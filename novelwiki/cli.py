@@ -103,5 +103,44 @@ def merge(
     asyncio.run(run())
 
 
+@app.command()
+def reset_db(
+    force: bool = typer.Option(False, "--force", "-f", help="Force reset without interactive prompt")
+):
+    """Resets the entire database by dropping all tables, data, and re-applying schema."""
+    if not force:
+        confirm = typer.confirm("⚠️ Are you sure you want to drop ALL data and reset the database? This cannot be undone.")
+        if not confirm:
+            typer.echo("Aborted.")
+            return
+            
+    async def run():
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                typer.echo("Dropping and clearing all tables...")
+                await conn.execute("DROP TABLE IF EXISTS query_cache CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS wiki_cache CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS extraction_state CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS events CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS relationships CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS entity_facts CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS identity_links CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS entity_aliases CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS entities CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS chunks CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS chapters CASCADE;")
+        typer.echo(typer.style("✔ All tables dropped successfully.", fg=typer.colors.GREEN, bold=True))
+        
+        # Now re-apply schema DDL
+        from novelwiki.db.schema import init_database
+        typer.echo("Re-initializing database schema...")
+        await init_database()
+        typer.echo(typer.style("✔ Database reset and clean schema initialized.", fg=typer.colors.GREEN, bold=True))
+        await close_db_pool()
+        
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     app()
