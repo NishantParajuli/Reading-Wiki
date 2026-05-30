@@ -258,7 +258,12 @@ async def answer_question(question: str, chapter_ceiling: float) -> dict:
                 logger.info("Pro concluded: DONE.")
                 break
 
-            tool_calls = json.loads(decision_clean)
+            import json_repair
+            try:
+                tool_calls = json.loads(decision_clean)
+            except Exception as json_err:
+                logger.warning(f"Standard JSON decoding failed for planning decisions: {json_err}. Attempting json-repair...")
+                tool_calls = json_repair.loads(decision_clean)
             if not isinstance(tool_calls, list):
                 logger.warning(f"Unexpected non-list decision: {decision_clean}")
                 break
@@ -312,7 +317,12 @@ async def answer_question(question: str, chapter_ceiling: float) -> dict:
             temperature=0.0,
         )
         verdict_clean = verdict_str.strip().replace("```json", "").replace("```", "").strip()
-        verdict = json.loads(verdict_clean)
+        import json_repair
+        try:
+            verdict = json.loads(verdict_clean)
+        except Exception as json_err:
+            logger.warning(f"Standard JSON decoding failed for verification: {json_err}. Attempting json-repair...")
+            verdict = json_repair.loads(verdict_clean)
 
         if verdict.get("unsupported", False):
             flags = verdict.get("flags", [])

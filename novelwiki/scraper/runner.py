@@ -1,6 +1,7 @@
-import httpx
 import asyncio
 import logging
+import re
+from curl_cffi.requests import AsyncSession
 from selectolax.parser import HTMLParser
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool, close_db_pool
@@ -19,8 +20,8 @@ async def scrape_novel(
     max_chapters: int = None
 ) -> int:
     """
-    Politely scrapes the novel beginning at start_url.
-    Follows 'Next' buttons sequentially.
+    Politely scrapes the novel beginning at start_url using curl_cffi Chrome impersonation to bypass Cloudflare.
+    Follows 'Next' buttons sequentially or falls back to predicting next URL indexes.
     Is idempotent by default (skips already scraped chapters unless force=True).
     """
     pool = await get_db_pool()
@@ -31,7 +32,7 @@ async def scrape_novel(
     
     logger.info(f"Starting sequential scrape from: {current_url}")
     
-    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30.0) as client:
+    async with AsyncSession(headers=HEADERS) as session:
         while current_url:
             if max_chapters is not None and scraped_count >= max_chapters:
                 logger.info(f"Reached max chapters limit ({max_chapters}). Stopping.")
@@ -39,7 +40,7 @@ async def scrape_novel(
                 
             logger.info(f"Fetching chapter page: {current_url}")
             try:
-                response = await client.get(current_url)
+                response = await session.get(current_url, impersonate="chrome", timeout=30.0)
                 response.raise_for_status()
             except Exception as e:
                 logger.error(f"HTTP request error fetching {current_url}: {e}")
@@ -62,6 +63,18 @@ async def scrape_novel(
             
             if not content:
                 logger.warning(f"No content extracted for chapter {chapter_num} ({title}). Skipping.")
+                if not next_url:
+                    # Try to predict next chapter URL
+                    parts = current_url.rstrip("/").split("/")
+                    last_part = parts[-1]
+                    if re.match(r"^\d+(?:\.\d+)?$", last_part):
+                        try:
+                            next_num = int(chapter_num) + 1
+                            predicted_url = "/".join(parts[:-1]) + f"/{next_num}"
+                            logger.info(f"Predicted fallback URL on blank content: {predicted_url}")
+                            next_url = predicted_url
+                        except Exception:
+                            pass
                 if not next_url:
                     break
                 current_url = next_url
@@ -88,7 +101,20 @@ async def scrape_novel(
                     scraped_count += 1
             
             if not next_url:
-                logger.info("No next chapter URL found. Sequential navigation completed.")
+                # Try to predict next chapter URL (e.g. replacing /1 with /2)
+                parts = current_url.rstrip("/").split("/")
+                last_part = parts[-1]
+                if re.match(r"^\d+(?:\.\d+)?$", last_part):
+                    try:
+                        next_num = int(chapter_num) + 1
+                        predicted_url = "/".join(parts[:-1]) + f"/{next_num}"
+                        logger.info(f"No next link found in HTML; predicting next URL: {predicted_url}")
+                        next_url = predicted_url
+                    except Exception:
+                        pass
+                        
+            if not next_url:
+                logger.info("No next chapter URL found and could not predict next. Sequential navigation completed.")
                 break
                 
             current_url = next_url

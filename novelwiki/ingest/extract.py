@@ -165,7 +165,12 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                 temperature=0.0
             )
             clean_resp = resp.strip().replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_resp)
+            import json_repair
+            try:
+                data = json.loads(clean_resp)
+            except Exception as json_err:
+                logger.warning(f"Standard JSON decoding failed for Chapter {chapter_number}: {json_err}. Attempting json-repair...")
+                data = json_repair.loads(clean_resp)
         except Exception as e:
             logger.error(f"Flash JSON extraction failed for Chapter {chapter_number}: {e}")
             raise e

@@ -123,7 +123,6 @@ class FenriRealmAdapter(BaseAdapter):
         # Elements we want to remove/clean
         remove_selectors = [
             "div.my-2", 
-            "div.container.mx-auto", 
             "div.hidden.text-center.text-zinc-500", 
             "div.my-10.border-t-4.border-dashed.pt-5",
             "script",

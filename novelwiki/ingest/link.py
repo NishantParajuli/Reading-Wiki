@@ -99,7 +99,12 @@ async def resolve_entity(
             )
             # Remove any markdown code blocks if the model included them
             clean_resp = response.strip().replace("```json", "").replace("```", "").strip()
-            match_data = json.loads(clean_resp)
+            import json_repair
+            try:
+                match_data = json.loads(clean_resp)
+            except Exception as json_err:
+                logger.warning(f"Standard JSON decoding failed for disambiguation: {json_err}. Attempting json-repair...")
+                match_data = json_repair.loads(clean_resp)
             match_id = match_data.get("match_id")
             if match_id != "NEW" and match_id is not None:
                 logger.info(f"Disambiguator matched '{name_clean}' to ID {match_id}. Reason: {match_data.get('reason')}")
