@@ -52,7 +52,7 @@ async def test_agentic_qa_orchestrator_and_cache(mock_get_embedding, mock_call_c
     2. answer_question returns {answer, citations, evidence_ids}.
     3. Answers are cached and retrieved directly on subsequent calls.
     """
-    mock_get_embedding.return_value = [0.1] * 1024
+    mock_get_embedding.return_value = [0.1] * settings.EMBED_DIM
 
     # Mock LLM calls in order:
     # 1. Pro initial plan
@@ -67,7 +67,7 @@ async def test_agentic_qa_orchestrator_and_cache(mock_get_embedding, mock_call_c
     ]
 
     await db_conn.execute("INSERT INTO chapters (number, title, clean_text) VALUES (1.0, 'Prologue', 'Prince X resides in the solar capital Solis.');")
-    await db_conn.execute("INSERT INTO chunks (chapter, chunk_index, text, embedding) VALUES (1.0, 0, 'Prince X resides in Solis.', $1::vector);", "[" + ",".join(["0.1"] * 1024) + "]")
+    await db_conn.execute("INSERT INTO chunks (chapter, chunk_index, text, embedding) VALUES (1.0, 0, 'Prince X resides in Solis.', $1::vector);", "[" + ",".join(["0.1"] * settings.EMBED_DIM) + "]")
 
     # First call: triggers full agent loop
     ans1 = await answer_question("Where does Prince X reside?", 1.0)
@@ -196,7 +196,7 @@ async def test_embedding_pipeline(mock_get_embeddings_batch, db_conn):
     Verifies that the embedding generator processes only chunks missing embeddings
     and stores them correctly.
     """
-    mock_get_embeddings_batch.return_value = [[0.2] * 1024]
+    mock_get_embeddings_batch.return_value = [[0.2] * settings.EMBED_DIM]
 
     await db_conn.execute("INSERT INTO chapters (number, title, clean_text) VALUES (1.0, 'Intro', 'Passage text.');")
     await db_conn.execute("INSERT INTO chunks (chapter, chunk_index, text) VALUES (1.0, 0, 'Passage text.');")
@@ -211,4 +211,4 @@ async def test_embedding_pipeline(mock_get_embeddings_batch, db_conn):
         emb_list = json.loads(emb)
     else:
         emb_list = list(emb)
-    assert len(emb_list) == 1024
+    assert len(emb_list) == settings.EMBED_DIM

@@ -36,7 +36,6 @@ DDL_QUERIES = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS chunks_chapter_idx ON chunks (chapter);",
-    "CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);",
     
     # 3. Entities
     f"""
@@ -52,7 +51,6 @@ DDL_QUERIES = [
     """,
     "CREATE INDEX IF NOT EXISTS entities_type_idx ON entities (type);",
     "CREATE INDEX IF NOT EXISTS entities_name_trgm ON entities USING gin (canonical_name gin_trgm_ops);",
-    "CREATE INDEX IF NOT EXISTS entities_name_emb  ON entities USING hnsw (name_embedding vector_cosine_ops);",
     
     # 4. Entity aliases
     """
@@ -184,7 +182,19 @@ async def init_database():
     try:
         conn = await asyncpg.connect(settings.DATABASE_URL)
         logger.info("Applying migrations and DDL queries to 'novelwiki'...")
-        for query in DDL_QUERIES:
+        
+        # Build the active query list (only apply HNSW index if EMBED_DIM <= 2000)
+        active_queries = list(DDL_QUERIES)
+        if settings.EMBED_DIM <= 2000:
+            active_queries.append("CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);")
+            active_queries.append("CREATE INDEX IF NOT EXISTS entities_name_emb ON entities USING hnsw (name_embedding vector_cosine_ops);")
+        else:
+            logger.warning(
+                f"EMBED_DIM ({settings.EMBED_DIM}) exceeds pgvector HNSW limits (2000 dimensions). "
+                f"Bypassing HNSW index creation. Raw scanning will be used, which is highly efficient for webnovel scale."
+            )
+            
+        for query in active_queries:
             try:
                 await conn.execute(query)
             except Exception as ex:
