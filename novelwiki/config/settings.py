@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     OPENROUTER_REFERER: str = "https://github.com/epick/novelwiki"
     OPENROUTER_TITLE: str = "Spoiler-Aware Webnovel Wiki"
 
+    # Presentation metadata for the UI hero/home surface. These are display-only
+    # and never gate content — purely the title/blurb the reader sees.
+    NOVEL_TITLE: str = "The Codex"
+    NOVEL_BLURB: str = "A spoiler-safe wiki for the novel you're reading — every fact bounded to where you are."
+
     # "Flash reads, Pro thinks" — set these to two distinct models to realize the
     # cost/quality split (e.g. a cheap model for reading/distilling and a stronger
     # one for planning/synthesis). They may legitimately be the same model.

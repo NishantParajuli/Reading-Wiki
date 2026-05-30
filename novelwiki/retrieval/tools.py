@@ -216,11 +216,12 @@ async def get_relationships(
             rows = await conn.fetch(
                 """
                 SELECT r.id, r.source_id, r.target_id, r.chapter, r.relation_type, r.directed, r.content, r.data,
-                       e1.canonical_name AS source_name, e2.canonical_name AS target_name
+                       e1.canonical_name AS source_name, e1.type AS source_type,
+                       e2.canonical_name AS target_name, e2.type AS target_type
                 FROM relationships r
                 JOIN entities e1 ON r.source_id = e1.id
                 JOIN entities e2 ON r.target_id = e2.id
-                WHERE ((r.source_id = ANY($1) AND r.target_id = ANY($2)) OR 
+                WHERE ((r.source_id = ANY($1) AND r.target_id = ANY($2)) OR
                        (r.source_id = ANY($2) AND r.target_id = ANY($1)))
                   AND r.chapter <= $3
                 ORDER BY r.chapter ASC;
@@ -231,7 +232,8 @@ async def get_relationships(
             rows = await conn.fetch(
                 """
                 SELECT r.id, r.source_id, r.target_id, r.chapter, r.relation_type, r.directed, r.content, r.data,
-                       e1.canonical_name AS source_name, e2.canonical_name AS target_name
+                       e1.canonical_name AS source_name, e1.type AS source_type,
+                       e2.canonical_name AS target_name, e2.type AS target_type
                 FROM relationships r
                 JOIN entities e1 ON r.source_id = e1.id
                 JOIN entities e2 ON r.target_id = e2.id
@@ -240,14 +242,16 @@ async def get_relationships(
                 """,
                 linked_ids, chapter_ceiling
             )
-            
+
         return [
             {
                 "id": int(r["id"]),
                 "source_id": int(r["source_id"]),
                 "source_name": r["source_name"],
+                "source_type": r["source_type"],
                 "target_id": int(r["target_id"]),
                 "target_name": r["target_name"],
+                "target_type": r["target_type"],
                 "chapter": float(r["chapter"]),
                 "relation_type": r["relation_type"],
                 "directed": r["directed"],
@@ -256,6 +260,49 @@ async def get_relationships(
             }
             for r in rows
         ]
+
+
+async def get_identity_links(entity_id: int, chapter_ceiling: float) -> list[dict]:
+    """
+    Returns in-story identity reveals (persona == persona) visible at the ceiling.
+    For the queried entity, each row is the OTHER persona it has been revealed to be
+    the same being as — gated by revealed_at_chapter <= ceiling AND the other entity's
+    first_seen_chapter <= ceiling. This is the spoiler-safe "the masked man is X" link;
+    below the reveal chapter it returns nothing in either direction.
+    """
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        linked_ids = await get_connected_personas(entity_id, chapter_ceiling, conn)
+        results = []
+        for other_id in linked_ids:
+            if other_id == entity_id:
+                continue
+            # The reveal chapter + note for the link that introduces this persona.
+            link = await conn.fetchrow(
+                """
+                SELECT id, revealed_at_chapter, note
+                FROM identity_links
+                WHERE (entity_a = $1 OR entity_b = $1) AND revealed_at_chapter <= $2
+                ORDER BY revealed_at_chapter ASC
+                LIMIT 1;
+                """,
+                other_id, chapter_ceiling
+            )
+            other = await conn.fetchrow(
+                "SELECT canonical_name, type FROM entities WHERE id = $1 AND first_seen_chapter <= $2;",
+                other_id, chapter_ceiling
+            )
+            if not other:
+                continue
+            results.append({
+                "id": int(link["id"]) if link else None,
+                "other_id": int(other_id),
+                "other_name": other["canonical_name"],
+                "other_type": other["type"],
+                "revealed_at_chapter": float(link["revealed_at_chapter"]) if link else float(chapter_ceiling),
+                "note": link["note"] if link else None,
+            })
+        return results
 
 async def get_timeline(entity_id: int, chapter_ceiling: float) -> list[dict]:
     """

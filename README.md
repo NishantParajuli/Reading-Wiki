@@ -39,7 +39,7 @@ This boundary is strictly enforced at the **database and data-retrieval layers**
                          │  verifies → answer    (loop, cap) │
                          └───────────────────────────────────┘
                                           │
-                                  FastAPI  ──►  Premium Glassmorphic UI
+                                  FastAPI  ──►  Tideglass Codex UI
 ```
 
 ---
@@ -121,7 +121,24 @@ Start the backend application server:
 uvicorn novelwiki.api.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open `http://localhost:8000` in your web browser to explore:
-1. **Interactive Slider**: Instantly adjust your Chapter Ceiling to filter profiles and LLM chats dynamically.
-2. **Lore Chatbot**: Input freeform questions; Pro decides planning, Flash digests raw segments, and verifiers validate answers.
-3. **Entity Directory**: Slide drawer profiles demonstrating combined personas, chronological timelines, and active relationship connections.
+Open `http://localhost:8000` in your web browser. The UI is the **Tideglass Codex** — a
+cozy, spoiler-safe reading companion (React + Babel-in-browser, served as static files; no
+build step). It talks only to the chapter-bounded API, so nothing past your ceiling ever
+reaches the browser.
+
+1. **Chapter-ceiling bar**: A first-class slider pinned under the header. Everything —
+   home stats, the codex, entity pages, and answers — re-bounds live as you move it.
+   Entities you newly unlock animate in; what's still ahead shows only a decorative,
+   data-free "Not yet revealed" teaser (the boundary is never crossed to render it).
+2. **Home**: Hero + spoiler-safe aggregate stats (entities revealed, facts known,
+   relationships mapped, % read — all `WHERE … <= ceiling`).
+3. **Codex (browse)**: Search + type filters over entities visible at your ceiling.
+4. **Entity pages**: The synthesized codex entry (`wiki_cache`), what's-known facts,
+   relationships, a chronological timeline, and **identity-reveal banners** that fold
+   personas together only once the reveal chapter is within your ceiling.
+5. **Ask**: Freeform Q&A. The four-step agent animation (Pro plans → Flash retrieves &
+   distills → Pro reasons → Flash verifies) mirrors the real orchestrator, and the answer
+   renders with clickable, popover-backed inline citations.
+6. **Admin** (gear icon, top-right): Gated ingestion controls — scrape, chunk, embed,
+   extract, rebuild-BM25, and merge-entities — wrapping the `/api/admin/*` endpoints.
+   These trigger real scraping and paid API calls, so they live off the primary nav.

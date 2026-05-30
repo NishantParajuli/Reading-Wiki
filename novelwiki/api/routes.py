@@ -11,7 +11,8 @@ from novelwiki.ingest.extract import extract_all_chapters
 from novelwiki.ingest.link import merge_entities
 from novelwiki.retrieval.bm25 import bm25_manager
 from novelwiki.retrieval.tools import (
-    resolve_entity, get_entity_profile, get_relationships, get_timeline, list_entities
+    resolve_entity, get_entity_profile, get_relationships, get_timeline,
+    list_entities, get_identity_links
 )
 from novelwiki.agent.orchestrator import answer_question
 from novelwiki.agent.llm_client import call_chat_completion
@@ -84,16 +85,57 @@ async def ask_question(req: AskRequest):
 
 @router.get("/meta/chapters")
 async def api_meta_chapters():
-    """Returns the chapter span available, so the UI can bound the ceiling control."""
+    """Returns the chapter span available + display title/blurb, so the UI can
+    bound the ceiling control and render the hero."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT COUNT(*) AS count, MIN(number) AS min_chapter, MAX(number) AS max_chapter FROM chapters;"
         )
     return {
+        "novel_title": settings.NOVEL_TITLE,
+        "novel_blurb": settings.NOVEL_BLURB,
         "count": int(row["count"]),
         "min_chapter": float(row["min_chapter"]) if row["min_chapter"] is not None else None,
         "max_chapter": float(row["max_chapter"]) if row["max_chapter"] is not None else None,
+    }
+
+
+@router.get("/meta/stats")
+async def api_meta_stats(ceiling: float):
+    """Spoiler-safe aggregate stats for the home/ceiling surfaces. Every count is a
+    `WHERE ... <= ceiling` aggregate, so nothing about future chapters is exposed —
+    not even how many entities are still to come."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        entities_revealed = await conn.fetchval(
+            "SELECT COUNT(*) FROM entities WHERE first_seen_chapter <= $1;", ceiling
+        )
+        facts_known = await conn.fetchval(
+            "SELECT COUNT(*) FROM entity_facts WHERE chapter <= $1;", ceiling
+        )
+        relationships_known = await conn.fetchval(
+            "SELECT COUNT(*) FROM relationships WHERE chapter <= $1;", ceiling
+        )
+        max_chapter = await conn.fetchval("SELECT MAX(number) FROM chapters;")
+        # Title of the chapter at/below the ceiling (a title <= ceiling is itself safe).
+        title_row = await conn.fetchrow(
+            "SELECT number, title FROM chapters WHERE number <= $1 ORDER BY number DESC LIMIT 1;",
+            ceiling,
+        )
+    max_f = float(max_chapter) if max_chapter is not None else None
+    pct = 0
+    if max_f and max_f > 0:
+        pct = round(min(100.0, (float(ceiling) / max_f) * 100))
+    return {
+        "ceiling": float(ceiling),
+        "entities_revealed": int(entities_revealed or 0),
+        "facts_known": int(facts_known or 0),
+        "relationships_known": int(relationships_known or 0),
+        "pct_read": pct,
+        "max_chapter": max_f,
+        "ceiling_chapter": float(title_row["number"]) if title_row else None,
+        "ceiling_title": title_row["title"] if title_row else None,
     }
 
 
@@ -212,6 +254,15 @@ async def api_get_timeline(entity_id: int, ceiling: float):
         return await get_timeline(entity_id=entity_id, chapter_ceiling=ceiling)
     except Exception as e:
         logger.error(f"Error fetching timeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/entity/{entity_id}/identities")
+async def api_get_identities(entity_id: int, ceiling: float):
+    """In-story identity reveals (this persona == another persona) visible below the ceiling."""
+    try:
+        return await get_identity_links(entity_id=entity_id, chapter_ceiling=ceiling)
+    except Exception as e:
+        logger.error(f"Error fetching identity links: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ── Admin Ingestion Routes ────────────────────────────────────────────────
