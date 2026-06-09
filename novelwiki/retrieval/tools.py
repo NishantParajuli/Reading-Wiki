@@ -142,9 +142,21 @@ async def get_entity_profile(entity_id: int, chapter_ceiling: float) -> dict | N
     """
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        # 1. Get current base entity metadata
+        # 1. Get current base entity metadata, with the freshest spoiler-safe
+        # description (latest observed at/below the ceiling, else first-seen blurb).
         entity = await conn.fetchrow(
-            "SELECT id, canonical_name, type, description, first_seen_chapter FROM entities WHERE id = $1 AND first_seen_chapter <= $2;",
+            """
+            SELECT e.id, e.canonical_name, e.type,
+                   COALESCE(d.description, e.description) AS description,
+                   e.first_seen_chapter
+            FROM entities e
+            LEFT JOIN LATERAL (
+                SELECT description FROM entity_descriptions ed
+                WHERE ed.entity_id = e.id AND ed.chapter <= $2
+                ORDER BY ed.chapter DESC LIMIT 1
+            ) d ON TRUE
+            WHERE e.id = $1 AND e.first_seen_chapter <= $2;
+            """,
             entity_id, chapter_ceiling
         )
         if not entity:
@@ -371,9 +383,16 @@ async def list_entities(
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         query = """
-            SELECT id, canonical_name, type, description, first_seen_chapter
-            FROM entities
-            WHERE first_seen_chapter <= $1
+            SELECT e.id, e.canonical_name, e.type,
+                   COALESCE(d.description, e.description) AS description,
+                   e.first_seen_chapter
+            FROM entities e
+            LEFT JOIN LATERAL (
+                SELECT description FROM entity_descriptions ed
+                WHERE ed.entity_id = e.id AND ed.chapter <= $1
+                ORDER BY ed.chapter DESC LIMIT 1
+            ) d ON TRUE
+            WHERE e.first_seen_chapter <= $1
         """
         args = [chapter_ceiling]
         

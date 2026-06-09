@@ -127,6 +127,7 @@ def reset_db(
                 await conn.execute("DROP TABLE IF EXISTS entity_facts CASCADE;")
                 await conn.execute("DROP TABLE IF EXISTS identity_links CASCADE;")
                 await conn.execute("DROP TABLE IF EXISTS entity_aliases CASCADE;")
+                await conn.execute("DROP TABLE IF EXISTS entity_descriptions CASCADE;")
                 await conn.execute("DROP TABLE IF EXISTS entities CASCADE;")
                 await conn.execute("DROP TABLE IF EXISTS chunks CASCADE;")
                 await conn.execute("DROP TABLE IF EXISTS chapters CASCADE;")

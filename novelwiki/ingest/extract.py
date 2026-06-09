@@ -7,7 +7,12 @@ from novelwiki.db.connection import get_db_pool, close_db_pool
 from novelwiki.db.queries import clear_caches
 from novelwiki.agent.llm_client import call_chat_completion
 from novelwiki.ingest.link import resolve_entity
-from novelwiki.agent.prompts import EXTRACTION_SYSTEM, EXTRACTION_USER
+from novelwiki.agent.prompts import (
+    EXTRACTION_SYSTEM,
+    EXTRACTION_USER,
+    EXTRACTION_VERIFY_SYSTEM,
+    EXTRACTION_VERIFY_USER,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,6 +35,51 @@ Text:
 
 Output the updated running summary.
 """
+
+# Top-level keys of the extraction schema (see prompts.EXTRACTION_SYSTEM).
+EXTRACTION_KEYS = ("mentions", "facts", "relationships", "events", "identity_reveals", "new_aliases")
+
+
+def _parse_json_object(raw: str):
+    """Parse a model response into a Python object, tolerating markdown code fences
+    and minor JSON breakage via json_repair (when installed). Raises on hard failure
+    so the caller can re-ask rather than silently dropping a chapter's knowledge."""
+    clean = (raw or "").strip().replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(clean)
+    except Exception:
+        try:
+            import json_repair
+        except ImportError:
+            raise
+        return json_repair.loads(clean)
+
+
+def _coerce_extraction(data) -> dict:
+    """Normalize a parsed extraction payload to the expected schema: a dict whose
+    every expected key is a list. Raises ValueError if the payload is not a JSON
+    object at all, so a garbled response triggers a retry instead of silent loss."""
+    if not isinstance(data, dict):
+        raise ValueError(f"expected a JSON object, got {type(data).__name__}")
+    return {key: (data[key] if isinstance(data.get(key), list) else []) for key in EXTRACTION_KEYS}
+
+
+async def _call_and_parse(messages: list[dict], label: str, temperature: float = 0.0) -> dict:
+    """Invoke Flash, parse + coerce the JSON, and re-ask ONCE (with a small temperature
+    nudge so a deterministic bad output isn't simply reproduced) if the payload is
+    unusable. Raises on a second failure rather than corrupting the knowledge base."""
+    raw = await call_chat_completion(model=settings.MODEL_FLASH, messages=messages, temperature=temperature)
+    try:
+        return _coerce_extraction(_parse_json_object(raw))
+    except Exception as first_err:
+        retry_temp = max(temperature, 0.3)
+        logger.warning(f"{label}: JSON parse/shape failed ({first_err}); re-asking once at temp {retry_temp}...")
+        raw_retry = await call_chat_completion(model=settings.MODEL_FLASH, messages=messages, temperature=retry_temp)
+        try:
+            return _coerce_extraction(_parse_json_object(raw_retry))
+        except Exception as second_err:
+            logger.error(f"{label}: extraction still unusable after retry: {second_err}")
+            raise
 
 
 def _clean_chunk_ids(raw, valid_set: set[int], fallback: list[int]) -> list[int]:
@@ -61,13 +111,23 @@ async def get_running_summary(chapter: float, conn: asyncpg.Connection) -> str:
 
 
 async def get_known_entities_roster(chapter: float, conn: asyncpg.Connection) -> str:
-    """Assembles a compact roster of entities known BEFORE this chapter."""
+    """Assembles a compact roster of entities known BEFORE this chapter, using the
+    freshest spoiler-safe description (latest one observed in a chapter < this one,
+    falling back to the first-seen blurb)."""
     rows = await conn.fetch(
         """
-        SELECT id, canonical_name, type, description
-        FROM entities
-        WHERE first_seen_chapter < $1
-        ORDER BY id ASC;
+        SELECT e.id, e.canonical_name, e.type,
+               COALESCE(d.description, e.description) AS description
+        FROM entities e
+        LEFT JOIN LATERAL (
+            SELECT description
+            FROM entity_descriptions ed
+            WHERE ed.entity_id = e.id AND ed.chapter < $1
+            ORDER BY ed.chapter DESC
+            LIMIT 1
+        ) d ON TRUE
+        WHERE e.first_seen_chapter < $1
+        ORDER BY e.id ASC;
         """,
         chapter
     )
@@ -138,18 +198,17 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
         prev_summary = await get_running_summary(chapter_number, conn)
         roster = await get_known_entities_roster(chapter_number, conn)
 
-        running_summary_context = (
-            f"Running Story Summary so far:\n{prev_summary}\n\n"
-            f"Active Roster of Known Entities:\n{roster}"
-        )
-
-        # 2. Invoke Flash for structured JSON extraction
+        # 2. Invoke Flash for structured JSON extraction.
+        # The roster leads the user message: it is append-only across chapters, so
+        # leading with it lets the provider cache the system+roster prefix, while the
+        # volatile running summary and chapter text follow.
         messages = [
             {"role": "system", "content": EXTRACTION_SYSTEM},
             {
                 "role": "user",
                 "content": EXTRACTION_USER.format(
-                    running_summary=running_summary_context,
+                    roster=roster,
+                    running_summary=prev_summary,
                     chapter_number=chapter_number,
                     chapter_title=chapter["title"],
                     chapter_text=extraction_body
@@ -157,23 +216,44 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
             }
         ]
 
-        try:
-            logger.info(f"Calling Flash extraction model for Chapter {chapter_number}...")
-            resp = await call_chat_completion(
-                model=settings.MODEL_FLASH,
-                messages=messages,
-                temperature=0.0
+        logger.info(f"Calling Flash extraction model for Chapter {chapter_number}...")
+        data = await _call_and_parse(messages, f"Chapter {chapter_number} extraction")
+        if not any(data[k] for k in EXTRACTION_KEYS):
+            logger.warning(
+                f"Chapter {chapter_number}: extraction returned no items of any kind — "
+                f"possible silent miss (check that the chapter has text/chunks)."
             )
-            clean_resp = resp.strip().replace("```json", "").replace("```", "").strip()
-            import json_repair
+
+        # 2b. Optional verification pass: re-read the chapter against the first pass and
+        # fold in anything it missed (esp. identity reveals/relationships). Best-effort —
+        # a failure here never blocks ingestion; we proceed with the first-pass result.
+        if settings.EXTRACTION_VERIFY:
+            verify_messages = [
+                {"role": "system", "content": EXTRACTION_VERIFY_SYSTEM},
+                {
+                    "role": "user",
+                    "content": EXTRACTION_VERIFY_USER.format(
+                        chapter_number=chapter_number,
+                        chapter_title=chapter["title"],
+                        chapter_text=extraction_body,
+                        first_pass_json=json.dumps(data, ensure_ascii=False),
+                    )
+                },
+            ]
             try:
-                data = json.loads(clean_resp)
-            except Exception as json_err:
-                logger.warning(f"Standard JSON decoding failed for Chapter {chapter_number}: {json_err}. Attempting json-repair...")
-                data = json_repair.loads(clean_resp)
-        except Exception as e:
-            logger.error(f"Flash JSON extraction failed for Chapter {chapter_number}: {e}")
-            raise e
+                vdata = await _call_and_parse(verify_messages, f"Chapter {chapter_number} verification")
+                added = 0
+                for key in EXTRACTION_KEYS:
+                    if vdata[key]:
+                        data[key].extend(vdata[key])
+                        added += len(vdata[key])
+                if added:
+                    logger.info(f"Verification pass added {added} missed item(s) for Chapter {chapter_number}.")
+            except Exception as ve:
+                logger.warning(
+                    f"Verification pass failed for Chapter {chapter_number}; "
+                    f"proceeding with first-pass extraction: {ve}"
+                )
 
         # 3. Resolve & Link mentions to entities (Inside a transaction)
         async with conn.transaction():
@@ -205,6 +285,18 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                 )
                 if ref:
                     local_ref_to_id[ref] = entity_id
+
+                # Record the chapter-local description so the roster/UI can show the
+                # freshest spoiler-safe blurb (not just the frozen first-seen one).
+                if mdesc and mdesc.strip():
+                    await conn.execute(
+                        """
+                        INSERT INTO entity_descriptions (entity_id, chapter, description)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (entity_id, chapter) DO UPDATE SET description = EXCLUDED.description;
+                        """,
+                        entity_id, chapter_number, mdesc.strip()
+                    )
 
             async def get_entity_id(ref_name: str, fallback_type: str = "concept") -> int:
                 if ref_name in local_ref_to_id:
@@ -306,7 +398,10 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                     "content": SUMMARY_USER.format(
                         prev_summary=prev_summary,
                         title=chapter["title"],
-                        text=chapter["clean_text"][:8000]  # bound context for the summary call
+                        # Feed (effectively) the whole chapter so end-of-chapter
+                        # developments still reach the forward-carried summary. The
+                        # cap only guards against pathologically huge chapters.
+                        text=chapter["clean_text"][:settings.SUMMARY_INPUT_MAX_CHARS]
                     )
                 }
             ]

@@ -53,28 +53,30 @@ async def resolve_entity(
         return int(row["id"])
         
     # ── Step 2: Fuzzy Match via pg_trgm ──
-    # Fetch top candidates above 0.35 similarity threshold
+    # Fetch top candidates above the configured similarity floor.
     rows = await conn.fetch(
         """
         SELECT DISTINCT e.id, e.canonical_name, similarity(e.canonical_name, $1) AS sim
         FROM entities e
         LEFT JOIN entity_aliases a ON e.id = a.entity_id AND a.revealed_at_chapter <= $2
-        WHERE (similarity(e.canonical_name, $1) > 0.35 OR similarity(a.alias, $1) > 0.35)
+        WHERE (similarity(e.canonical_name, $1) > $3 OR similarity(a.alias, $1) > $3)
           AND e.first_seen_chapter <= $2
         ORDER BY sim DESC
         LIMIT 5;
         """,
-        name_clean, chapter
+        name_clean, chapter, settings.FUZZY_MATCH_THRESHOLD
     )
-    
+
     candidates = [dict(r) for r in rows]
-    
-    if len(candidates) == 1:
-        # Single candidate passes fuzzy - resolve directly
-        logger.info(f"Fuzzy match resolved '{name_clean}' to candidate '{candidates[0]['canonical_name']}'")
+
+    if len(candidates) == 1 and candidates[0]["sim"] >= settings.FUZZY_AUTO_ACCEPT:
+        # High-confidence single candidate - resolve directly without an LLM call.
+        logger.info(f"Fuzzy match resolved '{name_clean}' to candidate '{candidates[0]['canonical_name']}' (sim {candidates[0]['sim']:.2f})")
         return int(candidates[0]["id"])
-    elif len(candidates) > 1:
-        # Multiple candidates found - use Flash to disambiguate
+    elif candidates:
+        # Either multiple candidates, or a single candidate in the gray zone
+        # ([FUZZY_MATCH_THRESHOLD, FUZZY_AUTO_ACCEPT)). Both are merge-risky, so let
+        # Flash decide rather than auto-merging two similarly-named distinct entities.
         cand_list_str = "\n".join([f"- Candidate ID {c['id']}: {c['canonical_name']} (similarity score: {c['sim']:.2f})" for c in candidates])
         
         messages = [
@@ -126,7 +128,7 @@ async def resolve_entity(
             """,
             emb_str, chapter
         )
-        if row and row["sim"] > 0.85:
+        if row and row["sim"] > settings.SEMANTIC_MATCH_THRESHOLD:
             logger.info(f"Semantic match resolved '{name_clean}' to ID {row['id']} (similarity {row['sim']:.3f})")
             return int(row["id"])
 
@@ -207,7 +209,17 @@ async def merge_entities(keep_id: int, drop_id: int, conn: asyncpg.Connection):
                 keep_id, row["alias"], row["revealed_at_chapter"]
             )
             
-        # 6. Delete old aliases & identity links
+        # 5b. Move per-chapter descriptions (keep the surviving entity's on conflict)
+        await conn.execute(
+            """
+            INSERT INTO entity_descriptions (entity_id, chapter, description)
+            SELECT $1, chapter, description FROM entity_descriptions WHERE entity_id = $2
+            ON CONFLICT (entity_id, chapter) DO NOTHING;
+            """,
+            keep_id, drop_id
+        )
+
+        # 6. Delete old aliases & identity links (descriptions cascade with the entity)
         await conn.execute("DELETE FROM entity_aliases WHERE entity_id = $1;", drop_id)
         await conn.execute("DELETE FROM identity_links WHERE entity_a = $1 OR entity_b = $1;", drop_id)
         

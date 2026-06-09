@@ -38,7 +38,15 @@ Output a strict JSON matching this schema:
 - If a person/thing was known by a mask/pseudonym, and they are revealed in this chapter to be someone else, record that reveal in `identity_reveals` and mark their alias as `is_reveal: true`.
 """
 
-EXTRACTION_USER = """{running_summary}
+# NOTE: ordering matters for prompt caching. The roster is append-only across
+# chapters, so leading the message with the (large, stable) roster lets the
+# provider cache the system+roster prefix; the volatile running summary and the
+# chapter text follow so the cache hit survives chapter-to-chapter.
+EXTRACTION_USER = """Active Roster of Known Entities (all first revealed in chapters before this one):
+{roster}
+
+Running Story Summary so far:
+{running_summary}
 
 --- CHAPTER {chapter_number} ---
 Title: {chapter_title}
@@ -48,6 +56,38 @@ Passages (each starts with its [chunk <id>] marker):
 Extract structured JSON strictly based on the schema and instructions. For every
 fact/relationship/event include the supporting `source_chunk_ids` using the marker
 ids above. Do not include markdown code block formatting (like ```json), just raw JSON.
+"""
+
+# ── Extraction Verification / Second Pass (Flash) ──
+# Re-reads the chapter against a first-pass extraction and returns ONLY the items
+# the first pass missed or got wrong, in the exact same schema. Returned items are
+# merged back and run through the same resolution/insertion path.
+EXTRACTION_VERIFY_SYSTEM = """You are an extraction auditor for a single novel chapter.
+You are given the full chapter text (with [chunk <id>] markers) and a FIRST-PASS extraction in JSON.
+Your job: find what the first pass MISSED or got WRONG, using ONLY this chapter's text.
+Pay special attention to:
+- identity reveals (a masked/pseudonymous persona shown to be a known entity),
+- relationships and events between characters,
+- new aliases/titles introduced here,
+- facts clearly stated but not captured.
+
+Output STRICT JSON in the SAME schema as the first pass, but containing ONLY the
+additional or corrected items (do NOT repeat items the first pass already captured
+correctly). If nothing was missed, return every list empty. Every fact/relationship/
+event MUST include `source_chunk_ids` drawn from the markers actually present in the text.
+Do not anticipate future chapters. Do not invent anything unsupported by the text.
+Output the same top-level keys: mentions, facts, relationships, events, identity_reveals, new_aliases.
+"""
+
+EXTRACTION_VERIFY_USER = """--- CHAPTER {chapter_number} ---
+Title: {chapter_title}
+Passages (each starts with its [chunk <id>] marker):
+{chapter_text}
+
+--- FIRST-PASS EXTRACTION (JSON) ---
+{first_pass_json}
+
+Return raw JSON (no markdown fences) with ONLY the missed/corrected items.
 """
 
 # ── Entity Disambiguation (Flash) ──

@@ -51,7 +51,24 @@ DDL_QUERIES = [
     """,
     "CREATE INDEX IF NOT EXISTS entities_type_idx ON entities (type);",
     "CREATE INDEX IF NOT EXISTS entities_name_trgm ON entities USING gin (canonical_name gin_trgm_ops);",
-    
+
+    # 3b. Entity descriptions (spoiler-safe, per-chapter history)
+    # One short blurb per entity per chapter, "as known in THIS chapter". The roster
+    # and entity pages read the freshest row at/below their chapter bound, so a
+    # character introduced as "a masked figure" can be described more accurately in
+    # later chapters without ever leaking ahead of the reader's ceiling.
+    """
+    CREATE TABLE IF NOT EXISTS entity_descriptions (
+      id          BIGSERIAL PRIMARY KEY,
+      entity_id   BIGINT  NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      chapter     NUMERIC NOT NULL,            -- chapter this description was observed in (spoiler key)
+      description TEXT    NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (entity_id, chapter)              -- at most one description per entity per chapter
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS entity_desc_entity_chapter ON entity_descriptions (entity_id, chapter);",
+
     # 4. Entity aliases
     """
     CREATE TABLE IF NOT EXISTS entity_aliases (

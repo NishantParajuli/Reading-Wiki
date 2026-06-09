@@ -40,6 +40,26 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = 5
     BM25_INDEX_PATH: str = "./data/bm25_index"
 
+    # ── Extraction accuracy knobs ──
+    # The running "story-so-far" summary is rebuilt each chapter from this many
+    # leading characters of the chapter. Keep it large enough to cover a whole
+    # chapter (an 8k-word chapter is ~44k chars) so late-chapter developments
+    # still feed forward; lower it only to trade continuity for cost.
+    SUMMARY_INPUT_MAX_CHARS: int = 48000
+    # Entity linking thresholds (pg_trgm similarity, 0..1). A fuzzy candidate must
+    # clear FUZZY_MATCH_THRESHOLD to be considered at all; a *single* candidate is
+    # auto-accepted only at/above FUZZY_AUTO_ACCEPT — anything in between is sent to
+    # the LLM disambiguator so two similarly-named-but-distinct entities don't merge.
+    FUZZY_MATCH_THRESHOLD: float = 0.35
+    FUZZY_AUTO_ACCEPT: float = 0.6
+    # Cosine-similarity floor for the vector fallback to fold a mention into an
+    # existing entity (higher = fewer false merges, more duplicates).
+    SEMANTIC_MATCH_THRESHOLD: float = 0.85
+    # Run a second LLM pass over each chapter to catch facts/relationships/events
+    # and (critically) identity reveals the first extraction missed. Costs one
+    # extra call per chapter; accuracy-first default is on.
+    EXTRACTION_VERIFY: bool = True
+
     # Scraper: pick a site adapter by key (see scraper/adapters.py registry).
     # The "generic" adapter reads the CSS selectors below from config so a new
     # site can be supported without writing code.
