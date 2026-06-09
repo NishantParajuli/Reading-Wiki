@@ -44,6 +44,13 @@ class NovelCreate(BaseModel):
     codex_enabled: bool = False
     source: SourceCreate | None = None  # optional first source
 
+class NovelUpdate(BaseModel):
+    title: str | None = None
+    author: str | None = None
+    description: str | None = None
+    cover_url: str | None = None
+    codex_enabled: bool | None = None
+
 class ProgressUpdate(BaseModel):
     last_chapter: float
     scroll_pct: float = 0
@@ -201,6 +208,28 @@ async def api_get_novel(novel_id: int):
             "scroll_pct": float(progress["scroll_pct"]) if progress and progress["scroll_pct"] is not None else 0,
         },
     }
+
+
+@router.patch("/novels/{novel_id}")
+async def api_update_novel(novel_id: int, payload: NovelUpdate):
+    """Edit novel metadata (title, author, description, cover, codex toggle)."""
+    fields = payload.model_dump(exclude_unset=True)
+    if not fields:
+        return {"status": "noop"}
+    sets, args = [], []
+    for k, v in fields.items():
+        args.append(v)
+        sets.append(f"{k} = ${len(args)}")
+    args.append(novel_id)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE novels SET {', '.join(sets)}, updated_at = now() WHERE id = ${len(args)} RETURNING id;",
+            *args,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Novel not found.")
+    return {"status": "success"}
 
 
 @router.delete("/novels/{novel_id}")

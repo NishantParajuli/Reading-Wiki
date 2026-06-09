@@ -38,6 +38,7 @@ const PATHS = {
   merge: "M7 3v6a4 4 0 0 0 4 4h6M7 3l-3 3M7 3l3 3M17 13l3-3M17 13l-3-3",
   refresh: "M21 12a9 9 0 1 1-3-6.7M21 4v4h-4",
   database: "M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6",
+  edit: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z",
 };
 function Icon({ name, size = 18, sw = 1.7, className = "", style }) {
   const d = PATHS[name] || "";

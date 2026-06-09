@@ -61,10 +61,53 @@ function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
   );
 }
 
+function NovelEditForm({ novel, onSaved, onCancel }) {
+  const [title, setTitle] = useState(novel.title || "");
+  const [author, setAuthor] = useState(novel.author || "");
+  const [description, setDescription] = useState(novel.description || "");
+  const [cover, setCover] = useState(novel.cover_url || "");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!title.trim() || busy) return;
+    setBusy(true);
+    try {
+      await window.API.updateNovel(novel.id, {
+        title: title.trim(), author: author.trim() || null,
+        description: description.trim() || null, cover_url: cover.trim() || null,
+      });
+      onSaved();
+    } finally { setBusy(false); }
+  }
+
+  return React.createElement("form", { className: "card add-novel", onSubmit: submit, style: { marginBottom: 26 } },
+    React.createElement("p", { className: "section-eyebrow", style: { marginTop: 0 } }, "Edit novel"),
+    React.createElement("label", { className: "field" },
+      React.createElement("span", null, "Title"),
+      React.createElement("input", { value: title, onChange: e => setTitle(e.target.value), autoFocus: true })),
+    React.createElement("div", { className: "row", style: { gap: 12, flexWrap: "wrap" } },
+      React.createElement("label", { className: "field", style: { flex: "1 1 180px" } },
+        React.createElement("span", null, "Author"),
+        React.createElement("input", { value: author, onChange: e => setAuthor(e.target.value) })),
+      React.createElement("label", { className: "field", style: { flex: "1 1 240px" } },
+        React.createElement("span", null, "Cover image URL"),
+        React.createElement("input", { value: cover, onChange: e => setCover(e.target.value), placeholder: "https://…" }))),
+    React.createElement("label", { className: "field" },
+      React.createElement("span", null, "Description"),
+      React.createElement("textarea", { value: description, onChange: e => setDescription(e.target.value), rows: 3 })),
+    React.createElement("div", { className: "row", style: { gap: 10 } },
+      React.createElement("button", { className: "btn btn-primary", type: "submit", disabled: busy }, busy ? "Saving…" : "Save"),
+      React.createElement("button", { className: "btn btn-ghost", type: "button", onClick: onCancel }, "Cancel"))
+  );
+}
+
 function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
   const [toc, setToc] = useState(null);    // null = loading
   const [adapters, setAdapters] = useState([]);
   const [addingSource, setAddingSource] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [bookmarks, setBookmarks] = useState([]);
   const [maxCh, setMaxCh] = useState("");
   const [msg, setMsg] = useState(null);
 
@@ -72,8 +115,12 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
     if (novelId == null) return;
     window.API.chapters(novelId).then(setToc).catch(() => setToc([]));
   }, [novelId]);
+  const loadBookmarks = useCallback(() => {
+    if (novelId == null) return;
+    window.API.bookmarks(novelId).then(setBookmarks).catch(() => setBookmarks([]));
+  }, [novelId]);
 
-  useEffect(() => { loadToc(); }, [loadToc]);
+  useEffect(() => { loadToc(); loadBookmarks(); }, [loadToc, loadBookmarks]);
   useEffect(() => { window.API.adapters().then(setAdapters).catch(() => setAdapters([])); }, []);
 
   if (!novel) return React.createElement("div", { className: "page" }, React.createElement(Loading, { label: "Loading novel…" }));
@@ -99,13 +146,19 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
 
   return React.createElement("div", { className: "page" },
     // header
-    React.createElement("div", { className: "novel-hero" },
+    editing
+      ? React.createElement(NovelEditForm, { novel, onSaved: () => { setEditing(false); reloadNovel(); }, onCancel: () => setEditing(false) })
+      : React.createElement("div", { className: "novel-hero" },
       React.createElement("div", { className: "novel-hero-cover" },
         novel.cover_url ? React.createElement("img", { src: novel.cover_url, alt: "" })
           : React.createElement("div", { className: "novel-cover-ph lg" }, React.createElement(Icon, { name: "book", size: 40 }))
       ),
       React.createElement("div", { className: "novel-hero-body" },
-        React.createElement("h1", { className: "serif", style: { margin: "0 0 6px" } }, novel.title),
+        React.createElement("div", { className: "row", style: { gap: 10, alignItems: "flex-start" } },
+          React.createElement("h1", { className: "serif", style: { margin: "0 0 6px", flex: 1 } }, novel.title),
+          React.createElement("button", { className: "icon-btn", onClick: () => setEditing(true), title: "Edit novel" },
+            React.createElement(Icon, { name: "edit", size: 17 }))
+        ),
         novel.author && React.createElement("div", { className: "muted" }, novel.author),
         novel.description && React.createElement("p", { style: { color: "var(--ink-2)", lineHeight: 1.6, maxWidth: "60ch" } }, novel.description),
         React.createElement("div", { className: "row", style: { gap: 10, marginTop: 14, flexWrap: "wrap" } },
@@ -163,6 +216,24 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
               "Builds the spoiler-safe knowledge base from scraped chapters. Runs in the background.")
           )
         )
+      )
+    ),
+
+    // bookmarks
+    bookmarks.length > 0 && React.createElement(React.Fragment, null,
+      React.createElement("p", { className: "section-eyebrow", style: { marginTop: 28 } }, "Bookmarks"),
+      React.createElement("div", { className: "card toc" },
+        bookmarks.map(b => React.createElement("div", { key: b.id, className: "toc-row", style: { cursor: "default" } },
+          React.createElement("button", { className: "bm-jump", onClick: () => openReader(b.chapter) },
+            React.createElement(Icon, { name: "book", size: 14, className: "muted" }),
+            React.createElement("span", { className: "toc-num mono" }, `Ch. ${b.chapter}`),
+            React.createElement("span", { className: "toc-title" }, b.note || "Bookmarked")
+          ),
+          React.createElement("button", {
+            className: "icon-btn", title: "Remove bookmark",
+            onClick: async () => { await window.API.delBookmark(novelId, b.id); loadBookmarks(); },
+          }, React.createElement(Icon, { name: "x", size: 15 }))
+        ))
       )
     ),
 

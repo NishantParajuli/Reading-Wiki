@@ -60,6 +60,7 @@
     novels() { return getJSON(`${API_BASE}/novels`); },
     createNovel(body) { return postJSON(`${API_BASE}/novels`, body); },
     novel(id) { return getJSON(N(id)); },
+    updateNovel(id, body) { return req("PATCH", N(id), body); },
     deleteNovel(id) { return delJSON(N(id)); },
     addSource(id, body) { return postJSON(`${N(id)}/sources`, body); },
     scrape(id, body) { return postJSON(`${N(id)}/scrape`, body); },

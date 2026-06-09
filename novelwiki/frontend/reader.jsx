@@ -5,7 +5,7 @@
    the server so the library can resume and the codex ceiling can follow along.
    ============================================================ */
 const READER_DEFAULTS = { font: "serif", size: 19, line: 1.7, width: "normal", tone: "default" };
-const WIDTHS = { narrow: 600, normal: 720, wide: 860 };
+const WIDTHS = { narrow: 620, normal: 760, wide: 960, ultra: 1200 };
 
 function loadReaderPrefs() {
   try { return { ...READER_DEFAULTS, ...JSON.parse(localStorage.getItem("nw-reader") || "{}") }; }
@@ -31,7 +31,7 @@ function ReaderSettings({ prefs, setPrefs, onClose }) {
       React.createElement("button", { onClick: () => set("line", Math.max(1.3, Math.round((prefs.line - 0.1) * 10) / 10)) }, "−"),
       React.createElement("span", { className: "rs-val" }, prefs.line.toFixed(1)),
       React.createElement("button", { onClick: () => set("line", Math.min(2.2, Math.round((prefs.line + 0.1) * 10) / 10)) }, "+"))),
-    Row("Width", seg("width", [{ v: "narrow", t: "Narrow" }, { v: "normal", t: "Normal" }, { v: "wide", t: "Wide" }])),
+    Row("Width", seg("width", [{ v: "narrow", t: "Narrow" }, { v: "normal", t: "Normal" }, { v: "wide", t: "Wide" }, { v: "ultra", t: "Ultra" }])),
     Row("Tone", seg("tone", [{ v: "default", t: "Default" }, { v: "sepia", t: "Sepia" }])),
     React.createElement("button", { className: "btn btn-ghost", style: { width: "100%", marginTop: 8 }, onClick: onClose }, "Done")
   );
@@ -45,6 +45,7 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
   const [toc, setToc] = useState(null);
   const [showToc, setShowToc] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
+  const [chrome, setChrome] = useState(true);   // toolbar + floating nav visibility (tap to toggle)
   const scrollSaved = useRef(0);
 
   useEffect(() => { localStorage.setItem("nw-reader", JSON.stringify(prefs)); }, [prefs]);
@@ -116,9 +117,16 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
     fontFamily, fontSize: prefs.size, lineHeight: prefs.line,
   };
 
-  return React.createElement("div", { className: "reader tone-" + prefs.tone, onClick: () => setShowSettings(false) },
+  // Tap the page (not a control) to toggle the toolbar + floating nav.
+  const tapToggle = (e) => {
+    if (e.target.closest("button, a, input, select, textarea, .reader-settings, .drawer")) return;
+    if (showSettings) { setShowSettings(false); return; }
+    setChrome(c => !c);
+  };
+
+  return React.createElement("div", { className: "reader tone-" + prefs.tone + (chrome ? "" : " chrome-hidden"), onClick: tapToggle },
     // toolbar
-    React.createElement("div", { className: "reader-bar" },
+    React.createElement("div", { className: "reader-bar" + (chrome ? "" : " hidden") },
       React.createElement("button", { className: "icon-btn", onClick: backToNovel, title: "Contents" },
         React.createElement(Icon, { name: "arrowLeft", size: 18 })),
       React.createElement("button", { className: "icon-btn", onClick: openTocDrawer, title: "Table of contents" },
@@ -154,16 +162,17 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
                 `This is a raw chapter (${ch.language || "foreign"}). On-demand translation arrives in the next phase.`)))
         : React.createElement("div", { className: "reader-text" },
             (ch.content || "").split(/\n{2,}/).map((para, i) =>
-              React.createElement("p", { key: i }, para))),
+              React.createElement("p", { key: i }, para)))
+    ),
 
-      // footer nav
-      React.createElement("div", { className: "reader-nav" },
-        React.createElement("button", { className: "btn btn-ghost", disabled: ch.prev == null, onClick: () => ch.prev != null && openReader(ch.prev) },
-          React.createElement(Icon, { name: "arrowLeft", size: 16 }), "Previous"),
-        React.createElement("button", { className: "btn btn-ghost", onClick: backToNovel }, "Contents"),
-        React.createElement("button", { className: "btn btn-primary", disabled: ch.next == null, onClick: () => ch.next != null && openReader(ch.next) },
-          "Next", React.createElement(Icon, { name: "arrowRight", size: 16 }))
-      )
+    // floating nav (tap the page to show/hide)
+    status === "ok" && ch && React.createElement("div", { className: "reader-float" + (chrome ? "" : " hidden") },
+      React.createElement("button", { className: "rf-btn", disabled: ch.prev == null, onClick: () => ch.prev != null && openReader(ch.prev), title: "Previous chapter" },
+        React.createElement(Icon, { name: "arrowLeft", size: 18 })),
+      React.createElement("button", { className: "rf-btn rf-mid", onClick: backToNovel, title: "Contents" },
+        React.createElement(Icon, { name: "layers", size: 17 }), "Contents"),
+      React.createElement("button", { className: "rf-btn", disabled: ch.next == null, onClick: () => ch.next != null && openReader(ch.next), title: "Next chapter" },
+        React.createElement(Icon, { name: "arrowRight", size: 18 }))
     ),
 
     // TOC drawer
