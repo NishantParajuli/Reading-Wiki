@@ -2,7 +2,7 @@
    Entity page — codex entry, facts, relationships, timeline, identity reveals
    All data arrives pre-bounded from the server (chapter <= ceiling).
    ============================================================ */
-function EntityPage({ id, ceiling, meta, nav, setView }) {
+function EntityPage({ novelId, id, ceiling, meta, nav, setView }) {
   const debCeiling = useDebounce(ceiling, 250);
   const [status, setStatus] = useState("loading"); // loading | ok | notfound | error
   const [profile, setProfile] = useState(null);
@@ -16,13 +16,13 @@ function EntityPage({ id, ceiling, meta, nav, setView }) {
     setStatus("loading");
     (async () => {
       try {
-        const p = await window.API.entityProfile(id, debCeiling);
+        const p = await window.API.entityProfile(novelId, id, debCeiling);
         if (cancel) return;
         setProfile(p);
         const [r, t, i] = await Promise.all([
-          window.API.relationships(id, debCeiling).catch(() => []),
-          window.API.timeline(id, debCeiling).catch(() => []),
-          window.API.identities(id, debCeiling).catch(() => []),
+          window.API.relationships(novelId, id, debCeiling).catch(() => []),
+          window.API.timeline(novelId, id, debCeiling).catch(() => []),
+          window.API.identities(novelId, id, debCeiling).catch(() => []),
         ]);
         if (cancel) return;
         setRels(r || []); setTl(t || []); setIdl(i || []);

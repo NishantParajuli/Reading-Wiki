@@ -1,147 +1,150 @@
 import asyncio
+import json
 import logging
-import re
 from curl_cffi.requests import AsyncSession
-from selectolax.parser import HTMLParser
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool, close_db_pool
-from novelwiki.scraper.adapters import get_adapter
+from novelwiki.scraper.adapters import get_adapter, ScrapeContext, PremiumReached, HEADERS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
 
-async def scrape_novel(
-    start_url: str, 
-    force: bool = False, 
-    max_chapters: int = None
-) -> int:
-    """
-    Politely scrapes the novel beginning at start_url using curl_cffi Chrome impersonation to bypass Cloudflare.
-    Follows 'Next' buttons sequentially or falls back to predicting next URL indexes.
-    Is idempotent by default (skips already scraped chapters unless force=True).
-    """
+async def _persist_chapter(conn, source: dict, global_number: float, ch, force: bool) -> bool:
+    """Upserts one scraped chapter into the novel's global chapter sequence.
+    Returns True if a row was written, False if skipped (already present, no force)."""
+    novel_id = source["novel_id"]
+    is_raw = source["is_raw"]
+    language = source["language"]
+
+    exists = await conn.fetchrow(
+        "SELECT number, title FROM chapters WHERE novel_id = $1 AND number = $2;",
+        novel_id, global_number,
+    )
+    if exists and not force:
+        logger.info(f"Chapter {global_number} ('{exists['title']}') already exists. Skipping.")
+        return False
+
+    word_count = len(ch.content.split())
+    if is_raw:
+        # Raw source: keep the source-language text; the reader translates on demand.
+        original_text, content = ch.content, None
+        translation_status, is_translated = "pending", False
+    else:
+        original_text, content = None, ch.content
+        translation_status, is_translated = "none", False
+
+    await conn.execute(
+        """
+        INSERT INTO chapters
+            (novel_id, number, source_id, title, url, raw_html, original_text, content,
+             language, is_translated, translation_status, word_count)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT (novel_id, number) DO UPDATE SET
+            source_id = EXCLUDED.source_id, title = EXCLUDED.title, url = EXCLUDED.url,
+            raw_html = EXCLUDED.raw_html, original_text = EXCLUDED.original_text,
+            content = EXCLUDED.content, language = EXCLUDED.language,
+            is_translated = EXCLUDED.is_translated, translation_status = EXCLUDED.translation_status,
+            word_count = EXCLUDED.word_count, scraped_at = now();
+        """,
+        novel_id, global_number, source["id"], ch.title, ch.url, ch.raw_html,
+        original_text, content, language, is_translated, translation_status, word_count,
+    )
+    logger.info(f"Saved Chapter {global_number}: '{ch.title}' ({word_count} words)")
+    return True
+
+
+async def scrape_source(source_id: int, force: bool = False, max_chapters: int | None = None) -> int:
+    """Scrapes one source into its novel's global chapter sequence using the source's
+    chosen adapter. Source-local chapter numbers are shifted by `chapter_offset` so a
+    continuation source lines up after the previous one. Stops cleanly at premium."""
     pool = await get_db_pool()
-    adapter = get_adapter()
-    
-    current_url = start_url
+    async with pool.acquire() as conn:
+        source = await conn.fetchrow(
+            """
+            SELECT id, novel_id, adapter, start_url, config, language, is_raw, chapter_offset
+            FROM sources WHERE id = $1;
+            """,
+            source_id,
+        )
+    if not source:
+        logger.error(f"Source {source_id} not found.")
+        return 0
+
+    source = dict(source)
+    cfg = source.get("config")
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg)
+        except Exception:
+            cfg = {}
+    source["config"] = cfg or {}
+    offset = float(source["chapter_offset"] or 0)
+
+    adapter = get_adapter(source["adapter"])
+    logger.info(f"Scraping source {source_id} (novel {source['novel_id']}, adapter '{source['adapter']}') from {source['start_url']}")
+
     scraped_count = 0
-    
-    logger.info(f"Starting sequential scrape from: {current_url}")
-    
+    fallback_local = 0  # used only when an adapter can't determine a chapter number
     async with AsyncSession(headers=HEADERS) as session:
-        while current_url:
-            if max_chapters is not None and scraped_count >= max_chapters:
-                logger.info(f"Reached max chapters limit ({max_chapters}). Stopping.")
-                break
-                
-            logger.info(f"Fetching chapter page: {current_url}")
-            try:
-                response = await session.get(current_url, impersonate="chrome", timeout=30.0)
-                response.raise_for_status()
-            except Exception as e:
-                logger.error(f"HTTP request error fetching {current_url}: {e}")
-                break
-                
-            parser = HTMLParser(response.text)
-            title = adapter.extract_title(parser)
-            content = adapter.extract_content(parser)
-            next_url = adapter.extract_next_url(parser, current_url)
-            
-            chapter_num = adapter.extract_chapter_number(current_url, title)
-            if chapter_num is None:
-                logger.warning(f"Could not extract chapter number for: {title} at {current_url}. Skipping.")
-                if not next_url:
-                    break
-                current_url = next_url
-                continue
-                
-            word_count = len(content.split())
-            
-            if not content:
-                logger.warning(f"No content extracted for chapter {chapter_num} ({title}). Skipping.")
-                if not next_url:
-                    # Try to predict next chapter URL
-                    parts = current_url.rstrip("/").split("/")
-                    last_part = parts[-1]
-                    if re.match(r"^\d+(?:\.\d+)?$", last_part):
-                        try:
-                            next_num = int(chapter_num) + 1
-                            predicted_url = "/".join(parts[:-1]) + f"/{next_num}"
-                            logger.info(f"Predicted fallback URL on blank content: {predicted_url}")
-                            next_url = predicted_url
-                        except Exception:
-                            pass
-                if not next_url:
-                    break
-                current_url = next_url
-                continue
-                
-            # Idempotency check & Upsert
-            async with pool.acquire() as conn:
-                exists = await conn.fetchrow("SELECT number, title FROM chapters WHERE number = $1;", chapter_num)
-                
-                if exists and not force:
-                    logger.info(f"Chapter {chapter_num} ('{exists['title']}') already exists. Skipping.")
-                else:
-                    await conn.execute(
-                        """
-                        INSERT INTO chapters (number, title, url, raw_html, clean_text, word_count)
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                        ON CONFLICT (number) DO UPDATE 
-                        SET title = EXCLUDED.title, url = EXCLUDED.url, raw_html = EXCLUDED.raw_html, 
-                            clean_text = EXCLUDED.clean_text, word_count = EXCLUDED.word_count, scraped_at = now();
-                        """,
-                        chapter_num, title, current_url, response.text, content, word_count
-                    )
-                    logger.info(f"Saved Chapter {chapter_num}: '{title}' ({word_count} words)")
+        ctx = ScrapeContext(
+            start_url=source["start_url"],
+            session=session,
+            config=source["config"],
+            max_chapters=max_chapters,
+            stop_on_premium=True,
+        )
+        try:
+            async for ch in adapter.crawl(ctx):
+                fallback_local += 1
+                local_number = ch.number if ch.number is not None else float(fallback_local)
+                global_number = local_number + offset
+
+                async with pool.acquire() as conn:
+                    wrote = await _persist_chapter(conn, source, global_number, ch, force)
+                if wrote:
                     scraped_count += 1
-            
-            if not next_url:
-                # Try to predict next chapter URL (e.g. replacing /1 with /2)
-                parts = current_url.rstrip("/").split("/")
-                last_part = parts[-1]
-                if re.match(r"^\d+(?:\.\d+)?$", last_part):
-                    try:
-                        next_num = int(chapter_num) + 1
-                        predicted_url = "/".join(parts[:-1]) + f"/{next_num}"
-                        logger.info(f"No next link found in HTML; predicting next URL: {predicted_url}")
-                        next_url = predicted_url
-                    except Exception:
-                        pass
-                        
-            if not next_url:
-                logger.info("No next chapter URL found and could not predict next. Sequential navigation completed.")
-                break
-                
-            current_url = next_url
-            
-            # Rate-limiting / Politeness delay
-            await asyncio.sleep(settings.SCRAPER_DELAY)
-            
+
+                await asyncio.sleep(settings.SCRAPER_DELAY)
+        except PremiumReached as p:
+            logger.info(f"Stopped at premium boundary (local chapter {p.number}). Scraped {scraped_count} this run.")
+
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE sources SET last_scraped_at = now() WHERE id = $1;", source_id)
+
     return scraped_count
+
+
+async def scrape_novel(novel_id: int, force: bool = False, max_chapters: int | None = None) -> int:
+    """Scrapes every source of a novel in id order (e.g. the eng source then a raw
+    continuation), accumulating into the novel's continuous chapter sequence."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        sources = await conn.fetch("SELECT id FROM sources WHERE novel_id = $1 ORDER BY id ASC;", novel_id)
+    total = 0
+    for s in sources:
+        total += await scrape_source(int(s["id"]), force=force, max_chapters=max_chapters)
+    return total
+
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        print("Usage: python -m novelwiki.scraper.runner <start_url> [--force] [--max <max_chapters>]")
+        print("Usage: python -m novelwiki.scraper.runner <source_id> [--force] [--max <max_chapters>]")
         sys.exit(1)
-        
-    start_url = sys.argv[1]
+
+    source_id = int(sys.argv[1])
     force = "--force" in sys.argv
     max_ch = None
     if "--max" in sys.argv:
         try:
             idx = sys.argv.index("--max")
-            max_ch = int(sys.argv[idx+1])
+            max_ch = int(sys.argv[idx + 1])
         except Exception:
             pass
-            
+
     async def main():
-        count = await scrape_novel(start_url, force=force, max_chapters=max_ch)
+        count = await scrape_source(source_id, force=force, max_chapters=max_ch)
         logger.info(f"Successfully scraped {count} chapters.")
         await close_db_pool()
 

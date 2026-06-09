@@ -99,18 +99,18 @@ def _clean_chunk_ids(raw, valid_set: set[int], fallback: list[int]) -> list[int]
     return ids if ids else list(fallback)
 
 
-async def get_running_summary(chapter: float, conn: asyncpg.Connection) -> str:
+async def get_running_summary(novel_id: int, chapter: float, conn: asyncpg.Connection) -> str:
     """Gets the running summary through the previous chapter, ordered ascending."""
     row = await conn.fetchrow(
-        "SELECT running_summary FROM extraction_state WHERE chapter < $1 ORDER BY chapter DESC LIMIT 1;",
-        chapter
+        "SELECT running_summary FROM extraction_state WHERE chapter < $1 AND novel_id = $2 ORDER BY chapter DESC LIMIT 1;",
+        chapter, novel_id
     )
     if row and row["running_summary"]:
         return row["running_summary"]
     return "No summary yet. The story is just beginning."
 
 
-async def get_known_entities_roster(chapter: float, conn: asyncpg.Connection) -> str:
+async def get_known_entities_roster(novel_id: int, chapter: float, conn: asyncpg.Connection) -> str:
     """Assembles a compact roster of entities known BEFORE this chapter, using the
     freshest spoiler-safe description (latest one observed in a chapter < this one,
     falling back to the first-seen blurb)."""
@@ -126,10 +126,10 @@ async def get_known_entities_roster(chapter: float, conn: asyncpg.Connection) ->
             ORDER BY ed.chapter DESC
             LIMIT 1
         ) d ON TRUE
-        WHERE e.first_seen_chapter < $1
+        WHERE e.first_seen_chapter < $1 AND e.novel_id = $2
         ORDER BY e.id ASC;
         """,
-        chapter
+        chapter, novel_id
     )
     if not rows:
         return "No entities recorded yet."
@@ -140,13 +140,13 @@ async def get_known_entities_roster(chapter: float, conn: asyncpg.Connection) ->
     return "\n".join(roster_lines)
 
 
-async def _load_chapter_chunks(chapter_number: float, conn: asyncpg.Connection):
+async def _load_chapter_chunks(novel_id: int, chapter_number: float, conn: asyncpg.Connection):
     """Returns (marked_text, valid_chunk_ids_set, all_chunk_ids_list) for a chapter.
     The marked text prefixes each passage with `[chunk <id>]` so the extractor can
     attach per-item provenance."""
     chunk_rows = await conn.fetch(
-        "SELECT id, chunk_index, text FROM chunks WHERE chapter = $1 ORDER BY chunk_index ASC;",
-        chapter_number
+        "SELECT id, chunk_index, text FROM chunks WHERE chapter = $1 AND novel_id = $2 ORDER BY chunk_index ASC;",
+        chapter_number, novel_id
     )
     all_ids = [int(r["id"]) for r in chunk_rows]
     valid = set(all_ids)
@@ -154,7 +154,7 @@ async def _load_chapter_chunks(chapter_number: float, conn: asyncpg.Connection):
     return marked, valid, all_ids
 
 
-async def extract_knowledge_for_chapter(chapter_number: float, force: bool = False):
+async def extract_knowledge_for_chapter(novel_id: int, chapter_number: float, force: bool = False):
     """
     Extracts structured knowledge from chapter_number in a forward-only transaction.
     """
@@ -163,8 +163,8 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
     async with pool.acquire() as conn:
         # Check if already processed
         processed = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM extraction_state WHERE chapter = $1);",
-            chapter_number
+            "SELECT EXISTS(SELECT 1 FROM extraction_state WHERE chapter = $1 AND novel_id = $2);",
+            chapter_number, novel_id
         )
         if processed and not force:
             logger.info(f"Chapter {chapter_number} already extracted. Skipping.")
@@ -172,31 +172,31 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
 
         logger.info(f"--- Starting Forward-Only Extraction for Chapter {chapter_number} ---")
         # Invalidate affected cache entries
-        await clear_caches(conn, chapter_number=chapter_number)
+        await clear_caches(conn, novel_id=novel_id, chapter_number=chapter_number)
 
         # Load chapter info
         chapter = await conn.fetchrow(
-            "SELECT title, clean_text FROM chapters WHERE number = $1;",
-            chapter_number
+            "SELECT title, content FROM chapters WHERE number = $1 AND novel_id = $2;",
+            chapter_number, novel_id
         )
         if not chapter:
             logger.error(f"Chapter {chapter_number} not found in DB.")
             return
 
         # Build chunk-marked text + provenance id set (Invariant 8).
-        marked_text, valid_chunk_ids, all_chunk_ids = await _load_chapter_chunks(chapter_number, conn)
+        marked_text, valid_chunk_ids, all_chunk_ids = await _load_chapter_chunks(novel_id, chapter_number, conn)
         if not all_chunk_ids:
             logger.warning(
                 f"Chapter {chapter_number} has no chunks; run `chunk` before `extract` for provenance. "
                 f"Proceeding with raw text and empty provenance."
             )
-            extraction_body = chapter["clean_text"]
+            extraction_body = chapter["content"]
         else:
             extraction_body = marked_text
 
         # 1. Compile forward context
-        prev_summary = await get_running_summary(chapter_number, conn)
-        roster = await get_known_entities_roster(chapter_number, conn)
+        prev_summary = await get_running_summary(novel_id, chapter_number, conn)
+        roster = await get_known_entities_roster(novel_id, chapter_number, conn)
 
         # 2. Invoke Flash for structured JSON extraction.
         # The roster leads the user message: it is append-only across chapters, so
@@ -269,13 +269,14 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                 # Locate surface form context snippet for disambiguation
                 context_snippet = ""
                 if surface:
-                    context_idx = chapter["clean_text"].lower().find(surface.lower())
+                    context_idx = chapter["content"].lower().find(surface.lower())
                     if context_idx != -1:
                         start = max(0, context_idx - 100)
-                        end = min(len(chapter["clean_text"]), context_idx + len(surface) + 100)
-                        context_snippet = chapter["clean_text"][start:end]
+                        end = min(len(chapter["content"]), context_idx + len(surface) + 100)
+                        context_snippet = chapter["content"][start:end]
 
                 entity_id = await resolve_entity(
+                    novel_id=novel_id,
                     mention=ref or surface,
                     entity_type=etype,
                     chapter=chapter_number,
@@ -291,18 +292,18 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                 if mdesc and mdesc.strip():
                     await conn.execute(
                         """
-                        INSERT INTO entity_descriptions (entity_id, chapter, description)
-                        VALUES ($1, $2, $3)
+                        INSERT INTO entity_descriptions (novel_id, entity_id, chapter, description)
+                        VALUES ($1, $2, $3, $4)
                         ON CONFLICT (entity_id, chapter) DO UPDATE SET description = EXCLUDED.description;
                         """,
-                        entity_id, chapter_number, mdesc.strip()
+                        novel_id, entity_id, chapter_number, mdesc.strip()
                     )
 
             async def get_entity_id(ref_name: str, fallback_type: str = "concept") -> int:
                 if ref_name in local_ref_to_id:
                     return local_ref_to_id[ref_name]
                 logger.info(f"Ref '{ref_name}' was not explicitly mentioned. Resolving dynamically...")
-                entity_id = await resolve_entity(ref_name, fallback_type, chapter_number, ref_name, conn)
+                entity_id = await resolve_entity(novel_id, ref_name, fallback_type, chapter_number, ref_name, conn)
                 local_ref_to_id[ref_name] = entity_id
                 return entity_id
 
@@ -315,10 +316,10 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                 src_ids = _clean_chunk_ids(fact.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids)
                 await conn.execute(
                     """
-                    INSERT INTO entity_facts (entity_id, chapter, fact_type, content, source_chunk_ids)
-                    VALUES ($1, $2, $3, $4, $5);
+                    INSERT INTO entity_facts (novel_id, entity_id, chapter, fact_type, content, source_chunk_ids)
+                    VALUES ($1, $2, $3, $4, $5, $6);
                     """,
-                    fid, chapter_number, fact.get("fact_type"), fact.get("content"), src_ids
+                    novel_id, fid, chapter_number, fact.get("fact_type"), fact.get("content"), src_ids
                 )
 
             # 5. Insert relationships (per-item provenance)
@@ -330,10 +331,10 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                 src_ids = _clean_chunk_ids(rel.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids)
                 await conn.execute(
                     """
-                    INSERT INTO relationships (source_id, target_id, chapter, relation_type, directed, content, source_chunk_ids)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7);
+                    INSERT INTO relationships (novel_id, source_id, target_id, chapter, relation_type, directed, content, source_chunk_ids)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
                     """,
-                    src_id, tgt_id, chapter_number, rel.get("relation_type"),
+                    novel_id, src_id, tgt_id, chapter_number, rel.get("relation_type"),
                     rel.get("directed", True), rel.get("content"), src_ids
                 )
 
@@ -348,10 +349,10 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                 src_ids = _clean_chunk_ids(ev.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids)
                 await conn.execute(
                     """
-                    INSERT INTO events (chapter, description, participants, location_id, significance, source_chunk_ids)
-                    VALUES ($1, $2, $3, $4, $5, $6);
+                    INSERT INTO events (novel_id, chapter, description, participants, location_id, significance, source_chunk_ids)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7);
                     """,
-                    chapter_number, ev.get("description"), participants, loc_id,
+                    novel_id, chapter_number, ev.get("description"), participants, loc_id,
                     ev.get("significance"), src_ids
                 )
 
@@ -365,10 +366,10 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                     continue
                 await conn.execute(
                     """
-                    INSERT INTO identity_links (entity_a, entity_b, revealed_at_chapter, note)
-                    VALUES ($1, $2, $3, $4);
+                    INSERT INTO identity_links (novel_id, entity_a, entity_b, revealed_at_chapter, note)
+                    VALUES ($1, $2, $3, $4, $5);
                     """,
-                    persona_id, true_id, chapter_number, reveal.get("note")
+                    novel_id, persona_id, true_id, chapter_number, reveal.get("note")
                 )
                 logger.info(f"Recorded Identity Reveal at Chapter {chapter_number}: Entity {persona_id} = Entity {true_id}")
 
@@ -382,12 +383,12 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                 reveal_ch = chapter_number if is_rev else 0.0
                 await conn.execute(
                     """
-                    INSERT INTO entity_aliases (entity_id, alias, revealed_at_chapter)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO entity_aliases (novel_id, entity_id, alias, revealed_at_chapter)
+                    VALUES ($1, $2, $3, $4)
                     ON CONFLICT (entity_id, alias) DO UPDATE
                     SET revealed_at_chapter = LEAST(entity_aliases.revealed_at_chapter, EXCLUDED.revealed_at_chapter);
                     """,
-                    ent_id, alias_name, reveal_ch
+                    novel_id, ent_id, alias_name, reveal_ch
                 )
 
             # 9. Update running summary using Flash
@@ -401,7 +402,7 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
                         # Feed (effectively) the whole chapter so end-of-chapter
                         # developments still reach the forward-carried summary. The
                         # cap only guards against pathologically huge chapters.
-                        text=chapter["clean_text"][:settings.SUMMARY_INPUT_MAX_CHARS]
+                        text=chapter["content"][:settings.SUMMARY_INPUT_MAX_CHARS]
                     )
                 }
             ]
@@ -416,18 +417,19 @@ async def extract_knowledge_for_chapter(chapter_number: float, force: bool = Fal
             # Save state
             await conn.execute(
                 """
-                INSERT INTO extraction_state (chapter, running_summary, processed_at)
-                VALUES ($1, $2, now())
-                ON CONFLICT (chapter) DO UPDATE
+                INSERT INTO extraction_state (novel_id, chapter, running_summary, processed_at)
+                VALUES ($1, $2, $3, now())
+                ON CONFLICT (novel_id, chapter) DO UPDATE
                 SET running_summary = EXCLUDED.running_summary, processed_at = now();
                 """,
-                chapter_number, new_summary
+                novel_id, chapter_number, new_summary
             )
 
         logger.info(f"--- Chapter {chapter_number} Extraction Complete ---")
 
 
 async def extract_all_chapters(
+    novel_id: int,
     force: bool = False,
     from_chapter: float | None = None,
     to_chapter: float | None = None,
@@ -436,21 +438,21 @@ async def extract_all_chapters(
     to a [from_chapter, to_chapter] range so the prompt can be iterated on the first
     ~50 chapters before committing to the full paid run."""
     pool = await get_db_pool()
-    conditions = []
-    args: list = []
+    conditions = ["novel_id = $1"]
+    args: list = [novel_id]
     if from_chapter is not None:
         args.append(from_chapter)
         conditions.append(f"number >= ${len(args)}")
     if to_chapter is not None:
         args.append(to_chapter)
         conditions.append(f"number <= ${len(args)}")
-    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    where = " WHERE " + " AND ".join(conditions)
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(f"SELECT number FROM chapters{where} ORDER BY number ASC;", *args)
 
     for row in rows:
-        await extract_knowledge_for_chapter(float(row["number"]), force=force)
+        await extract_knowledge_for_chapter(novel_id, float(row["number"]), force=force)
 
 
 if __name__ == "__main__":
@@ -458,7 +460,8 @@ if __name__ == "__main__":
     force = "--force" in sys.argv
 
     async def main():
-        await extract_all_chapters(force=force)
+        novel_id = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
+        await extract_all_chapters(novel_id, force=force)
         await close_db_pool()
 
     asyncio.run(main())

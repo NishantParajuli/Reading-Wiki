@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from novelwiki.db.connection import init_db_pool, close_db_pool
-from novelwiki.retrieval.bm25 import bm25_manager
+from novelwiki.db.schema import init_database
 from novelwiki.api.routes import router
 
 logging.basicConfig(level=logging.INFO)
@@ -13,14 +13,17 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup Phase ──
+    logger.info("Ensuring database schema exists...")
+    try:
+        await init_database()
+    except Exception as e:
+        logger.warning(f"Schema init at startup failed (continuing): {e}")
+
     logger.info("Initializing database connection pool...")
     await init_db_pool()
 
-    logger.info("Loading BM25 lexical search index (from disk if present)...")
-    try:
-        await bm25_manager.load_or_build_index()
-    except Exception as e:
-        logger.warning(f"Could not load BM25 index at startup (database might be empty): {e}")
+    # BM25 indexes are per-novel and lazy: each novel's index is built/loaded on its
+    # first codex query, so there's nothing to preload here.
 
     yield
 
@@ -29,9 +32,9 @@ async def lifespan(app: FastAPI):
     await close_db_pool()
 
 app = FastAPI(
-    title="Spoiler-Aware Webnovel Wiki",
-    description="A complete spoiler-gated hybrid-search knowledge base & chat for webnovels.",
-    version="1.0.0",
+    title="Novel Reading Platform",
+    description="A multi-novel reading platform with scraping, translation, and a spoiler-safe codex.",
+    version="2.0.0",
     lifespan=lifespan
 )
 

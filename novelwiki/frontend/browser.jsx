@@ -64,7 +64,7 @@ const FILTERS = [
   { id: "concept", label: "Concepts", icon: "spark" },
 ];
 
-function Browser({ ceiling, meta, nav }) {
+function Browser({ novelId, ceiling, meta, nav }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   const [list, setList] = useState(null); // null = loading
@@ -79,7 +79,7 @@ function Browser({ ceiling, meta, nav }) {
     let cancel = false;
     setList(null);
     const type = filter === "all" ? null : filter;
-    window.API.listEntities(debCeiling, { type, q: debQ.trim() || null })
+    window.API.listEntities(novelId, debCeiling, { type, q: debQ.trim() || null })
       .then(rows => {
         if (cancel) return;
         const sorted = [...rows].sort((a, b) => a.name.localeCompare(b.name));

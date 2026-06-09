@@ -22,13 +22,13 @@ logger = logging.getLogger(__name__)
 _CITATION_RE = re.compile(r"\[(chunk|fact|rel|relationship|event)\s+(\d+)", re.IGNORECASE)
 
 
-async def execute_tool(tool: str, args: dict, chapter_ceiling: float) -> str:
-    """Safely dispatches tool calls from the LLM, strictly injecting chapter_ceiling."""
+async def execute_tool(novel_id: int, tool: str, args: dict, chapter_ceiling: float) -> str:
+    """Safely dispatches tool calls from the LLM, strictly injecting novel_id + chapter_ceiling."""
     try:
         if tool == "hybrid_search":
             query = args.get("query", "")
             k = int(args.get("k", 50))
-            res = await hybrid_search(query, chapter_ceiling, k)
+            res = await hybrid_search(novel_id, query, chapter_ceiling, k)
             return json.dumps(res, default=str)
 
         elif tool == "rerank":
@@ -40,35 +40,35 @@ async def execute_tool(tool: str, args: dict, chapter_ceiling: float) -> str:
 
         elif tool == "get_chunk":
             chunk_id = int(args.get("chunk_id", 0))
-            res = await get_chunk(chunk_id, chapter_ceiling)
+            res = await get_chunk(novel_id, chunk_id, chapter_ceiling)
             return json.dumps(res, default=str)
 
         elif tool == "resolve_entity":
             name = args.get("name", "")
-            res = await resolve_entity(name, chapter_ceiling)
+            res = await resolve_entity(novel_id, name, chapter_ceiling)
             return json.dumps(res, default=str)
 
         elif tool == "get_entity_profile":
             entity_id = int(args.get("entity_id", 0))
-            res = await get_entity_profile(entity_id, chapter_ceiling)
+            res = await get_entity_profile(novel_id, entity_id, chapter_ceiling)
             return json.dumps(res, default=str)
 
         elif tool == "get_relationships":
             entity_id = int(args.get("entity_id", 0))
             other_id = args.get("other_id")
             other_id = int(other_id) if other_id is not None else None
-            res = await get_relationships(entity_id, chapter_ceiling, other_id)
+            res = await get_relationships(novel_id, entity_id, chapter_ceiling, other_id)
             return json.dumps(res, default=str)
 
         elif tool == "get_timeline":
             entity_id = int(args.get("entity_id", 0))
-            res = await get_timeline(entity_id, chapter_ceiling)
+            res = await get_timeline(novel_id, entity_id, chapter_ceiling)
             return json.dumps(res, default=str)
 
         elif tool == "list_entities":
             etype = args.get("type")
             q = args.get("name_query")
-            res = await list_entities(chapter_ceiling, etype, q)
+            res = await list_entities(novel_id, chapter_ceiling, etype, q)
             return json.dumps(res, default=str)
 
         else:
@@ -103,7 +103,7 @@ def _accumulate_evidence(tool: str, raw_result: str, evidence: dict):
             evidence["rel_ids"].add(int(it["id"]))
 
 
-async def build_citations(answer: str, chapter_ceiling: float) -> list[dict]:
+async def build_citations(novel_id: int, answer: str, chapter_ceiling: float) -> list[dict]:
     """Resolves inline citations in the answer to structured {kind,id,chapter,snippet}.
     Every snippet lookup is bounded by the ceiling, so a citation that points past the
     ceiling is dropped rather than leaked."""
@@ -136,8 +136,8 @@ async def build_citations(answer: str, chapter_ceiling: float) -> list[dict]:
                 continue
             table, col = tbl_col
             row = await conn.fetchrow(
-                f"SELECT chapter, {col} AS snippet FROM {table} WHERE id = $1 AND chapter <= $2;",
-                rid, chapter_ceiling
+                f"SELECT chapter, {col} AS snippet FROM {table} WHERE id = $1 AND chapter <= $2 AND novel_id = $3;",
+                rid, chapter_ceiling, novel_id
             )
             if not row:
                 continue  # not found, or beyond ceiling -> never surface
@@ -157,12 +157,12 @@ def compute_query_hash(question: str) -> str:
     return hashlib.md5(norm.encode("utf-8")).hexdigest()
 
 
-async def get_cached_answer(query_hash: str, ceiling: float):
+async def get_cached_answer(novel_id: int, query_hash: str, ceiling: float):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT answer_md, evidence_ids FROM query_cache WHERE query_hash = $1 AND chapter_ceiling = $2;",
-            query_hash, ceiling
+            "SELECT answer_md, evidence_ids FROM query_cache WHERE query_hash = $1 AND chapter_ceiling = $2 AND novel_id = $3;",
+            query_hash, ceiling, novel_id
         )
         if not row:
             return None
@@ -175,17 +175,17 @@ async def get_cached_answer(query_hash: str, ceiling: float):
         return {"answer_md": row["answer_md"], "evidence_ids": evidence or {}}
 
 
-async def save_cached_answer(query_hash: str, ceiling: float, answer: str, evidence_ids: dict):
+async def save_cached_answer(novel_id: int, query_hash: str, ceiling: float, answer: str, evidence_ids: dict):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO query_cache (query_hash, chapter_ceiling, answer_md, evidence_ids, created_at)
-            VALUES ($1, $2, $3, $4, now())
-            ON CONFLICT (query_hash, chapter_ceiling) DO UPDATE
+            INSERT INTO query_cache (novel_id, query_hash, chapter_ceiling, answer_md, evidence_ids, created_at)
+            VALUES ($1, $2, $3, $4, $5, now())
+            ON CONFLICT (novel_id, query_hash, chapter_ceiling) DO UPDATE
             SET answer_md = EXCLUDED.answer_md, evidence_ids = EXCLUDED.evidence_ids, created_at = now();
             """,
-            query_hash, ceiling, answer, json.dumps(evidence_ids)
+            novel_id, query_hash, ceiling, answer, json.dumps(evidence_ids)
         )
 
 
@@ -193,7 +193,7 @@ def _is_done(decision_clean: str) -> bool:
     return decision_clean.strip().strip('"').strip("'").upper() == "DONE"
 
 
-async def answer_question(question: str, chapter_ceiling: float) -> dict:
+async def answer_question(novel_id: int, question: str, chapter_ceiling: float) -> dict:
     """
     Full Pro/Flash agentic orchestrator: Pro plans -> (Flash distills) -> Pro reasons
     -> Pro synthesizes -> Flash verifies -> (Pro repairs) -> grounded, cited answer.
@@ -203,10 +203,10 @@ async def answer_question(question: str, chapter_ceiling: float) -> dict:
     query_hash = compute_query_hash(question)
 
     # 0. Cache
-    cached = await get_cached_answer(query_hash, chapter_ceiling)
+    cached = await get_cached_answer(novel_id, query_hash, chapter_ceiling)
     if cached:
         logger.info(f"Returning cached answer for {query_hash} at ceiling {chapter_ceiling}")
-        citations = await build_citations(cached["answer_md"], chapter_ceiling)
+        citations = await build_citations(novel_id, cached["answer_md"], chapter_ceiling)
         return {"answer": cached["answer_md"], "citations": citations, "evidence_ids": cached["evidence_ids"]}
 
     logger.info(f"Agent orchestrator start: '{question}' (ceiling {chapter_ceiling})")
@@ -279,7 +279,7 @@ async def answer_question(question: str, chapter_ceiling: float) -> dict:
             tool_name = call.get("tool")
             args = call.get("args", {}) or {}
             logger.info(f"Executing Agent Tool: {tool_name} with args {args}")
-            raw_result = await execute_tool(tool_name, args, chapter_ceiling)
+            raw_result = await execute_tool(novel_id, tool_name, args, chapter_ceiling)
             _accumulate_evidence(tool_name, raw_result, evidence)
 
             distill = await call_chat_completion(
@@ -344,8 +344,8 @@ async def answer_question(question: str, chapter_ceiling: float) -> dict:
         logger.error(f"Grounding verification error: {e}. Returning unrepaired draft.")
 
     # 5. Structured citations + evidence, then cache
-    citations = await build_citations(draft, chapter_ceiling)
+    citations = await build_citations(novel_id, draft, chapter_ceiling)
     evidence_ids = {k: sorted(v) for k, v in evidence.items()}
-    await save_cached_answer(query_hash, chapter_ceiling, draft, evidence_ids)
+    await save_cached_answer(novel_id, query_hash, chapter_ceiling, draft, evidence_ids)
 
     return {"answer": draft, "citations": citations, "evidence_ids": evidence_ids}

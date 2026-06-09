@@ -4,12 +4,13 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
-from novelwiki.scraper.runner import scrape_novel
+from novelwiki.scraper.runner import scrape_source, scrape_novel
+from novelwiki.scraper.adapters import list_adapters
 from novelwiki.ingest.chunk import chunk_all_chapters
 from novelwiki.ingest.embed import embed_missing_chunks
 from novelwiki.ingest.extract import extract_all_chapters
 from novelwiki.ingest.link import merge_entities
-from novelwiki.retrieval.bm25 import bm25_manager
+from novelwiki.retrieval.bm25 import get_bm25_manager
 from novelwiki.retrieval.tools import (
     resolve_entity, get_entity_profile, get_relationships, get_timeline,
     list_entities, get_identity_links
@@ -25,9 +26,49 @@ router = APIRouter()
 
 # ── API Models ────────────────────────────────────────────────────────────
 
+class SourceCreate(BaseModel):
+    adapter: str
+    start_url: str
+    language: str = "en"
+    is_raw: bool = False
+    chapter_offset: float = 0
+    label: str | None = None
+    config: dict | None = None
+
+class NovelCreate(BaseModel):
+    title: str
+    author: str | None = None
+    description: str | None = None
+    cover_url: str | None = None
+    original_language: str = "en"
+    codex_enabled: bool = False
+    source: SourceCreate | None = None  # optional first source
+
+class ProgressUpdate(BaseModel):
+    last_chapter: float
+    scroll_pct: float = 0
+
+class BookmarkCreate(BaseModel):
+    chapter: float
+    note: str | None = None
+
 class AskRequest(BaseModel):
     question: str
-    chapter_ceiling: float
+    ceiling: float
+
+class ScrapeTrigger(BaseModel):
+    force: bool = False
+    max_chapters: int | None = None
+    source_id: int | None = None  # scrape one source; omit to scrape all of the novel's sources
+
+class CodexBuild(BaseModel):
+    force: bool = False
+    from_chapter: float | None = None
+    to_chapter: float | None = None
+
+class MergePayload(BaseModel):
+    keep_id: int
+    drop_id: int
 
 class Citation(BaseModel):
     kind: str
@@ -40,88 +81,341 @@ class AskResponse(BaseModel):
     citations: list[Citation]
     evidence_ids: dict
 
-# Admin Trigger Payloads
-class ScrapePayload(BaseModel):
-    start_url: str
-    force: bool = False
-    max_chapters: int | None = None
 
-class RangePayload(BaseModel):
-    force: bool = False
-    from_chapter: float | None = None
-    to_chapter: float | None = None
+# ── Adapters ──────────────────────────────────────────────────────────────
 
-class EmbedPayload(BaseModel):
-    from_chapter: float | None = None
-    to_chapter: float | None = None
+@router.get("/adapters")
+async def api_adapters():
+    """The scraping techniques available for the Add-Source dropdown."""
+    return list_adapters()
 
-class MergePayload(BaseModel):
-    keep_id: int
-    drop_id: int
 
-# ── Endpoints ─────────────────────────────────────────────────────────────
+# ── Library / Novels ──────────────────────────────────────────────────────
 
-@router.post("/ask", response_model=AskResponse)
-async def ask_question(req: AskRequest):
-    """
-    Agentic Q&A: planning, reasoning, distilling, synthesis and grounding verification.
-    """
-    try:
-        if not bm25_manager.corpus:
-            await bm25_manager.load_or_build_index()
-
-        result = await answer_question(req.question, req.chapter_ceiling)
-        return AskResponse(
-            answer=result["answer"],
-            citations=[Citation(**c) for c in result["citations"]],
-            evidence_ids=result["evidence_ids"],
+@router.get("/novels")
+async def api_list_novels():
+    """The library grid: each novel with chapter span + reading progress."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT n.id, n.title, n.author, n.cover_url, n.description, n.codex_enabled,
+                   COUNT(c.number) AS chapter_count,
+                   MIN(c.number) AS min_chapter, MAX(c.number) AS max_chapter,
+                   p.last_chapter, p.max_chapter_read
+            FROM novels n
+            LEFT JOIN chapters c ON c.novel_id = n.id
+            LEFT JOIN reading_progress p ON p.novel_id = n.id
+            GROUP BY n.id, p.last_chapter, p.max_chapter_read
+            ORDER BY n.updated_at DESC NULLS LAST, n.id DESC;
+            """
         )
-    except Exception as e:
-        logger.error(f"Agentic Q&A error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return [
+        {
+            "id": int(r["id"]),
+            "title": r["title"],
+            "author": r["author"],
+            "cover_url": r["cover_url"],
+            "description": r["description"],
+            "codex_enabled": r["codex_enabled"],
+            "chapter_count": int(r["chapter_count"] or 0),
+            "min_chapter": float(r["min_chapter"]) if r["min_chapter"] is not None else None,
+            "max_chapter": float(r["max_chapter"]) if r["max_chapter"] is not None else None,
+            "last_chapter": float(r["last_chapter"]) if r["last_chapter"] is not None else None,
+            "max_chapter_read": float(r["max_chapter_read"]) if r["max_chapter_read"] is not None else None,
+        }
+        for r in rows
+    ]
 
 
-# ── Meta ──────────────────────────────────────────────────────────────────
+@router.post("/novels")
+async def api_create_novel(payload: NovelCreate):
+    """Create a novel and (optionally) its first source."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            novel_id = await conn.fetchval(
+                """
+                INSERT INTO novels (title, author, description, cover_url, original_language, codex_enabled)
+                VALUES ($1, $2, $3, $4, $5, $6) RETURNING id;
+                """,
+                payload.title, payload.author, payload.description, payload.cover_url,
+                payload.original_language, payload.codex_enabled,
+            )
+            source_id = None
+            if payload.source:
+                s = payload.source
+                source_id = await conn.fetchval(
+                    """
+                    INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw, chapter_offset, label)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
+                    """,
+                    novel_id, s.adapter, s.start_url, json.dumps(s.config or {}),
+                    s.language, s.is_raw, s.chapter_offset, s.label,
+                )
+    return {"id": int(novel_id), "source_id": int(source_id) if source_id else None}
 
-@router.get("/meta/chapters")
-async def api_meta_chapters():
-    """Returns the chapter span available + display title/blurb, so the UI can
-    bound the ceiling control and render the hero."""
+
+@router.get("/novels/{novel_id}")
+async def api_get_novel(novel_id: int):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        novel = await conn.fetchrow("SELECT * FROM novels WHERE id = $1;", novel_id)
+        if not novel:
+            raise HTTPException(status_code=404, detail="Novel not found.")
+        span = await conn.fetchrow(
+            "SELECT COUNT(*) AS count, MIN(number) AS min, MAX(number) AS max FROM chapters WHERE novel_id = $1;",
+            novel_id,
+        )
+        sources = await conn.fetch(
+            """
+            SELECT id, adapter, start_url, language, is_raw, chapter_offset, label, last_scraped_at
+            FROM sources WHERE novel_id = $1 ORDER BY id ASC;
+            """,
+            novel_id,
+        )
+        progress = await conn.fetchrow("SELECT * FROM reading_progress WHERE novel_id = $1;", novel_id)
+    return {
+        "id": int(novel["id"]),
+        "title": novel["title"],
+        "author": novel["author"],
+        "description": novel["description"],
+        "cover_url": novel["cover_url"],
+        "original_language": novel["original_language"],
+        "codex_enabled": novel["codex_enabled"],
+        "chapter_count": int(span["count"]),
+        "min_chapter": float(span["min"]) if span["min"] is not None else None,
+        "max_chapter": float(span["max"]) if span["max"] is not None else None,
+        "sources": [
+            {
+                "id": int(s["id"]), "adapter": s["adapter"], "start_url": s["start_url"],
+                "language": s["language"], "is_raw": s["is_raw"],
+                "chapter_offset": float(s["chapter_offset"] or 0), "label": s["label"],
+                "last_scraped_at": s["last_scraped_at"].isoformat() if s["last_scraped_at"] else None,
+            }
+            for s in sources
+        ],
+        "progress": {
+            "last_chapter": float(progress["last_chapter"]) if progress and progress["last_chapter"] is not None else None,
+            "max_chapter_read": float(progress["max_chapter_read"]) if progress and progress["max_chapter_read"] is not None else None,
+            "scroll_pct": float(progress["scroll_pct"]) if progress and progress["scroll_pct"] is not None else 0,
+        },
+    }
+
+
+@router.delete("/novels/{novel_id}")
+async def api_delete_novel(novel_id: int):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM novels WHERE id = $1;", novel_id)
+    return {"status": "success"}
+
+
+@router.post("/novels/{novel_id}/sources")
+async def api_add_source(novel_id: int, payload: SourceCreate):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        source_id = await conn.fetchval(
+            """
+            INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw, chapter_offset, label)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
+            """,
+            novel_id, payload.adapter, payload.start_url, json.dumps(payload.config or {}),
+            payload.language, payload.is_raw, payload.chapter_offset, payload.label,
+        )
+    return {"id": int(source_id)}
+
+
+# ── Chapters / Reader ─────────────────────────────────────────────────────
+
+@router.get("/novels/{novel_id}/chapters")
+async def api_list_chapters(novel_id: int):
+    """The table of contents for the reader."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT number, title, language, is_translated, translation_status,
+                   (content IS NOT NULL) AS has_content, word_count
+            FROM chapters WHERE novel_id = $1 ORDER BY number ASC;
+            """,
+            novel_id,
+        )
+    return [
+        {
+            "number": float(r["number"]),
+            "title": r["title"],
+            "language": r["language"],
+            "is_translated": r["is_translated"],
+            "translation_status": r["translation_status"],
+            "has_content": r["has_content"],
+            "word_count": r["word_count"],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/novels/{novel_id}/chapter/{number}")
+async def api_get_chapter(novel_id: int, number: float):
+    """Returns one chapter's readable content for the reader, plus prev/next numbers.
+    (Phase 2 will translate raw chapters on demand here; for now content may be null
+    for untranslated raw chapters, signalled via translation_status.)"""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT COUNT(*) AS count, MIN(number) AS min_chapter, MAX(number) AS max_chapter FROM chapters;"
+            """
+            SELECT number, title, content, original_text, language, is_translated, translation_status
+            FROM chapters WHERE novel_id = $1 AND number = $2;
+            """,
+            novel_id, number,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Chapter not found.")
+        prev_num = await conn.fetchval(
+            "SELECT number FROM chapters WHERE novel_id = $1 AND number < $2 ORDER BY number DESC LIMIT 1;",
+            novel_id, number,
+        )
+        next_num = await conn.fetchval(
+            "SELECT number FROM chapters WHERE novel_id = $1 AND number > $2 ORDER BY number ASC LIMIT 1;",
+            novel_id, number,
         )
     return {
-        "novel_title": settings.NOVEL_TITLE,
-        "novel_blurb": settings.NOVEL_BLURB,
+        "number": float(row["number"]),
+        "title": row["title"],
+        "content": row["content"],
+        "language": row["language"],
+        "is_translated": row["is_translated"],
+        "translation_status": row["translation_status"],
+        "prev": float(prev_num) if prev_num is not None else None,
+        "next": float(next_num) if next_num is not None else None,
+    }
+
+
+# ── Reading progress ──────────────────────────────────────────────────────
+
+@router.get("/novels/{novel_id}/progress")
+async def api_get_progress(novel_id: int):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM reading_progress WHERE novel_id = $1;", novel_id)
+    if not row:
+        return {"last_chapter": None, "max_chapter_read": None, "scroll_pct": 0}
+    return {
+        "last_chapter": float(row["last_chapter"]) if row["last_chapter"] is not None else None,
+        "max_chapter_read": float(row["max_chapter_read"]) if row["max_chapter_read"] is not None else None,
+        "scroll_pct": float(row["scroll_pct"] or 0),
+    }
+
+
+@router.put("/novels/{novel_id}/progress")
+async def api_set_progress(novel_id: int, payload: ProgressUpdate):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO reading_progress (novel_id, last_chapter, max_chapter_read, scroll_pct, updated_at)
+            VALUES ($1, $2, $2, $3, now())
+            ON CONFLICT (novel_id) DO UPDATE SET
+                last_chapter = EXCLUDED.last_chapter,
+                max_chapter_read = GREATEST(COALESCE(reading_progress.max_chapter_read, 0), EXCLUDED.last_chapter),
+                scroll_pct = EXCLUDED.scroll_pct,
+                updated_at = now();
+            """,
+            novel_id, payload.last_chapter, payload.scroll_pct,
+        )
+    return {"status": "success"}
+
+
+# ── Bookmarks ─────────────────────────────────────────────────────────────
+
+@router.get("/novels/{novel_id}/bookmarks")
+async def api_list_bookmarks(novel_id: int):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, chapter, note, created_at FROM bookmarks WHERE novel_id = $1 ORDER BY chapter ASC;",
+            novel_id,
+        )
+    return [
+        {"id": int(r["id"]), "chapter": float(r["chapter"]), "note": r["note"],
+         "created_at": r["created_at"].isoformat() if r["created_at"] else None}
+        for r in rows
+    ]
+
+
+@router.post("/novels/{novel_id}/bookmarks")
+async def api_add_bookmark(novel_id: int, payload: BookmarkCreate):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        bid = await conn.fetchval(
+            "INSERT INTO bookmarks (novel_id, chapter, note) VALUES ($1, $2, $3) RETURNING id;",
+            novel_id, payload.chapter, payload.note,
+        )
+    return {"id": int(bid)}
+
+
+@router.delete("/novels/{novel_id}/bookmarks/{bookmark_id}")
+async def api_delete_bookmark(novel_id: int, bookmark_id: int):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM bookmarks WHERE id = $1 AND novel_id = $2;", bookmark_id, novel_id)
+    return {"status": "success"}
+
+
+# ── Scraping ──────────────────────────────────────────────────────────────
+
+@router.post("/novels/{novel_id}/scrape")
+async def api_scrape(novel_id: int, payload: ScrapeTrigger, bg_tasks: BackgroundTasks):
+    """Kicks off scraping in the background. Targets one source if source_id is given,
+    else every source of the novel."""
+    if payload.source_id is not None:
+        bg_tasks.add_task(scrape_source, payload.source_id, force=payload.force, max_chapters=payload.max_chapters)
+    else:
+        bg_tasks.add_task(scrape_novel, novel_id, force=payload.force, max_chapters=payload.max_chapters)
+    return {"status": "success", "message": "Scrape job scheduled in background."}
+
+
+# ── Codex: meta / stats ───────────────────────────────────────────────────
+
+@router.get("/novels/{novel_id}/meta")
+async def api_meta_chapters(novel_id: int):
+    """Chapter span + display title/blurb so the codex ceiling control can be bounded."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        novel = await conn.fetchrow("SELECT title, description FROM novels WHERE id = $1;", novel_id)
+        row = await conn.fetchrow(
+            "SELECT COUNT(*) AS count, MIN(number) AS min_chapter, MAX(number) AS max_chapter FROM chapters WHERE novel_id = $1;",
+            novel_id,
+        )
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found.")
+    return {
+        "novel_title": novel["title"],
+        "novel_blurb": novel["description"] or "",
         "count": int(row["count"]),
         "min_chapter": float(row["min_chapter"]) if row["min_chapter"] is not None else None,
         "max_chapter": float(row["max_chapter"]) if row["max_chapter"] is not None else None,
     }
 
 
-@router.get("/meta/stats")
-async def api_meta_stats(ceiling: float):
-    """Spoiler-safe aggregate stats for the home/ceiling surfaces. Every count is a
-    `WHERE ... <= ceiling` aggregate, so nothing about future chapters is exposed —
-    not even how many entities are still to come."""
+@router.get("/novels/{novel_id}/stats")
+async def api_meta_stats(novel_id: int, ceiling: float):
+    """Spoiler-safe aggregate stats for the codex home surface (all bounded by ceiling)."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         entities_revealed = await conn.fetchval(
-            "SELECT COUNT(*) FROM entities WHERE first_seen_chapter <= $1;", ceiling
+            "SELECT COUNT(*) FROM entities WHERE first_seen_chapter <= $1 AND novel_id = $2;", ceiling, novel_id
         )
         facts_known = await conn.fetchval(
-            "SELECT COUNT(*) FROM entity_facts WHERE chapter <= $1;", ceiling
+            "SELECT COUNT(*) FROM entity_facts WHERE chapter <= $1 AND novel_id = $2;", ceiling, novel_id
         )
         relationships_known = await conn.fetchval(
-            "SELECT COUNT(*) FROM relationships WHERE chapter <= $1;", ceiling
+            "SELECT COUNT(*) FROM relationships WHERE chapter <= $1 AND novel_id = $2;", ceiling, novel_id
         )
-        max_chapter = await conn.fetchval("SELECT MAX(number) FROM chapters;")
-        # Title of the chapter at/below the ceiling (a title <= ceiling is itself safe).
+        max_chapter = await conn.fetchval("SELECT MAX(number) FROM chapters WHERE novel_id = $1;", novel_id)
         title_row = await conn.fetchrow(
-            "SELECT number, title FROM chapters WHERE number <= $1 ORDER BY number DESC LIMIT 1;",
-            ceiling,
+            "SELECT number, title FROM chapters WHERE number <= $1 AND novel_id = $2 ORDER BY number DESC LIMIT 1;",
+            ceiling, novel_id,
         )
     max_f = float(max_chapter) if max_chapter is not None else None
     pct = 0
@@ -139,47 +433,44 @@ async def api_meta_stats(ceiling: float):
     }
 
 
-# ── Structured Wiki Endpoints ─────────────────────────────────────────────
+# ── Codex: structured wiki ────────────────────────────────────────────────
 
-@router.get("/entities")
-async def api_list_entities(ceiling: float, type: str | None = None, q: str | None = None):
-    """Lists all entities discovered at or before the ceiling."""
+@router.get("/novels/{novel_id}/entities")
+async def api_list_entities(novel_id: int, ceiling: float, type: str | None = None, q: str | None = None):
     try:
-        return await list_entities(chapter_ceiling=ceiling, entity_type=type, name_query=q)
+        return await list_entities(novel_id, chapter_ceiling=ceiling, entity_type=type, name_query=q)
     except Exception as e:
         logger.error(f"Error listing entities: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/entity/resolve")
-async def api_resolve_entity(name: str, ceiling: float):
-    """Resolves an entity name or alias below the chapter ceiling."""
+
+@router.get("/novels/{novel_id}/entity/resolve")
+async def api_resolve_entity(novel_id: int, name: str, ceiling: float):
     try:
-        return await resolve_entity(name=name, chapter_ceiling=ceiling)
+        return await resolve_entity(novel_id, name=name, chapter_ceiling=ceiling)
     except Exception as e:
         logger.error(f"Error resolving entity: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/entity/{entity_id}")
-async def api_get_entity_profile(entity_id: int, ceiling: float):
-    """Gets the structured profile of an entity at the ceiling, using the wiki_cache fast path."""
+
+@router.get("/novels/{novel_id}/entity/{entity_id}")
+async def api_get_entity_profile(novel_id: int, entity_id: int, ceiling: float):
+    """Structured profile at the ceiling, using the wiki_cache fast path."""
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
             cached_row = await conn.fetchrow(
-                "SELECT rendered_md FROM wiki_cache WHERE entity_id = $1 AND chapter_ceiling = $2;",
-                entity_id, ceiling
+                "SELECT rendered_md FROM wiki_cache WHERE novel_id = $1 AND entity_id = $2 AND chapter_ceiling = $3;",
+                novel_id, entity_id, ceiling,
             )
 
-        profile = await get_entity_profile(entity_id=entity_id, chapter_ceiling=ceiling)
+        profile = await get_entity_profile(novel_id, entity_id=entity_id, chapter_ceiling=ceiling)
         if not profile:
             raise HTTPException(status_code=404, detail="Entity not found or not yet visible.")
 
         if cached_row:
-            logger.info(f"Wiki cache hit for entity {entity_id} at ceiling {ceiling}")
             profile["rendered_md"] = cached_row["rendered_md"]
             return profile
-
-        logger.info(f"Wiki cache miss for entity {entity_id} at ceiling {ceiling}. Synthesizing...")
 
         canonical_name = profile["canonical_name"]
         aliases = ", ".join(profile["aliases"]) if profile["aliases"] else "None"
@@ -188,7 +479,7 @@ async def api_get_entity_profile(entity_id: int, ceiling: float):
             for f in profile["facts"]
         ]) if profile["facts"] else "No facts recorded."
 
-        rels = await get_relationships(entity_id, ceiling)
+        rels = await get_relationships(novel_id, entity_id, ceiling)
         rels_str = "\n".join([
             f"- [Rel {r['id']}, Ch {r['chapter']}] {r['source_name']} ({r['relation_type']}) {r['target_name']}: {r['content'] or ''}"
             for r in rels
@@ -199,35 +490,23 @@ async def api_get_entity_profile(entity_id: int, ceiling: float):
             {
                 "role": "user",
                 "content": WIKI_PROFILE_SYNTHESIS_USER.format(
-                    canonical_name=canonical_name,
-                    type=profile["type"],
-                    chapter_ceiling=ceiling,
-                    aliases=aliases,
-                    facts=facts_str,
-                    relationships=rels_str
+                    canonical_name=canonical_name, type=profile["type"], chapter_ceiling=ceiling,
+                    aliases=aliases, facts=facts_str, relationships=rels_str,
                 )
             }
         ]
+        rendered_md = await call_chat_completion(model=settings.MODEL_PRO, messages=messages, temperature=0.0)
 
-        rendered_md = await call_chat_completion(
-            model=settings.MODEL_PRO,
-            messages=messages,
-            temperature=0.0
-        )
-
-        evidence_ids = {
-            "fact_ids": [f["id"] for f in profile["facts"]],
-            "rel_ids": [r["id"] for r in rels],
-        }
+        evidence_ids = {"fact_ids": [f["id"] for f in profile["facts"]], "rel_ids": [r["id"] for r in rels]}
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO wiki_cache (entity_id, chapter_ceiling, rendered_md, model, evidence_ids)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (entity_id, chapter_ceiling) DO UPDATE
+                INSERT INTO wiki_cache (novel_id, entity_id, chapter_ceiling, rendered_md, model, evidence_ids)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (novel_id, entity_id, chapter_ceiling) DO UPDATE
                 SET rendered_md = EXCLUDED.rendered_md, model = EXCLUDED.model, evidence_ids = EXCLUDED.evidence_ids;
                 """,
-                entity_id, ceiling, rendered_md, settings.MODEL_PRO, json.dumps(evidence_ids)
+                novel_id, entity_id, ceiling, rendered_md, settings.MODEL_PRO, json.dumps(evidence_ids),
             )
 
         profile["rendered_md"] = rendered_md
@@ -238,91 +517,76 @@ async def api_get_entity_profile(entity_id: int, ceiling: float):
         logger.error(f"Error fetching profile: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/entity/{entity_id}/relationships")
-async def api_get_relationships(entity_id: int, ceiling: float, other_id: int | None = None):
-    """Gets the relationship connections or developments of an entity below the ceiling."""
+
+@router.get("/novels/{novel_id}/entity/{entity_id}/relationships")
+async def api_get_relationships(novel_id: int, entity_id: int, ceiling: float, other_id: int | None = None):
     try:
-        return await get_relationships(entity_id=entity_id, chapter_ceiling=ceiling, other_id=other_id)
+        return await get_relationships(novel_id, entity_id=entity_id, chapter_ceiling=ceiling, other_id=other_id)
     except Exception as e:
         logger.error(f"Error fetching relationships: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/entity/{entity_id}/timeline")
-async def api_get_timeline(entity_id: int, ceiling: float):
-    """Chronologically aggregates all facts and events of an entity below the ceiling."""
+
+@router.get("/novels/{novel_id}/entity/{entity_id}/timeline")
+async def api_get_timeline(novel_id: int, entity_id: int, ceiling: float):
     try:
-        return await get_timeline(entity_id=entity_id, chapter_ceiling=ceiling)
+        return await get_timeline(novel_id, entity_id=entity_id, chapter_ceiling=ceiling)
     except Exception as e:
         logger.error(f"Error fetching timeline: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/entity/{entity_id}/identities")
-async def api_get_identities(entity_id: int, ceiling: float):
-    """In-story identity reveals (this persona == another persona) visible below the ceiling."""
+
+@router.get("/novels/{novel_id}/entity/{entity_id}/identities")
+async def api_get_identities(novel_id: int, entity_id: int, ceiling: float):
     try:
-        return await get_identity_links(entity_id=entity_id, chapter_ceiling=ceiling)
+        return await get_identity_links(novel_id, entity_id=entity_id, chapter_ceiling=ceiling)
     except Exception as e:
         logger.error(f"Error fetching identity links: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ── Admin Ingestion Routes ────────────────────────────────────────────────
 
-@router.post("/admin/scrape")
-async def trigger_scrape(payload: ScrapePayload, bg_tasks: BackgroundTasks):
-    """Triggers the sequential novel scraper in the background."""
-    bg_tasks.add_task(
-        scrape_novel,
-        payload.start_url,
-        force=payload.force,
-        max_chapters=payload.max_chapters
-    )
-    return {"status": "success", "message": "Scraper job scheduled in background."}
+# ── Codex: Q&A + build ────────────────────────────────────────────────────
 
-@router.post("/admin/chunk")
-async def trigger_chunking(payload: RangePayload, bg_tasks: BackgroundTasks):
-    """Triggers chunking of chapters in the database (optionally within a range)."""
-    bg_tasks.add_task(
-        chunk_all_chapters,
-        force=payload.force,
-        from_chapter=payload.from_chapter,
-        to_chapter=payload.to_chapter,
-    )
-    return {"status": "success", "message": "Chunking job scheduled in background."}
+@router.post("/novels/{novel_id}/ask", response_model=AskResponse)
+async def ask_question(novel_id: int, req: AskRequest):
+    """Agentic spoiler-safe Q&A scoped to one novel."""
+    try:
+        await get_bm25_manager(novel_id).ensure_loaded()
+        result = await answer_question(novel_id, req.question, req.ceiling)
+        return AskResponse(
+            answer=result["answer"],
+            citations=[Citation(**c) for c in result["citations"]],
+            evidence_ids=result["evidence_ids"],
+        )
+    except Exception as e:
+        logger.error(f"Agentic Q&A error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/admin/embed")
-async def trigger_embeddings(payload: EmbedPayload, bg_tasks: BackgroundTasks):
-    """Triggers generation of embeddings for missing chunks (optionally within a range)."""
-    bg_tasks.add_task(
-        embed_missing_chunks,
-        from_chapter=payload.from_chapter,
-        to_chapter=payload.to_chapter,
-    )
-    return {"status": "success", "message": "Embedding job scheduled in background."}
 
-@router.post("/admin/rebuild-bm25")
-async def rebuild_bm25():
-    """Forces rebuild + persist of the sparse BM25 index."""
-    await bm25_manager.rebuild()
-    return {"status": "success", "message": "BM25 index rebuilt and persisted."}
+async def _build_codex(novel_id: int, force: bool, from_chapter: float | None, to_chapter: float | None):
+    """Full codex pipeline for one novel: chunk -> embed -> extract -> rebuild BM25."""
+    await chunk_all_chapters(novel_id, force=force, from_chapter=from_chapter, to_chapter=to_chapter)
+    await embed_missing_chunks(novel_id, from_chapter=from_chapter, to_chapter=to_chapter)
+    await extract_all_chapters(novel_id, force=force, from_chapter=from_chapter, to_chapter=to_chapter)
+    await get_bm25_manager(novel_id).rebuild()
 
-@router.post("/admin/extract")
-async def trigger_extraction(payload: RangePayload, bg_tasks: BackgroundTasks):
-    """Triggers forward-only entity/fact extraction (optionally within a range)."""
-    bg_tasks.add_task(
-        extract_all_chapters,
-        force=payload.force,
-        from_chapter=payload.from_chapter,
-        to_chapter=payload.to_chapter,
-    )
-    return {"status": "success", "message": "Extraction job scheduled in background."}
 
-@router.post("/admin/merge-entities")
-async def trigger_merge(payload: MergePayload):
-    """Merges a duplicate entity (drop_id) into keep_id (extraction-error dedup)."""
+@router.post("/novels/{novel_id}/codex/build")
+async def api_codex_build(novel_id: int, payload: CodexBuild, bg_tasks: BackgroundTasks):
+    """Builds (or rebuilds) the spoiler-safe codex for a novel in the background."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE novels SET codex_enabled = TRUE WHERE id = $1;", novel_id)
+    bg_tasks.add_task(_build_codex, novel_id, payload.force, payload.from_chapter, payload.to_chapter)
+    return {"status": "success", "message": "Codex build scheduled in background."}
+
+
+@router.post("/novels/{novel_id}/merge-entities")
+async def trigger_merge(novel_id: int, payload: MergePayload):
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            await merge_entities(payload.keep_id, payload.drop_id, conn)
+            await merge_entities(novel_id, payload.keep_id, payload.drop_id, conn)
         return {"status": "success", "message": f"Entity {payload.drop_id} merged into {payload.keep_id}."}
     except Exception as e:
         logger.error(f"Error merging entities: {e}")

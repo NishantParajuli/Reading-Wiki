@@ -1,17 +1,21 @@
 /* ============================================================
-   api.js — backend client + adapters (replaces the demo data.js)
+   api.js — backend client for the multi-novel reading platform.
 
-   Spoiler-safety note: this layer NEVER requests unbounded data. Every read
-   carries the chapter ceiling, and the server applies `WHERE chapter <= ceiling`
-   in SQL — so no chapter > N data ever reaches the browser. The "locked / not
-   yet revealed" visuals are therefore purely decorative teasers fed by NOTHING
-   real (see Browser/Entity). That keeps THE ONE INVARIANT true by construction.
+   Everything is scoped to a novel id. The reader reads chapter `content`; the
+   codex reads are additionally bounded by the chapter ceiling, and the server
+   applies `WHERE chapter <= ceiling AND novel_id = ...` in SQL — so no future
+   data and no other novel's data ever reaches the browser.
    ============================================================ */
 (function () {
   const API_BASE = "/api";
 
-  async function getJSON(url) {
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
+  async function req(method, url, body) {
+    const opts = { method, headers: { Accept: "application/json" } };
+    if (body !== undefined) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body || {});
+    }
+    const res = await fetch(url, opts);
     if (!res.ok) {
       let detail = `${res.status} ${res.statusText}`;
       try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
@@ -19,26 +23,14 @@
       err.status = res.status;
       throw err;
     }
+    if (res.status === 204) return null;
     return res.json();
   }
+  const getJSON = (url) => req("GET", url);
+  const postJSON = (url, body) => req("POST", url, body || {});
+  const putJSON = (url, body) => req("PUT", url, body || {});
+  const delJSON = (url) => req("DELETE", url);
 
-  async function postJSON(url, body) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
-    });
-    if (!res.ok) {
-      let detail = `${res.status} ${res.statusText}`;
-      try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
-      const err = new Error(detail);
-      err.status = res.status;
-      throw err;
-    }
-    return res.json();
-  }
-
-  // Striped placeholder caption that mirrors the demo's portrait labels.
   const TYPE_PORTRAIT = {
     character: "PORTRAIT", location: "PLACE", faction: "EMBLEM",
     item: "OBJECT", concept: "CONCEPT", organization: "EMBLEM",
@@ -47,8 +39,6 @@
     const p = TYPE_PORTRAIT[type] || "ENTRY";
     return name ? `${p} — ${name}` : p;
   }
-
-  // Backend entity (list item OR profile) → the shape the cards/pages expect.
   function mapEntity(e) {
     return {
       id: e.id,
@@ -60,54 +50,53 @@
     };
   }
 
+  const N = (id) => `${API_BASE}/novels/${id}`;
+
   const API = {
     base: API_BASE,
 
-    meta() { return getJSON(`${API_BASE}/meta/chapters`); },
-    stats(ceiling) { return getJSON(`${API_BASE}/meta/stats?ceiling=${ceiling}`); },
+    // ── Library / novels ──
+    adapters() { return getJSON(`${API_BASE}/adapters`); },
+    novels() { return getJSON(`${API_BASE}/novels`); },
+    createNovel(body) { return postJSON(`${API_BASE}/novels`, body); },
+    novel(id) { return getJSON(N(id)); },
+    deleteNovel(id) { return delJSON(N(id)); },
+    addSource(id, body) { return postJSON(`${N(id)}/sources`, body); },
+    scrape(id, body) { return postJSON(`${N(id)}/scrape`, body); },
 
-    async listEntities(ceiling, opts = {}) {
+    // ── Reader ──
+    chapters(id) { return getJSON(`${N(id)}/chapters`); },
+    chapter(id, number) { return getJSON(`${N(id)}/chapter/${number}`); },
+    getProgress(id) { return getJSON(`${N(id)}/progress`); },
+    setProgress(id, body) { return putJSON(`${N(id)}/progress`, body); },
+    bookmarks(id) { return getJSON(`${N(id)}/bookmarks`); },
+    addBookmark(id, body) { return postJSON(`${N(id)}/bookmarks`, body); },
+    delBookmark(id, bid) { return delJSON(`${N(id)}/bookmarks/${bid}`); },
+
+    // ── Codex (novel-scoped) ──
+    meta(id) { return getJSON(`${N(id)}/meta`); },
+    stats(id, ceiling) { return getJSON(`${N(id)}/stats?ceiling=${ceiling}`); },
+    async listEntities(id, ceiling, opts = {}) {
       const params = new URLSearchParams({ ceiling });
       if (opts.type) params.set("type", opts.type);
       if (opts.q) params.set("q", opts.q);
-      const rows = await getJSON(`${API_BASE}/entities?${params.toString()}`);
+      const rows = await getJSON(`${N(id)}/entities?${params.toString()}`);
       return rows.map(mapEntity);
     },
-
-    entityProfile(id, ceiling) {
-      return getJSON(`${API_BASE}/entity/${id}?ceiling=${ceiling}`);
-    },
-    relationships(id, ceiling, otherId) {
+    entityProfile(id, eid, ceiling) { return getJSON(`${N(id)}/entity/${eid}?ceiling=${ceiling}`); },
+    relationships(id, eid, ceiling, otherId) {
       const params = new URLSearchParams({ ceiling });
       if (otherId != null) params.set("other_id", otherId);
-      return getJSON(`${API_BASE}/entity/${id}/relationships?${params.toString()}`);
+      return getJSON(`${N(id)}/entity/${eid}/relationships?${params.toString()}`);
     },
-    timeline(id, ceiling) {
-      return getJSON(`${API_BASE}/entity/${id}/timeline?ceiling=${ceiling}`);
-    },
-    identities(id, ceiling) {
-      return getJSON(`${API_BASE}/entity/${id}/identities?ceiling=${ceiling}`);
-    },
-    resolve(name, ceiling) {
-      return getJSON(`${API_BASE}/entity/resolve?name=${encodeURIComponent(name)}&ceiling=${ceiling}`);
-    },
-
-    ask(question, ceiling) {
-      return postJSON(`${API_BASE}/ask`, { question, chapter_ceiling: ceiling });
-    },
-
-    admin: {
-      scrape: (body) => postJSON(`${API_BASE}/admin/scrape`, body),
-      chunk: (body) => postJSON(`${API_BASE}/admin/chunk`, body),
-      embed: (body) => postJSON(`${API_BASE}/admin/embed`, body),
-      extract: (body) => postJSON(`${API_BASE}/admin/extract`, body),
-      rebuildBm25: () => postJSON(`${API_BASE}/admin/rebuild-bm25`, {}),
-      mergeEntities: (body) => postJSON(`${API_BASE}/admin/merge-entities`, body),
-    },
+    timeline(id, eid, ceiling) { return getJSON(`${N(id)}/entity/${eid}/timeline?ceiling=${ceiling}`); },
+    identities(id, eid, ceiling) { return getJSON(`${N(id)}/entity/${eid}/identities?ceiling=${ceiling}`); },
+    resolve(id, name, ceiling) { return getJSON(`${N(id)}/entity/resolve?name=${encodeURIComponent(name)}&ceiling=${ceiling}`); },
+    ask(id, question, ceiling) { return postJSON(`${N(id)}/ask`, { question, ceiling }); },
+    codexBuild(id, body) { return postJSON(`${N(id)}/codex/build`, body || {}); },
+    mergeEntities(id, body) { return postJSON(`${N(id)}/merge-entities`, body); },
   };
 
-  // Build a lookup from the /ask citations array, keyed by `${kind}:${id}`, so
-  // inline tokens like "[Chunk 12, Chapter 5]" can be turned into clickable sups.
   function buildCiteMap(citations) {
     const map = {};
     (citations || []).forEach((c) => {
@@ -128,8 +117,5 @@
   window.mapEntity = mapEntity;
   window.portraitLabel = portraitLabel;
   window.buildCiteMap = buildCiteMap;
-
-  // Display-only meta; App fills `meta` after the first /meta/chapters call.
-  // Kept on window so legacy references in the design components don't throw.
   window.NOVEL = { meta: { title: "Codex", blurb: "", totalChapters: 1 }, entities: [] };
 })();

@@ -10,6 +10,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def resolve_entity(
+    novel_id: int,
     mention: str,
     entity_type: str,
     chapter: float,
@@ -44,14 +45,14 @@ async def resolve_entity(
         SELECT e.id FROM entities e
         LEFT JOIN entity_aliases a ON e.id = a.entity_id AND a.revealed_at_chapter <= $2
         WHERE (LOWER(e.canonical_name) = LOWER($1) OR LOWER(a.alias) = LOWER($1))
-          AND e.first_seen_chapter <= $2
+          AND e.first_seen_chapter <= $2 AND e.novel_id = $3
         LIMIT 1;
         """,
-        name_clean, chapter
+        name_clean, chapter, novel_id
     )
     if row:
         return int(row["id"])
-        
+
     # ── Step 2: Fuzzy Match via pg_trgm ──
     # Fetch top candidates above the configured similarity floor.
     rows = await conn.fetch(
@@ -60,11 +61,11 @@ async def resolve_entity(
         FROM entities e
         LEFT JOIN entity_aliases a ON e.id = a.entity_id AND a.revealed_at_chapter <= $2
         WHERE (similarity(e.canonical_name, $1) > $3 OR similarity(a.alias, $1) > $3)
-          AND e.first_seen_chapter <= $2
+          AND e.first_seen_chapter <= $2 AND e.novel_id = $4
         ORDER BY sim DESC
         LIMIT 5;
         """,
-        name_clean, chapter, settings.FUZZY_MATCH_THRESHOLD
+        name_clean, chapter, settings.FUZZY_MATCH_THRESHOLD, novel_id
     )
 
     candidates = [dict(r) for r in rows]
@@ -122,11 +123,11 @@ async def resolve_entity(
             """
             SELECT id, 1 - (name_embedding <=> $1::vector) AS sim
             FROM entities
-            WHERE first_seen_chapter <= $2
+            WHERE first_seen_chapter <= $2 AND novel_id = $3
             ORDER BY name_embedding <=> $1::vector
             LIMIT 1;
             """,
-            emb_str, chapter
+            emb_str, chapter, novel_id
         )
         if row and row["sim"] > settings.SEMANTIC_MATCH_THRESHOLD:
             logger.info(f"Semantic match resolved '{name_clean}' to ID {row['id']} (similarity {row['sim']:.3f})")
@@ -137,27 +138,27 @@ async def resolve_entity(
 
     entity_id = await conn.fetchval(
         """
-        INSERT INTO entities (canonical_name, type, description, name_embedding, first_seen_chapter)
-        VALUES ($1, $2, $3, $4::vector, $5)
+        INSERT INTO entities (novel_id, canonical_name, type, description, name_embedding, first_seen_chapter)
+        VALUES ($1, $2, $3, $4, $5::vector, $6)
         RETURNING id;
         """,
-        name_clean, entity_type, desc_clean, emb_str, chapter
+        novel_id, name_clean, entity_type, desc_clean, emb_str, chapter
     )
-    
+
     # Insert default self-alias
     await conn.execute(
         """
-        INSERT INTO entity_aliases (entity_id, alias, revealed_at_chapter)
-        VALUES ($1, $2, 0.0)
+        INSERT INTO entity_aliases (novel_id, entity_id, alias, revealed_at_chapter)
+        VALUES ($1, $2, $3, 0.0)
         ON CONFLICT DO NOTHING;
         """,
-        entity_id, name_clean
+        novel_id, entity_id, name_clean
     )
     
     logger.info(f"Unresolved mention. Created new Entity '{name_clean}' (ID: {entity_id}) at Chapter {chapter}.")
     return entity_id
 
-async def merge_entities(keep_id: int, drop_id: int, conn: asyncpg.Connection):
+async def merge_entities(novel_id: int, keep_id: int, drop_id: int, conn: asyncpg.Connection):
     """
     Merges duplicate entity IDs (drop_id into keep_id) cleanly,
     updating facts, relations, timelines, events, and aliases.
@@ -227,7 +228,7 @@ async def merge_entities(keep_id: int, drop_id: int, conn: asyncpg.Connection):
         await conn.execute("DELETE FROM entities WHERE id = $1;", drop_id)
         
         # 8. Invalidate affected caches
-        await clear_caches(conn, entity_id=keep_id)
-        await clear_caches(conn, entity_id=drop_id)
+        await clear_caches(conn, novel_id=novel_id, entity_id=keep_id)
+        await clear_caches(conn, novel_id=novel_id, entity_id=drop_id)
         
     logger.info(f"Entity ID {drop_id} merged into ID {keep_id} successfully.")

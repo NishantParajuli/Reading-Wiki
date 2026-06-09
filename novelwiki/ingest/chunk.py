@@ -100,70 +100,71 @@ def chunk_chapter_text(
         
     return chunks
 
-async def chunk_chapter(chapter_number: float, force: bool = False) -> int:
+async def chunk_chapter(novel_id: int, chapter_number: float, force: bool = False) -> int:
     """
-    Fetches raw chapter text, chunks it, and writes chunks to the chunks table.
+    Fetches readable chapter text, chunks it, and writes chunks to the chunks table.
     Deletes prior chunks first if force=True.
     """
     pool = await get_db_pool()
-    
+
     async with pool.acquire() as conn:
         chapter = await conn.fetchrow(
-            "SELECT clean_text FROM chapters WHERE number = $1;", 
-            chapter_number
+            "SELECT content FROM chapters WHERE number = $1 AND novel_id = $2;",
+            chapter_number, novel_id
         )
-        if not chapter:
-            logger.error(f"Chapter {chapter_number} not found in DB.")
+        if not chapter or not chapter["content"]:
+            logger.error(f"Chapter {chapter_number} not found (or has no content) in DB.")
             return 0
-            
+
         # Check if chunks already exist
         existing = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM chunks WHERE chapter = $1);", 
-            chapter_number
+            "SELECT EXISTS(SELECT 1 FROM chunks WHERE chapter = $1 AND novel_id = $2);",
+            chapter_number, novel_id
         )
         if existing and not force:
             logger.info(f"Chapter {chapter_number} chunks already exist. Skipping.")
             return 0
-            
-        chunks = chunk_chapter_text(chapter["clean_text"])
-        
+
+        chunks = chunk_chapter_text(chapter["content"])
+
         # Deletion pass (idempotent overwrite)
         if existing:
-            await conn.execute("DELETE FROM chunks WHERE chapter = $1;", chapter_number)
-            
+            await conn.execute("DELETE FROM chunks WHERE chapter = $1 AND novel_id = $2;", chapter_number, novel_id)
+
         # Insert chunks
         async with conn.transaction():
             for idx, chunk_text in enumerate(chunks):
                 token_count = count_tokens(chunk_text)
                 await conn.execute(
                     """
-                    INSERT INTO chunks (chapter, chunk_index, text, token_count)
-                    VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (chapter, chunk_index) DO UPDATE
+                    INSERT INTO chunks (novel_id, chapter, chunk_index, text, token_count)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (novel_id, chapter, chunk_index) DO UPDATE
                     SET text = EXCLUDED.text, token_count = EXCLUDED.token_count, embedding = NULL;
                     """,
-                    chapter_number, idx, chunk_text, token_count
+                    novel_id, chapter_number, idx, chunk_text, token_count
                 )
-                
+
         logger.info(f"Successfully chunked Chapter {chapter_number} into {len(chunks)} chunks.")
         return len(chunks)
 
 async def chunk_all_chapters(
+    novel_id: int,
     force: bool = False,
     from_chapter: float | None = None,
     to_chapter: float | None = None,
 ) -> int:
     """Chunks chapters currently in the database, optionally limited to a range."""
     pool = await get_db_pool()
-    conditions = []
-    args: list = []
+    conditions = ["novel_id = $1"]
+    args: list = [novel_id]
     if from_chapter is not None:
         args.append(from_chapter)
         conditions.append(f"number >= ${len(args)}")
     if to_chapter is not None:
         args.append(to_chapter)
         conditions.append(f"number <= ${len(args)}")
-    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    where = " WHERE " + " AND ".join(conditions)
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(f"SELECT number FROM chapters{where} ORDER BY number ASC;", *args)
@@ -171,7 +172,7 @@ async def chunk_all_chapters(
     total_chunks = 0
     for row in rows:
         num = float(row["number"])
-        cnt = await chunk_chapter(num, force=force)
+        cnt = await chunk_chapter(novel_id, num, force=force)
         total_chunks += cnt
 
     return total_chunks
@@ -181,7 +182,8 @@ if __name__ == "__main__":
     force = "--force" in sys.argv
 
     async def main():
-        cnt = await chunk_all_chapters(force=force)
+        novel_id = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
+        cnt = await chunk_all_chapters(novel_id, force=force)
         logger.info(f"Chunked a total of {cnt} chunks.")
         await close_db_pool()
 

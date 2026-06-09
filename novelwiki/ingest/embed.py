@@ -7,6 +7,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def embed_missing_chunks(
+    novel_id: int,
     from_chapter: float | None = None,
     to_chapter: float | None = None,
 ) -> int:
@@ -16,8 +17,8 @@ async def embed_missing_chunks(
     """
     pool = await get_db_pool()
 
-    conditions = ["embedding IS NULL"]
-    args: list = []
+    conditions = ["embedding IS NULL", "novel_id = $1"]
+    args: list = [novel_id]
     if from_chapter is not None:
         args.append(from_chapter)
         conditions.append(f"chapter >= ${len(args)}")
@@ -71,8 +72,10 @@ async def embed_missing_chunks(
     return embedded_count
 
 if __name__ == "__main__":
+    import sys
     async def main():
-        cnt = await embed_missing_chunks()
+        novel_id = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
+        cnt = await embed_missing_chunks(novel_id)
         logger.info(f"Completed batch embedding run. {cnt} chunks processed.")
         await close_db_pool()
 

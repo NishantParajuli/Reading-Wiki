@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     MODEL_FLASH: str = "deepseek/deepseek-chat"
     MODEL_PRO: str = "deepseek/deepseek-chat"
 
+    # Model used to translate raw (foreign-language) chapters. Point this at your
+    # preferred DeepSeek "pro" model on OpenRouter. Used by the Phase 2 translation
+    # pipeline (on-demand when a raw chapter is opened, + background prefetch).
+    MODEL_TRANSLATE: str = "deepseek/deepseek-chat"
+    # How many upcoming raw chapters to translate in the background after one is opened.
+    TRANSLATE_PREFETCH: int = 3
+    # Guard against pathologically long chapters being sent to the translator in one call.
+    TRANSLATE_MAX_INPUT_CHARS: int = 48000
+
     EMBED_MODEL: str = "cohere/embed-english-v3.0"
     EMBED_DIM: int = 1024
     # Set True for models that support a requested output size (e.g. OpenAI

@@ -19,7 +19,7 @@ const SUGGESTIONS = [
   "Which locations have been introduced?",
 ];
 
-function Ask({ ceiling, initial }) {
+function Ask({ novelId, ceiling, initial }) {
   const [input, setInput] = useState(initial || "");
   const [active, setActive] = useState(null);   // current question text
   const [phase, setPhase] = useState("idle");    // idle | running | done | error
@@ -45,7 +45,7 @@ function Ask({ ceiling, initial }) {
       timers.current.push(setTimeout(() => setStepIdx(i + 1), t));
     }
     try {
-      const res = await window.API.ask(question, ceiling);
+      const res = await window.API.ask(novelId, question, ceiling);
       clearTimers();
       setStepIdx(AGENT_STEPS.length); // all done
       setResult(res);

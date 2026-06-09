@@ -12,37 +12,44 @@ logger = logging.getLogger(__name__)
 
 class BM25Manager:
     """
-    In-process BM25 lexical search backed by a single index that is BUILT ONCE
-    and PERSISTED to disk (settings.BM25_INDEX_PATH). It is rebuilt only when the
-    chunk set changes (see staleness signature), never on every query.
+    In-process BM25 lexical search for a SINGLE novel, backed by an index that is
+    BUILT ONCE and PERSISTED to disk (settings.BM25_INDEX_PATH/<novel_id>). It is
+    rebuilt only when that novel's chunk set changes (see staleness signature),
+    never on every query.
 
     Spoiler-safety (Invariant 7): the chapter ceiling is enforced per query with a
     0/1 ``weight_mask`` so chunks from chapters > ceiling score 0, plus a
     defensive post-filter on the returned hits.
     """
 
-    def __init__(self):
+    def __init__(self, novel_id: int):
+        self.novel_id = novel_id
         self.corpus: list[dict] = []          # [{"id", "chapter", "text"}], aligned to index order
         self.chapter_arr = np.array([])        # vectorized chapters, aligned to corpus
         self.retriever: bm25s.BM25 | None = None
-        self.index_dir = settings.BM25_INDEX_PATH
+        self._loaded = False
+        self.index_dir = os.path.join(settings.BM25_INDEX_PATH, str(novel_id))
         self._meta_path = os.path.join(self.index_dir, "novelwiki_meta.json")
 
     # ── Corpus / metadata ──────────────────────────────────────────────────
     async def _load_corpus_rows(self):
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch("SELECT id, chapter, text FROM chunks ORDER BY id ASC;")
+            rows = await conn.fetch(
+                "SELECT id, chapter, text FROM chunks WHERE novel_id = $1 ORDER BY id ASC;",
+                self.novel_id,
+            )
         self.corpus = [
             {"id": int(r["id"]), "chapter": float(r["chapter"]), "text": r["text"]}
             for r in rows
         ]
         self.chapter_arr = np.array([c["chapter"] for c in self.corpus], dtype=float)
-        logger.info(f"Loaded {len(self.corpus)} chunks into BM25 corpus.")
+        logger.info(f"Loaded {len(self.corpus)} chunks into BM25 corpus for novel {self.novel_id}.")
 
     def _db_signature(self) -> dict:
         """Cheap fingerprint of the indexed chunk set, used to detect staleness."""
         return {
+            "novel_id": self.novel_id,
             "count": len(self.corpus),
             "max_id": max((c["id"] for c in self.corpus), default=0),
             "dim": settings.EMBED_DIM,  # not used by BM25 but ties the cache to a build config
@@ -88,33 +95,36 @@ class BM25Manager:
             return False
 
     async def load_or_build_index(self):
-        """Startup path: load the persisted index if present and fresh, else build+save."""
+        """Load the persisted index if present and fresh, else build+save."""
         await self._load_corpus_rows()
+        self._loaded = True
         if not self.corpus:
             self.retriever = None
-            logger.info("No chunks present; BM25 index is empty.")
+            logger.info(f"No chunks present for novel {self.novel_id}; BM25 index is empty.")
             return
         if self._try_load_from_disk():
-            logger.info(f"Loaded persisted BM25 index ({len(self.corpus)} docs).")
+            logger.info(f"Loaded persisted BM25 index ({len(self.corpus)} docs) for novel {self.novel_id}.")
             return
-        logger.info(f"Building BM25 index over {len(self.corpus)} chunks...")
+        logger.info(f"Building BM25 index over {len(self.corpus)} chunks for novel {self.novel_id}...")
         self._build_retriever()
         self._save()
+
+    async def ensure_loaded(self):
+        """Lazy entry point for query paths: build/load the index on first use."""
+        if not self._loaded:
+            await self.load_or_build_index()
 
     async def rebuild(self):
         """Force a fresh build + persist (used by `rebuild-bm25` after ingestion)."""
         await self._load_corpus_rows()
+        self._loaded = True
         if not self.corpus:
             self.retriever = None
-            logger.info("No chunks present; nothing to index.")
+            logger.info(f"No chunks present for novel {self.novel_id}; nothing to index.")
             return
         self._build_retriever()
         self._save()
-        logger.info("BM25 index rebuilt.")
-
-    # Back-compat alias for older callers.
-    async def load_corpus(self):
-        await self.load_or_build_index()
+        logger.info(f"BM25 index rebuilt for novel {self.novel_id}.")
 
     # ── Query ──────────────────────────────────────────────────────────────
     def search(self, query: str, chapter_ceiling: float, k: int = 50) -> list[dict]:
@@ -158,5 +168,15 @@ class BM25Manager:
         return hits
 
 
-# Singleton instance
-bm25_manager = BM25Manager()
+# ── Per-novel manager registry ───────────────────────────────────────────
+# Indexes are lazy: a novel's manager is created and loaded on first use, so the
+# app doesn't pay to load every novel's index at startup.
+_managers: dict[int, BM25Manager] = {}
+
+
+def get_bm25_manager(novel_id: int) -> BM25Manager:
+    m = _managers.get(novel_id)
+    if m is None:
+        m = BM25Manager(novel_id)
+        _managers[novel_id] = m
+    return m

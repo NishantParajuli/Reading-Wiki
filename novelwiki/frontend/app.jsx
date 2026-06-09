@@ -1,12 +1,11 @@
 /* ============================================================
-   App shell — ceiling bar, theme, router, tweaks (backend-driven)
-   ============================================================ */
-const NAV = [
-  { id: "home", label: "Home", icon: "book" },
-  { id: "browse", label: "Codex", icon: "compass" },
-  { id: "ask", label: "Ask", icon: "sparkles" },
-];
+   App shell — library → novel → reader, plus the per-novel codex.
 
+   The library is the landing surface. Opening a novel enters a per-novel context
+   with three tabs: Contents (TOC + continue reading), Codex, and Ask. The reader
+   is a full-bleed view opened from Contents. The chapter-ceiling control only
+   appears in the codex/ask context and defaults to the reader's progress.
+   ============================================================ */
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accentHue": 64,
   "headings": "Literary",
@@ -46,7 +45,7 @@ function CeilingBar({ ceiling, setCeiling, meta, stats }) {
     React.createElement("div", { className: "ceiling-label" },
       React.createElement(Icon, { name: "book", size: 16, className: "lk" }),
       React.createElement("div", { className: "col", style: { gap: 1 } },
-        React.createElement("span", { className: "ceiling-eyebrow" }, "Reading through"),
+        React.createElement("span", { className: "ceiling-eyebrow" }, "Codex bounded to"),
         React.createElement("b", null, title ? `Ch. ${ceiling} · ${title}` : `Chapter ${ceiling}`)
       )
     ),
@@ -65,47 +64,53 @@ function CeilingBar({ ceiling, setCeiling, meta, stats }) {
   );
 }
 
+const CONTEXT_NAV = [
+  { id: "novel", label: "Contents", icon: "book" },
+  { id: "browse", label: "Codex", icon: "compass" },
+  { id: "ask", label: "Ask", icon: "sparkles" },
+];
+
 function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem("nw-theme") || "light");
-  const [ceiling, setCeiling] = useState(() => +(localStorage.getItem("nw-ceiling") || 1));
-  const [route, setRoute] = useState({ view: "home", params: {} });
-  const [meta, setMeta] = useState(null);
-  const [stats, setStats] = useState(null);
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
+  const [route, setRoute] = useState({ view: "library", params: {} });
+  const [novelId, setNovelId] = useState(null);
+  const [novel, setNovel] = useState(null);     // novel detail
+  const [ceiling, setCeiling] = useState(1);
+  const [stats, setStats] = useState(null);
   const debCeiling = useDebounce(ceiling, 250);
 
-  // Load novel meta once; clamp the saved ceiling into the available range.
-  useEffect(() => {
-    let cancel = false;
-    window.API.meta()
-      .then(m => {
-        if (cancel) return;
-        const min = m.min_chapter != null ? m.min_chapter : 1;
-        const max = m.max_chapter != null ? m.max_chapter : min;
-        const normalized = { title: m.novel_title, blurb: m.novel_blurb, count: m.count, min, max, totalChapters: max };
-        setMeta(normalized);
-        window.NOVEL.meta = { title: m.novel_title, blurb: m.novel_blurb, totalChapters: max };
-        setCeiling(c => Math.min(Math.max(c, min), max));
-      })
-      .catch(() => {
-        if (cancel) return;
-        setMeta({ title: "Codex", blurb: "", count: 0, min: 1, max: 1, totalChapters: 1 });
-      });
-    return () => { cancel = true; };
-  }, []);
+  const loadNovel = useCallback((id) => {
+    return window.API.novel(id).then(n => {
+      setNovel(n);
+      const def = (n.progress && n.progress.max_chapter_read) || n.min_chapter || 1;
+      setCeiling(c => (id === novelId ? c : def));  // keep ceiling when reloading the same novel
+      return n;
+    });
+  }, [novelId]);
 
-  // Refresh spoiler-safe aggregate stats (+ ceiling title) as the ceiling moves.
+  // Load (or reload) the open novel's detail.
   useEffect(() => {
+    if (novelId == null) { setNovel(null); setStats(null); return; }
     let cancel = false;
-    window.API.stats(debCeiling)
-      .then(s => { if (!cancel) setStats(s); })
-      .catch(() => { if (!cancel) setStats(null); });
+    window.API.novel(novelId).then(n => {
+      if (cancel) return;
+      setNovel(n);
+      setCeiling((n.progress && n.progress.max_chapter_read) || n.min_chapter || 1);
+    }).catch(() => { if (!cancel) setNovel(null); });
     return () => { cancel = true; };
-  }, [debCeiling]);
+  }, [novelId]);
+
+  // Codex aggregate stats as the ceiling moves (only meaningful once codex is built).
+  useEffect(() => {
+    if (novelId == null) { setStats(null); return; }
+    let cancel = false;
+    window.API.stats(novelId, debCeiling).then(s => { if (!cancel) setStats(s); }).catch(() => { if (!cancel) setStats(null); });
+    return () => { cancel = true; };
+  }, [novelId, debCeiling]);
 
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); localStorage.setItem("nw-theme", theme); }, [theme]);
-  useEffect(() => { localStorage.setItem("nw-ceiling", ceiling); }, [ceiling]);
   useEffect(() => { window.scrollTo({ top: 0 }); }, [route]);
   useEffect(() => {
     const r = document.documentElement.style;
@@ -119,44 +124,74 @@ function App() {
     r.setProperty("--radius-lg", c[2] + "px");
   }, [t]);
 
-  const setView = (view) => setRoute({ view, params: {} });
+  // ── navigation ──
+  const openLibrary = () => { setNovelId(null); setRoute({ view: "library", params: {} }); };
+  const openNovel = (id) => { setNovelId(id); setRoute({ view: "novel", params: {} }); };
+  const openReader = (number) => setRoute({ view: "reader", params: { number } });
   const nav = (view, params = {}) => setRoute({ view, params });
+  const setView = (view) => setRoute({ view, params: {} });
+  const reloadNovel = () => { if (novelId != null) loadNovel(novelId); };
+
+  // Reader reports progress → reflect it locally so the codex ceiling follows reading.
+  const onRead = (number) => {
+    setNovel(n => n ? { ...n, progress: { ...n.progress, last_chapter: number, max_chapter_read: Math.max(n.progress?.max_chapter_read || 0, number) } } : n);
+    setCeiling(c => Math.max(c, number));
+  };
+
+  const codexMeta = novel ? {
+    title: novel.title, blurb: novel.description || "",
+    min: novel.min_chapter || 1, max: novel.max_chapter || (novel.min_chapter || 1),
+    totalChapters: novel.max_chapter || 1, count: novel.chapter_count,
+  } : null;
+
+  const inNovel = novelId != null;
+  const showCeiling = inNovel && ["browse", "entity", "ask"].includes(route.view);
 
   let screen;
-  if (route.view === "home") screen = React.createElement(Home, { ceiling, meta, stats, nav, setView });
-  else if (route.view === "browse") screen = React.createElement(Browser, { ceiling, meta, nav });
-  else if (route.view === "entity") screen = React.createElement(EntityPage, { id: route.params.id, ceiling, meta, nav, setView });
-  else if (route.view === "ask") screen = React.createElement(Ask, { ceiling, initial: route.params.q });
-  else if (route.view === "admin") screen = React.createElement(Admin, { setView });
+  if (!inNovel || route.view === "library") {
+    screen = React.createElement(Library, { openNovel });
+  } else if (route.view === "novel") {
+    screen = React.createElement(NovelDetail, { novelId, novel, reloadNovel, openReader, nav });
+  } else if (route.view === "reader") {
+    screen = React.createElement(Reader, { novelId, number: route.params.number, openReader, backToNovel: () => setView("novel"), onRead });
+  } else if (route.view === "browse") {
+    screen = React.createElement(Browser, { novelId, ceiling, meta: codexMeta, nav });
+  } else if (route.view === "entity") {
+    screen = React.createElement(EntityPage, { novelId, id: route.params.id, ceiling, meta: codexMeta, nav, setView });
+  } else if (route.view === "ask") {
+    screen = React.createElement(Ask, { novelId, ceiling, initial: route.params.q });
+  }
+
+  const isReader = route.view === "reader";
 
   return React.createElement(CiteProvider, null,
-    React.createElement("div", { className: "app" },
+    React.createElement("div", { className: "app" + (isReader ? " app-reader" : "") },
       React.createElement("header", { className: "appbar" },
-        React.createElement("a", { className: "brand", onClick: () => setView("home"), style: { cursor: "pointer" } },
+        React.createElement("a", { className: "brand", onClick: openLibrary, style: { cursor: "pointer" } },
           React.createElement("div", { className: "brand-mark" }, React.createElement(Icon, { name: "book", size: 20 })),
           React.createElement("div", { className: "brand-name" },
             React.createElement("span", { className: "brand-title" }, "Tideglass"),
-            React.createElement("span", { className: "brand-sub" }, "Codex")
+            React.createElement("span", { className: "brand-sub" }, "Library")
           )
         ),
-        React.createElement("nav", { className: "nav" },
-          NAV.map(n => React.createElement("button", {
-            key: n.id, className: `nav-tab ${route.view === n.id || (n.id === "browse" && route.view === "entity") ? "active" : ""}`,
+        inNovel && React.createElement("nav", { className: "nav" },
+          React.createElement("button", { className: "nav-tab", onClick: openLibrary, title: "Back to library" },
+            React.createElement(Icon, { name: "arrowLeft", size: 16, sw: 2 }), "Library"),
+          CONTEXT_NAV.map(n => React.createElement("button", {
+            key: n.id,
+            className: `nav-tab ${route.view === n.id || (n.id === "browse" && route.view === "entity") || (n.id === "novel" && route.view === "reader") ? "active" : ""}`,
             onClick: () => setView(n.id),
           }, React.createElement(Icon, { name: n.icon, size: 16, sw: 2 }), n.label))
         ),
         React.createElement("div", { className: "appbar-right" },
-          React.createElement("button", {
-            className: `icon-btn ${route.view === "admin" ? "active" : ""}`, onClick: () => setView("admin"),
-            title: "Admin · ingestion pipeline", "aria-label": "Admin",
-          }, React.createElement(Icon, { name: "database", size: 18 })),
+          inNovel && novel && React.createElement("span", { className: "appbar-novel muted", title: novel.title }, novel.title),
           React.createElement("button", {
             className: "icon-btn", onClick: () => setTheme(th => th === "light" ? "dark" : "light"),
             "aria-label": "Toggle theme",
           }, React.createElement(Icon, { name: theme === "light" ? "moon" : "sun", size: 18 }))
         )
       ),
-      React.createElement(CeilingBar, { ceiling, setCeiling, meta, stats }),
+      showCeiling && React.createElement(CeilingBar, { ceiling, setCeiling, meta: codexMeta, stats }),
       screen,
       React.createElement(TweaksPanel, { title: "Tweaks" },
         React.createElement(TweakSection, { label: "Accent" }),

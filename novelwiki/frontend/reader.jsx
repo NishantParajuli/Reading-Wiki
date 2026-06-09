@@ -1,0 +1,190 @@
+/* ============================================================
+   Reader — the reading surface. Typeset chapter text, prev/next, a TOC drawer,
+   bookmark toggle, and reader display settings (font/size/line-height/width/tone)
+   persisted to localStorage. Reading progress (last chapter + scroll) is saved to
+   the server so the library can resume and the codex ceiling can follow along.
+   ============================================================ */
+const READER_DEFAULTS = { font: "serif", size: 19, line: 1.7, width: "normal", tone: "default" };
+const WIDTHS = { narrow: 600, normal: 720, wide: 860 };
+
+function loadReaderPrefs() {
+  try { return { ...READER_DEFAULTS, ...JSON.parse(localStorage.getItem("nw-reader") || "{}") }; }
+  catch (e) { return { ...READER_DEFAULTS }; }
+}
+
+function ReaderSettings({ prefs, setPrefs, onClose }) {
+  const set = (k, v) => setPrefs(p => ({ ...p, [k]: v }));
+  const Row = (label, children) => React.createElement("div", { className: "rs-row" },
+    React.createElement("span", { className: "rs-label" }, label), children);
+  const seg = (k, opts) => React.createElement("div", { className: "rs-seg" },
+    opts.map(o => React.createElement("button", {
+      key: o.v, className: prefs[k] === o.v ? "active" : "", onClick: () => set(k, o.v),
+    }, o.t)));
+
+  return React.createElement("div", { className: "reader-settings card", onClick: e => e.stopPropagation() },
+    Row("Font", seg("font", [{ v: "serif", t: "Serif" }, { v: "sans", t: "Sans" }])),
+    Row("Size", React.createElement("div", { className: "rs-seg" },
+      React.createElement("button", { onClick: () => set("size", Math.max(14, prefs.size - 1)) }, "A−"),
+      React.createElement("span", { className: "rs-val" }, prefs.size),
+      React.createElement("button", { onClick: () => set("size", Math.min(28, prefs.size + 1)) }, "A+"))),
+    Row("Line height", React.createElement("div", { className: "rs-seg" },
+      React.createElement("button", { onClick: () => set("line", Math.max(1.3, Math.round((prefs.line - 0.1) * 10) / 10)) }, "−"),
+      React.createElement("span", { className: "rs-val" }, prefs.line.toFixed(1)),
+      React.createElement("button", { onClick: () => set("line", Math.min(2.2, Math.round((prefs.line + 0.1) * 10) / 10)) }, "+"))),
+    Row("Width", seg("width", [{ v: "narrow", t: "Narrow" }, { v: "normal", t: "Normal" }, { v: "wide", t: "Wide" }])),
+    Row("Tone", seg("tone", [{ v: "default", t: "Default" }, { v: "sepia", t: "Sepia" }])),
+    React.createElement("button", { className: "btn btn-ghost", style: { width: "100%", marginTop: 8 }, onClick: onClose }, "Done")
+  );
+}
+
+function Reader({ novelId, number, openReader, backToNovel, onRead }) {
+  const [ch, setCh] = useState(null);     // null = loading
+  const [status, setStatus] = useState("loading");
+  const [prefs, setPrefs] = useState(loadReaderPrefs);
+  const [showSettings, setShowSettings] = useState(false);
+  const [toc, setToc] = useState(null);
+  const [showToc, setShowToc] = useState(false);
+  const [bookmarks, setBookmarks] = useState([]);
+  const scrollSaved = useRef(0);
+
+  useEffect(() => { localStorage.setItem("nw-reader", JSON.stringify(prefs)); }, [prefs]);
+
+  // Load the chapter + record progress.
+  useEffect(() => {
+    let cancel = false;
+    setStatus("loading"); setCh(null);
+    window.scrollTo({ top: 0 });
+    window.API.chapter(novelId, number)
+      .then(c => {
+        if (cancel) return;
+        setCh(c);
+        setStatus("ok");
+        window.API.setProgress(novelId, { last_chapter: number, scroll_pct: 0 }).catch(() => {});
+        onRead && onRead(Number(number));
+      })
+      .catch(e => { if (!cancel) { setStatus(e.status === 404 ? "notfound" : "error"); } });
+    return () => { cancel = true; };
+  }, [novelId, number]);
+
+  // Bookmarks for this novel (to toggle the current chapter).
+  const loadBookmarks = useCallback(() => {
+    window.API.bookmarks(novelId).then(setBookmarks).catch(() => setBookmarks([]));
+  }, [novelId]);
+  useEffect(() => { loadBookmarks(); }, [loadBookmarks]);
+
+  // Throttled scroll-position save.
+  useEffect(() => {
+    const onScroll = () => {
+      const h = document.documentElement;
+      const pct = h.scrollHeight > h.clientHeight ? h.scrollTop / (h.scrollHeight - h.clientHeight) : 0;
+      const now = Date.now();
+      if (now - scrollSaved.current > 2000) {
+        scrollSaved.current = now;
+        window.API.setProgress(novelId, { last_chapter: number, scroll_pct: pct }).catch(() => {});
+      }
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [novelId, number]);
+
+  // Keyboard prev/next.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.key === "ArrowLeft" && ch && ch.prev != null) openReader(ch.prev);
+      if (e.key === "ArrowRight" && ch && ch.next != null) openReader(ch.next);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [ch]);
+
+  function openTocDrawer() {
+    if (toc == null) window.API.chapters(novelId).then(setToc).catch(() => setToc([]));
+    setShowToc(true);
+  }
+
+  const bookmark = bookmarks.find(b => b.chapter === Number(number));
+  async function toggleBookmark() {
+    if (bookmark) { await window.API.delBookmark(novelId, bookmark.id); }
+    else { await window.API.addBookmark(novelId, { chapter: Number(number) }); }
+    loadBookmarks();
+  }
+
+  const fontFamily = prefs.font === "serif" ? 'var(--serif, "Newsreader", Georgia, serif)' : 'var(--sans, "Hanken Grotesk", system-ui, sans-serif)';
+  const colStyle = {
+    maxWidth: WIDTHS[prefs.width] || 720,
+    fontFamily, fontSize: prefs.size, lineHeight: prefs.line,
+  };
+
+  return React.createElement("div", { className: "reader tone-" + prefs.tone, onClick: () => setShowSettings(false) },
+    // toolbar
+    React.createElement("div", { className: "reader-bar" },
+      React.createElement("button", { className: "icon-btn", onClick: backToNovel, title: "Contents" },
+        React.createElement(Icon, { name: "arrowLeft", size: 18 })),
+      React.createElement("button", { className: "icon-btn", onClick: openTocDrawer, title: "Table of contents" },
+        React.createElement(Icon, { name: "layers", size: 18 })),
+      React.createElement("div", { className: "grow reader-bar-title" }, ch ? (ch.title || `Chapter ${ch.number}`) : "…"),
+      React.createElement("button", { className: "icon-btn" + (bookmark ? " active" : ""), onClick: toggleBookmark, title: bookmark ? "Remove bookmark" : "Bookmark" },
+        React.createElement(Icon, { name: bookmark ? "check" : "book", size: 18 })),
+      React.createElement("div", { style: { position: "relative" } },
+        React.createElement("button", { className: "icon-btn", onClick: e => { e.stopPropagation(); setShowSettings(s => !s); }, title: "Reading settings" },
+          React.createElement("span", { style: { fontWeight: 700, fontSize: 15 } }, "Aa")),
+        showSettings && React.createElement(ReaderSettings, { prefs, setPrefs, onClose: () => setShowSettings(false) })
+      )
+    ),
+
+    // body
+    status === "loading" && React.createElement("div", { className: "reader-col", style: colStyle }, React.createElement(Loading, { label: "Loading chapter…" })),
+
+    status === "notfound" && React.createElement("div", { className: "reader-col", style: colStyle },
+      React.createElement(EmptyState, { icon: "x", title: "Chapter not found", body: "It may not have been scraped yet." })),
+
+    status === "error" && React.createElement("div", { className: "reader-col", style: colStyle },
+      React.createElement(EmptyState, { icon: "x", title: "Couldn't load this chapter" })),
+
+    status === "ok" && ch && React.createElement("div", { className: "reader-col", style: colStyle },
+      React.createElement("h1", { className: "reader-title" }, ch.title || `Chapter ${ch.number}`),
+      React.createElement("div", { className: "reader-chapnum mono" }, `Chapter ${ch.number}`),
+      !ch.content
+        ? React.createElement("div", { className: "reader-raw-note card" },
+            React.createElement(Icon, { name: "lock", size: 18, className: "muted" }),
+            React.createElement("div", null,
+              React.createElement("b", null, "Not yet translated"),
+              React.createElement("p", { className: "muted", style: { margin: "4px 0 0", fontSize: 14 } },
+                `This is a raw chapter (${ch.language || "foreign"}). On-demand translation arrives in the next phase.`)))
+        : React.createElement("div", { className: "reader-text" },
+            (ch.content || "").split(/\n{2,}/).map((para, i) =>
+              React.createElement("p", { key: i }, para))),
+
+      // footer nav
+      React.createElement("div", { className: "reader-nav" },
+        React.createElement("button", { className: "btn btn-ghost", disabled: ch.prev == null, onClick: () => ch.prev != null && openReader(ch.prev) },
+          React.createElement(Icon, { name: "arrowLeft", size: 16 }), "Previous"),
+        React.createElement("button", { className: "btn btn-ghost", onClick: backToNovel }, "Contents"),
+        React.createElement("button", { className: "btn btn-primary", disabled: ch.next == null, onClick: () => ch.next != null && openReader(ch.next) },
+          "Next", React.createElement(Icon, { name: "arrowRight", size: 16 }))
+      )
+    ),
+
+    // TOC drawer
+    showToc && React.createElement("div", { className: "drawer-scrim", onClick: () => setShowToc(false) },
+      React.createElement("div", { className: "drawer", onClick: e => e.stopPropagation() },
+        React.createElement("div", { className: "drawer-head" },
+          React.createElement("b", null, "Contents"),
+          React.createElement("button", { className: "icon-btn", onClick: () => setShowToc(false) }, React.createElement(Icon, { name: "x", size: 16 }))),
+        toc == null
+          ? React.createElement(Loading, { label: "Loading…" })
+          : React.createElement("div", { className: "drawer-toc" },
+              toc.map(c => React.createElement("button", {
+                key: c.number, className: "drawer-toc-row" + (c.number === Number(number) ? " current" : ""),
+                onClick: () => { setShowToc(false); openReader(c.number); },
+              },
+                React.createElement("span", { className: "toc-num mono" }, c.number),
+                React.createElement("span", { className: "toc-title" }, c.title || `Chapter ${c.number}`)
+              )))
+      )
+    )
+  );
+}
+
+window.Reader = Reader;
