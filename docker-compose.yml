@@ -1,0 +1,19 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: novelwiki-web
+    # Uses host networking so the container can reach the host's PostgreSQL (localhost)
+    # and expose its web port directly on the host without double-nat.
+    network_mode: "host"
+    env_file:
+      - .env
+    volumes:
+      # Persists the BM25 index and cached database scrapings
+      - wiki_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  wiki_data:
+    name: novelwiki_data

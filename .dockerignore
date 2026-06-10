@@ -1,0 +1,35 @@
+# Git and Docker configuration
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Virtual environments
+.venv
+venv
+ENV
+
+# Python caches and artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Local data and secrets
+data/
+.env
+.env.example
+
+# IDEs and tool configurations
+.claude/
+.gemini/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation
+README.md
