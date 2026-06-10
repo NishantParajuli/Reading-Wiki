@@ -51,13 +51,7 @@ This boundary is strictly enforced at the **database and data-retrieval layers**
 - **PostgreSQL 18** with `pgvector` and `pg_trgm` extensions enabled.
 - **Docker & Docker Compose** (optional, recommended for fast DB spinning)
 
-### 2. Database Spinup
-Run the pre-configured Postgres container using Docker Compose:
-```bash
-docker compose up -d
-```
-
-### 3. Install Dependencies
+### 2. Install Dependencies
 This project uses modern Python packaging via `uv` or `pip`:
 ```bash
 python -m venv .venv
@@ -65,7 +59,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-### 4. Configuration
+### 3. Configuration
 Create a `.env` file from the provided example:
 ```bash
 cp .env.example .env
@@ -73,7 +67,7 @@ cp .env.example .env
 Fill in your API keys:
 - `OPENROUTER_API_KEY`: For chat, embeddings, and reranker calls.
 
-### 5. Initialize Schema & Database
+### 4. Initialize Schema & Database
 Generate tables, setup pgvector HNSW indexes, and verify connections:
 ```bash
 python -m novelwiki.db.schema
