@@ -140,12 +140,15 @@ async def set_source_offset(conn, source_id: int, new_offset: float) -> int:
     the new GLOBAL numbering, so correcting an offset takes effect immediately without a
     re-scrape (e.g. a raw that is one chapter ahead of the translation → offset -1).
 
-    Returns the number of chapters renumbered. Must be called inside a transaction. Raises
-    ValueError if the codex (chunks) was already built on the current numbering, since
-    chapter numbers are referenced there without ON UPDATE CASCADE."""
-    row = await conn.fetchrow("SELECT chapter_offset FROM sources WHERE id = $1;", source_id)
+    Bookmarks and reading-progress pointers that fall inside the source's chapters move by
+    the same delta so they keep pointing at the same text. Returns the number of chapters
+    renumbered. Must be called inside a transaction. Raises ValueError if the codex (chunks)
+    was already built on the current numbering, since chapter numbers are referenced there
+    without ON UPDATE CASCADE."""
+    row = await conn.fetchrow("SELECT novel_id, chapter_offset FROM sources WHERE id = $1;", source_id)
     if row is None:
         raise ValueError(f"Source {source_id} not found.")
+    novel_id = row["novel_id"]
     delta = float(new_offset) - float(row["chapter_offset"] or 0)
 
     renumbered = 0
@@ -163,6 +166,30 @@ async def set_source_offset(conn, source_id: int, new_offset: float) -> int:
                 "This source has codex chunks built on its current chapter numbering; "
                 "clear/rebuild the codex before changing the offset."
             )
+        # Move reader state that points into this source's chapters BEFORE renumbering them,
+        # while the chapters table still holds the OLD numbers used to identify the range.
+        # (Bookmarks / reading_progress aren't FK-linked to chapters, so we shift by hand.)
+        await conn.execute(
+            """
+            UPDATE bookmarks SET chapter = chapter + $2
+            WHERE novel_id = $3
+              AND chapter IN (SELECT number FROM chapters WHERE source_id = $1);
+            """,
+            source_id, delta, novel_id,
+        )
+        await conn.execute(
+            """
+            UPDATE reading_progress SET
+                last_chapter = CASE
+                    WHEN last_chapter IN (SELECT number FROM chapters WHERE source_id = $1)
+                    THEN last_chapter + $2 ELSE last_chapter END,
+                max_chapter_read = CASE
+                    WHEN max_chapter_read IN (SELECT number FROM chapters WHERE source_id = $1)
+                    THEN max_chapter_read + $2 ELSE max_chapter_read END
+            WHERE novel_id = $3;
+            """,
+            source_id, delta, novel_id,
+        )
         # Shift through a far range first so a contiguous block never collides with its own
         # not-yet-moved rows (the chapters PK is checked per row, mid-statement). The second
         # step lands on the final numbers and surfaces any real clash with other sources.
