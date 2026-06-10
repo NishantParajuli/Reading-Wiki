@@ -77,12 +77,18 @@ def _format_glossary(rows: list[dict]) -> tuple[str, str]:
     return confirmed_str, established_str
 
 
-def _parse_translation(raw: str) -> tuple[str, list[dict]]:
-    """Split the delimiter-framed response into (translation_text, new_terms).
+def _parse_translation(raw: str) -> tuple[str, str, list[dict]]:
+    """Split the delimiter-framed response into (translated_title, translation_text, new_terms).
     Tolerant of a missing/garbled TERMS block — that just yields no new terms."""
     text = raw or ""
-    if "===TRANSLATION===" in text:
+    title = ""
+    if "===TITLE===" in text:
+        parts = text.split("===TITLE===", 1)[1].split("===TRANSLATION===", 1)
+        title = parts[0].strip()
+        text = parts[1] if len(parts) > 1 else ""
+    elif "===TRANSLATION===" in text:
         text = text.split("===TRANSLATION===", 1)[1]
+
     translation, terms_raw = text, ""
     if "===TERMS===" in text:
         translation, terms_raw = text.split("===TERMS===", 1)
@@ -105,7 +111,7 @@ def _parse_translation(raw: str) -> tuple[str, list[dict]]:
     for t in terms:
         if isinstance(t, dict) and t.get("source_term") and t.get("translation"):
             clean.append(t)
-    return translation, clean
+    return title, translation, clean
 
 
 async def _upsert_terms(novel_id: int, terms: list[dict], conn):
@@ -162,7 +168,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False) -
 
         try:
             raw = await call_chat_completion(model=settings.MODEL_TRANSLATE, messages=messages, temperature=0.2)
-            translation, new_terms = _parse_translation(raw)
+            title_translated, translation, new_terms = _parse_translation(raw)
             if not translation:
                 raise ValueError("empty translation returned")
         except Exception as e:
@@ -177,15 +183,26 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False) -
         word_count = len(translation.split())
         async with pool.acquire() as conn:
             async with conn.transaction():
-                await conn.execute(
-                    """
-                    UPDATE chapters
-                    SET content = $1, is_translated = TRUE, translation_status = 'done',
-                        translation_model = $2, word_count = $3
-                    WHERE novel_id = $4 AND number = $5;
-                    """,
-                    translation, settings.MODEL_TRANSLATE, word_count, novel_id, number,
-                )
+                if title_translated:
+                    await conn.execute(
+                        """
+                        UPDATE chapters
+                        SET title = $1, content = $2, is_translated = TRUE, translation_status = 'done',
+                            translation_model = $3, word_count = $4
+                        WHERE novel_id = $5 AND number = $6;
+                        """,
+                        title_translated, translation, settings.MODEL_TRANSLATE, word_count, novel_id, number,
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE chapters
+                        SET content = $1, is_translated = TRUE, translation_status = 'done',
+                            translation_model = $2, word_count = $3
+                        WHERE novel_id = $4 AND number = $5;
+                        """,
+                        translation, settings.MODEL_TRANSLATE, word_count, novel_id, number,
+                    )
                 await _upsert_terms(novel_id, new_terms, conn)
         logger.info(f"Translated novel {novel_id} ch {number} ({word_count} words, +{len(new_terms)} glossary terms).")
         return {"status": "done", "content": translation, "new_terms": len(new_terms)}

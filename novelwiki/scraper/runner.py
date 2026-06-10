@@ -25,7 +25,11 @@ async def _persist_chapter(conn, source: dict, global_number: float, ch, force: 
         logger.info(f"Chapter {global_number} ('{exists['title']}') already exists. Skipping.")
         return False
 
-    word_count = len(ch.content.split())
+    import re
+    if is_raw or language in ("zh", "ja", "ko"):
+        word_count = len(re.sub(r"\s+", "", ch.content or ""))
+    else:
+        word_count = len(ch.content.split())
     if is_raw:
         # Raw source: keep the source-language text; the reader translates on demand.
         original_text, content = ch.content, None
