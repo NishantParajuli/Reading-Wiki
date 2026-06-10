@@ -6,6 +6,29 @@ You only know what has happened up to and including this chapter.
 Record facts/relationships/events as they are true or revealed in THIS chapter.
 Do not speculate about the future. Do not include anything not supported by the provided text.
 
+WHAT COUNTS AS AN ENTITY — be strict; quality over quantity. Only create a mention for a
+specific, named, story-persistent entity that the narrative will plausibly refer back to:
+- character: a NAMED individual (a real proper name, not a role). A distinctly named group that
+  acts as a single agent may count, but a generic group does not.
+- location: a PROPER place name — a named city, realm, region, or named building/landmark.
+- faction / organization: a NAMED group, sect, clan, guild, company, or institution.
+- item: a UNIQUELY NAMED object or artifact of ongoing significance (e.g. a named weapon or relic).
+- concept: a PROPER-NOUN, recurring in-world thing — a named power system, named technique/skill,
+  named realm/rank-by-name, named law, or named in-world work — treated as a named thing.
+
+DO NOT create entities (omit them entirely — do not even list them as mentions) for:
+- generic or common nouns and unnamed roles: "civilians", "the medical team", "the crowd",
+  "guards", "students", "the council" (unless it has a real proper name).
+- rank / grade / class / tier labels: "S-rank", "B-rank", "A-class", "Forbidden-class", "Golden Word".
+- ordinary objects, scene props, materials, substances, or body parts: "a chair", "black water",
+  "crow feathers", "a transport chair", "the core".
+- abstract mechanics, effects, or status phrases described in lowercase, and real-world / meta terms:
+  "law backlash", "forum feedback", "the comic", "surveillance", "the system message".
+- descriptive phrases that are not true proper names, even when capitalized by translation
+  (e.g. "Temporary Evacuation Platform", "Surveillance Room Above the Station").
+When unsure whether something is a real, named, recurring entity, OMIT it. A chapter usually has only
+a handful of genuine entities — prefer missing a borderline one over inventing noise.
+
 The chapter text is split into numbered passages, each prefixed with a marker like
 `[chunk 1234]`. For every fact, relationship, and event you MUST list the
 `source_chunk_ids` — the marker id(s) of the passage(s) that directly support it.
@@ -33,7 +56,8 @@ Output a strict JSON matching this schema:
   ]
 }
 
-- entity_ref / source_ref / target_ref / participant_refs MUST refer to the canonical name of the entity as identified in the text.
+- entity_ref / source_ref / target_ref / participant_refs MUST refer to the canonical name of the entity as identified in the text, AND must be one of the significant named entities defined above — never a generic noun, rank label, or scene prop. If a fact/event has no qualifying named entity, omit it rather than inventing one.
+- For events, set `location_ref` only when the location is a real named place; otherwise leave it out.
 - `description` on a mention should be a brief, neutral identifier (e.g. "a young swordsman from the northern clan"). Keep it to what is known in this chapter.
 - If a person/thing was known by a mask/pseudonym, and they are revealed in this chapter to be someone else, record that reveal in `identity_reveals` and mark their alias as `is_reveal: true`.
 """
@@ -75,6 +99,10 @@ Output STRICT JSON in the SAME schema as the first pass, but containing ONLY the
 additional or corrected items (do NOT repeat items the first pass already captured
 correctly). If nothing was missed, return every list empty. Every fact/relationship/
 event MUST include `source_chunk_ids` drawn from the markers actually present in the text.
+Apply the SAME strict entity criteria as the first pass: only significant, NAMED, recurring
+entities (characters, named places, named factions/orgs, uniquely named items, proper-noun
+concepts). Do NOT add generic nouns, unnamed roles, rank/class labels, scene props, materials,
+or meta terms — when unsure, leave it out.
 Do not anticipate future chapters. Do not invent anything unsupported by the text.
 Output the same top-level keys: mentions, facts, relationships, events, identity_reveals, new_aliases.
 """
