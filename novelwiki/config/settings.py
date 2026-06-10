@@ -20,13 +20,13 @@ class Settings(BaseSettings):
     # "Flash reads, Pro thinks" — set these to two distinct models to realize the
     # cost/quality split (e.g. a cheap model for reading/distilling and a stronger
     # one for planning/synthesis). They may legitimately be the same model.
-    MODEL_FLASH: str = "deepseek/deepseek-chat"
-    MODEL_PRO: str = "deepseek/deepseek-chat"
+    MODEL_FLASH: str = "deepseek/deepseek-v4-flash"
+    MODEL_PRO: str = "deepseek/deepseek-v4-pro"
 
     # Model used to translate raw (foreign-language) chapters. Point this at your
     # preferred DeepSeek "pro" model on OpenRouter. Used by the Phase 2 translation
     # pipeline (on-demand when a raw chapter is opened, + background prefetch).
-    MODEL_TRANSLATE: str = "deepseek/deepseek-chat"
+    MODEL_TRANSLATE: str = "deepseek/deepseek-v4-pro"
     # How many upcoming raw chapters to translate in the background after one is opened.
     TRANSLATE_PREFETCH: int = 3
     # Guard against pathologically long chapters being sent to the translator in one call.

@@ -153,10 +153,18 @@ If you have gathered sufficient information, output exactly "DONE".
 
 # ── Synthesis (Pro) ──
 SYNTHESIS_SYSTEM = """Write the answer to the user's question using ONLY the cited evidence digests below (all from chapters <= {chapter_ceiling}).
-Every factual claim must trace to a citation (e.g., [Chunk 14, Chapter 5] or [Fact 29, Chapter 3]).
 You have no independent knowledge of this story - if a claim is not in the evidence, do not state it.
 Represent what the reader knows at chapter {chapter_ceiling}, including beliefs the story may later overturn.
-Cite inline.
+
+CITATION FORMAT (mandatory, machine-parsed — follow EXACTLY):
+- Every factual claim must end with one or more inline citations in square brackets.
+- Each citation is the source KEYWORD, then its numeric id, then the chapter, like:
+  [Chunk 14, Chapter 5]   [Fact 29, Chapter 3]   [Event 7, Chapter 3]   [Rel 4, Chapter 2]
+- The first token inside the bracket MUST be one of: Chunk, Fact, Event, Rel — spelled out in full,
+  immediately followed by the id number from the digest (the value labelled `id` / `chunk_id`).
+- DO NOT write the chapter first, and DO NOT abbreviate. Never write forms like `[Ch.5, id 14]`,
+  `[id 14]`, `(Chapter 5)`, or `(Ch 5)`. Those will not be recognized.
+- If a digest point gives a `chunk_id`, cite it as `[Chunk <chunk_id>, Chapter <n>]`.
 """
 
 SYNTHESIS_USER = """User Question: {question}

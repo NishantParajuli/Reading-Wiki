@@ -9,6 +9,7 @@ from novelwiki.ingest.embed import embed_missing_chunks
 from novelwiki.ingest.extract import extract_all_chapters
 from novelwiki.retrieval.bm25 import get_bm25_manager
 from novelwiki.ingest.link import merge_entities
+from novelwiki.translate.translate import translate_range, seed_glossary_from_entities
 
 # Mute noisy standard logging for cleaner CLI prints
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -117,6 +118,26 @@ def extract(
         typer.echo("Launching forward-only structured knowledge extraction pass (Flash)...")
         await extract_all_chapters(novel_id, force=force, from_chapter=from_chapter, to_chapter=to_chapter)
         typer.echo(typer.style("✔ Extraction and entity-resolution completed.", fg=typer.colors.GREEN, bold=True))
+        await close_db_pool()
+    asyncio.run(run())
+
+
+@app.command()
+def translate(
+    novel_id: int = typer.Argument(..., help="The novel id"),
+    from_chapter: float = typer.Option(None, "--from", help="Only translate chapters >= this number"),
+    to_chapter: float = typer.Option(None, "--to", help="Only translate chapters <= this number"),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-translate even if already translated"),
+    seed: bool = typer.Option(False, "--seed", help="Seed the glossary from codex entities first"),
+):
+    """Translates raw (foreign-language) chapters into English, growing the name glossary."""
+    async def run():
+        if seed:
+            n = await seed_glossary_from_entities(novel_id)
+            typer.echo(f"Seeded {n} glossary terms from codex entities.")
+        typer.echo("Translating raw chapters (on-demand glossary-consistent)...")
+        count = await translate_range(novel_id, from_chapter=from_chapter, to_chapter=to_chapter, force=force)
+        typer.echo(typer.style(f"✔ Translated {count} chapters.", fg=typer.colors.GREEN, bold=True))
         await close_db_pool()
     asyncio.run(run())
 

@@ -46,6 +46,7 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
   const [showToc, setShowToc] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
   const [chrome, setChrome] = useState(true);   // toolbar + floating nav visibility (tap to toggle)
+  const [reloadKey, setReloadKey] = useState(0);
   const scrollSaved = useRef(0);
 
   useEffect(() => { localStorage.setItem("nw-reader", JSON.stringify(prefs)); }, [prefs]);
@@ -65,7 +66,7 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
       })
       .catch(e => { if (!cancel) { setStatus(e.status === 404 ? "notfound" : "error"); } });
     return () => { cancel = true; };
-  }, [novelId, number]);
+  }, [novelId, number, reloadKey]);
 
   // Bookmarks for this novel (to toggle the current chapter).
   const loadBookmarks = useCallback(() => {
@@ -155,11 +156,15 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
       React.createElement("div", { className: "reader-chapnum mono" }, `Chapter ${ch.number}`),
       !ch.content
         ? React.createElement("div", { className: "reader-raw-note card" },
-            React.createElement(Icon, { name: "lock", size: 18, className: "muted" }),
-            React.createElement("div", null,
-              React.createElement("b", null, "Not yet translated"),
-              React.createElement("p", { className: "muted", style: { margin: "4px 0 0", fontSize: 14 } },
-                `This is a raw chapter (${ch.language || "foreign"}). On-demand translation arrives in the next phase.`)))
+            React.createElement(Icon, { name: "x", size: 18, className: "muted" }),
+            React.createElement("div", { className: "grow" },
+              React.createElement("b", null, ch.translation_status === "failed" ? "Translation failed" : "No text available"),
+              React.createElement("p", { className: "muted", style: { margin: "4px 0 10px", fontSize: 14 } },
+                ch.translation_status === "failed"
+                  ? `Couldn't translate this raw chapter (${ch.language || "foreign"}). Try again.`
+                  : "This chapter has no readable text yet."),
+              React.createElement("button", { className: "btn btn-ghost", onClick: () => setReloadKey(k => k + 1) },
+                React.createElement(Icon, { name: "refresh", size: 15 }), "Retry")))
         : React.createElement("div", { className: "reader-text" },
             (ch.content || "").split(/\n{2,}/).map((para, i) =>
               React.createElement("p", { key: i }, para)))

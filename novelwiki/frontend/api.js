@@ -74,6 +74,13 @@
     addBookmark(id, body) { return postJSON(`${N(id)}/bookmarks`, body); },
     delBookmark(id, bid) { return delJSON(`${N(id)}/bookmarks/${bid}`); },
 
+    // ── Translation + glossary ──
+    translate(id, body) { return postJSON(`${N(id)}/translate`, body || {}); },
+    glossary(id) { return getJSON(`${N(id)}/glossary`); },
+    upsertGlossary(id, body) { return putJSON(`${N(id)}/glossary`, body); },
+    delGlossary(id, tid) { return delJSON(`${N(id)}/glossary/${tid}`); },
+    seedGlossary(id) { return postJSON(`${N(id)}/glossary/seed`, {}); },
+
     // ── Codex (novel-scoped) ──
     meta(id) { return getJSON(`${N(id)}/meta`); },
     stats(id, ceiling) { return getJSON(`${N(id)}/stats?ceiling=${ceiling}`); },

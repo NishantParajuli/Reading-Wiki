@@ -10,6 +10,9 @@ from novelwiki.ingest.chunk import chunk_all_chapters
 from novelwiki.ingest.embed import embed_missing_chunks
 from novelwiki.ingest.extract import extract_all_chapters
 from novelwiki.ingest.link import merge_entities
+from novelwiki.translate.translate import (
+    translate_chapter, prefetch_translations, translate_range, seed_glossary_from_entities,
+)
 from novelwiki.retrieval.bm25 import get_bm25_manager
 from novelwiki.retrieval.tools import (
     resolve_entity, get_entity_profile, get_relationships, get_timeline,
@@ -67,6 +70,19 @@ class ScrapeTrigger(BaseModel):
     force: bool = False
     max_chapters: int | None = None
     source_id: int | None = None  # scrape one source; omit to scrape all of the novel's sources
+
+class TranslateTrigger(BaseModel):
+    from_chapter: float | None = None
+    to_chapter: float | None = None
+    force: bool = False
+    seed_from_codex: bool = False
+
+class GlossaryUpsert(BaseModel):
+    source_term: str
+    translation: str
+    term_type: str | None = None
+    notes: str | None = None
+    locked: bool = False
 
 class CodexBuild(BaseModel):
     force: bool = False
@@ -285,15 +301,16 @@ async def api_list_chapters(novel_id: int):
 
 
 @router.get("/novels/{novel_id}/chapter/{number}")
-async def api_get_chapter(novel_id: int, number: float):
+async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTasks):
     """Returns one chapter's readable content for the reader, plus prev/next numbers.
-    (Phase 2 will translate raw chapters on demand here; for now content may be null
-    for untranslated raw chapters, signalled via translation_status.)"""
+    Raw chapters are translated on demand here (and the next few are prefetched in the
+    background), so the reader always gets English text — keyed off `translation_status`."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT number, title, content, original_text, language, is_translated, translation_status
+            SELECT number, title, content, (original_text IS NOT NULL) AS has_original,
+                   language, is_translated, translation_status
             FROM chapters WHERE novel_id = $1 AND number = $2;
             """,
             novel_id, number,
@@ -308,13 +325,26 @@ async def api_get_chapter(novel_id: int, number: float):
             "SELECT number FROM chapters WHERE novel_id = $1 AND number > $2 ORDER BY number ASC LIMIT 1;",
             novel_id, number,
         )
+
+    content = row["content"]
+    status = row["translation_status"]
+    is_translated = row["is_translated"]
+    # On-demand translation for a raw chapter that hasn't been translated yet.
+    if content is None and row["has_original"]:
+        result = await translate_chapter(novel_id, number)
+        content = result.get("content")
+        status = result.get("status")
+        is_translated = status == "done"
+        # Warm the next few chapters so reading flows without waiting at each boundary.
+        bg_tasks.add_task(prefetch_translations, novel_id, number, settings.TRANSLATE_PREFETCH)
+
     return {
         "number": float(row["number"]),
         "title": row["title"],
-        "content": row["content"],
+        "content": content,
         "language": row["language"],
-        "is_translated": row["is_translated"],
-        "translation_status": row["translation_status"],
+        "is_translated": is_translated,
+        "translation_status": status,
         "prev": float(prev_num) if prev_num is not None else None,
         "next": float(next_num) if next_num is not None else None,
     }
@@ -402,6 +432,74 @@ async def api_scrape(novel_id: int, payload: ScrapeTrigger, bg_tasks: Background
     else:
         bg_tasks.add_task(scrape_novel, novel_id, force=payload.force, max_chapters=payload.max_chapters)
     return {"status": "success", "message": "Scrape job scheduled in background."}
+
+
+# ── Translation + glossary ────────────────────────────────────────────────
+
+@router.post("/novels/{novel_id}/translate")
+async def api_translate(novel_id: int, payload: TranslateTrigger, bg_tasks: BackgroundTasks):
+    """Translate raw chapters in a range in the background (manual batch; reading
+    itself uses on-demand + prefetch). Optionally seed the glossary from the codex first."""
+    async def _job():
+        if payload.seed_from_codex:
+            await seed_glossary_from_entities(novel_id)
+        await translate_range(novel_id, payload.from_chapter, payload.to_chapter, payload.force)
+    bg_tasks.add_task(_job)
+    return {"status": "success", "message": "Translation job scheduled in background."}
+
+
+@router.post("/novels/{novel_id}/glossary/seed")
+async def api_seed_glossary(novel_id: int):
+    """Seed the glossary's English spellings from the established codex entities."""
+    n = await seed_glossary_from_entities(novel_id)
+    return {"status": "success", "seeded": n}
+
+
+@router.get("/novels/{novel_id}/glossary")
+async def api_list_glossary(novel_id: int):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, source_term, translation, term_type, notes, locked
+            FROM translation_glossary WHERE novel_id = $1
+            ORDER BY locked DESC, term_type NULLS LAST, source_term ASC;
+            """,
+            novel_id,
+        )
+    return [
+        {"id": int(r["id"]), "source_term": r["source_term"], "translation": r["translation"],
+         "term_type": r["term_type"], "notes": r["notes"], "locked": r["locked"]}
+        for r in rows
+    ]
+
+
+@router.put("/novels/{novel_id}/glossary")
+async def api_upsert_glossary(novel_id: int, payload: GlossaryUpsert):
+    """Add or update a glossary term (manual edits win and are typically locked)."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        gid = await conn.fetchval(
+            """
+            INSERT INTO translation_glossary (novel_id, source_term, translation, term_type, notes, locked)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (novel_id, source_term) DO UPDATE
+            SET translation = EXCLUDED.translation, term_type = EXCLUDED.term_type,
+                notes = EXCLUDED.notes, locked = EXCLUDED.locked
+            RETURNING id;
+            """,
+            novel_id, payload.source_term.strip(), payload.translation.strip(),
+            payload.term_type, payload.notes, payload.locked,
+        )
+    return {"id": int(gid)}
+
+
+@router.delete("/novels/{novel_id}/glossary/{term_id}")
+async def api_delete_glossary(novel_id: int, term_id: int):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM translation_glossary WHERE id = $1 AND novel_id = $2;", term_id, novel_id)
+    return {"status": "success"}
 
 
 # ── Codex: meta / stats ───────────────────────────────────────────────────

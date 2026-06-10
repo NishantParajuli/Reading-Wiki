@@ -18,8 +18,14 @@ from novelwiki.agent.prompts import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Matches inline citations like [Chunk 12, Chapter 5.0] / [Fact 29] / [Event 7, Chapter 3]
-_CITATION_RE = re.compile(r"\[(chunk|fact|rel|relationship|event)\s+(\d+)", re.IGNORECASE)
+# Matches inline citations in two shapes the models actually produce:
+#   keyword-first  → [Chunk 12, Chapter 5] / [Fact 29] / [Event 7, Chapter 3]   (group 1 = kind, 2 = id)
+#   chapter-first  → [Ch.1, id 3] / [Chapter 2, id10]                            (group 3 = id, kind defaults to chunk)
+# The digests are chunk-keyed (DISTILL cites chunk_id), so a keyword-less `id N` is a chunk ref.
+_CITATION_RE = re.compile(
+    r"\[(?:(chunk|fact|rel|relationship|event)s?\s+(\d+)|[^\]]*?\bid\s*(\d+))",
+    re.IGNORECASE,
+)
 
 
 async def execute_tool(novel_id: int, tool: str, args: dict, chapter_ceiling: float) -> str:
@@ -110,10 +116,10 @@ async def build_citations(novel_id: int, answer: str, chapter_ceiling: float) ->
     seen = set()
     refs = []
     for m in _CITATION_RE.finditer(answer or ""):
-        kind = m.group(1).lower()
+        kind = (m.group(1) or "chunk").lower()
         if kind == "relationship":
             kind = "rel"
-        rid = int(m.group(2))
+        rid = int(m.group(2) or m.group(3))
         if (kind, rid) not in seen:
             seen.add((kind, rid))
             refs.append((kind, rid))

@@ -198,7 +198,10 @@ function Cite({ n, cite }) {
        omit them silently (the spoiler boundary already did its job server-side).
    - mode "prose": tokens render as small, non-clickable footnote markers.
    ============================================================ */
-const _CITE_RE = /\[(chunk|fact|rel|relationship|event)s?\s+(\d+)[^\]]*\]/gi;
+// Two citation shapes the models produce: keyword-first `[Chunk 14, Chapter 5]`
+// (group 1 = kind, 2 = id) and chapter-first `[Ch.1, id 3]` (group 3 = id, kind
+// defaults to chunk since digests are chunk-keyed). Other brackets are left as text.
+const _CITE_RE = /\[(?:(chunk|fact|rel|relationship|event)s?\s+(\d+)|[^\]]*?\bid\s*(\d+))[^\]]*\]/gi;
 const _INLINE_RE = /(\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*|_([^_]+)_)/g;
 
 function renderInline(text, keyBase) {
@@ -226,9 +229,10 @@ function renderSegment(text, opts, keyBase) {
   _CITE_RE.lastIndex = 0;
   while ((m = _CITE_RE.exec(text)) !== null) {
     if (m.index > last) out.push(...renderInline(text.slice(last, m.index), `${keyBase}-t${i}`));
-    let kind = m[1].toLowerCase();
+    let kind = (m[1] || "chunk").toLowerCase();
     if (kind === "relationship") kind = "rel";
-    const key = `${kind}:${m[2]}`;
+    const rid = m[2] || m[3];
+    const key = `${kind}:${rid}`;
     if (mode === "answer") {
       const cite = citeMap[key];
       if (cite) {
@@ -237,7 +241,7 @@ function renderSegment(text, opts, keyBase) {
         out.push(React.createElement(Cite, { key: `${keyBase}-c${i}`, n: num, cite }));
       } // else: dropped beyond ceiling → omit token entirely
     } else {
-      out.push(React.createElement("sup", { key: `${keyBase}-c${i}`, className: "cite static", title: `${kind} ${m[2]}` }, m[2]));
+      out.push(React.createElement("sup", { key: `${keyBase}-c${i}`, className: "cite static", title: `${kind} ${rid}` }, rid));
     }
     i++;
     last = _CITE_RE.lastIndex;

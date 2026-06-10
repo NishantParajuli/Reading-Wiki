@@ -102,12 +102,58 @@ function NovelEditForm({ novel, onSaved, onCancel }) {
   );
 }
 
+function GlossaryEditor({ novelId, glossary, reload }) {
+  const [st, setSt] = useState("");
+  const [tr, setTr] = useState("");
+  const [type, setType] = useState("name");
+  const [busy, setBusy] = useState(false);
+
+  async function add(e) {
+    e.preventDefault();
+    if (!st.trim() || !tr.trim() || busy) return;
+    setBusy(true);
+    try {
+      await window.API.upsertGlossary(novelId, { source_term: st.trim(), translation: tr.trim(), term_type: type, locked: true });
+      setSt(""); setTr(""); reload();
+    } finally { setBusy(false); }
+  }
+  const toggleLock = async (g) => {
+    await window.API.upsertGlossary(novelId, { source_term: g.source_term, translation: g.translation, term_type: g.term_type, notes: g.notes, locked: !g.locked });
+    reload();
+  };
+  const del = async (g) => { await window.API.delGlossary(novelId, g.id); reload(); };
+
+  return React.createElement(React.Fragment, null,
+    React.createElement("p", { className: "section-eyebrow", style: { marginTop: 28 } }, `Translation glossary (${glossary.length})`),
+    React.createElement("div", { className: "card", style: { padding: 14 } },
+      React.createElement("form", { className: "row", style: { gap: 8, flexWrap: "wrap", marginBottom: glossary.length ? 12 : 0 }, onSubmit: add },
+        React.createElement("input", { className: "gl-input", value: st, onChange: e => setSt(e.target.value), placeholder: "Source term (林轩)" }),
+        React.createElement("input", { className: "gl-input", value: tr, onChange: e => setTr(e.target.value), placeholder: "English (Lin Xuan)" }),
+        React.createElement("select", { className: "gl-input", style: { flex: "0 0 104px" }, value: type, onChange: e => setType(e.target.value) },
+          ["name", "place", "skill", "item", "term"].map(o => React.createElement("option", { key: o, value: o }, o))),
+        React.createElement("button", { className: "btn btn-primary", type: "submit", disabled: busy }, "Add")
+      ),
+      glossary.map(g => React.createElement("div", { key: g.id, className: "gl-row" },
+        React.createElement("span", { className: "gl-src" }, g.source_term),
+        React.createElement(Icon, { name: "arrowRight", size: 13, className: "muted" }),
+        React.createElement("span", { className: "gl-tr" }, g.translation),
+        g.term_type && React.createElement("span", { className: "chip" }, g.term_type),
+        React.createElement("div", { className: "grow" }),
+        React.createElement("button", { className: "icon-btn" + (g.locked ? " active" : ""), title: g.locked ? "Locked — won't auto-change" : "Click to lock", onClick: () => toggleLock(g) },
+          React.createElement(Icon, { name: g.locked ? "lock" : "unlock", size: 15 })),
+        React.createElement("button", { className: "icon-btn", title: "Delete", onClick: () => del(g) }, React.createElement(Icon, { name: "x", size: 15 }))
+      ))
+    )
+  );
+}
+
 function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
   const [toc, setToc] = useState(null);    // null = loading
   const [adapters, setAdapters] = useState([]);
   const [addingSource, setAddingSource] = useState(false);
   const [editing, setEditing] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
+  const [glossary, setGlossary] = useState([]);
   const [maxCh, setMaxCh] = useState("");
   const [msg, setMsg] = useState(null);
 
@@ -119,8 +165,12 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
     if (novelId == null) return;
     window.API.bookmarks(novelId).then(setBookmarks).catch(() => setBookmarks([]));
   }, [novelId]);
+  const loadGlossary = useCallback(() => {
+    if (novelId == null) return;
+    window.API.glossary(novelId).then(setGlossary).catch(() => setGlossary([]));
+  }, [novelId]);
 
-  useEffect(() => { loadToc(); loadBookmarks(); }, [loadToc, loadBookmarks]);
+  useEffect(() => { loadToc(); loadBookmarks(); loadGlossary(); }, [loadToc, loadBookmarks, loadGlossary]);
   useEffect(() => { window.API.adapters().then(setAdapters).catch(() => setAdapters([])); }, []);
 
   if (!novel) return React.createElement("div", { className: "page" }, React.createElement(Loading, { label: "Loading novel…" }));
@@ -128,6 +178,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
   const progress = novel.progress || {};
   const startAt = progress.last_chapter != null ? progress.last_chapter : (novel.min_chapter || 1);
   const hasChapters = (novel.chapter_count || 0) > 0;
+  const hasRaw = (novel.sources || []).some(s => s.is_raw);
 
   async function doScrape() {
     setMsg("Scraping started in the background…");
@@ -142,6 +193,17 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
     setMsg("Codex build started in the background (chunk → embed → extract)…");
     try { await window.API.codexBuild(novelId, {}); reloadNovel(); }
     catch (e) { setMsg("Codex build failed: " + (e.message || "error")); }
+  }
+
+  async function doTranslate() {
+    setMsg("Translation started in the background (glossary-consistent)…");
+    try { await window.API.translate(novelId, {}); }
+    catch (e) { setMsg("Translate failed: " + (e.message || "error")); }
+  }
+
+  async function doSeedGlossary() {
+    try { const r = await window.API.seedGlossary(novelId); setMsg(`Seeded ${r.seeded} glossary terms from the codex.`); loadGlossary(); }
+    catch (e) { setMsg("Seed failed: " + (e.message || "error")); }
   }
 
   return React.createElement("div", { className: "page" },
@@ -209,6 +271,15 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
             React.createElement("button", { className: "btn btn-ghost", onClick: loadToc },
               React.createElement(Icon, { name: "refresh", size: 15 }), "Refresh TOC")
           ),
+          hasRaw && React.createElement("div", { style: { marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 } },
+            React.createElement("div", { className: "row", style: { gap: 10, flexWrap: "wrap" } },
+              React.createElement("button", { className: "btn btn-ghost", onClick: doTranslate },
+                React.createElement(Icon, { name: "refresh", size: 15 }), "Translate raw chapters"),
+              novel.codex_enabled && React.createElement("button", { className: "btn btn-ghost", onClick: doSeedGlossary },
+                React.createElement(Icon, { name: "merge", size: 15 }), "Seed glossary from codex")),
+            React.createElement("p", { className: "muted", style: { fontSize: 12.5, marginTop: 8, marginBottom: 0 } },
+              "Reading already translates on demand; this pre-translates the whole raw source.")
+          ),
           React.createElement("div", { style: { marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 } },
             React.createElement("button", { className: "btn btn-ghost", onClick: buildCodex },
               React.createElement(Icon, { name: "brain", size: 15 }), novel.codex_enabled ? "Rebuild codex" : "Build codex"),
@@ -218,6 +289,9 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
         )
       )
     ),
+
+    // translation glossary (raw novels)
+    (hasRaw || glossary.length > 0) && React.createElement(GlossaryEditor, { novelId, glossary, reload: loadGlossary }),
 
     // bookmarks
     bookmarks.length > 0 && React.createElement(React.Fragment, null,
