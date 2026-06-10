@@ -2,6 +2,7 @@ import re
 import logging
 from dataclasses import dataclass, field
 from typing import AsyncIterator
+import lxml.html
 from curl_cffi.requests import AsyncSession
 from selectolax.parser import HTMLParser
 from novelwiki.config.settings import settings
@@ -299,10 +300,272 @@ class FenriRealmAdapter(_PagedHtmlAdapter):
         return ""
 
 
+class GenericXPathAdapter(_PagedHtmlAdapter):
+    """Config-driven adapter using XPath: reads XPath selectors from the source config
+    so a new HTML site can be supported without writing code."""
+    name = "generic_xpath"
+    label = "Generic (XPath selectors)"
+    requires = ["start_url"]
+    default_language = "en"
+
+    def _sel(self, ctx: ScrapeContext, key: str, default: str) -> str:
+        return (ctx.config or {}).get(key) or default
+
+    async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
+        original_fetch = ctx.fetch_text
+
+        async def wrapped_fetch(url: str) -> str | None:
+            html_str = await original_fetch(url)
+            self._current_html = html_str
+            return html_str
+
+        ctx.fetch_text = wrapped_fetch
+        try:
+            async for ch in super().crawl(ctx):
+                yield ch
+        finally:
+            ctx.fetch_text = original_fetch
+
+    def _get_tree(self) -> lxml.html.HtmlElement | None:
+        html_str = getattr(self, "_current_html", None)
+        if not html_str:
+            return None
+        return lxml.html.fromstring(html_str)
+
+    def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
+        tree = self._get_tree()
+        if tree is None:
+            return "Untitled Chapter"
+        xpath_expr = self._sel(ctx, "title_xpath", "//h1")
+        nodes = tree.xpath(xpath_expr)
+        if nodes:
+            node = nodes[0]
+            if isinstance(node, str):
+                return node.strip()
+            return node.text_content().strip() if hasattr(node, "text_content") else str(node).strip()
+        return "Untitled Chapter"
+
+    def _extract_content(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
+        tree = self._get_tree()
+        if tree is None:
+            return ""
+        # Strip script, style, nav, ads, comments, navigation
+        for bad_tag in ("script", "style", "nav", ".ads", ".comments", ".navigation"):
+            if bad_tag.startswith("."):
+                class_name = bad_tag[1:]
+                for el in tree.xpath(f"//*[contains(@class, '{class_name}')]"):
+                    el.getparent().remove(el)
+            else:
+                for el in tree.xpath(f"//{bad_tag}"):
+                    el.getparent().remove(el)
+
+        xpath_expr = self._sel(ctx, "content_xpath", "//article")
+        nodes = tree.xpath(xpath_expr)
+        if not nodes:
+            return ""
+
+        node = nodes[0]
+        paragraphs = []
+        if hasattr(node, "xpath"):
+            p_nodes = node.xpath(".//p")
+            if p_nodes:
+                for p in p_nodes:
+                    txt = p.text_content().strip()
+                    if txt:
+                        paragraphs.append(txt)
+        if not paragraphs:
+            raw_text = node.text_content() if hasattr(node, "text_content") else str(node)
+            paragraphs = [p.strip() for p in raw_text.split("\n") if p.strip()]
+
+        return "\n\n".join(paragraphs)
+
+    def _extract_next_url(self, parser: HTMLParser, current_url: str, ctx: ScrapeContext) -> str:
+        tree = self._get_tree()
+        if tree is None:
+            return ""
+        xpath_expr = self._sel(ctx, "next_xpath", "//a[@rel='next']")
+        nodes = tree.xpath(xpath_expr)
+        if nodes:
+            node = nodes[0]
+            href = ""
+            if isinstance(node, str):
+                href = node
+            elif hasattr(node, "get"):
+                href = node.get("href") or ""
+            elif hasattr(node, "attrib"):
+                href = node.attrib.get("href") or ""
+            return _absolutize(href, current_url)
+        return ""
+
+
+class BotiTranslationAdapter(BaseAdapter):
+    """Concrete adapter for botitranslation.com which fetches chapters dynamically via API."""
+    name = "boti-translations"
+    label = "Boti Translation (botitranslation.com)"
+    requires = ["start_url"]
+    default_language = "en"
+
+    async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
+        current_url = ctx.start_url
+        count = 0
+        while current_url:
+            if ctx.max_chapters is not None and count >= ctx.max_chapters:
+                return
+
+            match = re.search(r"/chapter/(\d+)", current_url)
+            if not match:
+                logger.error(f"BotiTranslation: Could not parse chapter ID from URL: {current_url}")
+                return
+
+            chapter_id = match.group(1)
+            api_url = f"https://api.mystorywave.com/story-wave-backend/api/v1/content/chapters/{chapter_id}"
+
+            headers = {
+                "site-domain": "www.botitranslation.com",
+                "lang": "en_US",
+            }
+
+            try:
+                resp = await ctx.session.get(api_url, headers=headers, impersonate="chrome", timeout=30.0)
+                if resp.status_code != 200:
+                    logger.error(f"BotiTranslation: API request failed with status {resp.status_code} for chapter {chapter_id}")
+                    return
+
+                resp_json = resp.json()
+                ch_data = resp_json.get("data")
+                if not ch_data:
+                    logger.error(f"BotiTranslation: No data field in API response for chapter {chapter_id}")
+                    return
+            except Exception as e:
+                logger.error(f"BotiTranslation: HTTP or JSON error fetching chapter {chapter_id}: {e}")
+                return
+
+            title = ch_data.get("title") or "Untitled Chapter"
+            number = parse_chapter_number(current_url, title)
+
+            tier = ch_data.get("tier", 0)
+            paywall_status = ch_data.get("paywallStatus", "free")
+
+            if paywall_status != "free" or tier > 0:
+                if ctx.stop_on_premium:
+                    logger.info(f"BotiTranslation: Premium/locked chapter reached at {current_url} (tier={tier}, paywallStatus={paywall_status}). Stopping.")
+                    raise PremiumReached(number=number, title=title)
+                else:
+                    logger.info(f"BotiTranslation: Premium chapter reached at {current_url} but stop_on_premium is False. Continuing.")
+
+            content_html = ch_data.get("content") or ""
+            parser = HTMLParser(content_html)
+            paragraphs = [p.text(strip=True) for p in parser.css("p") if p.text(strip=True)]
+            if not paragraphs:
+                paragraphs = [p.strip() for p in parser.text(separator="\n", strip=True).split("\n") if p.strip()]
+            content = "\n\n".join(paragraphs)
+
+            yield ChapterData(
+                number=number,
+                title=title,
+                content=content,
+                url=current_url,
+                raw_html=resp.text,
+            )
+            count += 1
+
+            next_id = ch_data.get("nextId")
+            if not next_id:
+                logger.info("BotiTranslation: No nextId in API response. Crawl complete.")
+                return
+
+            current_url = f"https://www.botitranslation.com/chapter/{next_id}"
+
+
+class SixtyNineShubaAdapter(_PagedHtmlAdapter):
+    """Concrete adapter for 69shuba.com."""
+    name = "69shuba"
+    label = "69书吧 (69shuba.com)"
+    requires = ["start_url"]
+    default_language = "zh"
+
+    async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
+        original_fetch = ctx.fetch_text
+
+        async def wrapped_fetch(url: str) -> str | None:
+            http_url = url.replace("https://", "http://")
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Referer": "http://www.69shuba.com/",
+            }
+            try:
+                resp = await ctx.session.get(http_url, headers=headers, impersonate="chrome", timeout=30.0)
+                resp.raise_for_status()
+                return resp.content.decode("gbk", errors="ignore")
+            except Exception as e:
+                logger.error(f"69shuba: HTTP request error fetching {http_url}: {e}")
+                return None
+
+        ctx.fetch_text = wrapped_fetch
+        try:
+            async for ch in super().crawl(ctx):
+                if ch.url:
+                    ch.url = ch.url.replace("https://", "http://")
+                yield ch
+        finally:
+            ctx.fetch_text = original_fetch
+
+    def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
+        node = parser.css_first("h1")
+        if node:
+            return node.text(strip=True)
+        return "Untitled Chapter"
+
+    def _extract_content(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
+        node = parser.css_first(".txtnav")
+        if not node:
+            return ""
+
+        for tag in ["script", "style", "h1", "div.page1"]:
+            for el in node.css(tag):
+                el.decompose()
+
+        raw_text = node.text(separator="\n", strip=True)
+        lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
+
+        cleaned_lines = []
+        for line in lines:
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", line):
+                continue
+            if line.startswith("作者：") or "作者:" in line:
+                continue
+            if "(本章完)" in line or "（本章完）" in line:
+                continue
+            if "loadAdv(" in line:
+                continue
+            cleaned_lines.append(line)
+
+        # Skip repeating chapter title at the beginning of the text
+        if cleaned_lines:
+            first_line = cleaned_lines[0]
+            if len(first_line) < 30 and ("第" in first_line and "章" in first_line):
+                cleaned_lines.pop(0)
+
+        return "\n\n".join(cleaned_lines)
+
+    def _extract_next_url(self, parser: HTMLParser, current_url: str, ctx: ScrapeContext) -> str:
+        for a in parser.css(".txtnav a, .page1 a, a"):
+            href = a.attributes.get("href", "")
+            text = a.text(strip=True)
+            if href and any(x in text for x in ["下一", "next", "下一页", "下一章"]):
+                return _absolutize(href, current_url).replace("https://", "http://")
+        return ""
+
+
 # ── Adapter registry ──────────────────────────────────────────────────────
 ADAPTERS: dict[str, type[BaseAdapter]] = {
     "fenrirealm": FenriRealmAdapter,
     "generic": GenericAdapter,
+    "generic_xpath": GenericXPathAdapter,
+    "boti-translations": BotiTranslationAdapter,
+    "69shuba": SixtyNineShubaAdapter,
 }
 
 

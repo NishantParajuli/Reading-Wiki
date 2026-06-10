@@ -8,18 +8,44 @@ function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
   const [language, setLanguage] = useState("en");
   const [isRaw, setIsRaw] = useState(false);
   const [continuesFrom, setContinuesFrom] = useState("");
+  const [localStart, setLocalStart] = useState("");
+  const [titleSelector, setTitleSelector] = useState("");
+  const [contentSelector, setContentSelector] = useState("");
+  const [nextSelector, setNextSelector] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
     if (!startUrl.trim() || busy) return;
     setBusy(true);
-    // "Continues from global chapter N" means this source's local ch.1 maps to N,
-    // i.e. an offset of (N - 1).
-    const offset = continuesFrom.trim() ? (parseFloat(continuesFrom) - 1) : 0;
+    // Calculate custom offset: global_number = local_number + offset
+    // => offset = global_start - local_start
+    let offset = 0;
+    if (continuesFrom.trim()) {
+      const glob = parseFloat(continuesFrom);
+      const loc = localStart.trim() ? parseFloat(localStart) : 1.0;
+      offset = glob - loc;
+    }
+    
+    const config = {};
+    if (adapter === "generic") {
+      if (titleSelector.trim()) config.title_selector = titleSelector.trim();
+      if (contentSelector.trim()) config.content_selector = contentSelector.trim();
+      if (nextSelector.trim()) config.next_selector = nextSelector.trim();
+    } else if (adapter === "generic_xpath") {
+      if (titleSelector.trim()) config.title_xpath = titleSelector.trim();
+      if (contentSelector.trim()) config.content_xpath = contentSelector.trim();
+      if (nextSelector.trim()) config.next_xpath = nextSelector.trim();
+    }
+
     try {
       await window.API.addSource(novelId, {
-        adapter, start_url: startUrl.trim(), language, is_raw: isRaw, chapter_offset: offset,
+        adapter,
+        start_url: startUrl.trim(),
+        language,
+        is_raw: isRaw,
+        chapter_offset: offset,
+        config: Object.keys(config).length > 0 ? config : null,
       });
       onAdded();
     } finally {
@@ -44,10 +70,31 @@ function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
       React.createElement("span", null, "First chapter URL"),
       React.createElement("input", { value: startUrl, onChange: e => setStartUrl(e.target.value), placeholder: "https://…/1" })
     ),
+    (adapter === "generic" || adapter === "generic_xpath") && React.createElement("div", { className: "card", style: { padding: 12, marginTop: 8, marginBottom: 8, display: "flex", flexDirection: "column", gap: 8, backgroundColor: "var(--bg-2)" } },
+      React.createElement("p", { className: "section-eyebrow", style: { margin: 0, fontSize: 12 } }, "Advanced Selectors (Optional)"),
+      React.createElement("div", { className: "row", style: { gap: 12, flexWrap: "wrap" } },
+        React.createElement("label", { className: "field", style: { flex: "1 1 120px" } },
+          React.createElement("span", null, adapter === "generic_xpath" ? "Title XPath" : "Title Selector"),
+          React.createElement("input", { value: titleSelector, onChange: e => setTitleSelector(e.target.value), placeholder: adapter === "generic_xpath" ? "//h1" : "h1" })
+        ),
+        React.createElement("label", { className: "field", style: { flex: "1 1 120px" } },
+          React.createElement("span", null, adapter === "generic_xpath" ? "Content XPath" : "Content Selector"),
+          React.createElement("input", { value: contentSelector, onChange: e => setContentSelector(e.target.value), placeholder: adapter === "generic_xpath" ? "//article" : "article" })
+        ),
+        React.createElement("label", { className: "field", style: { flex: "1 1 120px" } },
+          React.createElement("span", null, adapter === "generic_xpath" ? "Next XPath" : "Next Selector"),
+          React.createElement("input", { value: nextSelector, onChange: e => setNextSelector(e.target.value), placeholder: adapter === "generic_xpath" ? "//a[@rel='next']" : "a[rel=next]" })
+        )
+      )
+    ),
     React.createElement("div", { className: "row", style: { gap: 16, flexWrap: "wrap" } },
-      React.createElement("label", { className: "field", style: { flex: "0 0 180px" } },
-        React.createElement("span", null, "Continues from chapter"),
+      React.createElement("label", { className: "field", style: { flex: "1 1 180px" } },
+        React.createElement("span", null, "Continues from global chapter"),
         React.createElement("input", { value: continuesFrom, onChange: e => setContinuesFrom(e.target.value), placeholder: "e.g. 125", inputMode: "decimal" })
+      ),
+      continuesFrom.trim() && React.createElement("label", { className: "field", style: { flex: "1 1 180px" } },
+        React.createElement("span", null, "Source-local starting chapter"),
+        React.createElement("input", { value: localStart, onChange: e => setLocalStart(e.target.value), placeholder: "defaults to 1", inputMode: "decimal" })
       ),
       React.createElement("label", { className: "check" },
         React.createElement("input", { type: "checkbox", checked: isRaw, onChange: e => setIsRaw(e.target.checked) }),
