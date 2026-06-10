@@ -63,6 +63,7 @@
     updateNovel(id, body) { return req("PATCH", N(id), body); },
     deleteNovel(id) { return delJSON(N(id)); },
     addSource(id, body) { return postJSON(`${N(id)}/sources`, body); },
+    updateSource(id, sid, body) { return req("PATCH", `${N(id)}/sources/${sid}`, body); },
     scrape(id, body) { return postJSON(`${N(id)}/scrape`, body); },
 
     // ── Reader ──

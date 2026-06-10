@@ -54,10 +54,23 @@ async def _persist_chapter(conn, source: dict, global_number: float, ch, force: 
     return True
 
 
+async def _resume_url(pool, source_id: int) -> str | None:
+    """The URL of the furthest-progressed chapter already scraped by this source, so a
+    re-run can jump straight there instead of re-walking every prior chapter page."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT url FROM chapters WHERE source_id = $1 AND url IS NOT NULL ORDER BY number DESC LIMIT 1;",
+            source_id,
+        )
+
+
 async def scrape_source(source_id: int, force: bool = False, max_chapters: int | None = None) -> int:
     """Scrapes one source into its novel's global chapter sequence using the source's
     chosen adapter. Source-local chapter numbers are shifted by `chapter_offset` so a
-    continuation source lines up after the previous one. Stops cleanly at premium."""
+    continuation source lines up after the previous one. Stops cleanly at premium.
+
+    On a re-run we resume from the last chapter already scraped (rather than re-fetching
+    every prior page just to skip it), unless `force` re-scrapes from the start."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         source = await conn.fetchrow(
@@ -82,13 +95,20 @@ async def scrape_source(source_id: int, force: bool = False, max_chapters: int |
     offset = float(source["chapter_offset"] or 0)
 
     adapter = get_adapter(source["adapter"])
-    logger.info(f"Scraping source {source_id} (novel {source['novel_id']}, adapter '{source['adapter']}') from {source['start_url']}")
+
+    start_url = source["start_url"]
+    if not force:
+        resume = await _resume_url(pool, source_id)
+        if resume:
+            start_url = resume
+            logger.info(f"Resuming source {source_id} from last scraped chapter: {start_url}")
+    logger.info(f"Scraping source {source_id} (novel {source['novel_id']}, adapter '{source['adapter']}') from {start_url}")
 
     scraped_count = 0
     fallback_local = 0  # used only when an adapter can't determine a chapter number
     async with AsyncSession(headers=HEADERS) as session:
         ctx = ScrapeContext(
-            start_url=source["start_url"],
+            start_url=start_url,
             session=session,
             config=source["config"],
             max_chapters=max_chapters,
@@ -113,6 +133,54 @@ async def scrape_source(source_id: int, force: bool = False, max_chapters: int |
         await conn.execute("UPDATE sources SET last_scraped_at = now() WHERE id = $1;", source_id)
 
     return scraped_count
+
+
+async def set_source_offset(conn, source_id: int, new_offset: float) -> int:
+    """Re-points a source's `chapter_offset` and shifts its already-scraped chapters onto
+    the new GLOBAL numbering, so correcting an offset takes effect immediately without a
+    re-scrape (e.g. a raw that is one chapter ahead of the translation → offset -1).
+
+    Returns the number of chapters renumbered. Must be called inside a transaction. Raises
+    ValueError if the codex (chunks) was already built on the current numbering, since
+    chapter numbers are referenced there without ON UPDATE CASCADE."""
+    row = await conn.fetchrow("SELECT chapter_offset FROM sources WHERE id = $1;", source_id)
+    if row is None:
+        raise ValueError(f"Source {source_id} not found.")
+    delta = float(new_offset) - float(row["chapter_offset"] or 0)
+
+    renumbered = 0
+    if delta != 0:
+        n_chunks = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM chunks c
+            JOIN chapters ch ON ch.novel_id = c.novel_id AND ch.number = c.chapter
+            WHERE ch.source_id = $1;
+            """,
+            source_id,
+        )
+        if n_chunks:
+            raise ValueError(
+                "This source has codex chunks built on its current chapter numbering; "
+                "clear/rebuild the codex before changing the offset."
+            )
+        # Shift through a far range first so a contiguous block never collides with its own
+        # not-yet-moved rows (the chapters PK is checked per row, mid-statement). The second
+        # step lands on the final numbers and surfaces any real clash with other sources.
+        await conn.execute(
+            "UPDATE chapters SET number = number + $2 + 1000000 WHERE source_id = $1;",
+            source_id, delta,
+        )
+        status = await conn.execute(
+            "UPDATE chapters SET number = number - 1000000 WHERE source_id = $1;",
+            source_id,
+        )
+        try:
+            renumbered = int(status.split()[-1])
+        except (ValueError, IndexError):
+            renumbered = 0
+
+    await conn.execute("UPDATE sources SET chapter_offset = $2 WHERE id = $1;", source_id, new_offset)
+    return renumbered
 
 
 async def scrape_novel(novel_id: int, force: bool = False, max_chapters: int | None = None) -> int:

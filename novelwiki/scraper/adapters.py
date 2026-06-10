@@ -1,4 +1,5 @@
 import re
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import AsyncIterator
@@ -51,6 +52,11 @@ def parse_chapter_number(url: str, title: str) -> float | None:
             return float(raw_num)
         except ValueError:
             pass
+
+    # Chinese patterns: e.g. 第123章, 第123话, 第123.5章
+    match = re.search(r"第\s*(\d+(?:\.\d+)?)\s*[章话集页]", title_clean)
+    if match:
+        return float(match.group(1))
 
     match = re.search(r"\b(\d+(?:\.\d+)?)\b", title_clean)
     if match:
@@ -495,13 +501,27 @@ class SixtyNineShubaAdapter(_PagedHtmlAdapter):
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
                 "Referer": "http://www.69shuba.com/",
             }
-            try:
-                resp = await ctx.session.get(http_url, headers=headers, impersonate="chrome", timeout=30.0)
-                resp.raise_for_status()
-                return resp.content.decode("gbk", errors="ignore")
-            except Exception as e:
-                logger.error(f"69shuba: HTTP request error fetching {http_url}: {e}")
-                return None
+            retries = 3
+            backoff = 5.0
+            for attempt in range(retries):
+                try:
+                    resp = await ctx.session.get(http_url, headers=headers, impersonate="chrome", timeout=30.0)
+                    if resp.status_code == 429:
+                        logger.warning(f"69shuba: Rate limited (429) fetching {http_url}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
+                        await asyncio.sleep(backoff)
+                        backoff *= 2
+                        continue
+                    resp.raise_for_status()
+                    return resp.content.decode("gbk", errors="ignore")
+                except Exception as e:
+                    if attempt < retries - 1:
+                        logger.warning(f"69shuba: Error fetching {http_url}: {e}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
+                        await asyncio.sleep(backoff)
+                        backoff *= 2
+                        continue
+                    logger.error(f"69shuba: HTTP request error fetching {http_url} after {retries} attempts: {e}")
+                    return None
+            return None
 
         ctx.fetch_text = wrapped_fetch
         try:

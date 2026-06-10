@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
-from novelwiki.scraper.runner import scrape_source, scrape_novel
+from novelwiki.scraper.runner import scrape_source, scrape_novel, set_source_offset
 from novelwiki.scraper.adapters import list_adapters
 from novelwiki.ingest.chunk import chunk_all_chapters
 from novelwiki.ingest.embed import embed_missing_chunks
@@ -37,6 +37,13 @@ class SourceCreate(BaseModel):
     chapter_offset: float = 0
     label: str | None = None
     config: dict | None = None
+
+class SourceUpdate(BaseModel):
+    chapter_offset: float | None = None
+    start_url: str | None = None
+    label: str | None = None
+    language: str | None = None
+    is_raw: bool | None = None
 
 class NovelCreate(BaseModel):
     title: str
@@ -269,6 +276,43 @@ async def api_add_source(novel_id: int, payload: SourceCreate):
             payload.language, payload.is_raw, payload.chapter_offset, payload.label,
         )
     return {"id": int(source_id)}
+
+
+@router.patch("/novels/{novel_id}/sources/{source_id}")
+async def api_update_source(novel_id: int, source_id: int, payload: SourceUpdate):
+    """Edits an existing source. Changing `chapter_offset` also renumbers that source's
+    already-scraped chapters onto the new global numbering (e.g. set -1 when a raw source
+    is one chapter ahead of the translation), so the fix is immediate — no re-scrape."""
+    fields = payload.model_dump(exclude_unset=True)
+    if not fields:
+        return {"status": "noop"}
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        owner = await conn.fetchval(
+            "SELECT id FROM sources WHERE id = $1 AND novel_id = $2;", source_id, novel_id,
+        )
+        if not owner:
+            raise HTTPException(status_code=404, detail="Source not found.")
+        renumbered = 0
+        try:
+            async with conn.transaction():
+                if "chapter_offset" in fields:
+                    renumbered = await set_source_offset(conn, source_id, fields.pop("chapter_offset"))
+                if fields:
+                    sets, args = [], []
+                    for k, v in fields.items():
+                        args.append(v)
+                        sets.append(f"{k} = ${len(args)}")
+                    args.append(source_id)
+                    await conn.execute(
+                        f"UPDATE sources SET {', '.join(sets)} WHERE id = ${len(args)};", *args,
+                    )
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except Exception as e:
+            # e.g. the renumber would collide with another source's chapter numbers
+            raise HTTPException(status_code=409, detail=f"Could not update source: {e}")
+    return {"status": "success", "renumbered": renumbered}
 
 
 # ── Chapters / Reader ─────────────────────────────────────────────────────

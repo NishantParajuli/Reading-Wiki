@@ -108,6 +108,40 @@ function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
   );
 }
 
+function EditSourceForm({ novelId, source, onSaved, onCancel }) {
+  const [offset, setOffset] = useState(String(source.chapter_offset || 0));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function save() {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await window.API.updateSource(novelId, source.id, { chapter_offset: parseFloat(offset) || 0 });
+      onSaved(r);
+    } catch (e) {
+      setErr(e.message || "Could not save");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return React.createElement("div", { className: "card", style: { padding: 12, marginTop: 8, background: "var(--bg-2)" } },
+    React.createElement("p", { className: "section-eyebrow", style: { marginTop: 0 } }, "Edit chapter offset"),
+    React.createElement("label", { className: "field" },
+      React.createElement("span", null, "Chapter offset (added to this source's own numbers)"),
+      React.createElement("input", { value: offset, onChange: e => setOffset(e.target.value), placeholder: "e.g. -1", inputMode: "decimal" })
+    ),
+    React.createElement("p", { className: "muted", style: { fontSize: 12, marginTop: 6 } },
+      "Use -1 if this raw source is one chapter ahead of the translation. Existing chapters are renumbered immediately."),
+    err && React.createElement("p", { style: { color: "var(--danger, #c0392b)", fontSize: 12.5, marginTop: 4 } }, err),
+    React.createElement("div", { className: "row", style: { gap: 10, marginTop: 8 } },
+      React.createElement("button", { className: "btn btn-primary", type: "button", onClick: save, disabled: busy }, busy ? "Saving…" : "Save"),
+      React.createElement("button", { className: "btn btn-ghost", type: "button", onClick: onCancel }, "Cancel")
+    )
+  );
+}
+
 function NovelEditForm({ novel, onSaved, onCancel }) {
   const [title, setTitle] = useState(novel.title || "");
   const [author, setAuthor] = useState(novel.author || "");
@@ -198,6 +232,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
   const [toc, setToc] = useState(null);    // null = loading
   const [adapters, setAdapters] = useState([]);
   const [addingSource, setAddingSource] = useState(false);
+  const [editSourceId, setEditSourceId] = useState(null);
   const [editing, setEditing] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
   const [glossary, setGlossary] = useState([]);
@@ -289,12 +324,25 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
       React.createElement("div", null,
         React.createElement("p", { className: "section-eyebrow" }, "Sources"),
         React.createElement("div", { className: "card", style: { padding: 12 } },
-          (novel.sources || []).map(s => React.createElement("div", { key: s.id, className: "source-row" },
-            React.createElement("div", { className: "grow" },
-              React.createElement("div", { style: { fontWeight: 600 } }, s.label || s.adapter, s.is_raw && React.createElement("span", { className: "chip", style: { marginLeft: 8 } }, "raw · " + s.language)),
-              React.createElement("div", { className: "muted", style: { fontSize: 12.5, wordBreak: "break-all" } }, s.start_url)
+          (novel.sources || []).map(s => React.createElement("div", { key: s.id },
+            React.createElement("div", { className: "source-row" },
+              React.createElement("div", { className: "grow" },
+                React.createElement("div", { style: { fontWeight: 600 } }, s.label || s.adapter, s.is_raw && React.createElement("span", { className: "chip", style: { marginLeft: 8 } }, "raw · " + s.language)),
+                React.createElement("div", { className: "muted", style: { fontSize: 12.5, wordBreak: "break-all" } }, s.start_url)
+              ),
+              s.chapter_offset ? React.createElement("span", { className: "chip mono" }, `${s.chapter_offset > 0 ? "+" : ""}${s.chapter_offset}`) : null,
+              React.createElement("button", { className: "icon-btn", title: "Edit offset", onClick: () => setEditSourceId(editSourceId === s.id ? null : s.id) },
+                React.createElement(Icon, { name: "edit", size: 15 }))
             ),
-            s.chapter_offset ? React.createElement("span", { className: "chip mono" }, `+${s.chapter_offset}`) : null
+            editSourceId === s.id && React.createElement(EditSourceForm, {
+              novelId, source: s,
+              onCancel: () => setEditSourceId(null),
+              onSaved: (r) => {
+                setEditSourceId(null);
+                setMsg(r && r.renumbered ? `Renumbered ${r.renumbered} chapters to the new offset.` : "Source updated.");
+                reloadNovel(); loadToc();
+              },
+            })
           )),
           (novel.sources || []).length === 0 && React.createElement("div", { className: "muted", style: { padding: 8 } }, "No sources yet."),
           !addingSource && React.createElement("button", { className: "btn btn-ghost", style: { marginTop: 8 }, onClick: () => setAddingSource(true) },
