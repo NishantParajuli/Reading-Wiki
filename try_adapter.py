@@ -2,24 +2,14 @@ import asyncio
 from curl_cffi.requests import AsyncSession
 from novelwiki.scraper.adapters import get_adapter, ScrapeContext, HEADERS
 
-# CONFIG: Set your custom CSS/XPath selectors here if using 'generic' or 'generic_xpath'
-CONFIG = {
-    # CSS selectors example:
-    # "title_selector": "h1",
-    # "content_selector": "div.chapter-content",
-    # "next_selector": "a.next"
-    
-    # XPath selectors example:
-    # "title_xpath": "//h1",
-    # "content_xpath": "//div[@class='chapter-content']",
-    # "next_xpath": "//a[@class='next']/@href"
-}
+# CONFIG: Additional configuration parameters (if any)
+CONFIG = {}
 
-# ADAPTER: Choose from 'fenrirealm', 'generic', 'generic_xpath', 'boti-translations', '69shuba'
-ADAPTER_NAME = "69shuba"
+# ADAPTER: Choose from 'fenrirealm', 'readhive', 'boti-translations', '69shuba'
+ADAPTER_NAME = "readhive"
 
 # START: The first chapter URL to start scraping from
-START = "http://www.69shuba.com/txt/84208/39503023"
+START = "https://readhive.org/series/85669/0/"
 
 async def main():
     print(f"Starting test scrape using adapter '{ADAPTER_NAME}' from: {START}")

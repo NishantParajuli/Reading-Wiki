@@ -198,39 +198,56 @@ class _PagedHtmlAdapter(BaseAdapter):
             current_url = next_url
 
 
-class GenericAdapter(_PagedHtmlAdapter):
-    """Config-driven adapter: reads CSS selectors from the source config (falling back
-    to settings) so a new HTML site can be supported without writing code."""
-    name = "generic"
-    label = "Generic (CSS selectors)"
+class ReadhiveAdapter(_PagedHtmlAdapter):
+    """Concrete adapter for readhive.org."""
+    name = "readhive"
+    label = "Readhive (readhive.org)"
     requires = ["start_url"]
     default_language = "en"
 
-    def _sel(self, ctx: ScrapeContext, key: str, default: str) -> str:
-        return (ctx.config or {}).get(key) or default
-
     def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
-        node = parser.css_first(self._sel(ctx, "title_selector", settings.SCRAPER_TITLE_SELECTOR))
-        return node.text(strip=True) if node else "Untitled Chapter"
+        node = parser.css_first("h1")
+        if node:
+            strong = node.css_first("strong")
+            span = node.css_first("span")
+            if strong and span:
+                return f"{span.text(strip=True)} - {strong.text(strip=True)}"
+            elif strong:
+                return strong.text(strip=True)
+            return node.text(strip=True)
+        return "Untitled Chapter"
 
     def _extract_content(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
-        for sel in ("script", "style", "nav", ".ads", ".comments", ".navigation"):
-            for node in parser.css(sel):
-                node.decompose()
-        node = parser.css_first(self._sel(ctx, "content_selector", settings.SCRAPER_CONTENT_SELECTOR))
+        node = parser.css_first("div.prose")
         if not node:
             return ""
-        paragraphs = [p.text(strip=True) for p in node.css("p") if p.text(strip=True)]
+
+        for tag in ("script", "style", "nav", ".ads", ".comments", ".navigation"):
+            for el in node.css(tag):
+                el.decompose()
+
+        paragraphs = []
+        p_nodes = node.css("p")
+        if p_nodes:
+            for p in p_nodes:
+                text = p.text(strip=True)
+                if text:
+                    paragraphs.append(text)
         if not paragraphs:
-            raw = node.text(separator="\n", strip=True)
-            paragraphs = [p.strip() for p in raw.split("\n") if p.strip()]
+            raw_text = node.text(separator="\n", strip=True)
+            paragraphs = [p.strip() for p in raw_text.split("\n") if p.strip()]
         return "\n\n".join(paragraphs)
 
     def _extract_next_url(self, parser: HTMLParser, current_url: str, ctx: ScrapeContext) -> str:
-        node = parser.css_first(self._sel(ctx, "next_selector", settings.SCRAPER_NEXT_SELECTOR))
-        if node:
-            return _absolutize(node.attributes.get("href", ""), current_url)
+        for node in parser.css("a"):
+            text = node.text(strip=True).lower()
+            href = node.attributes.get("href", "")
+            if not href or href == "#":
+                continue
+            if text == "next":
+                return _absolutize(href, current_url)
         return ""
+
 
 
 class FenriRealmAdapter(_PagedHtmlAdapter):
@@ -306,102 +323,7 @@ class FenriRealmAdapter(_PagedHtmlAdapter):
         return ""
 
 
-class GenericXPathAdapter(_PagedHtmlAdapter):
-    """Config-driven adapter using XPath: reads XPath selectors from the source config
-    so a new HTML site can be supported without writing code."""
-    name = "generic_xpath"
-    label = "Generic (XPath selectors)"
-    requires = ["start_url"]
-    default_language = "en"
 
-    def _sel(self, ctx: ScrapeContext, key: str, default: str) -> str:
-        return (ctx.config or {}).get(key) or default
-
-    async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
-        original_fetch = ctx.fetch_text
-
-        async def wrapped_fetch(url: str) -> str | None:
-            html_str = await original_fetch(url)
-            self._current_html = html_str
-            return html_str
-
-        ctx.fetch_text = wrapped_fetch
-        try:
-            async for ch in super().crawl(ctx):
-                yield ch
-        finally:
-            ctx.fetch_text = original_fetch
-
-    def _get_tree(self) -> lxml.html.HtmlElement | None:
-        html_str = getattr(self, "_current_html", None)
-        if not html_str:
-            return None
-        return lxml.html.fromstring(html_str)
-
-    def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
-        tree = self._get_tree()
-        if tree is None:
-            return "Untitled Chapter"
-        xpath_expr = self._sel(ctx, "title_xpath", "//h1")
-        nodes = tree.xpath(xpath_expr)
-        if nodes:
-            node = nodes[0]
-            if isinstance(node, str):
-                return node.strip()
-            return node.text_content().strip() if hasattr(node, "text_content") else str(node).strip()
-        return "Untitled Chapter"
-
-    def _extract_content(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
-        tree = self._get_tree()
-        if tree is None:
-            return ""
-        # Strip script, style, nav, ads, comments, navigation
-        for bad_tag in ("script", "style", "nav", ".ads", ".comments", ".navigation"):
-            if bad_tag.startswith("."):
-                class_name = bad_tag[1:]
-                for el in tree.xpath(f"//*[contains(@class, '{class_name}')]"):
-                    el.getparent().remove(el)
-            else:
-                for el in tree.xpath(f"//{bad_tag}"):
-                    el.getparent().remove(el)
-
-        xpath_expr = self._sel(ctx, "content_xpath", "//article")
-        nodes = tree.xpath(xpath_expr)
-        if not nodes:
-            return ""
-
-        node = nodes[0]
-        paragraphs = []
-        if hasattr(node, "xpath"):
-            p_nodes = node.xpath(".//p")
-            if p_nodes:
-                for p in p_nodes:
-                    txt = p.text_content().strip()
-                    if txt:
-                        paragraphs.append(txt)
-        if not paragraphs:
-            raw_text = node.text_content() if hasattr(node, "text_content") else str(node)
-            paragraphs = [p.strip() for p in raw_text.split("\n") if p.strip()]
-
-        return "\n\n".join(paragraphs)
-
-    def _extract_next_url(self, parser: HTMLParser, current_url: str, ctx: ScrapeContext) -> str:
-        tree = self._get_tree()
-        if tree is None:
-            return ""
-        xpath_expr = self._sel(ctx, "next_xpath", "//a[@rel='next']")
-        nodes = tree.xpath(xpath_expr)
-        if nodes:
-            node = nodes[0]
-            href = ""
-            if isinstance(node, str):
-                href = node
-            elif hasattr(node, "get"):
-                href = node.get("href") or ""
-            elif hasattr(node, "attrib"):
-                href = node.attrib.get("href") or ""
-            return _absolutize(href, current_url)
-        return ""
 
 
 class BotiTranslationAdapter(BaseAdapter):
@@ -582,8 +504,7 @@ class SixtyNineShubaAdapter(_PagedHtmlAdapter):
 # ── Adapter registry ──────────────────────────────────────────────────────
 ADAPTERS: dict[str, type[BaseAdapter]] = {
     "fenrirealm": FenriRealmAdapter,
-    "generic": GenericAdapter,
-    "generic_xpath": GenericXPathAdapter,
+    "readhive": ReadhiveAdapter,
     "boti-translations": BotiTranslationAdapter,
     "69shuba": SixtyNineShubaAdapter,
 }

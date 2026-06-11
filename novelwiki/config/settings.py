@@ -70,14 +70,9 @@ class Settings(BaseSettings):
     EXTRACTION_VERIFY: bool = True
 
     # Scraper: pick a site adapter by key (see scraper/adapters.py registry).
-    # The "generic" adapter reads the CSS selectors below from config so a new
-    # site can be supported without writing code.
     SCRAPER_ADAPTER: str = "fenrirealm"
     SCRAPER_BASE_URL: str = "https://fenrirealm.com"
     SCRAPER_DELAY: float = 1.0
-    SCRAPER_TITLE_SELECTOR: str = "h1"
-    SCRAPER_CONTENT_SELECTOR: str = "article"
-    SCRAPER_NEXT_SELECTOR: str = "a[rel=next]"
 
     model_config = SettingsConfigDict(
         env_file=".env",

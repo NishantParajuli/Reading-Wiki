@@ -9,9 +9,6 @@ function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
   const [isRaw, setIsRaw] = useState(false);
   const [continuesFrom, setContinuesFrom] = useState("");
   const [localStart, setLocalStart] = useState("");
-  const [titleSelector, setTitleSelector] = useState("");
-  const [contentSelector, setContentSelector] = useState("");
-  const [nextSelector, setNextSelector] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit(e) {
@@ -26,17 +23,6 @@ function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
       const loc = localStart.trim() ? parseFloat(localStart) : 1.0;
       offset = glob - loc;
     }
-    
-    const config = {};
-    if (adapter === "generic") {
-      if (titleSelector.trim()) config.title_selector = titleSelector.trim();
-      if (contentSelector.trim()) config.content_selector = contentSelector.trim();
-      if (nextSelector.trim()) config.next_selector = nextSelector.trim();
-    } else if (adapter === "generic_xpath") {
-      if (titleSelector.trim()) config.title_xpath = titleSelector.trim();
-      if (contentSelector.trim()) config.content_xpath = contentSelector.trim();
-      if (nextSelector.trim()) config.next_xpath = nextSelector.trim();
-    }
 
     try {
       await window.API.addSource(novelId, {
@@ -45,7 +31,7 @@ function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
         language,
         is_raw: isRaw,
         chapter_offset: offset,
-        config: Object.keys(config).length > 0 ? config : null,
+        config: null,
       });
       onAdded();
     } finally {
@@ -69,23 +55,6 @@ function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
     React.createElement("label", { className: "field" },
       React.createElement("span", null, "First chapter URL"),
       React.createElement("input", { value: startUrl, onChange: e => setStartUrl(e.target.value), placeholder: "https://…/1" })
-    ),
-    (adapter === "generic" || adapter === "generic_xpath") && React.createElement("div", { className: "card", style: { padding: 12, marginTop: 8, marginBottom: 8, display: "flex", flexDirection: "column", gap: 8, backgroundColor: "var(--bg-2)" } },
-      React.createElement("p", { className: "section-eyebrow", style: { margin: 0, fontSize: 12 } }, "Advanced Selectors (Optional)"),
-      React.createElement("div", { className: "row", style: { gap: 12, flexWrap: "wrap" } },
-        React.createElement("label", { className: "field", style: { flex: "1 1 120px" } },
-          React.createElement("span", null, adapter === "generic_xpath" ? "Title XPath" : "Title Selector"),
-          React.createElement("input", { value: titleSelector, onChange: e => setTitleSelector(e.target.value), placeholder: adapter === "generic_xpath" ? "//h1" : "h1" })
-        ),
-        React.createElement("label", { className: "field", style: { flex: "1 1 120px" } },
-          React.createElement("span", null, adapter === "generic_xpath" ? "Content XPath" : "Content Selector"),
-          React.createElement("input", { value: contentSelector, onChange: e => setContentSelector(e.target.value), placeholder: adapter === "generic_xpath" ? "//article" : "article" })
-        ),
-        React.createElement("label", { className: "field", style: { flex: "1 1 120px" } },
-          React.createElement("span", null, adapter === "generic_xpath" ? "Next XPath" : "Next Selector"),
-          React.createElement("input", { value: nextSelector, onChange: e => setNextSelector(e.target.value), placeholder: adapter === "generic_xpath" ? "//a[@rel='next']" : "a[rel=next]" })
-        )
-      )
     ),
     React.createElement("div", { className: "row", style: { gap: 16, flexWrap: "wrap" } },
       React.createElement("label", { className: "field", style: { flex: "1 1 180px" } },
@@ -293,29 +262,29 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
     editing
       ? React.createElement(NovelEditForm, { novel, onSaved: () => { setEditing(false); reloadNovel(); }, onCancel: () => setEditing(false) })
       : React.createElement("div", { className: "novel-hero" },
-      React.createElement("div", { className: "novel-hero-cover" },
-        novel.cover_url ? React.createElement("img", { src: novel.cover_url, alt: "" })
-          : React.createElement("div", { className: "novel-cover-ph lg" }, React.createElement(Icon, { name: "book", size: 40 }))
-      ),
-      React.createElement("div", { className: "novel-hero-body" },
-        React.createElement("div", { className: "row", style: { gap: 10, alignItems: "flex-start" } },
-          React.createElement("h1", { className: "serif", style: { margin: "0 0 6px", flex: 1 } }, novel.title),
-          React.createElement("button", { className: "icon-btn", onClick: () => setEditing(true), title: "Edit novel" },
-            React.createElement(Icon, { name: "edit", size: 17 }))
+        React.createElement("div", { className: "novel-hero-cover" },
+          novel.cover_url ? React.createElement("img", { src: novel.cover_url, alt: "" })
+            : React.createElement("div", { className: "novel-cover-ph lg" }, React.createElement(Icon, { name: "book", size: 40 }))
         ),
-        novel.author && React.createElement("div", { className: "muted" }, novel.author),
-        novel.description && React.createElement("p", { style: { color: "var(--ink-2)", lineHeight: 1.6, maxWidth: "60ch" } }, novel.description),
-        React.createElement("div", { className: "row", style: { gap: 10, marginTop: 14, flexWrap: "wrap" } },
-          hasChapters && React.createElement("button", { className: "btn btn-primary", onClick: () => openReader(startAt) },
-            React.createElement(Icon, { name: "book", size: 16 }),
-            progress.last_chapter != null ? `Continue · Ch. ${startAt}` : "Start reading"),
-          React.createElement("span", { className: "chip mono" }, `${novel.chapter_count} chapters`),
-          novel.max_chapter != null && React.createElement("span", { className: "chip mono" }, `ch. ${novel.min_chapter}–${novel.max_chapter}`),
-          novel.codex_enabled && React.createElement("button", { className: "btn btn-ghost", onClick: () => nav("browse") },
-            React.createElement(Icon, { name: "compass", size: 16 }), "Open codex")
+        React.createElement("div", { className: "novel-hero-body" },
+          React.createElement("div", { className: "row", style: { gap: 10, alignItems: "flex-start" } },
+            React.createElement("h1", { className: "serif", style: { margin: "0 0 6px", flex: 1 } }, novel.title),
+            React.createElement("button", { className: "icon-btn", onClick: () => setEditing(true), title: "Edit novel" },
+              React.createElement(Icon, { name: "edit", size: 17 }))
+          ),
+          novel.author && React.createElement("div", { className: "muted" }, novel.author),
+          novel.description && React.createElement("p", { style: { color: "var(--ink-2)", lineHeight: 1.6, maxWidth: "60ch" } }, novel.description),
+          React.createElement("div", { className: "row", style: { gap: 10, marginTop: 14, flexWrap: "wrap" } },
+            hasChapters && React.createElement("button", { className: "btn btn-primary", onClick: () => openReader(startAt) },
+              React.createElement(Icon, { name: "book", size: 16 }),
+              progress.last_chapter != null ? `Continue · Ch. ${startAt}` : "Start reading"),
+            React.createElement("span", { className: "chip mono" }, `${novel.chapter_count} chapters`),
+            novel.max_chapter != null && React.createElement("span", { className: "chip mono" }, `ch. ${novel.min_chapter}–${novel.max_chapter}`),
+            novel.codex_enabled && React.createElement("button", { className: "btn btn-ghost", onClick: () => nav("browse") },
+              React.createElement(Icon, { name: "compass", size: 16 }), "Open codex")
+          )
         )
-      )
-    ),
+      ),
 
     msg && React.createElement("div", { className: "card", style: { padding: "10px 16px", marginBottom: 16, fontSize: 13.5 } }, msg),
 
@@ -413,18 +382,18 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
       : toc.length === 0
         ? React.createElement(EmptyState, { icon: "book", title: "No chapters yet", body: "Use Scrape above to fetch chapters from the source." })
         : React.createElement("div", { className: "card toc" },
-            toc.map(ch => React.createElement("button", {
-              key: ch.number, className: "toc-row" + (progress.last_chapter === ch.number ? " current" : ""),
-              onClick: () => openReader(ch.number),
-            },
-              React.createElement("span", { className: "toc-num mono" }, ch.number),
-              React.createElement("span", { className: "toc-title" }, ch.title || `Chapter ${ch.number}`),
-              !ch.has_content && ch.translation_status === "pending"
-                ? React.createElement("span", { className: "chip", title: "Raw — translates on open" }, "raw")
-                : null,
-              React.createElement(Icon, { name: "arrowRight", size: 15, className: "muted" })
-            ))
-          )
+          toc.map(ch => React.createElement("button", {
+            key: ch.number, className: "toc-row" + (progress.last_chapter === ch.number ? " current" : ""),
+            onClick: () => openReader(ch.number),
+          },
+            React.createElement("span", { className: "toc-num mono" }, ch.number),
+            React.createElement("span", { className: "toc-title" }, ch.title || `Chapter ${ch.number}`),
+            !ch.has_content && ch.translation_status === "pending"
+              ? React.createElement("span", { className: "chip", title: "Raw — translates on open" }, "raw")
+              : null,
+            React.createElement(Icon, { name: "arrowRight", size: 15, className: "muted" })
+          ))
+        )
   );
 }
 

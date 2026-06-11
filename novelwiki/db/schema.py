@@ -39,7 +39,7 @@ DDL_QUERIES = [
     CREATE TABLE IF NOT EXISTS sources (
       id              BIGSERIAL PRIMARY KEY,
       novel_id        BIGINT NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
-      adapter         TEXT NOT NULL,                  -- registry key: fenrirealm|generic|...
+      adapter         TEXT NOT NULL,                  -- registry key: fenrirealm|readhive|...
       start_url       TEXT,                           -- or file path for epub/pdf later
       config          JSONB,                          -- per-source adapter config
       language        TEXT DEFAULT 'en',
