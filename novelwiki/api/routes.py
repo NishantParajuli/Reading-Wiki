@@ -27,6 +27,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Shelves a novel can sit on (user reading status) and the user-applied status tags.
+SHELVES = {"to_read", "reading", "completed"}
+STATUS_TAGS = {"ongoing", "finished", "translation_ongoing"}
+
+
+def _translation_type(has_raw, has_eng) -> str | None:
+    """Auto-derived from a novel's sources: English source(s) read as-is = 'translated',
+    raw source(s) we translate = 'raws', a mix = 'raws+translated'. None if no sources."""
+    if has_raw and has_eng:
+        return "raws+translated"
+    if has_raw:
+        return "raws"
+    if has_eng:
+        return "translated"
+    return None
+
+
 # ── API Models ────────────────────────────────────────────────────────────
 
 class SourceCreate(BaseModel):
@@ -60,6 +77,8 @@ class NovelUpdate(BaseModel):
     description: str | None = None
     cover_url: str | None = None
     codex_enabled: bool | None = None
+    shelf: str | None = None          # to_read|reading|completed|"" (empty string clears the shelf)
+    status_tags: list[str] | None = None
 
 class ProgressUpdate(BaseModel):
     last_chapter: float
@@ -130,9 +149,12 @@ async def api_list_novels():
         rows = await conn.fetch(
             """
             SELECT n.id, n.title, n.author, n.cover_url, n.description, n.codex_enabled,
+                   n.shelf, n.status_tags,
                    COUNT(c.number) AS chapter_count,
                    MIN(c.number) AS min_chapter, MAX(c.number) AS max_chapter,
-                   p.last_chapter, p.max_chapter_read
+                   p.last_chapter, p.max_chapter_read,
+                   (SELECT bool_or(s.is_raw)     FROM sources s WHERE s.novel_id = n.id) AS has_raw,
+                   (SELECT bool_or(NOT s.is_raw)  FROM sources s WHERE s.novel_id = n.id) AS has_eng
             FROM novels n
             LEFT JOIN chapters c ON c.novel_id = n.id
             LEFT JOIN reading_progress p ON p.novel_id = n.id
@@ -148,6 +170,9 @@ async def api_list_novels():
             "cover_url": r["cover_url"],
             "description": r["description"],
             "codex_enabled": r["codex_enabled"],
+            "shelf": r["shelf"],
+            "status_tags": list(r["status_tags"] or []),
+            "translation_type": _translation_type(r["has_raw"], r["has_eng"]),
             "chapter_count": int(r["chapter_count"] or 0),
             "min_chapter": float(r["min_chapter"]) if r["min_chapter"] is not None else None,
             "max_chapter": float(r["max_chapter"]) if r["max_chapter"] is not None else None,
@@ -205,6 +230,8 @@ async def api_get_novel(novel_id: int):
             novel_id,
         )
         progress = await conn.fetchrow("SELECT * FROM reading_progress WHERE novel_id = $1;", novel_id)
+    has_raw = any(s["is_raw"] for s in sources) if sources else None
+    has_eng = any(not s["is_raw"] for s in sources) if sources else None
     return {
         "id": int(novel["id"]),
         "title": novel["title"],
@@ -213,6 +240,9 @@ async def api_get_novel(novel_id: int):
         "cover_url": novel["cover_url"],
         "original_language": novel["original_language"],
         "codex_enabled": novel["codex_enabled"],
+        "shelf": novel["shelf"],
+        "status_tags": list(novel["status_tags"] or []),
+        "translation_type": _translation_type(has_raw, has_eng),
         "chapter_count": int(span["count"]),
         "min_chapter": float(span["min"]) if span["min"] is not None else None,
         "max_chapter": float(span["max"]) if span["max"] is not None else None,
@@ -235,10 +265,19 @@ async def api_get_novel(novel_id: int):
 
 @router.patch("/novels/{novel_id}")
 async def api_update_novel(novel_id: int, payload: NovelUpdate):
-    """Edit novel metadata (title, author, description, cover, codex toggle)."""
+    """Edit novel metadata (title, author, description, cover, codex toggle, shelf, tags)."""
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         return {"status": "noop"}
+    # Normalize the user-curation fields: blank shelf clears it; tags are whitelisted.
+    if "shelf" in fields:
+        shelf = (fields["shelf"] or "").strip().lower()
+        if shelf and shelf not in SHELVES:
+            raise HTTPException(status_code=422, detail=f"Unknown shelf '{shelf}'.")
+        fields["shelf"] = shelf or None
+    if "status_tags" in fields:
+        tags = [t.strip().lower() for t in (fields["status_tags"] or [])]
+        fields["status_tags"] = [t for t in dict.fromkeys(tags) if t in STATUS_TAGS]
     sets, args = [], []
     for k, v in fields.items():
         args.append(v)

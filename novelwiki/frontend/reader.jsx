@@ -4,8 +4,10 @@
    persisted to localStorage. Reading progress (last chapter + scroll) is saved to
    the server so the library can resume and the codex ceiling can follow along.
    ============================================================ */
-const READER_DEFAULTS = { font: "serif", size: 19, line: 1.7, width: "normal", tone: "default" };
+const READER_DEFAULTS = { font: "serif", size: 19, line: 1.7, width: "normal", tone: "default", autoScroll: false, autoSpeed: 3 };
 const WIDTHS = { narrow: 620, normal: 760, wide: 960, ultra: 1200 };
+// Auto-scroll: speed 1..10 maps to px/second (gentle reading pace ≈ 28–280 px/s).
+const AUTOSCROLL_PX_PER_SEC = (speed) => Math.max(1, speed) * 28;
 
 function loadReaderPrefs() {
   try { return { ...READER_DEFAULTS, ...JSON.parse(localStorage.getItem("nw-reader") || "{}") }; }
@@ -33,6 +35,11 @@ function ReaderSettings({ prefs, setPrefs, onClose }) {
       React.createElement("button", { onClick: () => set("line", Math.min(2.2, Math.round((prefs.line + 0.1) * 10) / 10)) }, "+"))),
     Row("Width", seg("width", [{ v: "narrow", t: "Narrow" }, { v: "normal", t: "Normal" }, { v: "wide", t: "Wide" }, { v: "ultra", t: "Ultra" }])),
     Row("Tone", seg("tone", [{ v: "default", t: "Default" }, { v: "sepia", t: "Sepia" }])),
+    Row("Auto-scroll", seg("autoScroll", [{ v: false, t: "Off" }, { v: true, t: "On" }])),
+    Row("Scroll speed", React.createElement("div", { className: "rs-seg" },
+      React.createElement("button", { onClick: () => set("autoSpeed", Math.max(1, prefs.autoSpeed - 1)) }, "−"),
+      React.createElement("span", { className: "rs-val" }, prefs.autoSpeed),
+      React.createElement("button", { onClick: () => set("autoSpeed", Math.min(10, prefs.autoSpeed + 1)) }, "+"))),
     React.createElement("button", { className: "btn btn-ghost", style: { width: "100%", marginTop: 8 }, onClick: onClose }, "Done")
   );
 }
@@ -51,18 +58,34 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
 
   useEffect(() => { localStorage.setItem("nw-reader", JSON.stringify(prefs)); }, [prefs]);
 
-  // Load the chapter + record progress.
+  // Load the chapter + record progress. If we're reopening the exact chapter the
+  // server says we last left off in, restore the saved scroll fraction so reading
+  // resumes seamlessly across devices (the position lives server-side, not locally).
   useEffect(() => {
     let cancel = false;
     setStatus("loading"); setCh(null);
     window.scrollTo({ top: 0 });
-    window.API.chapter(novelId, number)
-      .then(c => {
+    Promise.all([
+      window.API.chapter(novelId, number),
+      window.API.getProgress(novelId).catch(() => null),
+    ])
+      .then(([c, prog]) => {
         if (cancel) return;
         setCh(c);
         setStatus("ok");
-        window.API.setProgress(novelId, { last_chapter: number, scroll_pct: 0 }).catch(() => {});
+        const resume = prog && Number(prog.last_chapter) === Number(number) ? (prog.scroll_pct || 0) : 0;
+        // Keep the resume fraction rather than zeroing it, so the position survives a reopen.
+        window.API.setProgress(novelId, { last_chapter: Number(number), scroll_pct: resume }).catch(() => {});
+        scrollSaved.current = Date.now();   // don't immediately re-save right after restoring
         onRead && onRead(Number(number));
+        if (resume > 0.002) {
+          // Restore after the text lays out. Double rAF: first commits the DOM, second measures it.
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (cancel) return;
+            const h = document.documentElement;
+            window.scrollTo({ top: resume * (h.scrollHeight - h.clientHeight) });
+          }));
+        }
       })
       .catch(e => { if (!cancel) { setStatus(e.status === 404 ? "notfound" : "error"); } });
     return () => { cancel = true; };
@@ -88,6 +111,30 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, [novelId, number]);
+
+  // Auto-scroll engine: rAF nudges the page down at the chosen speed. At the bottom it
+  // rolls into the next chapter so a hands-free read flows continuously. Sub-pixel
+  // accumulation keeps slow speeds smooth instead of stuttering one pixel at a time.
+  useEffect(() => {
+    if (!prefs.autoScroll || status !== "ok" || !ch || !ch.content) return;
+    let raf, last = performance.now(), acc = 0;
+    const step = (now) => {
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      const h = document.documentElement;
+      const maxTop = h.scrollHeight - h.clientHeight;
+      if (maxTop > 4) {
+        acc += AUTOSCROLL_PX_PER_SEC(prefs.autoSpeed) * dt;
+        if (h.scrollTop >= maxTop - 1) {
+          if (ch.next != null) { openReader(ch.next); return; }   // seamless next chapter
+          return;                                                  // end of novel → stop
+        }
+        if (acc >= 1) { const dy = Math.floor(acc); acc -= dy; window.scrollBy(0, dy); }
+      }
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [prefs.autoScroll, prefs.autoSpeed, status, ch, openReader]);
 
   // Keyboard prev/next.
   useEffect(() => {
@@ -133,6 +180,11 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
       React.createElement("button", { className: "icon-btn", onClick: openTocDrawer, title: "Table of contents" },
         React.createElement(Icon, { name: "layers", size: 18 })),
       React.createElement("div", { className: "grow reader-bar-title" }, ch ? (ch.title || `Chapter ${ch.number}`) : "…"),
+      React.createElement("button", {
+        className: "icon-btn" + (prefs.autoScroll ? " active" : ""),
+        onClick: e => { e.stopPropagation(); setPrefs(p => ({ ...p, autoScroll: !p.autoScroll })); },
+        title: prefs.autoScroll ? "Stop auto-scroll" : "Auto-scroll",
+      }, React.createElement(Icon, { name: prefs.autoScroll ? "pause" : "play", size: 17 })),
       React.createElement("button", { className: "icon-btn" + (bookmark ? " active" : ""), onClick: toggleBookmark, title: bookmark ? "Remove bookmark" : "Bookmark" },
         React.createElement(Icon, { name: bookmark ? "check" : "book", size: 18 })),
       React.createElement("div", { style: { position: "relative" } },

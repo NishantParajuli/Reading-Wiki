@@ -153,6 +153,7 @@ function NovelEditForm({ novel, onSaved, onCancel }) {
 }
 
 function GlossaryEditor({ novelId, glossary, reload }) {
+  const [open, setOpen] = useState(false);   // minimized by default; expand on click
   const [st, setSt] = useState("");
   const [tr, setTr] = useState("");
   const [type, setType] = useState("name");
@@ -174,8 +175,14 @@ function GlossaryEditor({ novelId, glossary, reload }) {
   const del = async (g) => { await window.API.delGlossary(novelId, g.id); reload(); };
 
   return React.createElement(React.Fragment, null,
-    React.createElement("p", { className: "section-eyebrow", style: { marginTop: 28 } }, `Translation glossary (${glossary.length})`),
-    React.createElement("div", { className: "card", style: { padding: 14 } },
+    React.createElement("button", {
+      className: "section-eyebrow collapse-head", style: { marginTop: 28 },
+      onClick: () => setOpen(o => !o), "aria-expanded": open,
+    },
+      `Translation glossary (${glossary.length})`,
+      React.createElement(Icon, { name: "chevronDown", size: 15, className: "collapse-caret" + (open ? " open" : "") })
+    ),
+    open && React.createElement("div", { className: "card", style: { padding: 14 } },
       React.createElement("form", { className: "row", style: { gap: 8, flexWrap: "wrap", marginBottom: glossary.length ? 12 : 0 }, onSubmit: add },
         React.createElement("input", { className: "gl-input", value: st, onChange: e => setSt(e.target.value), placeholder: "Source term (林轩)" }),
         React.createElement("input", { className: "gl-input", value: tr, onChange: e => setTr(e.target.value), placeholder: "English (Lin Xuan)" }),
@@ -193,6 +200,40 @@ function GlossaryEditor({ novelId, glossary, reload }) {
           React.createElement(Icon, { name: g.locked ? "lock" : "unlock", size: 15 })),
         React.createElement("button", { className: "icon-btn", title: "Delete", onClick: () => del(g) }, React.createElement(Icon, { name: "x", size: 15 }))
       ))
+    )
+  );
+}
+
+function ShelfTagsControls({ novel, reloadNovel }) {
+  const shelf = novel.shelf || "";
+  const tags = novel.status_tags || [];
+  const tt = novel.translation_type ? window.TRANSLATION_TYPE_LABELS[novel.translation_type] : null;
+  const [busy, setBusy] = useState(false);
+
+  const patch = async (body) => {
+    if (busy) return;
+    setBusy(true);
+    try { await window.API.updateNovel(novel.id, body); reloadNovel(); }
+    finally { setBusy(false); }
+  };
+  const setShelf = (s) => patch({ shelf: shelf === s ? "" : s });   // tap the active shelf to clear it
+  const toggleTag = (t) => patch({ status_tags: tags.includes(t) ? tags.filter(x => x !== t) : [...tags, t] });
+
+  return React.createElement("div", { className: "shelf-tags" },
+    React.createElement("div", { className: "st-group" },
+      React.createElement("span", { className: "st-label" }, "Shelf"),
+      React.createElement("div", { className: "rs-seg" },
+        window.SHELF_ORDER.map(s => React.createElement("button", {
+          key: s, className: shelf === s ? "active" : "", onClick: () => setShelf(s),
+        }, window.SHELF_LABELS[s])))
+    ),
+    React.createElement("div", { className: "st-group" },
+      React.createElement("span", { className: "st-label" }, "Tags"),
+      React.createElement("div", { className: "st-tags" },
+        window.STATUS_TAG_ORDER.map(t => React.createElement("button", {
+          key: t, className: "tag-toggle" + (tags.includes(t) ? " on" : ""), onClick: () => toggleTag(t),
+        }, window.STATUS_TAG_LABELS[t])),
+        tt && React.createElement("span", { className: "chip tt-chip", title: "Auto-detected from sources" }, tt))
     )
   );
 }
@@ -282,7 +323,8 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
             novel.max_chapter != null && React.createElement("span", { className: "chip mono" }, `ch. ${novel.min_chapter}–${novel.max_chapter}`),
             novel.codex_enabled && React.createElement("button", { className: "btn btn-ghost", onClick: () => nav("browse") },
               React.createElement(Icon, { name: "compass", size: 16 }), "Open codex")
-          )
+          ),
+          React.createElement(ShelfTagsControls, { novel, reloadNovel })
         )
       ),
 

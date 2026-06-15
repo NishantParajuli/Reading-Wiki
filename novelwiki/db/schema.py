@@ -23,10 +23,17 @@ DDL_QUERIES = [
       description       TEXT,
       original_language TEXT DEFAULT 'en',
       codex_enabled     BOOLEAN DEFAULT FALSE,        -- opt-in spoiler-safe codex pipeline
+      shelf             TEXT,                          -- user reading shelf: to_read|reading|completed (NULL = unshelved)
+      status_tags       TEXT[] DEFAULT '{}',           -- user-applied tags: ongoing|finished|translation_ongoing
       created_at        TIMESTAMPTZ DEFAULT now(),
       updated_at        TIMESTAMPTZ DEFAULT now()
     );
     """,
+    # Idempotent backfills so an existing live DB gains the new columns without a
+    # destructive reset (CREATE TABLE IF NOT EXISTS won't add columns to an old table).
+    "ALTER TABLE novels ADD COLUMN IF NOT EXISTS shelf TEXT;",
+    "ALTER TABLE novels ADD COLUMN IF NOT EXISTS status_tags TEXT[] DEFAULT '{}';",
+    "CREATE INDEX IF NOT EXISTS novels_shelf_idx ON novels (shelf);",
 
     # ── 0b. Sources ────────────────────────────────────────────────────────
     # A novel can have several sources, each scraped by a different adapter. This

@@ -37,6 +37,8 @@ const PATHS = {
   cpu: "M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2M6 6h12v12H6zM10 10h4v4h-4z",
   merge: "M7 3v6a4 4 0 0 0 4 4h6M7 3l-3 3M7 3l3 3M17 13l3-3M17 13l-3-3",
   refresh: "M21 12a9 9 0 1 1-3-6.7M21 4v4h-4",
+  play: "M7 4v16l13-8z",
+  pause: "M8 4h3v16H8zM15 4h3v16h-3z",
   database: "M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6",
   edit: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z",
 };
@@ -53,6 +55,14 @@ function Icon({ name, size = 18, sw = 1.7, className = "", style }) {
 
 const TYPE_ICON = { character: "user", location: "mapPin", faction: "users", item: "gem", concept: "spark", organization: "users" };
 const TYPE_LABEL = { character: "Character", location: "Location", faction: "Faction", item: "Item", concept: "Concept", organization: "Org" };
+
+// User reading shelves (manual), user status tags (manual), and the auto-derived
+// translation type. Shared by the library grid and the novel detail page.
+const SHELF_LABELS = { to_read: "To read", reading: "Reading", completed: "Completed" };
+const SHELF_ORDER = ["reading", "to_read", "completed"];
+const STATUS_TAG_LABELS = { ongoing: "Ongoing", finished: "Finished", translation_ongoing: "Translation ongoing" };
+const STATUS_TAG_ORDER = ["ongoing", "finished", "translation_ongoing"];
+const TRANSLATION_TYPE_LABELS = { translated: "Translated", raws: "Raws", "raws+translated": "Raws + Translated" };
 
 /* ---------- Placeholder avatar ---------- */
 function Avatar({ entity, lg, locked }) {
@@ -299,5 +309,6 @@ Object.assign(window, {
   Loading, SkeletonGrid, EmptyState, useDebounce,
   Markdown, AnswerBody, renderMarkdown,
   TYPE_ICON, TYPE_LABEL,
+  SHELF_LABELS, SHELF_ORDER, STATUS_TAG_LABELS, STATUS_TAG_ORDER, TRANSLATION_TYPE_LABELS,
   useState, useEffect, useRef, useMemo, useCallback, createContext, useContext,
 });

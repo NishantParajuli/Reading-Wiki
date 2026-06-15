@@ -1,26 +1,50 @@
 /* ============================================================
    Library — the landing surface: a grid of novels + Add Novel.
    ============================================================ */
-function NovelCard({ n, openNovel }) {
+function NovelCard({ n, openNovel, onChanged }) {
   const max = n.max_chapter || 0;
   const read = n.max_chapter_read || 0;
   const pct = max > 0 ? Math.round(Math.min(100, (read / max) * 100)) : 0;
   const cont = n.last_chapter != null ? `Continue · Ch. ${n.last_chapter}` : (n.chapter_count ? "Start reading" : "Not scraped yet");
-  return React.createElement("button", { className: "novel-card", onClick: () => openNovel(n.id) },
+  const tt = n.translation_type ? window.TRANSLATION_TYPE_LABELS[n.translation_type] : null;
+  const tags = n.status_tags || [];
+
+  async function setShelf(e) {
+    e.stopPropagation();
+    try { await window.API.updateNovel(n.id, { shelf: e.target.value }); onChanged && onChanged(); }
+    catch (err) { /* keep the card as-is on failure */ }
+  }
+
+  return React.createElement("div", {
+    className: "novel-card", role: "button", tabIndex: 0,
+    onClick: () => openNovel(n.id),
+    onKeyDown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openNovel(n.id); } },
+  },
     React.createElement("div", { className: "novel-cover" },
       n.cover_url
-        ? React.createElement("img", { src: n.cover_url, alt: "" })
+        ? React.createElement("img", { src: n.cover_url, alt: "", loading: "lazy" })
         : React.createElement("div", { className: "novel-cover-ph" }, React.createElement(Icon, { name: "book", size: 30 }))
     ),
     React.createElement("div", { className: "novel-card-body" },
       React.createElement("div", { className: "novel-card-title" }, n.title),
       n.author && React.createElement("div", { className: "muted", style: { fontSize: 13 } }, n.author),
+      (tt || tags.length > 0) && React.createElement("div", { className: "card-tags" },
+        tt && React.createElement("span", { className: "chip tt-chip", title: "Auto-detected from sources" }, tt),
+        tags.map(t => React.createElement("span", { key: t, className: "chip tag-chip" }, window.STATUS_TAG_LABELS[t] || t))
+      ),
       React.createElement("div", { className: "progress-track", style: { marginTop: 12 } },
         React.createElement("div", { className: "progress-fill", style: { width: pct + "%" } })
       ),
       React.createElement("div", { className: "novel-card-foot" },
         React.createElement("span", { className: "chip mono" }, `${n.chapter_count} ch.`),
         React.createElement("span", { className: "muted", style: { fontSize: 12.5, marginLeft: "auto" } }, cont)
+      ),
+      React.createElement("select", {
+        className: "shelf-select", value: n.shelf || "", title: "Add to a shelf",
+        onClick: e => e.stopPropagation(), onChange: setShelf,
+      },
+        React.createElement("option", { value: "" }, "+ Shelf"),
+        window.SHELF_ORDER.map(s => React.createElement("option", { key: s, value: s }, window.SHELF_LABELS[s]))
       )
     )
   );
@@ -99,10 +123,18 @@ function AddNovelForm({ adapters, onCreated, onCancel }) {
   );
 }
 
+const LIBRARY_TABS = [
+  { id: "all", label: "All" },
+  { id: "reading", label: "Reading" },
+  { id: "to_read", label: "To read" },
+  { id: "completed", label: "Completed" },
+];
+
 function Library({ openNovel }) {
   const [novels, setNovels] = useState(null);  // null = loading
   const [adapters, setAdapters] = useState([]);
   const [adding, setAdding] = useState(false);
+  const [tab, setTab] = useState(() => localStorage.getItem("nw-lib-tab") || "all");
 
   const load = useCallback(() => {
     window.API.novels().then(setNovels).catch(() => setNovels([]));
@@ -112,6 +144,12 @@ function Library({ openNovel }) {
     load();
     window.API.adapters().then(setAdapters).catch(() => setAdapters([]));
   }, [load]);
+  useEffect(() => { localStorage.setItem("nw-lib-tab", tab); }, [tab]);
+
+  const all = novels || [];
+  const counts = { all: all.length, reading: 0, to_read: 0, completed: 0 };
+  all.forEach(n => { if (n.shelf && counts[n.shelf] != null) counts[n.shelf]++; });
+  const shown = tab === "all" ? all : all.filter(n => n.shelf === tab);
 
   return React.createElement("div", { className: "page" },
     React.createElement("div", { className: "lib-head" },
@@ -123,6 +161,12 @@ function Library({ openNovel }) {
         React.createElement(Icon, { name: "sparkles", size: 16 }), "Add novel")
     ),
 
+    novels != null && React.createElement("div", { className: "lib-tabs" },
+      LIBRARY_TABS.map(tb => React.createElement("button", {
+        key: tb.id, className: "lib-tab" + (tab === tb.id ? " active" : ""), onClick: () => setTab(tb.id),
+      }, tb.label, React.createElement("span", { className: "lib-tab-count" }, counts[tb.id])))
+    ),
+
     adding && React.createElement(AddNovelForm, {
       adapters,
       onCancel: () => setAdding(false),
@@ -131,11 +175,13 @@ function Library({ openNovel }) {
 
     novels == null
       ? React.createElement(Loading, { label: "Loading your library…" })
-      : novels.length === 0 && !adding
+      : all.length === 0 && !adding
         ? React.createElement(EmptyState, { icon: "book", title: "No novels yet", body: "Add your first novel to start reading." })
-        : React.createElement("div", { className: "lib-grid" },
-            novels.map(n => React.createElement(NovelCard, { key: n.id, n, openNovel }))
-          )
+        : shown.length === 0
+          ? React.createElement(EmptyState, { icon: "book", title: `Nothing on “${(LIBRARY_TABS.find(t => t.id === tab) || {}).label}” yet`, body: "Use the shelf picker on a novel to add it here." })
+          : React.createElement("div", { className: "lib-grid" },
+              shown.map(n => React.createElement(NovelCard, { key: n.id, n, openNovel, onChanged: load }))
+            )
   );
 }
 
