@@ -1,4 +1,4 @@
-# 📖 Tideglass — a self-hosted webnovel reading platform
+# 📖 A self-hosted webnovel reading platform
 
 A single-user, self-hosted platform for reading webnovels end to end: **scrape → read → translate → (optionally) build a spoiler-safe codex.** Point it at a chapter URL, let it crawl, and read in a cozy, distraction-free reader. Raw (foreign-language) chapters are translated on demand as you open them, and any novel can opt into an agentic, **spoiler-gated** knowledge base.
 
