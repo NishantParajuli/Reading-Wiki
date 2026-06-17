@@ -74,6 +74,31 @@ class Settings(BaseSettings):
     SCRAPER_BASE_URL: str = "https://fenrirealm.com"
     SCRAPER_DELAY: float = 1.0
 
+    # ── File import (EPUB/PDF ingestion) ──
+    # Heavy artifacts live on disk; the DB holds pointers + the editable plan.
+    IMPORT_DIR: str = "./data/imports"
+    IMPORT_INCOMING_DIR: str = "./data/imports/incoming"   # host watched-folder drop (big files)
+    ASSET_DIR: str = "./data/assets"
+    MAX_UPLOAD_MB: int = 50                                 # multipart cap; watched folder bypasses it
+    IMPORT_AUTO_BUILD_CODEX: bool = False                   # build codex over the imported range on commit
+
+    # Text segmentation/cleanup LLM (routed through OpenRouter alongside the codex models).
+    SEGMENT_MODEL: str = "deepseek/deepseek-v4-pro"
+
+    # Vision provider — Gemini via its OpenAI-compatible endpoint. Used for scanned-PDF OCR
+    # escalation (S3); the daily budget + RPM guards keep us inside the free tier.
+    GEMINI_API_KEY: str = ""
+    GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    GEMINI_VISION_MODEL: str = "gemini-2.5-flash"
+    GEMINI_DAILY_BUDGET: int = 2000          # margin under the ~2.5k/day free tier
+    GEMINI_RPM: int = 10
+    GEMINI_PAGES_PER_REQUEST: int = 3
+
+    # OCR sidecar (PaddleOCR PP-StructureV3) on localhost (S3; separate GPU deploy).
+    OCR_SIDECAR_URL: str = "http://localhost:8077"
+    OCR_ENABLED: bool = True
+    OCR_CONFIDENCE_ESCALATE: float = 0.80    # page mean confidence below this → Gemini
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -731,3 +731,61 @@ input[type="range"].slider::-moz-range-thumb {
 }
 .collapse-caret { transition: transform 0.18s ease; }
 .collapse-caret.open { transform: rotate(180deg); }
+
+/* ============================================================
+   Imported rich chapter content (reader) — scoped so a book's own markup can't
+   fight the reader theme. Images are constrained to the column; figures/blockquotes/
+   scene breaks are typeset to match the plain-text reader.
+   ============================================================ */
+.reader-rich { color: var(--ink); }
+.reader-rich p { margin: 0 0 1.1em; }
+.reader-rich h2, .reader-rich h3, .reader-rich h4 { font-family: var(--serif); color: var(--ink); line-height: 1.25; margin: 1.6em 0 0.6em; }
+.reader-rich h2 { font-size: 1.4em; }
+.reader-rich h3 { font-size: 1.2em; }
+.reader-rich h4 { font-size: 1.05em; }
+.reader-rich em, .reader-rich i { font-style: italic; }
+.reader-rich strong, .reader-rich b { font-weight: 700; }
+.reader-rich a { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; }
+.reader-rich figure { margin: 1.6em 0; text-align: center; }
+.reader-rich img { max-width: 100%; height: auto; border-radius: var(--radius-sm); }
+.reader-rich figcaption, .reader-rich .caption { font-size: 0.85em; color: var(--ink-2); margin-top: 0.5em; font-style: italic; }
+.reader-rich blockquote { margin: 1.2em 0; padding: 0.2em 0 0.2em 1.1em; border-left: 3px solid var(--accent); color: var(--ink-2); }
+.reader-rich ul, .reader-rich ol { margin: 0 0 1.1em 1.4em; }
+.reader-rich sup, .reader-rich sub { font-size: 0.72em; }
+.reader-rich hr.scene-break { border: none; text-align: center; margin: 1.8em 0; }
+.reader-rich hr.scene-break::before { content: "* * *"; letter-spacing: 0.5em; color: var(--accent-ink); font-size: 0.95em; }
+/* The drop-cap only suits prose; imported chapters often open with a figure/heading. */
+.reader-rich p:first-of-type::first-letter { all: unset; }
+
+/* ============================================================
+   Import view — upload, recent jobs, and the plan editor.
+   ============================================================ */
+.import-drop {
+  display: flex; align-items: center; gap: 14px; padding: 22px;
+  border: 2px dashed var(--border-2); border-radius: var(--radius);
+  background: var(--surface-2); cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease;
+}
+.import-drop:hover, .import-drop.drag { border-color: var(--accent); background: var(--accent-soft); }
+.import-drop-text { display: flex; flex-direction: column; gap: 2px; }
+.import-cols { display: grid; grid-template-columns: 270px 1fr; gap: 22px; margin-top: 22px; align-items: start; }
+@media (max-width: 760px) { .import-cols { grid-template-columns: 1fr; } }
+.import-job-row { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-sm); cursor: pointer; }
+.import-job-row:hover { background: var(--surface-2); }
+.import-job-row.active { background: var(--accent-soft); }
+.import-meta { display: flex; gap: 14px; align-items: flex-start; padding: 14px; margin-bottom: 14px; }
+.import-cover { width: 64px; height: 92px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+
+.plan-head { display: flex; align-items: center; justify-content: space-between; margin: 6px 2px 12px; }
+.seg-list { display: flex; flex-direction: column; gap: 6px; }
+.seg-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.seg-row.excluded { opacity: 0.5; }
+.seg-include { padding-top: 3px; }
+.seg-main { flex: 1 1 auto; min-width: 0; }
+.seg-line1 { display: flex; gap: 8px; align-items: center; }
+.seg-title { flex: 1 1 auto; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 9px; background: var(--surface); color: var(--ink); font-weight: 600; font-size: 14px; }
+.seg-kind { flex: 0 0 116px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 8px; background: var(--surface); color: var(--ink-2); font-size: 12.5px; }
+.seg-num { flex: 0 0 56px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 8px; background: var(--surface); color: var(--ink); font-size: 13px; text-align: center; }
+.seg-line2 { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; margin-top: 5px; font-size: 12px; }
+.seg-first { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; opacity: 0.85; }
+.seg-actions { display: flex; gap: 2px; }
+.commit-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 14px; margin-top: 16px; position: sticky; bottom: 12px; }

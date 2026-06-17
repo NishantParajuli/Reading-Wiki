@@ -1,0 +1,7 @@
+# OCR sidecar dependencies — GPU-only, NOT installed into the main web image.
+paddlepaddle-gpu>=2.6.0
+paddleocr>=2.7.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pillow>=10.3.0
+numpy>=1.26.4

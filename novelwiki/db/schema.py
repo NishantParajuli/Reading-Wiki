@@ -85,6 +85,11 @@ DDL_QUERIES = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS chapters_source_idx ON chapters (source_id);",
+    # File-import additions: `kind` marks non-chapter sections (chapter|frontmatter|
+    # interlude|backmatter) so the reader can flag/skip them; `part_label` groups chapters
+    # under a "Volume 1" heading in the TOC. Idempotent backfills for an existing DB.
+    "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'chapter';",
+    "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS part_label TEXT;",
 
     # ── 2. Chunks ──────────────────────────────────────────────────────────
     """
@@ -292,10 +297,73 @@ DDL_QUERIES = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS glossary_novel_idx ON translation_glossary (novel_id, term_type);",
+
+    # ── 15. Assets ─────────────────────────────────────────────────────────
+    # Extracted images from file imports (EPUB/PDF): covers, inline illustrations,
+    # page scans. Heavy bytes live on disk under ASSET_DIR/<novel_id>/; this row is
+    # the pointer. `sha256` content-addresses the bytes so the same image shared
+    # across chapters is stored once (UNIQUE per novel).
+    """
+    CREATE TABLE IF NOT EXISTS assets (
+      id         BIGSERIAL PRIMARY KEY,
+      novel_id   BIGINT NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+      sha256     TEXT NOT NULL,
+      path       TEXT NOT NULL,                 -- relative under ASSET_DIR/<novel_id>/
+      mime       TEXT,
+      kind       TEXT,                          -- cover|illustration|page_scan
+      width      INT, height INT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (novel_id, sha256)                 -- content dedup
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS assets_novel_idx ON assets (novel_id);",
+
+    # ── 16. Import jobs ────────────────────────────────────────────────────
+    # Durable, resumable ingestion pipeline state for an uploaded EPUB/PDF. The big
+    # artifacts (block stream, original blob, images) live on disk; this row holds the
+    # job status + the (small) editable segmentation `plan` the user reviews before
+    # committing chapters. A DB-polled worker advances these across restarts.
+    """
+    CREATE TABLE IF NOT EXISTS import_jobs (
+      id            BIGSERIAL PRIMARY KEY,
+      novel_id      BIGINT REFERENCES novels(id) ON DELETE CASCADE,    -- null until target chosen/created
+      source_id     BIGINT REFERENCES sources(id) ON DELETE SET NULL,
+      format        TEXT NOT NULL,                                     -- epub|pdf
+      original_path TEXT NOT NULL,
+      file_sha256   TEXT,
+      status        TEXT NOT NULL DEFAULT 'uploaded',
+      stage         TEXT,                                              -- human-readable current step
+      detected_meta JSONB DEFAULT '{}',
+      plan          JSONB,                                             -- editable draft segmentation plan
+      stats         JSONB DEFAULT '{}',
+      cost_estimate JSONB,
+      progress      JSONB DEFAULT '{}',                                -- {done,total,unit}
+      options       JSONB DEFAULT '{}',                                -- {gemini_first:bool, target:new|append, ...}
+      error         TEXT,
+      created_at    TIMESTAMPTZ DEFAULT now(),
+      updated_at    TIMESTAMPTZ DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS import_jobs_status_idx ON import_jobs (status);",
+
+    # ── 17. Provider budget ────────────────────────────────────────────────
+    # Daily provider call counter (Gemini free-tier guard) that survives restarts, so a
+    # multi-day OCR run never blows past the free quota. One row per (provider, day).
+    """
+    CREATE TABLE IF NOT EXISTS provider_budget (
+      provider TEXT NOT NULL,
+      day      DATE NOT NULL,
+      used     INT  NOT NULL DEFAULT 0,
+      PRIMARY KEY (provider, day)
+    );
+    """,
 ]
 
 # Tables in dependency order (children first) — used by reset_db to drop cleanly.
 ALL_TABLES = [
+    "import_jobs",
+    "provider_budget",
+    "assets",
     "translation_glossary",
     "bookmarks",
     "reading_progress",

@@ -1,6 +1,7 @@
 import logging
 import json
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+import os
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
@@ -298,7 +299,17 @@ async def api_update_novel(novel_id: int, payload: NovelUpdate):
 async def api_delete_novel(novel_id: int):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
+        # Collect the novel's import scratch dirs before the cascade nulls the references,
+        # so we can free those on-disk files too (they aren't FK-cascaded).
+        job_ids = [int(r["id"]) for r in await conn.fetch(
+            "SELECT id FROM import_jobs WHERE novel_id = $1;", novel_id
+        )]
         await conn.execute("DELETE FROM novels WHERE id = $1;", novel_id)
+    # The assets/import_jobs rows cascade with the novel, but the files on disk do not.
+    from novelwiki.importer.storage import cleanup_novel_assets, cleanup_job
+    cleanup_novel_assets(novel_id)
+    for jid in job_ids:
+        cleanup_job(jid)
     return {"status": "success"}
 
 
@@ -392,9 +403,12 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT number, title, content, (original_text IS NOT NULL) AS has_original,
-                   language, is_translated, translation_status
-            FROM chapters WHERE novel_id = $1 AND number = $2;
+            SELECT c.number, c.title, c.content, c.raw_html,
+                   (c.original_text IS NOT NULL) AS has_original,
+                   c.language, c.is_translated, c.translation_status,
+                   s.adapter, COALESCE(s.is_raw, FALSE) AS source_is_raw
+            FROM chapters c LEFT JOIN sources s ON s.id = c.source_id
+            WHERE c.novel_id = $1 AND c.number = $2;
             """,
             novel_id, number,
         )
@@ -421,10 +435,18 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
         # Warm the next few chapters so reading flows without waiting at each boundary.
         bg_tasks.add_task(prefetch_translations, novel_id, number, settings.TRANSLATE_PREFETCH)
 
+    # Only file-import sources (epub/pdf) store sanitized rich HTML in raw_html; scraped
+    # sources put the raw page dump there, which must never be rendered. And for a *raw*
+    # import source the rich HTML is the source language, while `content` is the translation
+    # — surfacing it would override the translation, so we only send rich HTML for non-raw
+    # import sources whose content matches it.
+    rich_html = row["raw_html"] if (row["adapter"] in ("epub", "pdf") and not row["source_is_raw"]) else None
+
     return {
         "number": float(row["number"]),
         "title": row["title"],
         "content": content,
+        "rich_html": rich_html,
         "language": row["language"],
         "is_translated": is_translated,
         "translation_status": status,
@@ -801,3 +823,212 @@ async def trigger_merge(novel_id: int, payload: MergePayload):
     except Exception as e:
         logger.error(f"Error merging entities: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── File import (EPUB/PDF ingestion) ──────────────────────────────────────
+# Upload → parse/segment (worker) → review/edit the plan → commit into chapters. The
+# heavy work runs in the durable import worker (not BackgroundTasks) so it survives a
+# restart; these endpoints just mutate import_jobs and return its state.
+
+class PlanUpdate(BaseModel):
+    plan: dict                       # the full edited plan (frontend sends it back wholesale)
+
+class ImportCommit(BaseModel):
+    mode: str = "new"                # new | append
+    novel_id: int | None = None      # required when mode == append
+    offset: float = 0                # append: global = segment number + offset
+
+class OcrConfirm(BaseModel):
+    gemini_first: bool = False       # skip the sidecar, OCR every page with Gemini directly
+
+
+_IMPORT_FORMATS = {".epub": "epub", ".pdf": "pdf"}
+
+
+def _job_view(job: dict) -> dict:
+    """Trim a job row to what the UI needs (drops the on-disk original path)."""
+    return {
+        "id": int(job["id"]),
+        "novel_id": int(job["novel_id"]) if job.get("novel_id") is not None else None,
+        "format": job["format"],
+        "status": job["status"],
+        "stage": job.get("stage"),
+        "filename": os.path.basename(job.get("original_path") or "") or None,
+        "detected_meta": job.get("detected_meta") or {},
+        "plan": job.get("plan"),
+        "stats": job.get("stats") or {},
+        "cost_estimate": job.get("cost_estimate"),
+        "progress": job.get("progress") or {},
+        "options": job.get("options") or {},
+        "error": job.get("error"),
+        "created_at": job["created_at"].isoformat() if job.get("created_at") else None,
+        "updated_at": job["updated_at"].isoformat() if job.get("updated_at") else None,
+    }
+
+
+@router.post("/import/upload")
+async def api_import_upload(file: UploadFile = File(...)):
+    """Accept an uploaded EPUB, stash it under a fresh job id, and queue it for parsing."""
+    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.importer import storage as import_storage
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    fmt = _IMPORT_FORMATS.get(ext)
+    if not fmt:
+        raise HTTPException(status_code=400, detail="Only .epub and .pdf files are supported.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(data) > settings.MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds the {settings.MAX_UPLOAD_MB} MB upload cap.")
+
+    # Insert as 'receiving' so the worker can't grab it before the blob lands on disk.
+    job_id = await import_jobs.create_job(fmt, original_path="", status="receiving")
+    path = import_storage.save_original(job_id, data, ext)
+    await import_jobs.update_job(
+        job_id, original_path=str(path),
+        file_sha256=import_storage.sha256_bytes(data), status="uploaded",
+    )
+    return {"id": job_id, "status": "uploaded", "format": fmt}
+
+
+@router.post("/import/scan-incoming")
+async def api_import_scan_incoming():
+    """Enqueue any EPUBs dropped into IMPORT_INCOMING_DIR (the watched-folder path for big
+    files that bypass the multipart upload cap)."""
+    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.importer import storage as import_storage
+
+    incoming = settings.IMPORT_INCOMING_DIR
+    import_storage.ensure_dirs()
+    queued = []
+    try:
+        names = sorted(os.listdir(incoming))
+    except FileNotFoundError:
+        names = []
+    for name in names:
+        ext = os.path.splitext(name)[1].lower()
+        fmt = _IMPORT_FORMATS.get(ext)
+        src = os.path.join(incoming, name)
+        if not fmt or not os.path.isfile(src):
+            continue
+        job_id = await import_jobs.create_job(fmt, original_path="", status="receiving")
+        data = open(src, "rb").read()
+        path = import_storage.save_original(job_id, data, ext)
+        await import_jobs.update_job(
+            job_id, original_path=str(path),
+            file_sha256=import_storage.sha256_bytes(data), status="uploaded",
+        )
+        queued.append({"id": job_id, "filename": name})
+    return {"queued": queued, "count": len(queued)}
+
+
+@router.get("/import/jobs")
+async def api_import_jobs():
+    from novelwiki.importer import jobs as import_jobs
+    return [_job_view(j) for j in await import_jobs.list_jobs()]
+
+
+@router.get("/import/jobs/{job_id}")
+async def api_import_job(job_id: int):
+    from novelwiki.importer import jobs as import_jobs
+    job = await import_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found.")
+    return _job_view(job)
+
+
+@router.put("/import/jobs/{job_id}/plan")
+async def api_import_update_plan(job_id: int, payload: PlanUpdate):
+    """Replace the editable segmentation plan (merge/split/rename/include/number/kind are
+    all client-side edits that produce a new plan). Block ranges are validated against the
+    stored block stream so a bad edit can't point off the end of the document."""
+    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.importer import storage as import_storage
+
+    job = await import_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found.")
+    if job["status"] in ("committing", "committed"):
+        raise HTTPException(status_code=409, detail="This job has already been committed.")
+
+    segments = payload.plan.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise HTTPException(status_code=422, detail="Plan must contain a non-empty 'segments' list.")
+    try:
+        n_blocks = len(import_storage.load_blocks(job_id).blocks)
+    except Exception:
+        n_blocks = None
+    for s in segments:
+        rng = s.get("block_range")
+        if not (isinstance(rng, list) and len(rng) == 2 and isinstance(rng[0], int) and isinstance(rng[1], int)
+                and 0 <= rng[0] <= rng[1] and (n_blocks is None or rng[1] < n_blocks)):
+            raise HTTPException(status_code=422, detail=f"Segment '{s.get('id')}' has an invalid block_range.")
+
+    payload.plan.setdefault("version", 1)
+    await import_jobs.update_job(job_id, plan=payload.plan)
+    return {"status": "success"}
+
+
+@router.post("/import/jobs/{job_id}/commit")
+async def api_import_commit(job_id: int, payload: ImportCommit):
+    """Hand the job to the worker for commit: stamp the target into options and flip the
+    status to 'committing'. The worker writes chapters via the scraper persist path."""
+    from novelwiki.importer import jobs as import_jobs
+    job = await import_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found.")
+    if job["status"] not in ("awaiting_review", "failed", "committed"):
+        raise HTTPException(status_code=409, detail=f"Job is '{job['status']}', not ready to commit.")
+    if not (job.get("plan") and job["plan"].get("segments")):
+        raise HTTPException(status_code=409, detail="Job has no plan to commit; re-parse it first.")
+
+    if payload.mode == "append":
+        if not payload.novel_id:
+            raise HTTPException(status_code=422, detail="Append mode requires a novel_id.")
+        target = {"novel_id": payload.novel_id, "offset": payload.offset}
+    else:
+        target = "new"
+
+    options = {**(job.get("options") or {}), "target": target}
+    await import_jobs.update_job(job_id, options=options, status="committing", error=None)
+    return {"status": "committing"}
+
+
+@router.post("/import/jobs/{job_id}/confirm-ocr")
+async def api_import_confirm_ocr(job_id: int, payload: OcrConfirm):
+    """Approve the (expensive) OCR run for a scanned PDF: the job leaves the confirm gate and
+    the worker starts reading pages (sidecar + Gemini escalation, budget-guarded)."""
+    from novelwiki.importer import jobs as import_jobs
+    job = await import_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found.")
+    if job["status"] not in ("awaiting_ocr_confirm", "ocr_paused"):
+        raise HTTPException(status_code=409, detail=f"Job is '{job['status']}', not awaiting OCR confirmation.")
+    options = {**(job.get("options") or {}), "gemini_first": payload.gemini_first}
+    await import_jobs.update_job(job_id, options=options, status="ocr_pending",
+                                 stage="OCR queued", error=None)
+    return {"status": "ocr_pending"}
+
+
+@router.post("/import/jobs/{job_id}/cancel")
+async def api_import_cancel(job_id: int):
+    from novelwiki.importer import jobs as import_jobs
+    job = await import_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found.")
+    await import_jobs.update_job(job_id, status="canceled", stage="canceled")
+    return {"status": "canceled"}
+
+
+@router.delete("/import/jobs/{job_id}")
+async def api_import_delete(job_id: int):
+    """Delete a job row and free its scratch dir + staged assets."""
+    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.importer import storage as import_storage
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM import_jobs WHERE id = $1;", job_id)
+    import_storage.cleanup_job(job_id)
+    return {"status": "success"}

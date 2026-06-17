@@ -80,11 +80,22 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
         onRead && onRead(Number(number));
         if (resume > 0.002) {
           // Restore after the text lays out. Double rAF: first commits the DOM, second measures it.
-          requestAnimationFrame(() => requestAnimationFrame(() => {
-            if (cancel) return;
+          const applyScroll = () => {
             const h = document.documentElement;
             window.scrollTo({ top: resume * (h.scrollHeight - h.clientHeight) });
-          }));
+          };
+          requestAnimationFrame(() => requestAnimationFrame(() => { if (!cancel) applyScroll(); }));
+          // Imported rich chapters carry images that shift layout as they decode (even with
+          // reserved width/height, lazy ones load late) — re-apply the saved fraction once
+          // they finish so the restore doesn't land short.
+          setTimeout(() => {
+            if (cancel) return;
+            const imgs = Array.from(document.querySelectorAll(".reader-rich img"));
+            let pending = imgs.filter(im => !im.complete).length;
+            if (!pending) return;
+            const onDone = () => { if (--pending <= 0 && !cancel) applyScroll(); };
+            imgs.forEach(im => { if (!im.complete) { im.addEventListener("load", onDone); im.addEventListener("error", onDone); } });
+          }, 0);
         }
       })
       .catch(e => { if (!cancel) { setStatus(e.status === 404 ? "notfound" : "error"); } });
@@ -116,7 +127,7 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
   // rolls into the next chapter so a hands-free read flows continuously. Sub-pixel
   // accumulation keeps slow speeds smooth instead of stuttering one pixel at a time.
   useEffect(() => {
-    if (!prefs.autoScroll || status !== "ok" || !ch || !ch.content) return;
+    if (!prefs.autoScroll || status !== "ok" || !ch || (!ch.content && !ch.rich_html)) return;
     let raf, last = performance.now(), acc = 0;
     const step = (now) => {
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -206,7 +217,7 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
     status === "ok" && ch && React.createElement("div", { className: "reader-col", style: colStyle },
       React.createElement("h1", { className: "reader-title" }, ch.title || `Chapter ${ch.number}`),
       React.createElement("div", { className: "reader-chapnum mono" }, `Chapter ${ch.number}`),
-      !ch.content
+      (!ch.content && !ch.rich_html)
         ? React.createElement("div", { className: "reader-raw-note card" },
             React.createElement(Icon, { name: "x", size: 18, className: "muted" }),
             React.createElement("div", { className: "grow" },
@@ -217,9 +228,12 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
                   : "This chapter has no readable text yet."),
               React.createElement("button", { className: "btn btn-ghost", onClick: () => setReloadKey(k => k + 1) },
                 React.createElement(Icon, { name: "refresh", size: 15 }), "Retry")))
-        : React.createElement("div", { className: "reader-text" },
-            (ch.content || "").split(/\n{2,}/).map((para, i) =>
-              React.createElement("p", { key: i }, para)))
+        : ch.rich_html
+          // Imported chapters ship sanitized rich HTML (server-side nh3) — render it directly.
+          ? React.createElement("div", { className: "reader-text reader-rich", dangerouslySetInnerHTML: { __html: ch.rich_html } })
+          : React.createElement("div", { className: "reader-text" },
+              (ch.content || "").split(/\n{2,}/).map((para, i) =>
+                React.createElement("p", { key: i }, para)))
     ),
 
     // floating nav (tap the page to show/hide)

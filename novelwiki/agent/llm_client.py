@@ -119,6 +119,116 @@ async def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
             backoff *= 2.0
     return []
 
+# ── Unified provider routing (text → OpenRouter, pixels → Gemini) ───────────
+# The codex/translation/segmentation work is text and goes to OpenRouter (above).
+# Vision work (scanned-PDF OCR escalation) goes to Gemini's free tier through its
+# OpenAI-compatible endpoint, guarded by a persistent daily budget + an RPM limiter.
+
+class BudgetExhausted(Exception):
+    """Raised when the Gemini daily free-tier budget is spent. The import worker
+    catches this and parks the job until the per-day counter rolls over."""
+
+
+_gemini_client = None
+# One in-process limiter for the whole app: serialize a minimum interval between
+# Gemini calls to stay under GEMINI_RPM (the budget table guards the daily cap).
+_gemini_lock = asyncio.Lock()
+_gemini_last_call = 0.0
+
+
+def get_gemini_client() -> AsyncOpenAI:
+    global _gemini_client
+    if _gemini_client is None:
+        api_key = settings.GEMINI_API_KEY
+        if not api_key:
+            logger.warning("GEMINI_API_KEY is not set; vision calls will fail.")
+        _gemini_client = AsyncOpenAI(api_key=api_key, base_url=settings.GEMINI_BASE_URL)
+    return _gemini_client
+
+
+async def _charge_gemini_budget() -> int:
+    """Atomically increments today's Gemini usage and returns the new total. Raises
+    BudgetExhausted (and refunds the increment) once over GEMINI_DAILY_BUDGET, so the
+    cap survives restarts. Lazily imported pool to avoid a circular import at module load."""
+    from novelwiki.db.connection import get_db_pool
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        used = await conn.fetchval(
+            """
+            INSERT INTO provider_budget (provider, day, used)
+            VALUES ('gemini', CURRENT_DATE, 1)
+            ON CONFLICT (provider, day) DO UPDATE SET used = provider_budget.used + 1
+            RETURNING used;
+            """
+        )
+        if used > settings.GEMINI_DAILY_BUDGET:
+            await conn.execute(
+                "UPDATE provider_budget SET used = used - 1 WHERE provider = 'gemini' AND day = CURRENT_DATE;"
+            )
+            raise BudgetExhausted(
+                f"Gemini daily budget of {settings.GEMINI_DAILY_BUDGET} reached; pausing until tomorrow."
+            )
+    return int(used)
+
+
+async def _gemini_rate_gate():
+    """Sleeps just enough to keep at least 60/RPM seconds between Gemini calls."""
+    global _gemini_last_call
+    min_interval = 60.0 / max(1, settings.GEMINI_RPM)
+    async with _gemini_lock:
+        wait = min_interval - (asyncio.get_event_loop().time() - _gemini_last_call)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _gemini_last_call = asyncio.get_event_loop().time()
+
+
+async def call_vision_completion(
+    messages: list[dict], model: str = None, temperature: float = 0.0
+) -> str:
+    """Routes a (possibly image-bearing) chat to Gemini. `messages` may contain
+    OpenAI-style content parts with `image_url` data URLs. Enforces the daily budget
+    and RPM limit, with exponential backoff mirroring call_chat_completion."""
+    await _charge_gemini_budget()      # raises BudgetExhausted if over the cap
+    await _gemini_rate_gate()
+    client = get_gemini_client()
+    backoff = 1.0
+    for attempt in range(5):
+        try:
+            response = await client.chat.completions.create(
+                model=model or settings.GEMINI_VISION_MODEL,
+                messages=messages,
+                temperature=temperature,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            logger.warning(f"Vision completion error on attempt {attempt + 1}: {e}")
+            if attempt == 4:
+                raise e
+            await asyncio.sleep(backoff)
+            backoff *= 2.0
+    return ""
+
+
+async def call_llm(
+    messages: list[dict],
+    *,
+    needs_vision: bool,
+    model: str = None,
+    temperature: float = 0.0,
+    response_format: dict = None,
+) -> str:
+    """The provider router: pixels go to Gemini vision; everything else goes to
+    OpenRouter (defaulting to the segmentation model). Callers don't pick a provider."""
+    if needs_vision:
+        return await call_vision_completion(messages, model=model, temperature=temperature)
+    return await call_chat_completion(
+        model=model or settings.SEGMENT_MODEL,
+        messages=messages,
+        temperature=temperature,
+        response_format=response_format,
+    )
+
+
 async def rerank_passages(query: str, documents: list[str], top_n: int = None) -> list[dict]:
     """
     Reranks documents against a query using OpenRouter's /rerank endpoint.

@@ -104,6 +104,28 @@
     ask(id, question, ceiling) { return postJSON(`${N(id)}/ask`, { question, ceiling }); },
     codexBuild(id, body) { return postJSON(`${N(id)}/codex/build`, body || {}); },
     mergeEntities(id, body) { return postJSON(`${N(id)}/merge-entities`, body); },
+
+    // ── File import (EPUB/PDF ingestion) ──
+    // uploadImport posts multipart (FormData), not JSON, so it bypasses the req() helper.
+    async uploadImport(file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`${API_BASE}/import/upload`, { method: "POST", body: fd });
+      if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
+        const err = new Error(detail); err.status = res.status; throw err;
+      }
+      return res.json();
+    },
+    scanIncoming() { return postJSON(`${API_BASE}/import/scan-incoming`, {}); },
+    importJobs() { return getJSON(`${API_BASE}/import/jobs`); },
+    importJob(jid) { return getJSON(`${API_BASE}/import/jobs/${jid}`); },
+    updateImportPlan(jid, plan) { return putJSON(`${API_BASE}/import/jobs/${jid}/plan`, { plan }); },
+    confirmOcr(jid, body) { return postJSON(`${API_BASE}/import/jobs/${jid}/confirm-ocr`, body || {}); },
+    commitImport(jid, body) { return postJSON(`${API_BASE}/import/jobs/${jid}/commit`, body || {}); },
+    cancelImport(jid) { return postJSON(`${API_BASE}/import/jobs/${jid}/cancel`, {}); },
+    deleteImport(jid) { return delJSON(`${API_BASE}/import/jobs/${jid}`); },
   };
 
   function buildCiteMap(citations) {

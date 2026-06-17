@@ -23,6 +23,15 @@ dependencies = [
     "json-repair>=0.60.1",
     "curl-cffi>=0.15.0",
     "lxml>=6.1.1",
+    # File import (EPUB/PDF ingestion). The web image stays GPU-free: PaddleOCR runs in
+    # the separate sidecar (see sidecar/), not here.
+    "ebooklib>=0.18",
+    "pymupdf>=1.24.0",
+    "nh3>=0.2.17",
+    "pillow>=10.3.0",
+    "ftfy>=6.2.0",
+    "charset-normalizer>=3.3.2",
+    "python-multipart>=0.0.9",   # FastAPI multipart upload support
 ]
 
 [tool.pytest.ini_options]

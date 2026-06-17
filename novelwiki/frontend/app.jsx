@@ -126,6 +126,7 @@ function App() {
 
   // ── navigation ──
   const openLibrary = () => { setNovelId(null); setRoute({ view: "library", params: {} }); };
+  const openImport = () => { setNovelId(null); setRoute({ view: "import", params: {} }); };
   const openNovel = (id) => { setNovelId(id); setRoute({ view: "novel", params: {} }); };
   const openReader = (number) => setRoute({ view: "reader", params: { number } });
   const nav = (view, params = {}) => setRoute({ view, params });
@@ -148,8 +149,10 @@ function App() {
   const showCeiling = inNovel && ["browse", "entity", "ask"].includes(route.view);
 
   let screen;
-  if (!inNovel || route.view === "library") {
-    screen = React.createElement(Library, { openNovel });
+  if (route.view === "import") {
+    screen = React.createElement(ImportView, { openNovel, openLibrary });
+  } else if (!inNovel || route.view === "library") {
+    screen = React.createElement(Library, { openNovel, openImport });
   } else if (route.view === "novel") {
     screen = React.createElement(NovelDetail, { novelId, novel, reloadNovel, openReader, nav });
   } else if (route.view === "reader") {

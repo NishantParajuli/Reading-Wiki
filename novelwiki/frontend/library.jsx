@@ -130,7 +130,7 @@ const LIBRARY_TABS = [
   { id: "completed", label: "Completed" },
 ];
 
-function Library({ openNovel }) {
+function Library({ openNovel, openImport }) {
   const [novels, setNovels] = useState(null);  // null = loading
   const [adapters, setAdapters] = useState([]);
   const [adding, setAdding] = useState(false);
@@ -157,8 +157,11 @@ function Library({ openNovel }) {
         React.createElement("h1", { className: "lib-title" }, "Your Library"),
         React.createElement("p", { className: "muted", style: { margin: "4px 0 0" } }, "Everything you're reading, in one place.")
       ),
-      !adding && React.createElement("button", { className: "btn btn-primary", onClick: () => setAdding(true) },
-        React.createElement(Icon, { name: "sparkles", size: 16 }), "Add novel")
+      !adding && React.createElement("div", { className: "row", style: { gap: 8 } },
+        openImport && React.createElement("button", { className: "btn btn-ghost", onClick: openImport },
+          React.createElement(Icon, { name: "book", size: 16 }), "Import EPUB"),
+        React.createElement("button", { className: "btn btn-primary", onClick: () => setAdding(true) },
+          React.createElement(Icon, { name: "sparkles", size: 16 }), "Add novel"))
     ),
 
     novels != null && React.createElement("div", { className: "lib-tabs" },

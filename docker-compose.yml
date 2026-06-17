@@ -4,15 +4,34 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: novelwiki-web
-    # Uses host networking so the container can reach the host's PostgreSQL (localhost)
-    # and expose its web port directly on the host without double-nat.
+    # Uses host networking so the container can reach the host's PostgreSQL (localhost),
+    # the OCR sidecar (localhost:8077), and expose its web port directly without double-nat.
     network_mode: "host"
     env_file:
       - .env
     volumes:
-      # Persists the BM25 index and cached database scrapings
+      # Persists the BM25 index, import scratch, extracted assets, and cached scrapings
       - wiki_data:/app/data
     restart: unless-stopped
+
+  # OCR sidecar (scanned-PDF import, S3). GPU-only and OPTIONAL — the web app runs fine
+  # without it (digital PDFs + EPUB don't need it; scanned PDFs fall back to Gemini vision).
+  # Start it on a GPU host with: docker compose up -d ocr
+  ocr:
+    build:
+      context: ./sidecar
+      dockerfile: Dockerfile
+    container_name: novelwiki-ocr
+    network_mode: "host"            # serves on localhost:8077, which the web app reaches
+    restart: unless-stopped
+    profiles: ["ocr"]               # only starts when explicitly requested / GPU is present
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 volumes:
   wiki_data:

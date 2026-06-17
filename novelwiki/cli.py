@@ -142,6 +142,80 @@ def translate(
     asyncio.run(run())
 
 
+@app.command(name="import")
+def import_file(
+    path: str = typer.Argument(..., help="Path to an .epub or digital .pdf file to import"),
+    novel_id: int = typer.Option(None, "--novel", "-n", help="Append to this existing novel id (omit to create a new novel)"),
+    offset: float = typer.Option(0.0, "--offset", help="Append: add this to segment chapter numbers to get global numbers"),
+    codex: bool = typer.Option(False, "--codex", help="Build the codex over the imported range after committing"),
+):
+    """Imports an EPUB or digital PDF into the library from the terminal (parse → segment →
+    commit), mirroring the web import worker. Heuristic segmentation only (no interactive
+    review). Scanned PDFs need the OCR confirm gate — import those from the web UI."""
+    import os
+    ext = os.path.splitext(path)[1].lower()
+    if not os.path.isfile(path):
+        typer.echo(typer.style(f"✘ File not found: {path}", fg=typer.colors.RED, bold=True))
+        raise typer.Exit(1)
+    if ext not in (".epub", ".pdf"):
+        typer.echo(typer.style("✘ Only .epub and .pdf files are supported.", fg=typer.colors.RED, bold=True))
+        raise typer.Exit(1)
+    fmt = "epub" if ext == ".epub" else "pdf"
+
+    async def run():
+        from novelwiki.importer import jobs as import_jobs, storage, cleanup, segment, commit
+
+        storage.ensure_dirs()
+        target = {"novel_id": novel_id, "offset": offset} if novel_id else "new"
+        job_id = await import_jobs.create_job(fmt, os.path.abspath(path),
+                                              options={"target": target}, status="receiving")
+        typer.echo(f"Parsing {path} (job {job_id})…")
+        if fmt == "epub":
+            from novelwiki.importer.parsers import epub as epub_parser
+            document = epub_parser.parse_epub(path, job_id)
+        else:
+            from novelwiki.importer.parsers import pdf_text
+            document = pdf_text.parse_pdf_text(path, job_id)
+            if document.meta.get("scanned"):
+                typer.echo(typer.style(
+                    "✘ This PDF is scanned and needs OCR (cost-confirmed). Import it from the web UI.",
+                    fg=typer.colors.RED, bold=True))
+                await close_db_pool()
+                raise typer.Exit(1)
+        cleanup.clean_document(document)
+        storage.save_blocks(job_id, document)
+        plan = segment.build_plan(document)
+        await import_jobs.update_job(job_id, plan=plan, detected_meta={"title": document.meta.get("title")})
+
+        included = [s for s in plan["segments"] if s.get("include")]
+        typer.echo(f"  {len(plan['segments'])} segments detected, {len(included)} will be imported.")
+
+        job = await import_jobs.get_job(job_id)
+        result = await commit.commit_job(job)
+        await import_jobs.update_job(job_id, status="committed", novel_id=result["novel_id"],
+                                     source_id=result.get("source_id"))
+        st = result["stats"]
+        typer.echo(typer.style(
+            f"✔ Imported {st['chapters_written']} chapters (ch. {st['from_chapter']}–{st['to_chapter']}) "
+            f"into novel {result['novel_id']}.", fg=typer.colors.GREEN, bold=True))
+
+        if codex:
+            from novelwiki.ingest.chunk import chunk_all_chapters
+            from novelwiki.ingest.embed import embed_missing_chunks
+            from novelwiki.ingest.extract import extract_all_chapters
+            from novelwiki.retrieval.bm25 import get_bm25_manager
+            nid, frm, to = result["novel_id"], st["from_chapter"], st["to_chapter"]
+            typer.echo("Building codex over the imported range (chunk → embed → extract)…")
+            await chunk_all_chapters(nid, force=False, from_chapter=frm, to_chapter=to)
+            await embed_missing_chunks(nid, from_chapter=frm, to_chapter=to)
+            await extract_all_chapters(nid, force=False, from_chapter=frm, to_chapter=to)
+            await get_bm25_manager(nid).rebuild()
+            typer.echo(typer.style("✔ Codex built.", fg=typer.colors.GREEN, bold=True))
+
+        await close_db_pool()
+    asyncio.run(run())
+
+
 @app.command()
 def rebuild_bm25(
     novel_id: int = typer.Argument(..., help="The novel id"),
