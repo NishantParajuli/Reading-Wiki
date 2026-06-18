@@ -144,9 +144,10 @@ async def _do_parse(job: dict) -> None:
 
 
 async def _finish_parse(job_id: int, document) -> None:
-    """Shared tail for every parser: cleanup → segment → awaiting_review. Used by EPUB,
-    digital PDF, and the post-OCR path."""
-    from novelwiki.importer import cleanup, segment
+    """Shared tail for every parser: cleanup → segment → quality → awaiting_review. Used by
+    EPUB, digital PDF, and the post-OCR path. A batch job with ``auto_commit`` is advanced
+    straight past review."""
+    from novelwiki.importer import cleanup, segment, quality
     await update_job(job_id, stage="cleanup")
     cleanup.clean_document(document)
     storage.save_blocks(job_id, document)
@@ -160,6 +161,7 @@ async def _finish_parse(job_id: int, document) -> None:
         "segments": len(plan["segments"]),
         "images": len(document.meta.get("assets", {})),
         "words": sum(s.get("word_count", 0) for s in plan["segments"]),
+        "quality": quality.compute_quality(document, plan),
     }
     if document.meta.get("ocr_stats"):
         stats["ocr"] = document.meta["ocr_stats"]
@@ -172,7 +174,93 @@ async def _finish_parse(job_id: int, document) -> None:
         stage="awaiting review",
         error=None,
     )
-    logger.info(f"Import job {job_id} parsed: {stats['segments']} segments, {stats['images']} images.")
+    logger.info(f"Import job {job_id} parsed: {stats['segments']} segments, {stats['images']} images, "
+                f"quality {stats['quality']['score']}.")
+    await _auto_advance(job_id)
+
+
+# States a batch sibling passes through on its own before it reaches review — while any
+# sibling is still in one of these, a `group_series` batch waits before committing the group.
+# (awaiting_ocr_confirm is excluded: it needs a human, so it never blocks the rest.)
+_PRE_REVIEW = ("receiving", "uploaded", "parsing", "segmenting",
+               "ocr_pending", "ocr_running", "ocr_paused")
+
+
+async def _batch_siblings(batch_id: str) -> list[dict]:
+    if not batch_id:
+        return []
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM import_jobs WHERE options->>'batch_id' = $1 ORDER BY id ASC;", batch_id
+        )
+    return [_row_to_job(r) for r in rows]
+
+
+async def _auto_advance(job_id: int) -> None:
+    """Honour ``options.auto_commit`` for folder/batch imports. Without ``group_series`` each
+    book commits to its own new novel; with it, once every auto-progressing sibling in the
+    batch has reached review, siblings are grouped by detected series and each multi-volume
+    group is committed into a single novel (others commit individually)."""
+    job = await get_job(job_id)
+    options = (job or {}).get("options") or {}
+    if not options.get("auto_commit"):
+        return
+    if not options.get("group_series"):
+        await update_job(job_id, status="committing", stage="auto-committing")
+        return
+
+    siblings = await _batch_siblings(options.get("batch_id"))
+    if any(s["status"] in _PRE_REVIEW for s in siblings):
+        return  # the last straggler to finish parsing will trigger the grouped commit
+
+    ready = [s for s in siblings if s["status"] == "awaiting_review"]
+    groups: dict[str, list[dict]] = {}
+    for s in ready:
+        series = ((s.get("detected_meta") or {}).get("series") or "").strip()
+        groups.setdefault(series or f"__single_{s['id']}", []).append(s)
+
+    from novelwiki.importer import commit
+    for key, grp in groups.items():
+        ids = [int(s["id"]) for s in grp]
+        if key.startswith("__single_") or len(ids) == 1:
+            await update_job(ids[0], status="committing", stage="auto-committing")
+            continue
+        try:
+            await commit.commit_series(ids)
+            logger.info(f"Auto-committed series '{key}' ({len(ids)} volumes) from batch.")
+        except Exception as e:
+            logger.warning(f"Series auto-commit failed for '{key}': {e}")
+            for jid in ids:
+                await fail_job(jid, f"series commit: {type(e).__name__}: {e}")
+
+
+async def imports_with_hash(file_sha256: str, exclude_job_id: int | None = None) -> list[dict]:
+    """Prior import jobs for the same file bytes (re-import detection). Most-recent first;
+    callers surface committed ones as a 'you already imported this' warning."""
+    if not file_sha256:
+        return []
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT j.id, j.novel_id, j.status, j.created_at, n.title AS novel_title
+            FROM import_jobs j LEFT JOIN novels n ON n.id = j.novel_id
+            WHERE j.file_sha256 = $1 AND ($2::bigint IS NULL OR j.id <> $2)
+            ORDER BY j.created_at DESC;
+            """,
+            file_sha256, exclude_job_id,
+        )
+    return [
+        {
+            "job_id": int(r["id"]),
+            "novel_id": int(r["novel_id"]) if r["novel_id"] is not None else None,
+            "novel_title": r["novel_title"],
+            "status": r["status"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
 
 
 # ── OCR (scanned PDF) ────────────────────────────────────────────────────────
@@ -234,20 +322,16 @@ async def _do_ocr(job: dict) -> None:
 
 
 async def _do_commit(job: dict) -> None:
-    """committing → write chapters/assets via the scraper persist path → committed."""
+    """committing → write chapters/assets via the scraper persist path → committed.
+
+    ``commit_job`` records completion (novel_id + status='committed') INSIDE its own
+    transaction, so this stage is crash-safe: if a restart interrupts a commit, the work
+    either fully rolled back (re-run starts clean) or fully landed as 'committed' (no longer
+    a trigger state, so never re-run) — a duplicate novel can't slip through the gap."""
     job_id = int(job["id"])
     await update_job(job_id, stage="committing")
     from novelwiki.importer import commit
     result = await commit.commit_job(job)
-    await update_job(
-        job_id,
-        novel_id=result["novel_id"],
-        source_id=result.get("source_id"),
-        status="committed",
-        stage="committed",
-        stats={**(job.get("stats") or {}), **result.get("stats", {})},
-        error=None,
-    )
     logger.info(f"Import job {job_id} committed → novel {result['novel_id']} "
                 f"({result.get('stats', {}).get('chapters_written', 0)} chapters).")
 

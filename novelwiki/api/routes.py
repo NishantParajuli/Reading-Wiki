@@ -1,7 +1,7 @@
 import logging
 import json
 import os
-from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Request
 from pydantic import BaseModel
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
@@ -375,7 +375,8 @@ async def api_list_chapters(novel_id: int):
         rows = await conn.fetch(
             """
             SELECT number, title, language, is_translated, translation_status,
-                   (content IS NOT NULL) AS has_content, word_count
+                   (content IS NOT NULL OR raw_html IS NOT NULL) AS has_content,
+                   word_count, kind, part_label
             FROM chapters WHERE novel_id = $1 ORDER BY number ASC;
             """,
             novel_id,
@@ -389,6 +390,10 @@ async def api_list_chapters(novel_id: int):
             "translation_status": r["translation_status"],
             "has_content": r["has_content"],
             "word_count": r["word_count"],
+            # File-import grouping: `kind` flags non-chapter sections (frontmatter/interlude/
+            # backmatter); `part_label` groups chapters under a "Volume 1" heading in the TOC.
+            "kind": r["kind"] or "chapter",
+            "part_label": r["part_label"],
         }
         for r in rows
     ]
@@ -834,12 +839,26 @@ class PlanUpdate(BaseModel):
     plan: dict                       # the full edited plan (frontend sends it back wholesale)
 
 class ImportCommit(BaseModel):
-    mode: str = "new"                # new | append
+    mode: str = "new"                # new | append | replace
     novel_id: int | None = None      # required when mode == append
-    offset: float = 0                # append: global = segment number + offset
+    source_id: int | None = None     # required when mode == replace
+    offset: float = 0                # append/replace: global = segment number + offset
 
 class OcrConfirm(BaseModel):
     gemini_first: bool = False       # skip the sidecar, OCR every page with Gemini directly
+
+class ImportInit(BaseModel):
+    filename: str                    # used only for its extension (.epub/.pdf)
+    size: int = 0                    # declared total bytes (for the completion check)
+
+class ImportBatch(BaseModel):
+    path: str | None = None          # folder to scan; defaults to IMPORT_INCOMING_DIR
+    recursive: bool = True           # walk subfolders (Calibre stores book-per-folder)
+    auto_commit: bool = False        # commit each book without a manual review step
+    group_series: bool = False       # group EPUB volumes of one series into a single novel
+
+class CommitSeries(BaseModel):
+    job_ids: list[int]               # parsed jobs to fold into one multi-volume novel
 
 
 _IMPORT_FORMATS = {".epub": "epub", ".pdf": "pdf"}
@@ -886,42 +905,180 @@ async def api_import_upload(file: UploadFile = File(...)):
     # Insert as 'receiving' so the worker can't grab it before the blob lands on disk.
     job_id = await import_jobs.create_job(fmt, original_path="", status="receiving")
     path = import_storage.save_original(job_id, data, ext)
+    sha = import_storage.sha256_bytes(data)
     await import_jobs.update_job(
-        job_id, original_path=str(path),
-        file_sha256=import_storage.sha256_bytes(data), status="uploaded",
+        job_id, original_path=str(path), file_sha256=sha, status="uploaded",
     )
-    return {"id": job_id, "status": "uploaded", "format": fmt}
+    # Re-import detection: if these exact bytes were imported before, tell the UI so it can
+    # warn ("you already imported this") instead of silently making a duplicate novel.
+    duplicate_of = await import_jobs.imports_with_hash(sha, exclude_job_id=job_id)
+    return {"id": job_id, "status": "uploaded", "format": fmt, "duplicate_of": duplicate_of}
 
 
-@router.post("/import/scan-incoming")
-async def api_import_scan_incoming():
-    """Enqueue any EPUBs dropped into IMPORT_INCOMING_DIR (the watched-folder path for big
-    files that bypass the multipart upload cap)."""
+def _iter_import_files(root: str, recursive: bool):
+    """Yield (path, filename) for every importable EPUB/PDF under `root`. Recursive mode
+    walks subfolders, which is how a Calibre library (book-per-folder) is laid out."""
+    if recursive:
+        for dirpath, _dirs, files in os.walk(root):
+            for name in sorted(files):
+                if os.path.splitext(name)[1].lower() in _IMPORT_FORMATS:
+                    yield os.path.join(dirpath, name), name
+    else:
+        try:
+            names = sorted(os.listdir(root))
+        except FileNotFoundError:
+            return
+        for name in names:
+            src = os.path.join(root, name)
+            if os.path.isfile(src) and os.path.splitext(name)[1].lower() in _IMPORT_FORMATS:
+                yield src, name
+
+
+async def _enqueue_batch(files, *, auto_commit: bool, group_series: bool):
+    """Stage a list of (path, filename) into fresh import jobs sharing one batch id, so the
+    worker can group/auto-commit them. Returns the queued job descriptors."""
+    import uuid
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
 
-    incoming = settings.IMPORT_INCOMING_DIR
     import_storage.ensure_dirs()
+    batch_id = uuid.uuid4().hex
+    options = {"batch_id": batch_id, "auto_commit": auto_commit, "group_series": group_series}
     queued = []
-    try:
-        names = sorted(os.listdir(incoming))
-    except FileNotFoundError:
-        names = []
-    for name in names:
+    for src, name in files:
         ext = os.path.splitext(name)[1].lower()
-        fmt = _IMPORT_FORMATS.get(ext)
-        src = os.path.join(incoming, name)
-        if not fmt or not os.path.isfile(src):
-            continue
-        job_id = await import_jobs.create_job(fmt, original_path="", status="receiving")
-        data = open(src, "rb").read()
+        fmt = _IMPORT_FORMATS[ext]
+        job_id = await import_jobs.create_job(fmt, original_path="", options=options, status="receiving")
+        with open(src, "rb") as f:
+            data = f.read()
         path = import_storage.save_original(job_id, data, ext)
         await import_jobs.update_job(
             job_id, original_path=str(path),
             file_sha256=import_storage.sha256_bytes(data), status="uploaded",
         )
         queued.append({"id": job_id, "filename": name})
+    return batch_id, queued
+
+
+@router.post("/import/scan-incoming")
+async def api_import_scan_incoming():
+    """Enqueue any EPUB/PDF dropped into IMPORT_INCOMING_DIR (the watched-folder path for big
+    files that bypass the multipart upload cap). Non-recursive, manual review per book."""
+    files = list(_iter_import_files(settings.IMPORT_INCOMING_DIR, recursive=False))
+    _batch_id, queued = await _enqueue_batch(files, auto_commit=False, group_series=False)
     return {"queued": queued, "count": len(queued)}
+
+
+@router.post("/import/batch")
+async def api_import_batch(payload: ImportBatch):
+    """Bulk-import a folder (e.g. a Calibre library). Recurses by default, can auto-commit
+    each book without review, and can group EPUB volumes of one series into a single novel."""
+    root = payload.path or settings.IMPORT_INCOMING_DIR
+    if not os.path.isdir(root):
+        raise HTTPException(status_code=400, detail=f"Not a directory: {root}")
+    files = list(_iter_import_files(root, recursive=payload.recursive))
+    if not files:
+        raise HTTPException(status_code=404, detail=f"No .epub/.pdf files found under {root}.")
+    batch_id, queued = await _enqueue_batch(
+        files, auto_commit=payload.auto_commit, group_series=payload.group_series)
+    return {"batch_id": batch_id, "queued": queued, "count": len(queued)}
+
+
+# ── Resumable chunked upload (big files over the tunnel) ────────────────────
+# init → (chunk … chunk) → complete. The on-disk blob size is the resume cursor, so a
+# dropped connection just resumes from GET .../status. The job stays 'receiving' (not a
+# worker trigger) until complete flips it to 'uploaded'.
+
+@router.post("/import/upload/init")
+async def api_import_upload_init(payload: ImportInit):
+    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.importer import storage as import_storage
+
+    ext = os.path.splitext(payload.filename or "")[1].lower()
+    fmt = _IMPORT_FORMATS.get(ext)
+    if not fmt:
+        raise HTTPException(status_code=400, detail="Only .epub and .pdf files are supported.")
+    job_id = await import_jobs.create_job(
+        fmt, original_path="", options={"upload": {"size": int(payload.size or 0), "ext": ext.lstrip('.')}},
+        status="receiving")
+    path = import_storage.init_upload(job_id, ext)
+    await import_jobs.update_job(job_id, original_path=str(path))
+    return {"id": job_id, "offset": 0, "format": fmt}
+
+
+@router.get("/import/upload/{job_id}/status")
+async def api_import_upload_status(job_id: int):
+    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.importer import storage as import_storage
+    job = await import_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found.")
+    up = (job.get("options") or {}).get("upload") or {}
+    ext = up.get("ext", job["format"])
+    return {"id": job_id, "offset": import_storage.upload_offset(job_id, ext),
+            "size": up.get("size", 0), "complete": job["status"] != "receiving"}
+
+
+@router.put("/import/upload/{job_id}/chunk")
+async def api_import_upload_chunk(job_id: int, request: Request):
+    """Append one chunk at the byte offset given in the `Upload-Offset` header."""
+    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.importer import storage as import_storage
+    job = await import_jobs.get_job(job_id)
+    if not job or job["status"] != "receiving":
+        raise HTTPException(status_code=409, detail="Upload session is not open.")
+    up = (job.get("options") or {}).get("upload") or {}
+    ext = up.get("ext", job["format"])
+    try:
+        offset = int(request.headers.get("Upload-Offset", "0"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid Upload-Offset header.")
+    data = await request.body()
+    if len(data) > settings.UPLOAD_CHUNK_MAX_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Chunk too large.")
+    new_offset = import_storage.write_chunk(job_id, ext, offset, data)
+    return {"offset": new_offset}
+
+
+@router.post("/import/upload/{job_id}/complete")
+async def api_import_upload_complete(job_id: int):
+    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.importer import storage as import_storage
+    job = await import_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found.")
+    if job["status"] != "receiving":
+        return {"id": job_id, "status": job["status"]}    # already finalized (idempotent)
+    up = (job.get("options") or {}).get("upload") or {}
+    ext = up.get("ext", job["format"])
+    sha, size = import_storage.finalize_upload(job_id, ext)
+    declared = int(up.get("size") or 0)
+    if declared and size != declared:
+        raise HTTPException(status_code=400,
+                            detail=f"Upload incomplete: have {size} bytes, expected {declared}.")
+    await import_jobs.update_job(job_id, file_sha256=sha, status="uploaded", stage=None)
+    duplicate_of = await import_jobs.imports_with_hash(sha, exclude_job_id=job_id)
+    return {"id": job_id, "status": "uploaded", "format": job["format"], "duplicate_of": duplicate_of}
+
+
+@router.post("/import/commit-series")
+async def api_import_commit_series(payload: CommitSeries):
+    """Fold several parsed jobs into one multi-volume novel (ordered by series index)."""
+    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.importer import commit as import_commit
+    if len(payload.job_ids) < 1:
+        raise HTTPException(status_code=422, detail="Provide at least one job id.")
+    for jid in payload.job_ids:
+        job = await import_jobs.get_job(jid)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Import job {jid} not found.")
+        if job["status"] not in ("awaiting_review", "failed"):
+            raise HTTPException(status_code=409, detail=f"Job {jid} is '{job['status']}', not ready to commit.")
+    try:
+        result = await import_commit.commit_series(payload.job_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return result
 
 
 @router.get("/import/jobs")
@@ -979,7 +1136,9 @@ async def api_import_commit(job_id: int, payload: ImportCommit):
     job = await import_jobs.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Import job not found.")
-    if job["status"] not in ("awaiting_review", "failed", "committed"):
+    # 'committed' is intentionally excluded: a finished job already produced its novel, and
+    # re-committing 'new' would duplicate it. Re-import the file for a fresh copy instead.
+    if job["status"] not in ("awaiting_review", "failed"):
         raise HTTPException(status_code=409, detail=f"Job is '{job['status']}', not ready to commit.")
     if not (job.get("plan") and job["plan"].get("segments")):
         raise HTTPException(status_code=409, detail="Job has no plan to commit; re-parse it first.")
@@ -988,6 +1147,10 @@ async def api_import_commit(job_id: int, payload: ImportCommit):
         if not payload.novel_id:
             raise HTTPException(status_code=422, detail="Append mode requires a novel_id.")
         target = {"novel_id": payload.novel_id, "offset": payload.offset}
+    elif payload.mode == "replace":
+        if not payload.source_id:
+            raise HTTPException(status_code=422, detail="Replace mode requires a source_id.")
+        target = {"source_id": payload.source_id, "offset": payload.offset}
     else:
         target = "new"
 

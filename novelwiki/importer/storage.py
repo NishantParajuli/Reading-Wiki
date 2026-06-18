@@ -80,6 +80,42 @@ def save_original(job_id: int, data: bytes, ext: str) -> Path:
     return p
 
 
+# ── Resumable chunked upload (tus-style) ────────────────────────────────────
+# Big files over the Cloudflare tunnel can't ride a single multipart POST, so the client
+# uploads them in chunks: init creates an empty blob, each chunk is written at its byte
+# offset, and the on-disk file size IS the resume cursor (no separate bookkeeping needed).
+
+def init_upload(job_id: int, ext: str) -> Path:
+    """Create the (empty) target blob for a chunked upload so chunks can seek into it."""
+    p = original_path(job_id, ext)
+    if not p.exists():
+        p.write_bytes(b"")
+    return p
+
+
+def upload_offset(job_id: int, ext: str) -> int:
+    """Current received size = the resume cursor. 0 if nothing has landed yet."""
+    p = original_path(job_id, ext)
+    return p.stat().st_size if p.exists() else 0
+
+
+def write_chunk(job_id: int, ext: str, offset: int, data: bytes) -> int:
+    """Write a chunk at ``offset`` and return the new received size. Idempotent on retried
+    chunks (a client may resend the last chunk); seeking past the end zero-fills any gap,
+    but the client is expected to send contiguous offsets."""
+    p = original_path(job_id, ext)
+    with open(p, "r+b") as f:
+        f.seek(offset)
+        f.write(data)
+    return p.stat().st_size
+
+
+def finalize_upload(job_id: int, ext: str) -> tuple[str, int]:
+    """Hash the fully-assembled blob and return (sha256, size)."""
+    p = original_path(job_id, ext)
+    return sha256_bytes(p.read_bytes()), p.stat().st_size
+
+
 def blocks_path(job_id: int) -> Path:
     return job_dir(job_id) / "blocks.json"
 

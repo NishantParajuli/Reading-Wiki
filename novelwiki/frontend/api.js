@@ -119,13 +119,46 @@
       return res.json();
     },
     scanIncoming() { return postJSON(`${API_BASE}/import/scan-incoming`, {}); },
+    batchImport(body) { return postJSON(`${API_BASE}/import/batch`, body || {}); },
     importJobs() { return getJSON(`${API_BASE}/import/jobs`); },
     importJob(jid) { return getJSON(`${API_BASE}/import/jobs/${jid}`); },
     updateImportPlan(jid, plan) { return putJSON(`${API_BASE}/import/jobs/${jid}/plan`, { plan }); },
     confirmOcr(jid, body) { return postJSON(`${API_BASE}/import/jobs/${jid}/confirm-ocr`, body || {}); },
     commitImport(jid, body) { return postJSON(`${API_BASE}/import/jobs/${jid}/commit`, body || {}); },
+    commitSeries(jobIds) { return postJSON(`${API_BASE}/import/commit-series`, { job_ids: jobIds }); },
     cancelImport(jid) { return postJSON(`${API_BASE}/import/jobs/${jid}/cancel`, {}); },
     deleteImport(jid) { return delJSON(`${API_BASE}/import/jobs/${jid}`); },
+
+    // Files above ~40 MB can't ride a single POST through the tunnel, so they go up in
+    // chunks: init → PUT each slice at its byte offset → complete. `onProgress(frac)` drives
+    // a progress bar; a dropped connection can resume from GET .../status.
+    CHUNKED_THRESHOLD: 40 * 1024 * 1024,
+    CHUNK_SIZE: 8 * 1024 * 1024,
+    async uploadChunked(file, onProgress) {
+      const init = await postJSON(`${API_BASE}/import/upload/init`, { filename: file.name, size: file.size });
+      const jid = init.id;
+      let offset = 0;
+      while (offset < file.size) {
+        const end = Math.min(offset + this.CHUNK_SIZE, file.size);
+        const res = await fetch(`${API_BASE}/import/upload/${jid}/chunk`, {
+          method: "PUT",
+          headers: { "Upload-Offset": String(offset), "Content-Type": "application/octet-stream" },
+          body: file.slice(offset, end),
+        });
+        if (!res.ok) throw new Error(`Chunk upload failed at ${offset}`);
+        const j = await res.json();
+        offset = j.offset;
+        if (onProgress) onProgress(offset / file.size);
+      }
+      return postJSON(`${API_BASE}/import/upload/${jid}/complete`, {});
+    },
+    // One entry point the UI calls regardless of size: small files go single-shot, big ones chunked.
+    async importFile(file, onProgress) {
+      if (file.size > this.CHUNKED_THRESHOLD) return this.uploadChunked(file, onProgress);
+      const r = await this.uploadImport(file);
+      if (onProgress) onProgress(1);
+      return r;
+    },
   };
 
   function buildCiteMap(citations) {

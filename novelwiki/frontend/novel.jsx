@@ -2,6 +2,37 @@
    Novel detail — the per-novel hub: continue reading, sources, scraping,
    codex build, and the table of contents.
    ============================================================ */
+
+// Non-chapter sections from file imports get a short tag instead of a number.
+const TOC_KIND_LABEL = { frontmatter: "front", interlude: "interlude", backmatter: "extra" };
+
+// Build the TOC as a flat element list, inserting a heading whenever the imported
+// `part_label` (e.g. "Volume 1") changes and tagging non-chapter sections.
+function buildToc(toc, progress, openReader) {
+  const out = [];
+  let lastPart;
+  toc.forEach(ch => {
+    if (ch.part_label && ch.part_label !== lastPart) {
+      out.push(React.createElement("div", { key: "part:" + ch.part_label, className: "toc-part" }, ch.part_label));
+    }
+    lastPart = ch.part_label || lastPart;
+    const isSection = ch.kind && ch.kind !== "chapter";
+    out.push(React.createElement("button", {
+      key: ch.number,
+      className: "toc-row" + (progress.last_chapter === ch.number ? " current" : "") + (isSection ? " toc-section" : ""),
+      onClick: () => openReader(ch.number),
+    },
+      React.createElement("span", { className: "toc-num mono" }, isSection ? "—" : ch.number),
+      React.createElement("span", { className: "toc-title" }, ch.title || `Chapter ${ch.number}`),
+      isSection ? React.createElement("span", { className: "chip toc-kind", title: "Non-chapter section" }, TOC_KIND_LABEL[ch.kind] || ch.kind) : null,
+      (!ch.has_content && ch.translation_status === "pending")
+        ? React.createElement("span", { className: "chip", title: "Raw — translates on open" }, "raw") : null,
+      React.createElement(Icon, { name: "arrowRight", size: 15, className: "muted" })
+    ));
+  });
+  return out;
+}
+
 function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
   const [adapter, setAdapter] = useState(adapters[0] ? adapters[0].name : "fenrirealm");
   const [startUrl, setStartUrl] = useState("");
@@ -423,19 +454,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
       ? React.createElement(Loading, { label: "Loading chapters…" })
       : toc.length === 0
         ? React.createElement(EmptyState, { icon: "book", title: "No chapters yet", body: "Use Scrape above to fetch chapters from the source." })
-        : React.createElement("div", { className: "card toc" },
-          toc.map(ch => React.createElement("button", {
-            key: ch.number, className: "toc-row" + (progress.last_chapter === ch.number ? " current" : ""),
-            onClick: () => openReader(ch.number),
-          },
-            React.createElement("span", { className: "toc-num mono" }, ch.number),
-            React.createElement("span", { className: "toc-title" }, ch.title || `Chapter ${ch.number}`),
-            !ch.has_content && ch.translation_status === "pending"
-              ? React.createElement("span", { className: "chip", title: "Raw — translates on open" }, "raw")
-              : null,
-            React.createElement(Icon, { name: "arrowRight", size: 15, className: "muted" })
-          ))
-        )
+        : React.createElement("div", { className: "card toc" }, buildToc(toc, progress, openReader))
   );
 }
 

@@ -34,6 +34,11 @@ DDL_QUERIES = [
     "ALTER TABLE novels ADD COLUMN IF NOT EXISTS shelf TEXT;",
     "ALTER TABLE novels ADD COLUMN IF NOT EXISTS status_tags TEXT[] DEFAULT '{}';",
     "CREATE INDEX IF NOT EXISTS novels_shelf_idx ON novels (shelf);",
+    # File-import series grouping: when several EPUB volumes of one series are imported,
+    # they become sources of a single novel whose `series` records the collection name, so a
+    # later volume of the same series auto-appends instead of creating a duplicate novel.
+    "ALTER TABLE novels ADD COLUMN IF NOT EXISTS series TEXT;",
+    "CREATE INDEX IF NOT EXISTS novels_series_idx ON novels (series);",
 
     # ── 0b. Sources ────────────────────────────────────────────────────────
     # A novel can have several sources, each scraped by a different adapter. This

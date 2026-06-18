@@ -216,6 +216,165 @@ def import_file(
     asyncio.run(run())
 
 
+async def _parse_into_job(path: str, fmt: str, options: dict | None = None) -> int:
+    """Create a job, parse + clean + segment the file, and leave it at 'awaiting_review' (the
+    same state the web worker reaches). Returns the job id. Scanned PDFs are rejected (OCR
+    needs the cost-confirm gate / a running worker). Shared by the batch/series CLI commands."""
+    import os
+    from novelwiki.importer import jobs as import_jobs, storage, cleanup, segment, quality
+    storage.ensure_dirs()
+    job_id = await import_jobs.create_job(fmt, os.path.abspath(path),
+                                          options=options or {}, status="receiving")
+    if fmt == "epub":
+        from novelwiki.importer.parsers import epub as epub_parser
+        document = epub_parser.parse_epub(path, job_id)
+    else:
+        from novelwiki.importer.parsers import pdf_text
+        document = pdf_text.parse_pdf_text(path, job_id)
+        if document.meta.get("scanned"):
+            raise RuntimeError(f"{os.path.basename(path)} is a scanned PDF — import it from the web UI (OCR).")
+    cleanup.clean_document(document)
+    storage.save_blocks(job_id, document)
+    plan = segment.build_plan(document)
+    await import_jobs.update_job(
+        job_id, plan=plan, status="awaiting_review",
+        detected_meta={"title": document.meta.get("title"), "series": document.meta.get("series"),
+                       "series_index": document.meta.get("series_index")},
+        stats={"quality": quality.compute_quality(document, plan)},
+    )
+    return job_id
+
+
+def _import_files_in(folder: str) -> list[str]:
+    import os
+    out = []
+    for dirpath, _dirs, files in os.walk(folder):
+        for name in sorted(files):
+            if os.path.splitext(name)[1].lower() in (".epub", ".pdf"):
+                out.append(os.path.join(dirpath, name))
+    return out
+
+
+async def _build_codex_range(novel_id: int, frm: float, to: float):
+    from novelwiki.ingest.embed import embed_missing_chunks
+    from novelwiki.ingest.extract import extract_all_chapters
+    await chunk_all_chapters(novel_id, force=False, from_chapter=frm, to_chapter=to)
+    await embed_missing_chunks(novel_id, from_chapter=frm, to_chapter=to)
+    await extract_all_chapters(novel_id, force=False, from_chapter=frm, to_chapter=to)
+    await get_bm25_manager(novel_id).rebuild()
+
+
+@app.command(name="import-batch")
+def import_batch(
+    folder: str = typer.Argument(..., help="Folder to scan recursively for .epub/.pdf (e.g. a Calibre library)"),
+    series: bool = typer.Option(False, "--series", help="Group EPUB volumes that share a series into single novels"),
+    codex: bool = typer.Option(False, "--codex", help="Build the codex over each imported novel afterward"),
+):
+    """Bulk-imports every EPUB/digital-PDF under a folder. With --series, books sharing a
+    detected series become one multi-volume novel; otherwise each book becomes its own novel."""
+    import os
+    if not os.path.isdir(folder):
+        typer.echo(typer.style(f"✘ Not a directory: {folder}", fg=typer.colors.RED, bold=True)); raise typer.Exit(1)
+    files = _import_files_in(folder)
+    if not files:
+        typer.echo(typer.style("✘ No .epub/.pdf files found.", fg=typer.colors.RED, bold=True)); raise typer.Exit(1)
+
+    async def run():
+        from novelwiki.importer import jobs as import_jobs, commit
+        typer.echo(f"Found {len(files)} file(s). Parsing…")
+        parsed = []   # (job_id, series_name)
+        for p in files:
+            fmt = "epub" if p.lower().endswith(".epub") else "pdf"
+            try:
+                jid = await _parse_into_job(p, fmt)
+                job = await import_jobs.get_job(jid)
+                parsed.append((jid, (job.get("detected_meta") or {}).get("series")))
+                typer.echo(f"  ✓ {os.path.basename(p)}")
+            except Exception as e:
+                typer.echo(typer.style(f"  ✘ {os.path.basename(p)}: {e}", fg=typer.colors.YELLOW))
+
+        novels = []
+        if series:
+            groups: dict = {}
+            for jid, sname in parsed:
+                groups.setdefault(sname or f"__single_{jid}", []).append(jid)
+            for key, ids in groups.items():
+                if key.startswith("__single_") or len(ids) == 1:
+                    res = await commit.commit_job(await import_jobs.get_job(ids[0]))
+                    novels.append(res)
+                else:
+                    res = await commit.commit_series(ids)
+                    novels.append(res)
+                    typer.echo(f"  → series '{key}': {len(ids)} volumes → novel {res['novel_id']}")
+        else:
+            for jid, _s in parsed:
+                novels.append(await commit.commit_job(await import_jobs.get_job(jid)))
+
+        typer.echo(typer.style(f"✔ Imported {len(novels)} novel(s).", fg=typer.colors.GREEN, bold=True))
+        if codex:
+            for res in novels:
+                st = res.get("stats", {})
+                if st.get("from_chapter") is not None:
+                    typer.echo(f"Building codex for novel {res['novel_id']}…")
+                    await _build_codex_range(res["novel_id"], st["from_chapter"], st["to_chapter"])
+            typer.echo(typer.style("✔ Codex built.", fg=typer.colors.GREEN, bold=True))
+        await close_db_pool()
+    asyncio.run(run())
+
+
+@app.command(name="import-series")
+def import_series(
+    paths: list[str] = typer.Argument(..., help="EPUB/PDF volumes to fold into one novel (ordered by detected series index)"),
+    codex: bool = typer.Option(False, "--codex", help="Build the codex over the new novel afterward"),
+):
+    """Imports several volumes as a single multi-volume novel (one source per volume)."""
+    import os
+    for p in paths:
+        if not os.path.isfile(p):
+            typer.echo(typer.style(f"✘ File not found: {p}", fg=typer.colors.RED, bold=True)); raise typer.Exit(1)
+
+    async def run():
+        from novelwiki.importer import commit
+        job_ids = []
+        for p in paths:
+            fmt = "epub" if p.lower().endswith(".epub") else "pdf"
+            job_ids.append(await _parse_into_job(p, fmt))
+            typer.echo(f"  ✓ parsed {os.path.basename(p)}")
+        res = await commit.commit_series(job_ids)
+        st = res["stats"]
+        typer.echo(typer.style(
+            f"✔ Imported {res['volumes']} volumes (ch. {st['from_chapter']}–{st['to_chapter']}) "
+            f"into novel {res['novel_id']}.", fg=typer.colors.GREEN, bold=True))
+        if codex:
+            typer.echo("Building codex…")
+            await _build_codex_range(res["novel_id"], st["from_chapter"], st["to_chapter"])
+            typer.echo(typer.style("✔ Codex built.", fg=typer.colors.GREEN, bold=True))
+        await close_db_pool()
+    asyncio.run(run())
+
+
+@app.command(name="import-worker")
+def import_worker():
+    """Runs the durable import worker as a standalone process (parse/OCR/commit jobs from the
+    DB queue). Use this to split the worker off the web image; Ctrl-C stops it cleanly."""
+    async def run():
+        from novelwiki.importer.jobs import worker_loop, stop_worker
+        from novelwiki.db.connection import init_db_pool
+        await init_db_pool()
+        typer.echo("Import worker running (Ctrl-C to stop)…")
+        try:
+            await worker_loop()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+        finally:
+            await stop_worker()
+            await close_db_pool()
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        typer.echo("Stopped.")
+
+
 @app.command()
 def rebuild_bm25(
     novel_id: int = typer.Argument(..., help="The novel id"),

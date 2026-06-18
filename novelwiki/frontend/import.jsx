@@ -17,6 +17,7 @@ const IMPORT_STATUS_LABEL = {
 
 function UploadDrop({ onUploaded }) {
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [err, setErr] = useState(null);
   const [drag, setDrag] = useState(false);
   const inputRef = useRef(null);
@@ -24,23 +25,29 @@ function UploadDrop({ onUploaded }) {
   async function send(file) {
     if (!file || busy) return;
     if (!/\.(epub|pdf)$/i.test(file.name)) { setErr("Only .epub and .pdf files are supported."); return; }
-    setBusy(true); setErr(null);
-    try { const r = await window.API.uploadImport(file); onUploaded(r.id); }
+    setBusy(true); setErr(null); setProgress(0);
+    try {
+      // Big files (>40 MB) go up in chunks automatically; small ones single-shot.
+      const r = await window.API.importFile(file, setProgress);
+      onUploaded(r.id, r.duplicate_of);
+    }
     catch (e) { setErr(e.message || "Upload failed."); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setProgress(0); }
   }
 
   return React.createElement("div", null,
     React.createElement("div", {
       className: "import-drop" + (drag ? " drag" : ""),
-      onClick: () => inputRef.current && inputRef.current.click(),
+      onClick: () => !busy && inputRef.current && inputRef.current.click(),
       onDragOver: e => { e.preventDefault(); setDrag(true); },
       onDragLeave: () => setDrag(false),
       onDrop: e => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files[0]); },
     },
       React.createElement(Icon, { name: "book", size: 26, className: "muted" }),
       React.createElement("div", { className: "import-drop-text" },
-        React.createElement("b", null, busy ? "Uploading…" : "Drop an EPUB or PDF here, or click to choose"),
+        React.createElement("b", null, busy
+          ? (progress > 0 && progress < 1 ? `Uploading… ${Math.round(progress * 100)}%` : "Uploading…")
+          : "Drop an EPUB or PDF here, or click to choose"),
         React.createElement("span", { className: "muted", style: { fontSize: 13 } }, "We parse it (scanned PDFs are OCR'd), you review the chapters, then commit.")
       ),
       React.createElement("input", {
@@ -48,8 +55,81 @@ function UploadDrop({ onUploaded }) {
         onChange: e => send(e.target.files[0]),
       })
     ),
+    busy && progress > 0 && React.createElement("div", { className: "progress-track", style: { marginTop: 8 } },
+      React.createElement("div", { className: "progress-fill", style: { width: Math.round(progress * 100) + "%" } })),
     err && React.createElement("div", { className: "muted", style: { color: "var(--rose, crimson)", fontSize: 13, marginTop: 8 } }, err)
   );
+}
+
+// Bulk import a server-side folder (e.g. a Calibre library, or the watched incoming dir).
+function FolderImport({ onQueued }) {
+  const [open, setOpen] = useState(false);
+  const [path, setPath] = useState("");
+  const [autoCommit, setAutoCommit] = useState(true);
+  const [groupSeries, setGroupSeries] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  async function run() {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await window.API.batchImport({
+        path: path.trim() || null, recursive: true, auto_commit: autoCommit, group_series: groupSeries,
+      });
+      setMsg(`Queued ${r.count} file(s).`);
+      onQueued && onQueued();
+    } catch (e) { setMsg(e.message || "Batch import failed."); }
+    finally { setBusy(false); }
+  }
+
+  if (!open) {
+    return React.createElement("button", {
+      className: "btn btn-ghost", style: { marginTop: 10 }, onClick: () => setOpen(true),
+    }, React.createElement(Icon, { name: "layers", size: 15 }), "Import a folder / Calibre library");
+  }
+  return React.createElement("div", { className: "card", style: { padding: 14, marginTop: 10 } },
+    React.createElement("p", { className: "section-eyebrow", style: { marginTop: 0 } }, "Folder / batch import"),
+    React.createElement("input", {
+      className: "gl-input", value: path, onChange: e => setPath(e.target.value),
+      placeholder: "Server path to a folder (blank = watched incoming dir)", style: { width: "100%", marginBottom: 10 },
+    }),
+    React.createElement("label", { className: "check" },
+      React.createElement("input", { type: "checkbox", checked: autoCommit, onChange: e => setAutoCommit(e.target.checked) }),
+      "Auto-commit each book (skip manual review)"),
+    React.createElement("label", { className: "check", style: { marginTop: 6 } },
+      React.createElement("input", { type: "checkbox", checked: groupSeries, onChange: e => setGroupSeries(e.target.checked) }),
+      "Group EPUB volumes of one series into a single novel"),
+    msg && React.createElement("div", { className: "muted", style: { fontSize: 13, margin: "10px 0 0" } }, msg),
+    React.createElement("div", { className: "row", style: { gap: 10, marginTop: 12 } },
+      React.createElement("button", { className: "btn btn-primary", disabled: busy, onClick: run },
+        React.createElement(Icon, { name: "play", size: 15 }), busy ? "Scanning…" : "Scan & import"),
+      React.createElement("button", { className: "btn btn-ghost", onClick: () => setOpen(false) }, "Close")
+    )
+  );
+}
+
+// "You've imported this exact file before" — shown after upload + on the job detail.
+function DuplicateWarning({ dups, onOpenNovel }) {
+  const committed = (dups || []).filter(d => d.novel_id);
+  if (!committed.length) return null;
+  const d = committed[0];
+  return React.createElement("div", { className: "card", style: { padding: "10px 14px", margin: "12px 0", display: "flex", gap: 10, alignItems: "center", borderLeft: "3px solid var(--accent)" } },
+    React.createElement(Icon, { name: "alert", size: 16, className: "muted" }),
+    React.createElement("div", { className: "grow", style: { fontSize: 13.5 } },
+      "You already imported this file",
+      d.novel_title ? React.createElement(React.Fragment, null, " into ", React.createElement("b", null, d.novel_title)) : null,
+      ". Committing again makes a separate copy."),
+    d.novel_id && React.createElement("button", { className: "btn btn-ghost", onClick: () => onOpenNovel(d.novel_id) }, "Open")
+  );
+}
+
+// Compact 0–100 import-quality badge with the contributing factors on hover.
+function QualityBadge({ quality }) {
+  if (!quality || quality.score == null) return null;
+  const s = quality.score;
+  const tone = s >= 85 ? "good" : s >= 60 ? "warn" : "bad";
+  const tip = (quality.factors || []).map(f => `${f.ok ? "✓" : "✕"} ${f.label}: ${f.detail}`).join("\n");
+  return React.createElement("span", { className: "quality-badge q-" + tone, title: tip }, `Quality ${s}`);
 }
 
 function SegmentRow({ seg, onPatch, onMerge, onSplit, canMerge }) {
@@ -95,6 +175,26 @@ function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
   const [mode, setMode] = useState("new");
   const [novelId, setNovelId] = useState("");
   const [offset, setOffset] = useState("0");
+  const [sourceId, setSourceId] = useState("");
+  const [sources, setSources] = useState([]);
+
+  // Replace mode targets one of a novel's existing sources — load them on demand.
+  useEffect(() => {
+    if (mode !== "replace" || !novelId) { setSources([]); return; }
+    let cancel = false;
+    window.API.novel(parseInt(novelId)).then(n => { if (!cancel) setSources(n.sources || []); }).catch(() => {});
+    return () => { cancel = true; };
+  }, [mode, novelId]);
+
+  const buildBody = () => {
+    if (mode === "append") return { mode: "append", novel_id: parseInt(novelId), offset: parseFloat(offset) || 0 };
+    if (mode === "replace") return { mode: "replace", source_id: parseInt(sourceId), offset: parseFloat(offset) || 0 };
+    return { mode: "new" };
+  };
+  const commitDisabled = busy
+    || segs.filter(s => s.include).length === 0
+    || (mode === "append" && !novelId)
+    || (mode === "replace" && !sourceId);
 
   const patchSeg = (i, body) => setPlan(p => {
     const next = { ...p, segments: p.segments.map((s, j) => j === i ? { ...s, ...body } : s) };
@@ -140,23 +240,32 @@ function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
     React.createElement("div", { className: "card commit-bar" },
       React.createElement("div", { className: "rs-seg" },
         React.createElement("button", { className: mode === "new" ? "active" : "", onClick: () => setMode("new") }, "New novel"),
-        React.createElement("button", { className: mode === "append" ? "active" : "", onClick: () => setMode("append") }, "Append to…")
+        React.createElement("button", { className: mode === "append" ? "active" : "", onClick: () => setMode("append") }, "Append to…"),
+        React.createElement("button", { className: mode === "replace" ? "active" : "", onClick: () => setMode("replace"), title: "Overwrite an existing source's chapters" }, "Replace…")
       ),
-      mode === "append" && React.createElement("select", {
-        className: "gl-input", value: novelId, onChange: e => setNovelId(e.target.value), style: { flex: "1 1 160px" },
+      (mode === "append" || mode === "replace") && React.createElement("select", {
+        className: "gl-input", value: novelId, onChange: e => { setNovelId(e.target.value); setSourceId(""); }, style: { flex: "1 1 160px" },
       },
         React.createElement("option", { value: "" }, "Choose a novel…"),
         novels.map(n => React.createElement("option", { key: n.id, value: n.id }, n.title))
       ),
-      mode === "append" && React.createElement("input", {
+      mode === "replace" && novelId && React.createElement("select", {
+        className: "gl-input", value: sourceId, onChange: e => setSourceId(e.target.value), style: { flex: "1 1 160px" },
+      },
+        React.createElement("option", { value: "" }, "Choose a source…"),
+        sources.map(s => React.createElement("option", { key: s.id, value: s.id }, (s.label || s.adapter) + ` (#${s.id})`))
+      ),
+      (mode === "append" || mode === "replace") && React.createElement("input", {
         className: "gl-input", style: { flex: "0 0 120px" }, value: offset,
         onChange: e => setOffset(e.target.value), placeholder: "offset", inputMode: "decimal", title: "Chapter offset",
       }),
       React.createElement("button", {
-        className: "btn btn-primary", disabled: busy || includedCount === 0 || (mode === "append" && !novelId),
-        onClick: () => onCommit(mode === "append" ? { mode: "append", novel_id: parseInt(novelId), offset: parseFloat(offset) || 0 } : { mode: "new" }),
-      }, React.createElement(Icon, { name: "check", size: 16 }), busy ? "Committing…" : "Commit")
-    )
+        className: "btn btn-primary", disabled: commitDisabled, onClick: () => onCommit(buildBody()),
+      }, React.createElement(Icon, { name: "check", size: 16 }),
+        busy ? "Committing…" : (mode === "replace" ? "Replace chapters" : "Commit"))
+    ),
+    mode === "replace" && React.createElement("p", { className: "muted", style: { fontSize: 12.5, margin: "8px 2px 0" } },
+      "Replacing deletes that source's current chapters and rebuilds its part of the codex.")
   );
 }
 
@@ -206,6 +315,8 @@ function ImportView({ openNovel, openLibrary }) {
   const [plan, setPlan] = useState(null);      // local editable copy of the plan
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [dupWarn, setDupWarn] = useState(null);     // duplicate_of from the last upload
+  const [seriesSel, setSeriesSel] = useState({});   // {jobId: true} chosen for a series commit
   const novelsRef = useRef([]);
 
   const loadJobs = useCallback(() => {
@@ -240,7 +351,25 @@ function ImportView({ openNovel, openLibrary }) {
     return () => { cancel = true; if (timer) clearTimeout(timer); };
   }, [sel, loadJobs]);
 
-  async function onUploaded(jobId) { setMsg(null); loadJobs(); setSel(jobId); }
+  async function onUploaded(jobId, duplicateOf) {
+    setMsg(null);
+    setDupWarn(duplicateOf && duplicateOf.length ? duplicateOf : null);
+    loadJobs(); setSel(jobId);
+  }
+
+  async function commitSeriesNow() {
+    const ids = Object.keys(seriesSel).filter(k => seriesSel[k]).map(Number);
+    if (ids.length < 2) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await window.API.commitSeries(ids);
+      setMsg(`Committed ${ids.length} volumes into one novel.`);
+      setSeriesSel({}); loadJobs();
+      if (r.novel_id) openNovel(r.novel_id);
+    } catch (e) { setMsg(e.message || "Series commit failed."); }
+    finally { setBusy(false); }
+  }
+  const seriesCount = Object.values(seriesSel).filter(Boolean).length;
 
   async function commit(body) {
     setBusy(true); setMsg(null);
@@ -279,12 +408,18 @@ function ImportView({ openNovel, openLibrary }) {
     ),
 
     React.createElement(UploadDrop, { onUploaded }),
+    React.createElement(FolderImport, { onQueued: loadJobs }),
+    dupWarn && React.createElement(DuplicateWarning, { dups: dupWarn, onOpenNovel: openNovel }),
     msg && React.createElement("div", { className: "card", style: { padding: "10px 16px", margin: "12px 0", fontSize: 13.5 } }, msg),
 
     React.createElement("div", { className: "import-cols" },
       // Jobs list
       React.createElement("div", { className: "import-jobs" },
         React.createElement("p", { className: "section-eyebrow" }, "Recent imports"),
+        seriesCount >= 2 && React.createElement("div", { className: "card", style: { padding: "8px 10px", marginBottom: 8, display: "flex", gap: 8, alignItems: "center" } },
+          React.createElement("span", { className: "grow", style: { fontSize: 13 } }, `${seriesCount} selected`),
+          React.createElement("button", { className: "btn btn-primary btn-sm", disabled: busy, onClick: commitSeriesNow },
+            React.createElement(Icon, { name: "layers", size: 14 }), "Commit as series")),
         jobs == null
           ? React.createElement(Loading, { label: "Loading…" })
           : jobs.length === 0
@@ -294,9 +429,17 @@ function ImportView({ openNovel, openLibrary }) {
                   key: j.id, className: "import-job-row" + (sel === j.id ? " active" : ""),
                   onClick: () => setSel(j.id),
                 },
+                  j.status === "awaiting_review" && React.createElement("input", {
+                    type: "checkbox", title: "Select for a series commit",
+                    checked: !!seriesSel[j.id],
+                    onClick: e => e.stopPropagation(),
+                    onChange: e => setSeriesSel(prev => ({ ...prev, [j.id]: e.target.checked })),
+                  }),
                   React.createElement("div", { className: "grow" },
                     React.createElement("div", { style: { fontWeight: 600, fontSize: 13.5 } }, (j.detected_meta && j.detected_meta.title) || j.filename || `Job ${j.id}`),
-                    React.createElement("div", { className: "muted", style: { fontSize: 12 } }, IMPORT_STATUS_LABEL[j.status] || j.status)
+                    React.createElement("div", { className: "muted", style: { fontSize: 12 } },
+                      (IMPORT_STATUS_LABEL[j.status] || j.status)
+                      + ((j.detected_meta && j.detected_meta.series) ? " · " + j.detected_meta.series : ""))
                   ),
                   React.createElement("button", { className: "icon-btn", title: "Delete", onClick: e => { e.stopPropagation(); removeJob(j.id); } },
                     React.createElement(Icon, { name: "x", size: 14 }))
@@ -316,8 +459,11 @@ function ImportView({ openNovel, openLibrary }) {
                   meta.author && React.createElement("div", { className: "muted", style: { fontSize: 13 } }, meta.author),
                   React.createElement("div", { className: "muted", style: { fontSize: 12.5, marginTop: 4 } },
                     `${IMPORT_STATUS_LABEL[job.status] || job.status}${job.stage ? " · " + job.stage : ""}`),
-                  job.stats && job.stats.images != null && React.createElement("div", { className: "muted", style: { fontSize: 12.5 } },
-                    `${job.stats.segments || 0} segments · ${job.stats.images || 0} images`)
+                  React.createElement("div", { className: "row", style: { gap: 8, marginTop: 6, alignItems: "center", flexWrap: "wrap" } },
+                    job.stats && job.stats.images != null && React.createElement("span", { className: "muted", style: { fontSize: 12.5 } },
+                      `${job.stats.segments || 0} segments · ${job.stats.images || 0} images`),
+                    job.stats && React.createElement(QualityBadge, { quality: job.stats.quality })
+                  )
                 )
               ),
               job.error && React.createElement("div", { className: "card", style: { padding: "10px 14px", color: "var(--danger, #c0392b)", fontSize: 13 } }, job.error),

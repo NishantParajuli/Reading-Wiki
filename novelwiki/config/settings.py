@@ -79,7 +79,9 @@ class Settings(BaseSettings):
     IMPORT_DIR: str = "./data/imports"
     IMPORT_INCOMING_DIR: str = "./data/imports/incoming"   # host watched-folder drop (big files)
     ASSET_DIR: str = "./data/assets"
-    MAX_UPLOAD_MB: int = 50                                 # multipart cap; watched folder bypasses it
+    MAX_UPLOAD_MB: int = 50                                 # single-shot multipart cap
+    UPLOAD_CHUNK_MAX_MB: int = 16                           # max size of one resumable-upload chunk
+    UPLOAD_CHUNKED_THRESHOLD_MB: int = 40                   # client switches to chunked upload above this
     IMPORT_AUTO_BUILD_CODEX: bool = False                   # build codex over the imported range on commit
 
     # Text segmentation/cleanup LLM (routed through OpenRouter alongside the codex models).

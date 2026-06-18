@@ -41,6 +41,7 @@ const PATHS = {
   pause: "M8 4h3v16H8zM15 4h3v16h-3z",
   database: "M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6",
   edit: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z",
+  alert: "M10.3 4.3 2.5 18a1.5 1.5 0 0 0 1.3 2.2h16.4a1.5 1.5 0 0 0 1.3-2.2L13.7 4.3a1.5 1.5 0 0 0-2.6 0zM12 9v4M12 17h.01",
 };
 function Icon({ name, size = 18, sw = 1.7, className = "", style }) {
   const d = PATHS[name] || "";
