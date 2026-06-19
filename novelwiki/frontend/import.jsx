@@ -177,6 +177,10 @@ function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
   const [offset, setOffset] = useState("0");
   const [sourceId, setSourceId] = useState("");
   const [sources, setSources] = useState([]);
+  // Raws (foreign-language text) get translated on read; the parser pre-checks this for a
+  // non-English book, but the user has the final say here before committing.
+  const detectedLang = (job.detected_meta && job.detected_meta.language) || "";
+  const [isRaw, setIsRaw] = useState(!!(job.options && job.options.is_raw));
 
   // Replace mode targets one of a novel's existing sources — load them on demand.
   useEffect(() => {
@@ -187,9 +191,9 @@ function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
   }, [mode, novelId]);
 
   const buildBody = () => {
-    if (mode === "append") return { mode: "append", novel_id: parseInt(novelId), offset: parseFloat(offset) || 0 };
-    if (mode === "replace") return { mode: "replace", source_id: parseInt(sourceId), offset: parseFloat(offset) || 0 };
-    return { mode: "new" };
+    if (mode === "append") return { mode: "append", novel_id: parseInt(novelId), offset: parseFloat(offset) || 0, is_raw: isRaw };
+    if (mode === "replace") return { mode: "replace", source_id: parseInt(sourceId), offset: parseFloat(offset) || 0, is_raw: isRaw };
+    return { mode: "new", is_raw: isRaw };
   };
   const commitDisabled = busy
     || segs.filter(s => s.include).length === 0
@@ -236,6 +240,11 @@ function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
         onPatch: body => patchSeg(i, body),
         onMerge: () => mergePrev(i), onSplit: () => splitHalf(i),
       }))
+    ),
+    React.createElement("label", { className: "check", style: { margin: "10px 2px 0" } },
+      React.createElement("input", { type: "checkbox", checked: isRaw, onChange: e => setIsRaw(e.target.checked) }),
+      "These are raws — translate on read",
+      detectedLang && React.createElement("span", { className: "muted", style: { fontSize: 12 } }, `(detected: ${detectedLang})`)
     ),
     React.createElement("div", { className: "card commit-bar" },
       React.createElement("div", { className: "rs-seg" },

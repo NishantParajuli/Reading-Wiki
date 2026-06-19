@@ -35,6 +35,13 @@ _CJK = ("zh", "ja", "ko")
 
 _JSON_FIELDS = {"detected_meta", "plan", "stats", "cost_estimate", "progress", "options"}
 
+
+def _looks_raw(language: str | None) -> bool:
+    """A book whose own text isn't English is a raw the reader should translate on demand.
+    Used to pre-set ``options.is_raw`` after parsing; the review UI can still override it."""
+    lang = (language or "").strip().lower()
+    return bool(lang) and not lang.startswith("en")
+
 _worker_task: asyncio.Task | None = None
 _stop = asyncio.Event()
 # One GPU behind the OCR sidecar → never run two OCR jobs at once (the worker is already
@@ -165,8 +172,18 @@ async def _finish_parse(job_id: int, document) -> None:
     }
     if document.meta.get("ocr_stats"):
         stats["ocr"] = document.meta["ocr_stats"]
+
+    # Auto-flag a non-English book as a raw so it lands in the on-demand translation pipeline.
+    # The OCR path may already have set this for a CJK scan; if so, keep it. The review UI
+    # surfaces this as a pre-checked toggle the user can still flip before committing.
+    job = await get_job(job_id)
+    options = (job or {}).get("options") or {}
+    if "is_raw" not in options and _looks_raw(document.meta.get("language")):
+        options = {**options, "is_raw": True}
+
     await update_job(
         job_id,
+        options=options,
         detected_meta=_public_meta(document.meta, job_id),
         plan=plan,
         stats=stats,

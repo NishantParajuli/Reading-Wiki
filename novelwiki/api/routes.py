@@ -843,6 +843,7 @@ class ImportCommit(BaseModel):
     novel_id: int | None = None      # required when mode == append
     source_id: int | None = None     # required when mode == replace
     offset: float = 0                # append/replace: global = segment number + offset
+    is_raw: bool | None = None        # override the raw/translate flag (None = keep detected)
 
 class OcrConfirm(BaseModel):
     gemini_first: bool = False       # skip the sidecar, OCR every page with Gemini directly
@@ -1155,6 +1156,11 @@ async def api_import_commit(job_id: int, payload: ImportCommit):
         target = "new"
 
     options = {**(job.get("options") or {}), "target": target}
+    # Raw source → the importer stores the source-language text and the reader translates it
+    # on demand. Honour an explicit choice from the review UI; otherwise keep whatever the
+    # parser auto-detected (non-English book / CJK scan).
+    if payload.is_raw is not None:
+        options["is_raw"] = payload.is_raw
     await import_jobs.update_job(job_id, options=options, status="committing", error=None)
     return {"status": "committing"}
 
