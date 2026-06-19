@@ -501,12 +501,170 @@ class SixtyNineShubaAdapter(_PagedHtmlAdapter):
         return ""
 
 
+class WeTriedTLSAdapter(BaseAdapter):
+    """Concrete adapter for wetriedtls.com which parses Next.js RSC next_f payload."""
+    name = "wetriedtls"
+    label = "WeTried TLS (wetriedtls.com)"
+    requires = ["start_url"]
+    default_language = "en"
+
+    def _decode_js_string(self, s: str) -> str:
+        import json
+        import codecs
+        try:
+            return json.loads(f'"{s}"')
+        except Exception:
+            try:
+                return codecs.escape_decode(bytes(s, "utf-8"))[0].decode("utf-8")
+            except Exception:
+                return s
+
+    async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
+        current_url = ctx.start_url
+        count = 0
+        while current_url:
+            if ctx.max_chapters is not None and count >= ctx.max_chapters:
+                return
+
+            html = await ctx.fetch_text(current_url)
+            if html is None:
+                return
+
+            parser = HTMLParser(html)
+            buffer_parts = []
+            for node in parser.css("script"):
+                js_text = node.text()
+                if "self.__next_f.push" in js_text:
+                    start = 0
+                    while True:
+                        idx = js_text.find("self.__next_f.push(", start)
+                        if idx == -1:
+                            break
+                        pos = idx + len("self.__next_f.push(")
+                        while pos < len(js_text) and js_text[pos] not in ('[', '('):
+                            pos += 1
+                        if pos >= len(js_text):
+                            break
+                        pos += 1  # skip '['
+                        while pos < len(js_text) and js_text[pos].isdigit():
+                            pos += 1
+                        while pos < len(js_text) and js_text[pos] in (',', ' ', '\t', '\n', '\r'):
+                            pos += 1
+                        if pos >= len(js_text) or js_text[pos] != '"':
+                            start = pos
+                            continue
+                        pos += 1  # skip '"'
+                        string_chars = []
+                        while pos < len(js_text):
+                            c = js_text[pos]
+                            if c == '"':
+                                bs_count = 0
+                                temp = pos - 1
+                                while temp >= 0 and js_text[temp] == '\\':
+                                    bs_count += 1
+                                    temp -= 1
+                                if bs_count % 2 == 0:
+                                    break
+                                else:
+                                    string_chars.append(c)
+                            else:
+                                string_chars.append(c)
+                            pos += 1
+                        raw_str = "".join(string_chars)
+                        decoded = self._decode_js_string(raw_str)
+                        buffer_parts.append(decoded)
+                        start = pos + 1
+
+            full_buffer = "".join(buffer_parts)
+
+            # Extract title
+            title_match = re.search(r'"chapter_title"\s*:\s*"([^"]+)"', full_buffer)
+            chapter_name_match = re.search(r'"chapter_name"\s*:\s*"([^"]+)"', full_buffer)
+            title = "Untitled Chapter"
+            if chapter_name_match and title_match:
+                title = f"{chapter_name_match.group(1)} - {title_match.group(1)}"
+            elif title_match:
+                title = title_match.group(1)
+
+            number = parse_chapter_number(current_url, title)
+
+            # Check if locked/premium
+            price_match = re.search(r'"price"\s*:\s*(\d+)', full_buffer)
+            public_match = re.search(r'"public"\s*:\s*(true|false)', full_buffer)
+
+            is_premium = False
+            if price_match and int(price_match.group(1)) > 0:
+                is_premium = True
+            if public_match and public_match.group(1) == "false":
+                is_premium = True
+
+            if is_premium:
+                if ctx.stop_on_premium:
+                    logger.info(f"Premium/locked chapter reached at {current_url}. Stopping.")
+                    raise PremiumReached(number=number, title=title)
+
+            # Extract content reference
+            content_ref_match = re.search(r'"chapter_content"\s*:\s*"\$([^"]+)"', full_buffer)
+            if not content_ref_match:
+                logger.warning(f"Could not find chapter_content reference at {current_url}")
+                return
+
+            ref_id = content_ref_match.group(1)
+            decl_pattern = re.compile(re.escape(ref_id) + r':T([0-9a-fA-Z]+),')
+            decl_match = decl_pattern.search(full_buffer)
+            if not decl_match:
+                logger.warning(f"Could not find declaration for reference {ref_id} at {current_url}")
+                return
+
+            length_hex = decl_match.group(1)
+            length = int(length_hex, 16)
+            content_start = decl_match.end()
+            content_end = content_start + length
+            raw_content = full_buffer[content_start:content_end]
+
+            decoded_content = self._decode_js_string(raw_content)
+
+            # Parse HTML to paragraphs
+            content_parser = HTMLParser(decoded_content)
+            paragraphs = []
+            p_nodes = content_parser.css("p")
+            for p in p_nodes:
+                text = p.text(strip=True)
+                if text:
+                    paragraphs.append(text)
+            if not paragraphs:
+                paragraphs = [line.strip() for line in content_parser.text(separator="\n", strip=True).split("\n") if line.strip()]
+
+            content = "\n\n".join(paragraphs)
+
+            yield ChapterData(number=number, title=title, content=content, url=current_url, raw_html=html)
+            count += 1
+
+            # Extract next url slug
+            next_slug_match = re.search(r'"next_chapter"\s*:\s*\{[^}]+?"chapter_slug"\s*:\s*"([^"]+)"', full_buffer)
+            if not next_slug_match:
+                logger.info("No next chapter slug found in API response. Crawl complete.")
+                return
+
+            next_slug = next_slug_match.group(1)
+
+            # Construct next URL
+            base_url = current_url.rstrip("/")
+            parts = base_url.split("/")
+            if len(parts) > 1:
+                current_url = "/".join(parts[:-1]) + "/" + next_slug
+            else:
+                logger.error(f"Cannot construct next URL from current URL: {current_url} and slug: {next_slug}")
+                return
+
+
 # ── Adapter registry ──────────────────────────────────────────────────────
 ADAPTERS: dict[str, type[BaseAdapter]] = {
     "fenrirealm": FenriRealmAdapter,
     "readhive": ReadhiveAdapter,
     "boti-translations": BotiTranslationAdapter,
     "69shuba": SixtyNineShubaAdapter,
+    "wetriedtls": WeTriedTLSAdapter,
 }
 
 
