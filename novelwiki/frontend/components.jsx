@@ -42,6 +42,7 @@ const PATHS = {
   database: "M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6",
   edit: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z",
   alert: "M10.3 4.3 2.5 18a1.5 1.5 0 0 0 1.3 2.2h16.4a1.5 1.5 0 0 0 1.3-2.2L13.7 4.3a1.5 1.5 0 0 0-2.6 0zM12 9v4M12 17h.01",
+  trash: "M4 7h16M10 11v6M14 11v6M5 7l1 13a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-13M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3",
 };
 function Icon({ name, size = 18, sw = 1.7, className = "", style }) {
   const d = PATHS[name] || "";
@@ -305,9 +306,52 @@ function AnswerBody({ answer, citeMap }) {
   return React.createElement("div", { className: "answer-body", "data-cites": state.n }, nodes);
 }
 
+// Destructive-action guard. A modal scrim + two deliberate clicks so a stray tap can't
+// wipe anything: clicking the backdrop or Cancel (or Escape) dismisses; only the explicit
+// confirm button fires `onConfirm`. `requireText` adds a type-to-confirm step for the
+// scariest actions (e.g. deleting a novel — the user types the title to arm the button).
+function ConfirmDialog({ title, body, confirmLabel = "Delete", cancelLabel = "Cancel",
+                         requireText = null, busy = false, onConfirm, onCancel }) {
+  const [typed, setTyped] = useState("");
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !busy) onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
+
+  const armed = !requireText || typed.trim() === String(requireText).trim();
+  return React.createElement("div", {
+    className: "modal-scrim",
+    onClick: (e) => { if (e.target === e.currentTarget && !busy) onCancel(); },
+  },
+    React.createElement("div", { className: "card modal-card", role: "dialog", "aria-modal": "true" },
+      React.createElement("div", { className: "row", style: { gap: 10, alignItems: "flex-start", marginBottom: 10 } },
+        React.createElement("span", { className: "modal-danger-icon" }, React.createElement(Icon, { name: "alert", size: 20 })),
+        React.createElement("h3", { className: "serif", style: { margin: 0, fontSize: 19 } }, title)
+      ),
+      typeof body === "string"
+        ? React.createElement("p", { className: "muted", style: { fontSize: 13.8, lineHeight: 1.55, margin: "0 0 4px" } }, body)
+        : body,
+      requireText && React.createElement("label", { className: "field", style: { marginTop: 12 } },
+        React.createElement("span", null, "Type ", React.createElement("b", null, requireText), " to confirm"),
+        React.createElement("input", {
+          value: typed, onChange: e => setTyped(e.target.value), autoFocus: true,
+          placeholder: requireText, spellCheck: false,
+        })
+      ),
+      React.createElement("div", { className: "row", style: { gap: 10, marginTop: 18, justifyContent: "flex-end" } },
+        React.createElement("button", { className: "btn btn-ghost", onClick: onCancel, disabled: busy }, cancelLabel),
+        React.createElement("button", {
+          className: "btn btn-danger", onClick: onConfirm, disabled: busy || !armed,
+        }, busy ? "Deleting…" : confirmLabel)
+      )
+    )
+  );
+}
+
 Object.assign(window, {
   Icon, Avatar, TypeBadge, Reveal, CiteProvider, CiteContext, Cite,
-  Loading, SkeletonGrid, EmptyState, useDebounce,
+  Loading, SkeletonGrid, EmptyState, useDebounce, ConfirmDialog,
   Markdown, AnswerBody, renderMarkdown,
   TYPE_ICON, TYPE_LABEL,
   SHELF_LABELS, SHELF_ORDER, STATUS_TAG_LABELS, STATUS_TAG_ORDER, TRANSLATION_TYPE_LABELS,

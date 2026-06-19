@@ -332,6 +332,22 @@ input[type="range"].slider::-moz-range-thumb {
 .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; transform: none; filter: none; }
 .btn-ghost { background: var(--surface); color: var(--ink); border-color: var(--border); }
 .btn-ghost:hover { border-color: var(--border-2); transform: translateY(-1px); }
+.btn-danger { background: var(--danger, #c0392b); color: #fff; box-shadow: var(--shadow-1); }
+.btn-danger:hover { filter: brightness(1.05); transform: translateY(-1px); box-shadow: var(--shadow-2); }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; transform: none; filter: none; }
+.btn-ghost.is-danger { color: var(--danger, #c0392b); }
+.btn-ghost.is-danger:hover { border-color: var(--danger, #c0392b); }
+
+/* Destructive-action confirm modal (ConfirmDialog) */
+.modal-scrim {
+  position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px;
+  background: oklch(0.2 0.02 60 / 0.45); backdrop-filter: blur(3px);
+}
+.modal-card { width: min(440px, 100%); padding: 22px; box-shadow: var(--shadow-pop); }
+.modal-danger-icon {
+  flex-shrink: 0; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+  background: color-mix(in oklch, var(--danger, #c0392b) 16%, transparent); color: var(--danger, #c0392b);
+}
 
 .grid { display: grid; gap: 16px; }
 .grid-entities { grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); }

@@ -142,7 +142,7 @@ function EditSourceForm({ novelId, source, onSaved, onCancel }) {
   );
 }
 
-function NovelEditForm({ novel, onSaved, onCancel }) {
+function NovelEditForm({ novel, onSaved, onCancel, onRequestDelete }) {
   const [title, setTitle] = useState(novel.title || "");
   const [author, setAuthor] = useState(novel.author || "");
   const [description, setDescription] = useState(novel.description || "");
@@ -177,9 +177,14 @@ function NovelEditForm({ novel, onSaved, onCancel }) {
     React.createElement("label", { className: "field" },
       React.createElement("span", null, "Description"),
       React.createElement("textarea", { value: description, onChange: e => setDescription(e.target.value), rows: 3 })),
-    React.createElement("div", { className: "row", style: { gap: 10 } },
+    React.createElement("div", { className: "row", style: { gap: 10, alignItems: "center" } },
       React.createElement("button", { className: "btn btn-primary", type: "submit", disabled: busy }, busy ? "Saving…" : "Save"),
-      React.createElement("button", { className: "btn btn-ghost", type: "button", onClick: onCancel }, "Cancel"))
+      React.createElement("button", { className: "btn btn-ghost", type: "button", onClick: onCancel }, "Cancel"),
+      React.createElement("div", { className: "grow" }),
+      React.createElement("button", {
+        className: "btn btn-ghost is-danger", type: "button", onClick: onRequestDelete,
+        title: "Permanently delete this novel",
+      }, React.createElement(Icon, { name: "trash", size: 16 }), "Delete novel"))
   );
 }
 
@@ -269,7 +274,7 @@ function ShelfTagsControls({ novel, reloadNovel }) {
   );
 }
 
-function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
+function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary }) {
   const [toc, setToc] = useState(null);    // null = loading
   const [adapters, setAdapters] = useState([]);
   const [addingSource, setAddingSource] = useState(false);
@@ -279,6 +284,8 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
   const [glossary, setGlossary] = useState([]);
   const [maxCh, setMaxCh] = useState("");
   const [msg, setMsg] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const loadToc = useCallback(() => {
     if (novelId == null) return;
@@ -329,10 +336,23 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
     catch (e) { setMsg("Seed failed: " + (e.message || "error")); }
   }
 
+  async function doDelete() {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await window.API.deleteNovel(novelId);
+      setConfirmDelete(false);
+      openLibrary();   // novel is gone — leave the detail view
+    } catch (e) {
+      setMsg("Delete failed: " + (e.message || "error"));
+      setDeleting(false);
+    }
+  }
+
   return React.createElement("div", { className: "page" },
     // header
     editing
-      ? React.createElement(NovelEditForm, { novel, onSaved: () => { setEditing(false); reloadNovel(); }, onCancel: () => setEditing(false) })
+      ? React.createElement(NovelEditForm, { novel, onSaved: () => { setEditing(false); reloadNovel(); }, onCancel: () => setEditing(false), onRequestDelete: () => setConfirmDelete(true) })
       : React.createElement("div", { className: "novel-hero" },
         React.createElement("div", { className: "novel-hero-cover" },
           novel.cover_url ? React.createElement("img", { src: novel.cover_url, alt: "" })
@@ -454,7 +474,24 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav }) {
       ? React.createElement(Loading, { label: "Loading chapters…" })
       : toc.length === 0
         ? React.createElement(EmptyState, { icon: "book", title: "No chapters yet", body: "Use Scrape above to fetch chapters from the source." })
-        : React.createElement("div", { className: "card toc" }, buildToc(toc, progress, openReader))
+        : React.createElement("div", { className: "card toc" }, buildToc(toc, progress, openReader)),
+
+    confirmDelete && React.createElement(ConfirmDialog, {
+      title: `Delete “${novel.title}”?`,
+      requireText: novel.title,
+      confirmLabel: "Delete permanently",
+      busy: deleting,
+      onCancel: () => setConfirmDelete(false),
+      onConfirm: doDelete,
+      body: React.createElement("div", null,
+        React.createElement("p", { className: "muted", style: { fontSize: 13.8, lineHeight: 1.55, margin: "0 0 8px" } },
+          "This permanently removes the novel and everything tied to it — there's no undo."),
+        React.createElement("ul", { className: "muted", style: { fontSize: 13.2, lineHeight: 1.6, margin: 0, paddingLeft: 18 } },
+          React.createElement("li", null, `${novel.chapter_count || 0} chapters (text + translations)`),
+          React.createElement("li", null, "the codex, bookmarks, glossary and reading progress"),
+          React.createElement("li", null, "imported files, covers and illustrations on disk"))
+      ),
+    })
   );
 }
 

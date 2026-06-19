@@ -154,7 +154,7 @@ function App() {
   } else if (!inNovel || route.view === "library") {
     screen = React.createElement(Library, { openNovel, openImport });
   } else if (route.view === "novel") {
-    screen = React.createElement(NovelDetail, { novelId, novel, reloadNovel, openReader, nav });
+    screen = React.createElement(NovelDetail, { novelId, novel, reloadNovel, openReader, nav, openLibrary });
   } else if (route.view === "reader") {
     screen = React.createElement(Reader, { novelId, number: route.params.number, openReader, backToNovel: () => setView("novel"), onRead });
   } else if (route.view === "browse") {
