@@ -49,7 +49,8 @@ async def call_chat_completion(
     model: str, 
     messages: list[dict], 
     temperature: float = 0.0, 
-    response_format: dict = None
+    response_format: dict = None,
+    reasoning: str = "high"
 ) -> str:
     """Invokes OpenRouter Chat Completions API with exponential backoff retries."""
     client = get_openai_client()
@@ -60,6 +61,7 @@ async def call_chat_completion(
                 "model": model,
                 "messages": messages,
                 "temperature": temperature,
+                "reasoning_effort": reasoning,
             }
             if response_format:
                 kwargs["response_format"] = response_format
