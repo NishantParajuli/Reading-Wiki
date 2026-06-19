@@ -16,6 +16,9 @@ from novelwiki.agent.orchestrator import answer_question
 from novelwiki.api.routes import api_get_entity_profile
 
 # ── Clean up Database after each test ──
+# SAFETY: the unscoped DELETEs below wipe whole tables. They are safe ONLY because
+# conftest.py routes the eval suite onto a disposable *_test database (and hard-fails
+# the session otherwise). Never point this at the production DB.
 @pytest_asyncio.fixture(autouse=True)
 async def clean_database():
     await close_db_pool()
