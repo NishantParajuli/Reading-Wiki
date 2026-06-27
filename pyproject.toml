@@ -32,6 +32,10 @@ dependencies = [
     "ftfy>=6.2.0",
     "charset-normalizer>=3.3.2",
     "python-multipart>=0.0.9",   # FastAPI multipart upload support
+    # Multi-user support: auth, sessions, transactional email. OAuth2 flows are
+    # hand-rolled on httpx (already a dependency) — no extra OAuth client needed.
+    "argon2-cffi>=23.1.0",       # password hashing
+    "aiosmtplib>=3.0.1",         # async SMTP for verification/reset mail
 ]
 
 [tool.pytest.ini_options]

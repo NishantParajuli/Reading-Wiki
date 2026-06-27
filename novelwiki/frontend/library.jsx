@@ -1,6 +1,9 @@
 /* ============================================================
    Library — the landing surface: a grid of novels + Add Novel.
+   Plus Discover (the shared Global/Public library) for multi-user.
    ============================================================ */
+const VIS_LABELS = { global: "Global", public: "Public", private: "Private" };
+
 function NovelCard({ n, openNovel, onChanged }) {
   const max = n.max_chapter || 0;
   const read = n.max_chapter_read || 0;
@@ -28,7 +31,8 @@ function NovelCard({ n, openNovel, onChanged }) {
     React.createElement("div", { className: "novel-card-body" },
       React.createElement("div", { className: "novel-card-title" }, n.title),
       n.author && React.createElement("div", { className: "muted", style: { fontSize: 13 } }, n.author),
-      (tt || tags.length > 0) && React.createElement("div", { className: "card-tags" },
+      (tt || tags.length > 0 || (n.visibility && n.visibility !== "private")) && React.createElement("div", { className: "card-tags" },
+        n.visibility && n.visibility !== "private" && React.createElement("span", { className: "chip vis-chip", title: "Shared library" }, VIS_LABELS[n.visibility]),
         tt && React.createElement("span", { className: "chip tt-chip", title: "Auto-detected from sources" }, tt),
         tags.map(t => React.createElement("span", { key: t, className: "chip tag-chip" }, window.STATUS_TAG_LABELS[t] || t))
       ),
@@ -130,7 +134,7 @@ const LIBRARY_TABS = [
   { id: "completed", label: "Completed" },
 ];
 
-function Library({ openNovel, openImport }) {
+function Library({ openNovel, openImport, openDiscover }) {
   const [novels, setNovels] = useState(null);  // null = loading
   const [adapters, setAdapters] = useState([]);
   const [adding, setAdding] = useState(false);
@@ -158,6 +162,8 @@ function Library({ openNovel, openImport }) {
         React.createElement("p", { className: "muted", style: { margin: "4px 0 0" } }, "Everything you're reading, in one place.")
       ),
       !adding && React.createElement("div", { className: "row", style: { gap: 8 } },
+        openDiscover && React.createElement("button", { className: "btn btn-ghost", onClick: openDiscover },
+          React.createElement(Icon, { name: "compass", size: 16 }), "Discover"),
         openImport && React.createElement("button", { className: "btn btn-ghost", onClick: openImport },
           React.createElement(Icon, { name: "book", size: 16 }), "Import EPUB"),
         React.createElement("button", { className: "btn btn-primary", onClick: () => setAdding(true) },
@@ -188,4 +194,83 @@ function Library({ openNovel, openImport }) {
   );
 }
 
-Object.assign(window, { Library, NovelCard });
+/* ── Discover: the shared Global + Public library you can add to your own ── */
+function DiscoverCard({ n, openNovel, onAdded }) {
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
+  async function add(e) {
+    e.stopPropagation();
+    setAdding(true);
+    try { await window.API.addToLibrary(n.id); setAdded(true); onAdded && onAdded(n.id); }
+    catch (err) { setAdding(false); }
+  }
+  return React.createElement("div", {
+    className: "novel-card", role: "button", tabIndex: 0,
+    onClick: () => openNovel(n.id),
+    onKeyDown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openNovel(n.id); } },
+  },
+    React.createElement("div", { className: "novel-cover" },
+      n.cover_url
+        ? React.createElement("img", { src: n.cover_url, alt: "", loading: "lazy" })
+        : React.createElement("div", { className: "novel-cover-ph" }, React.createElement(Icon, { name: "book", size: 30 }))
+    ),
+    React.createElement("div", { className: "novel-card-body" },
+      React.createElement("div", { className: "novel-card-title" }, n.title),
+      n.author && React.createElement("div", { className: "muted", style: { fontSize: 13 } }, n.author),
+      React.createElement("div", { className: "card-tags" },
+        React.createElement("span", { className: "chip vis-chip" }, VIS_LABELS[n.visibility]),
+        n.owner_username && n.visibility === "public" &&
+          React.createElement("span", { className: "chip", title: "Uploaded by" }, "@" + n.owner_username)
+      ),
+      React.createElement("div", { className: "novel-card-foot" },
+        React.createElement("span", { className: "chip mono" }, `${n.chapter_count} ch.`),
+        React.createElement("button", {
+          className: "btn btn-primary", style: { marginLeft: "auto", padding: "5px 10px" },
+          disabled: adding || added, onClick: add,
+        }, added ? "Added ✓" : adding ? "…" : "Add to library")
+      )
+    )
+  );
+}
+
+function Discover({ openNovel, openLibrary }) {
+  const [items, setItems] = useState(null);
+  const [q, setQ] = useState("");
+  const load = useCallback((query) => {
+    setItems(null);
+    window.API.discover(query || "").then(setItems).catch(() => setItems([]));
+  }, []);
+  useEffect(() => { load(""); }, [load]);
+
+  return React.createElement("div", { className: "page" },
+    React.createElement("div", { className: "lib-head" },
+      React.createElement("div", null,
+        React.createElement("h1", { className: "lib-title" }, "Discover"),
+        React.createElement("p", { className: "muted", style: { margin: "4px 0 0" } }, "The shared library — add anything to start reading with your own progress.")
+      ),
+      React.createElement("div", { className: "row", style: { gap: 8 } },
+        openLibrary && React.createElement("button", { className: "btn btn-ghost", onClick: openLibrary },
+          React.createElement(Icon, { name: "arrowLeft", size: 16 }), "My library")
+      )
+    ),
+    React.createElement("form", { className: "row", style: { gap: 8, marginBottom: 14 }, onSubmit: e => { e.preventDefault(); load(q); } },
+      React.createElement("input", {
+        className: "auth-input", style: { maxWidth: 340 }, value: q, placeholder: "Search shared titles…",
+        onChange: e => setQ(e.target.value),
+      }),
+      React.createElement("button", { className: "btn btn-ghost", type: "submit" }, "Search")
+    ),
+    items == null
+      ? React.createElement(Loading, { label: "Loading the shared library…" })
+      : items.length === 0
+        ? React.createElement(EmptyState, { icon: "compass", title: "Nothing to discover yet", body: "Global novels and other readers' public uploads show up here." })
+        : React.createElement("div", { className: "lib-grid" },
+            items.map(n => React.createElement(DiscoverCard, {
+              key: n.id, n, openNovel,
+              onAdded: (id) => setItems(prev => prev.filter(x => x.id !== id)),
+            }))
+          )
+  );
+}
+
+Object.assign(window, { Library, NovelCard, Discover });

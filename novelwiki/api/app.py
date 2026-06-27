@@ -23,6 +23,14 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database connection pool...")
     await init_db_pool()
 
+    # Multi-user: bootstrap the admin + reassign any pre-existing single-user data to the
+    # shared Global library. Idempotent — a no-op once the DB is already multi-user.
+    try:
+        from novelwiki.db.migrate_multiuser import maybe_migrate
+        await maybe_migrate()
+    except Exception as e:
+        logger.warning(f"Multi-user migration at startup failed (continuing): {e}")
+
     # BM25 indexes are per-novel and lazy: each novel's index is built/loaded on its
     # first codex query, so there's nothing to preload here.
 
@@ -54,17 +62,26 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Enable CORS for local development and premium UI interactions
+# CORS: cookie-based auth requires explicit origins (browsers reject `*` with
+# credentials). The SPA is served same-origin in prod; ALLOWED_ORIGINS covers the
+# tunnel domain + local dev. Comma-separated in the env var.
+_origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Bind API endpoints
-app.include_router(router, prefix="/api")
+# Bind API endpoints. The auth router is public (login/register); everything else under
+# /api requires a logged-in user via a router-level dependency. Handlers that need the
+# user object additionally declare `Depends(current_user)` — FastAPI caches it per request.
+from fastapi import Depends
+from novelwiki.auth.router import router as auth_router
+from novelwiki.auth.deps import current_user
+app.include_router(auth_router, prefix="/api/auth")
+app.include_router(router, prefix="/api", dependencies=[Depends(current_user)])
 
 @app.get("/health")
 async def health_check():

@@ -274,7 +274,28 @@ function ShelfTagsControls({ novel, reloadNovel }) {
   );
 }
 
-function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary }) {
+/* Per-novel visibility control (owner/admin). Only admins get the Global option; a Global
+   novel is admin-owned, so non-admin owners never see this for one. */
+function VisibilityControl({ novel, reloadNovel, isAdmin }) {
+  const [busy, setBusy] = useState(false);
+  const opts = isAdmin ? ["private", "public", "global"]
+    : (novel.visibility === "global" ? ["global"] : ["private", "public"]);
+  async function change(e) {
+    const v = e.target.value;
+    setBusy(true);
+    try { await window.API.setVisibility(novel.id, v); reloadNovel && reloadNovel(); }
+    catch (err) { alert(err.message || "Could not change visibility."); }
+    finally { setBusy(false); }
+  }
+  const LABELS = { private: "Private", public: "Public", global: "Global" };
+  return React.createElement("label", { className: "row", style: { gap: 6, alignItems: "center" }, title: "Who can see this novel" },
+    React.createElement(Icon, { name: "compass", size: 15 }),
+    React.createElement("select", { className: "shelf-select", value: novel.visibility || "private", disabled: busy, onChange: change },
+      opts.map(v => React.createElement("option", { key: v, value: v }, LABELS[v])))
+  );
+}
+
+function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary, user }) {
   const [toc, setToc] = useState(null);    // null = loading
   const [adapters, setAdapters] = useState([]);
   const [addingSource, setAddingSource] = useState(false);
@@ -309,6 +330,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
   const startAt = progress.last_chapter != null ? progress.last_chapter : (novel.min_chapter || 1);
   const hasChapters = (novel.chapter_count || 0) > 0;
   const hasRaw = (novel.sources || []).some(s => s.is_raw);
+  const canEdit = !!novel.can_edit;
 
   async function doScrape() {
     setMsg("Scraping started in the background…");
@@ -361,7 +383,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
         React.createElement("div", { className: "novel-hero-body" },
           React.createElement("div", { className: "row", style: { gap: 10, alignItems: "flex-start" } },
             React.createElement("h1", { className: "serif", style: { margin: "0 0 6px", flex: 1 } }, novel.title),
-            React.createElement("button", { className: "icon-btn", onClick: () => setEditing(true), title: "Edit novel" },
+            canEdit && React.createElement("button", { className: "icon-btn", onClick: () => setEditing(true), title: "Edit novel" },
               React.createElement(Icon, { name: "edit", size: 17 }))
           ),
           novel.author && React.createElement("div", { className: "muted" }, novel.author),
@@ -373,7 +395,10 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
             React.createElement("span", { className: "chip mono" }, `${novel.chapter_count} chapters`),
             novel.max_chapter != null && React.createElement("span", { className: "chip mono" }, `ch. ${novel.min_chapter}–${novel.max_chapter}`),
             novel.codex_enabled && React.createElement("button", { className: "btn btn-ghost", onClick: () => nav("browse") },
-              React.createElement(Icon, { name: "compass", size: 16 }), "Open codex")
+              React.createElement(Icon, { name: "compass", size: 16 }), "Open codex"),
+            canEdit && React.createElement(VisibilityControl, {
+              novel, reloadNovel, isAdmin: !!(user && user.role === "admin"),
+            })
           ),
           React.createElement(ShelfTagsControls, { novel, reloadNovel })
         )
@@ -393,10 +418,10 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
                 React.createElement("div", { className: "muted", style: { fontSize: 12.5, wordBreak: "break-all" } }, s.start_url)
               ),
               s.chapter_offset ? React.createElement("span", { className: "chip mono" }, `${s.chapter_offset > 0 ? "+" : ""}${s.chapter_offset}`) : null,
-              React.createElement("button", { className: "icon-btn", title: "Edit offset", onClick: () => setEditSourceId(editSourceId === s.id ? null : s.id) },
+              canEdit && React.createElement("button", { className: "icon-btn", title: "Edit offset", onClick: () => setEditSourceId(editSourceId === s.id ? null : s.id) },
                 React.createElement(Icon, { name: "edit", size: 15 }))
             ),
-            editSourceId === s.id && React.createElement(EditSourceForm, {
+            canEdit && editSourceId === s.id && React.createElement(EditSourceForm, {
               novelId, source: s,
               onCancel: () => setEditSourceId(null),
               onSaved: (r) => {
@@ -407,15 +432,15 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
             })
           )),
           (novel.sources || []).length === 0 && React.createElement("div", { className: "muted", style: { padding: 8 } }, "No sources yet."),
-          !addingSource && React.createElement("button", { className: "btn btn-ghost", style: { marginTop: 8 }, onClick: () => setAddingSource(true) },
+          canEdit && !addingSource && React.createElement("button", { className: "btn btn-ghost", style: { marginTop: 8 }, onClick: () => setAddingSource(true) },
             React.createElement(Icon, { name: "sparkles", size: 15 }), "Add source")
         ),
-        addingSource && React.createElement(AddSourceForm, {
+        canEdit && addingSource && React.createElement(AddSourceForm, {
           novelId, adapters, onCancel: () => setAddingSource(false),
           onAdded: () => { setAddingSource(false); reloadNovel(); },
         })
       ),
-      React.createElement("div", null,
+      canEdit && React.createElement("div", null,
         React.createElement("p", { className: "section-eyebrow" }, "Pipeline"),
         React.createElement("div", { className: "card", style: { padding: 16 } },
           React.createElement("div", { className: "row", style: { gap: 10, alignItems: "flex-end", flexWrap: "wrap" } },
@@ -448,7 +473,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
     ),
 
     // translation glossary (raw novels)
-    (hasRaw || glossary.length > 0) && React.createElement(GlossaryEditor, { novelId, glossary, reload: loadGlossary }),
+    canEdit && (hasRaw || glossary.length > 0) && React.createElement(GlossaryEditor, { novelId, glossary, reload: loadGlossary }),
 
     // bookmarks
     bookmarks.length > 0 && React.createElement(React.Fragment, null,

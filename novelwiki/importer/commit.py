@@ -103,18 +103,31 @@ async def _resolve_target(conn, job: dict, meta: dict):
         cover_pending = None
     # ── Brand-new novel ──
     else:
+        # The uploader owns the imported novel; it starts private (they can publish it later).
+        # Jobs created by CLI/tests/legacy code may not have a user; keep those readable as
+        # system/global imports instead of creating an ownerless private orphan.
+        owner_id = job.get("user_id")
+        visibility = "private" if owner_id is not None else "global"
         novel_id = await conn.fetchval(
             """
-            INSERT INTO novels (title, author, description, original_language, codex_enabled, series)
-            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id;
+            INSERT INTO novels (title, author, description, original_language, codex_enabled, series,
+                                owner_id, visibility)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
             """,
             meta.get("title") or "Imported book", meta.get("author"),
             meta.get("description"), language, settings.IMPORT_AUTO_BUILD_CODEX,
-            (meta.get("series") or None),
+            (meta.get("series") or None), owner_id, visibility,
         )
         novel_id = int(novel_id)
         offset = 0.0
         cover_pending = meta.get("cover_sha")
+        # The owner sees their imported novel in their library immediately.
+        if owner_id is not None:
+            await conn.execute(
+                "INSERT INTO library_entries (user_id, novel_id) VALUES ($1, $2) "
+                "ON CONFLICT (user_id, novel_id) DO NOTHING;",
+                owner_id, novel_id,
+            )
 
     source_id = await conn.fetchval(
         """
@@ -350,18 +363,27 @@ async def commit_series(job_ids: list[int]) -> dict:
     first_meta = loaded[0]["doc"].meta
     language = (first_meta.get("language") or "en")[:8]
     series_name = first_meta.get("series") or first_meta.get("title") or "Imported series"
+    owner_id = loaded[0]["job"].get("user_id")
+    visibility = "private" if owner_id is not None else "global"
 
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             novel_id = int(await conn.fetchval(
                 """
-                INSERT INTO novels (title, author, description, original_language, codex_enabled, series)
-                VALUES ($1, $2, $3, $4, $5, $6) RETURNING id;
+                INSERT INTO novels (title, author, description, original_language, codex_enabled, series,
+                                    owner_id, visibility)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
                 """,
                 series_name, first_meta.get("author"), first_meta.get("description"),
-                language, settings.IMPORT_AUTO_BUILD_CODEX, series_name,
+                language, settings.IMPORT_AUTO_BUILD_CODEX, series_name, owner_id, visibility,
             ))
+            if owner_id is not None:
+                await conn.execute(
+                    "INSERT INTO library_entries (user_id, novel_id) VALUES ($1, $2) "
+                    "ON CONFLICT (user_id, novel_id) DO NOTHING;",
+                    owner_id, novel_id,
+                )
             running = 0.0
             lo_all = hi_all = None
             for i, item in enumerate(loaded):

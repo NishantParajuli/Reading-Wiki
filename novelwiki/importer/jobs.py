@@ -71,19 +71,19 @@ def _row_to_job(row) -> dict:
 
 async def create_job(format: str, original_path: str, file_sha256: str | None = None,
                      options: dict | None = None, detected_meta: dict | None = None,
-                     status: str = "uploaded") -> int:
-    """Insert a job row. Callers that already have the file on disk use the default
-    'uploaded' status (the worker picks it up); the multipart upload path inserts as
-    'receiving' first, saves the blob under the new id, then flips to 'uploaded'."""
+                     status: str = "uploaded", user_id: int | None = None) -> int:
+    """Insert a job row owned by `user_id` (the uploader). Callers that already have the file
+    on disk use the default 'uploaded' status (the worker picks it up); the multipart upload
+    path inserts as 'receiving' first, saves the blob under the new id, then flips to 'uploaded'."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         return int(await conn.fetchval(
             """
-            INSERT INTO import_jobs (format, original_path, file_sha256, options, detected_meta, status)
-            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id;
+            INSERT INTO import_jobs (format, original_path, file_sha256, options, detected_meta, status, user_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id;
             """,
             format, original_path, file_sha256,
-            json.dumps(options or {}), json.dumps(detected_meta or {}), status,
+            json.dumps(options or {}), json.dumps(detected_meta or {}), status, user_id,
         ))
 
 
@@ -94,12 +94,19 @@ async def get_job(job_id: int) -> dict | None:
     return _row_to_job(row) if row else None
 
 
-async def list_jobs(limit: int = 100) -> list[dict]:
+async def list_jobs(limit: int = 100, user_id: int | None = None) -> list[dict]:
+    """All jobs (admin) or only those owned by `user_id`."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM import_jobs ORDER BY created_at DESC LIMIT $1;", limit
-        )
+        if user_id is None:
+            rows = await conn.fetch(
+                "SELECT * FROM import_jobs ORDER BY created_at DESC LIMIT $1;", limit
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM import_jobs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2;",
+                user_id, limit,
+            )
     return [_row_to_job(r) for r in rows]
 
 

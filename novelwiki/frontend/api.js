@@ -10,13 +10,20 @@
   const API_BASE = "/api";
 
   async function req(method, url, body) {
-    const opts = { method, headers: { Accept: "application/json" } };
+    // credentials: "include" sends the session cookie (same-origin in prod; needed
+    // for the cookie-based auth to work at all).
+    const opts = { method, credentials: "include", headers: { Accept: "application/json" } };
     if (body !== undefined) {
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body || {});
     }
     const res = await fetch(url, opts);
     if (!res.ok) {
+      // A 401 on a normal call means the session lapsed mid-use — let the app re-gate.
+      // Auth endpoints (e.g. /me when logged out) handle their own 401, so skip those.
+      if (res.status === 401 && url.indexOf("/auth/") === -1 && window.__onUnauthorized) {
+        try { window.__onUnauthorized(); } catch (e) {}
+      }
       let detail = `${res.status} ${res.statusText}`;
       try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
       const err = new Error(detail);
@@ -55,6 +62,18 @@
   const API = {
     base: API_BASE,
 
+    // ── Auth / account ──
+    auth: {
+      me() { return getJSON(`${API_BASE}/auth/me`); },
+      login(identifier, password) { return postJSON(`${API_BASE}/auth/login`, { identifier, password }); },
+      register(email, username, password) { return postJSON(`${API_BASE}/auth/register`, { email, username, password }); },
+      logout() { return postJSON(`${API_BASE}/auth/logout`, {}); },
+      requestReset(email) { return postJSON(`${API_BASE}/auth/request-reset`, { email }); },
+      reset(token, password) { return postJSON(`${API_BASE}/auth/reset`, { token, password }); },
+      providers() { return getJSON(`${API_BASE}/auth/providers`); },
+      oauthStart(provider) { window.location.href = `${API_BASE}/auth/oauth/${provider}/start`; },
+    },
+
     // ── Library / novels ──
     adapters() { return getJSON(`${API_BASE}/adapters`); },
     novels() { return getJSON(`${API_BASE}/novels`); },
@@ -62,6 +81,12 @@
     novel(id) { return getJSON(N(id)); },
     updateNovel(id, body) { return req("PATCH", N(id), body); },
     deleteNovel(id) { return delJSON(N(id)); },
+    // Discovery, per-user library membership, visibility, and quota usage.
+    discover(q) { return getJSON(`${API_BASE}/discover${q ? `?q=${encodeURIComponent(q)}` : ""}`); },
+    addToLibrary(id) { return postJSON(`${N(id)}/library`, {}); },
+    removeFromLibrary(id) { return delJSON(`${N(id)}/library`); },
+    setVisibility(id, visibility) { return req("PATCH", `${N(id)}/visibility`, { visibility }); },
+    usage() { return getJSON(`${API_BASE}/me/usage`); },
     addSource(id, body) { return postJSON(`${N(id)}/sources`, body); },
     updateSource(id, sid, body) { return req("PATCH", `${N(id)}/sources/${sid}`, body); },
     scrape(id, body) { return postJSON(`${N(id)}/scrape`, body); },
@@ -110,7 +135,7 @@
     async uploadImport(file) {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`${API_BASE}/import/upload`, { method: "POST", body: fd });
+      const res = await fetch(`${API_BASE}/import/upload`, { method: "POST", credentials: "include", body: fd });
       if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`;
         try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
@@ -142,6 +167,7 @@
         const end = Math.min(offset + this.CHUNK_SIZE, file.size);
         const res = await fetch(`${API_BASE}/import/upload/${jid}/chunk`, {
           method: "PUT",
+          credentials: "include",
           headers: { "Upload-Offset": String(offset), "Content-Type": "application/octet-stream" },
           body: file.slice(offset, end),
         });

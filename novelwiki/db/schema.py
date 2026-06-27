@@ -10,6 +10,89 @@ DDL_QUERIES = [
     "CREATE EXTENSION IF NOT EXISTS vector;",
     "CREATE EXTENSION IF NOT EXISTS pg_trgm;",
 
+    # ══ Multi-user layer ═══════════════════════════════════════════════════
+    # Accounts. One row per human. `password_hash` is NULL for OAuth-only logins.
+    # `role` gates the admin surface; `status` lets an admin suspend/ban without
+    # deleting data. Per-user spend caps default to settings when NULL. `prefs`
+    # holds reader preferences synced across devices (was browser localStorage).
+    """
+    CREATE TABLE IF NOT EXISTS users (
+      id                        BIGSERIAL PRIMARY KEY,
+      email                     TEXT UNIQUE NOT NULL,          -- stored lowercased
+      email_verified            BOOLEAN DEFAULT FALSE,
+      password_hash             TEXT,                          -- NULL for OAuth-only
+      username                  TEXT UNIQUE NOT NULL,          -- handle for /u/<username>
+      display_name              TEXT,
+      bio                       TEXT,
+      avatar_path               TEXT,                          -- relative under ASSET_DIR/_users/<id>/
+      role                      TEXT DEFAULT 'user',           -- user|admin
+      status                    TEXT DEFAULT 'active',         -- active|suspended|banned
+      quota_translated_chapters INT,                           -- NULL ⇒ settings default
+      quota_ocr_pages           INT,
+      quota_codex_builds        INT,
+      prefs                     JSONB DEFAULT '{}',
+      created_at                TIMESTAMPTZ DEFAULT now(),
+      updated_at                TIMESTAMPTZ DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS users_username_idx ON users (username);",
+
+    # External identity links (Google/Discord). A user may link several providers.
+    """
+    CREATE TABLE IF NOT EXISTS oauth_accounts (
+      id                  BIGSERIAL PRIMARY KEY,
+      user_id             BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider            TEXT NOT NULL,                       -- google|discord
+      provider_account_id TEXT NOT NULL,
+      created_at          TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (provider, provider_account_id)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS oauth_user_idx ON oauth_accounts (user_id);",
+
+    # Server-side sessions. The cookie carries an opaque token; we store only its
+    # hash. Deleting the row (logout / ban) revokes access immediately.
+    """
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash   TEXT PRIMARY KEY,
+      user_id      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at   TIMESTAMPTZ DEFAULT now(),
+      expires_at   TIMESTAMPTZ NOT NULL,
+      last_seen_at TIMESTAMPTZ DEFAULT now(),
+      user_agent   TEXT
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions (user_id);",
+
+    # One-time email tokens for verification + password reset (hashed at rest).
+    """
+    CREATE TABLE IF NOT EXISTS email_tokens (
+      id         BIGSERIAL PRIMARY KEY,
+      user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind       TEXT NOT NULL,                                -- verify|reset
+      token_hash TEXT UNIQUE NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at    TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS email_tokens_user_idx ON email_tokens (user_id, kind);",
+
+    # NOTE: `library_entries` references novels(id) and is defined just after the
+    # novels table below (sequential DDL — the referenced table must exist first).
+
+    # Monthly per-user spend meter (one row per user per month bucket).
+    """
+    CREATE TABLE IF NOT EXISTS quota_usage (
+      user_id            BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      period             DATE NOT NULL,                        -- first-of-month bucket
+      translated_chapters INT NOT NULL DEFAULT 0,
+      ocr_pages          INT NOT NULL DEFAULT 0,
+      codex_builds       INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, period)
+    );
+    """,
+
     # ── 0. Novels ──────────────────────────────────────────────────────────
     # The library. One row per novel the user is reading. A novel is a single
     # continuous reading sequence even when it is stitched from several sources
@@ -23,8 +106,11 @@ DDL_QUERIES = [
       description       TEXT,
       original_language TEXT DEFAULT 'en',
       codex_enabled     BOOLEAN DEFAULT FALSE,        -- opt-in spoiler-safe codex pipeline
-      shelf             TEXT,                          -- user reading shelf: to_read|reading|completed (NULL = unshelved)
-      status_tags       TEXT[] DEFAULT '{}',           -- user-applied tags: ongoing|finished|translation_ongoing
+      shelf             TEXT,                          -- legacy/owner default; per-user shelf lives in library_entries
+      status_tags       TEXT[] DEFAULT '{}',           -- legacy/owner default; per-user tags live in library_entries
+      owner_id          BIGINT REFERENCES users(id) ON DELETE SET NULL,   -- who uploaded it (NULL = system/global)
+      visibility        TEXT DEFAULT 'private',        -- private|public|global
+      contribution_policy TEXT DEFAULT 'manual',       -- manual|auto: how contribute-back offers merge
       created_at        TIMESTAMPTZ DEFAULT now(),
       updated_at        TIMESTAMPTZ DEFAULT now()
     );
@@ -39,6 +125,28 @@ DDL_QUERIES = [
     # later volume of the same series auto-appends instead of creating a duplicate novel.
     "ALTER TABLE novels ADD COLUMN IF NOT EXISTS series TEXT;",
     "CREATE INDEX IF NOT EXISTS novels_series_idx ON novels (series);",
+    # Multi-user ownership + visibility (idempotent backfills for an existing DB).
+    "ALTER TABLE novels ADD COLUMN IF NOT EXISTS owner_id BIGINT REFERENCES users(id) ON DELETE SET NULL;",
+    "ALTER TABLE novels ADD COLUMN IF NOT EXISTS visibility TEXT DEFAULT 'private';",
+    "ALTER TABLE novels ADD COLUMN IF NOT EXISTS contribution_policy TEXT DEFAULT 'manual';",
+    "CREATE INDEX IF NOT EXISTS novels_owner_idx ON novels (owner_id);",
+    "CREATE INDEX IF NOT EXISTS novels_visibility_idx ON novels (visibility);",
+
+    # A user's personal library + per-user curation. Adding a shared (global/public)
+    # novel here is the "read the shared copy" action — one shared text, many readers.
+    # Defined here (not in the multi-user block above) because it references novels(id).
+    """
+    CREATE TABLE IF NOT EXISTS library_entries (
+      id          BIGSERIAL PRIMARY KEY,
+      user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      novel_id    BIGINT NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+      shelf       TEXT,                                        -- to_read|reading|completed
+      status_tags TEXT[] DEFAULT '{}',
+      added_at    TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (user_id, novel_id)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS library_user_idx ON library_entries (user_id);",
 
     # ── 0b. Sources ────────────────────────────────────────────────────────
     # A novel can have several sources, each scraped by a different adapter. This
@@ -85,6 +193,7 @@ DDL_QUERIES = [
       translation_status TEXT DEFAULT 'none',          -- none|pending|done|failed
       translation_model  TEXT,
       word_count         INT,
+      content_version    INT DEFAULT 1,                -- bumped on each base-content change; anchor for per-user overlay merge
       scraped_at         TIMESTAMPTZ DEFAULT now(),
       PRIMARY KEY (novel_id, number)
     );
@@ -95,6 +204,8 @@ DDL_QUERIES = [
     # under a "Volume 1" heading in the TOC. Idempotent backfills for an existing DB.
     "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'chapter';",
     "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS part_label TEXT;",
+    # Multi-user: content version anchor for translation overlays (Phase 5).
+    "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS content_version INT DEFAULT 1;",
 
     # ── 2. Chunks ──────────────────────────────────────────────────────────
     """
@@ -261,29 +372,37 @@ DDL_QUERIES = [
     """,
 
     # ── 12. Reading progress ───────────────────────────────────────────────
-    # Single-user app: one row per novel. `max_chapter_read` drives the codex
-    # spoiler ceiling; `last_chapter` + `scroll_pct` drive "continue reading".
+    # Per-user, per-novel. `max_chapter_read` drives that user's codex spoiler
+    # ceiling; `last_chapter` + `scroll_pct` drive "continue reading". On a fresh DB
+    # the PK is composite; an existing single-user DB (PK = novel_id) is migrated to
+    # this shape by novelwiki/db/migrate_multiuser.py.
     """
     CREATE TABLE IF NOT EXISTS reading_progress (
-      novel_id         BIGINT PRIMARY KEY REFERENCES novels(id) ON DELETE CASCADE,
+      user_id          BIGINT REFERENCES users(id) ON DELETE CASCADE,
+      novel_id         BIGINT REFERENCES novels(id) ON DELETE CASCADE,
       last_chapter     NUMERIC,
       max_chapter_read NUMERIC,
       scroll_pct       REAL DEFAULT 0,
-      updated_at       TIMESTAMPTZ DEFAULT now()
+      updated_at       TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY (user_id, novel_id)
     );
     """,
+    # Existing single-user DBs gain the column here; the PK swap is done in the migration.
+    "ALTER TABLE reading_progress ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;",
 
     # ── 13. Bookmarks ──────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS bookmarks (
       id          BIGSERIAL PRIMARY KEY,
+      user_id     BIGINT  REFERENCES users(id) ON DELETE CASCADE,
       novel_id    BIGINT  NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
       chapter     NUMERIC NOT NULL,
       note        TEXT,
       created_at  TIMESTAMPTZ DEFAULT now()
     );
     """,
-    "CREATE INDEX IF NOT EXISTS bookmarks_novel_idx ON bookmarks (novel_id, chapter);",
+    "ALTER TABLE bookmarks ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;",
+    "CREATE INDEX IF NOT EXISTS bookmarks_user_novel_idx ON bookmarks (user_id, novel_id, chapter);",
 
     # ── 14. Translation glossary ───────────────────────────────────────────
     # Per-novel name/term consistency anchor for translation. `locked` rows are
@@ -345,11 +464,14 @@ DDL_QUERIES = [
       progress      JSONB DEFAULT '{}',                                -- {done,total,unit}
       options       JSONB DEFAULT '{}',                                -- {gemini_first:bool, target:new|append, ...}
       error         TEXT,
+      user_id       BIGINT REFERENCES users(id) ON DELETE CASCADE,     -- who uploaded the file
       created_at    TIMESTAMPTZ DEFAULT now(),
       updated_at    TIMESTAMPTZ DEFAULT now()
     );
     """,
+    "ALTER TABLE import_jobs ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;",
     "CREATE INDEX IF NOT EXISTS import_jobs_status_idx ON import_jobs (status);",
+    "CREATE INDEX IF NOT EXISTS import_jobs_user_idx ON import_jobs (user_id);",
 
     # ── 17. Provider budget ────────────────────────────────────────────────
     # Daily provider call counter (Gemini free-tier guard) that survives restarts, so a
@@ -362,10 +484,54 @@ DDL_QUERIES = [
       PRIMARY KEY (provider, day)
     );
     """,
+
+    # ── 18. Chapter overlays (Phase 5) ─────────────────────────────────────
+    # Per-user translation override on top of a shared novel's base content. The
+    # reader shows the overlay if present, else chapters.content. `base_version`
+    # records the chapters.content_version it forked from, so a later base change
+    # can be detected as a merge conflict.
+    """
+    CREATE TABLE IF NOT EXISTS chapter_overlays (
+      id           BIGSERIAL PRIMARY KEY,
+      user_id      BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      novel_id     BIGINT  NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+      chapter      NUMERIC NOT NULL,
+      content      TEXT    NOT NULL,
+      base_version INT     NOT NULL DEFAULT 1,
+      origin       TEXT    DEFAULT 'manual_edit',              -- manual_edit|self_translated
+      conflict     BOOLEAN DEFAULT FALSE,
+      created_at   TIMESTAMPTZ DEFAULT now(),
+      updated_at   TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (user_id, novel_id, chapter)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS overlays_user_novel_idx ON chapter_overlays (user_id, novel_id);",
+
+    # ── 19. Contributions (Phase 5) ────────────────────────────────────────
+    # Contribute-back "pull requests": a user offers their overlay to the novel
+    # owner (admin for global, uploader for public) to merge into the shared base.
+    """
+    CREATE TABLE IF NOT EXISTS contributions (
+      id           BIGSERIAL PRIMARY KEY,
+      novel_id     BIGINT  NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+      from_user_id BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind         TEXT    DEFAULT 'translation',
+      chapter      NUMERIC NOT NULL,
+      content      TEXT    NOT NULL,
+      base_version INT     NOT NULL DEFAULT 1,
+      status       TEXT    DEFAULT 'pending',                 -- pending|accepted|rejected|auto_merged
+      reviewed_by  BIGINT  REFERENCES users(id) ON DELETE SET NULL,
+      created_at   TIMESTAMPTZ DEFAULT now(),
+      reviewed_at  TIMESTAMPTZ
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS contributions_novel_status_idx ON contributions (novel_id, status);",
 ]
 
 # Tables in dependency order (children first) — used by reset_db to drop cleanly.
 ALL_TABLES = [
+    "contributions",
+    "chapter_overlays",
     "import_jobs",
     "provider_budget",
     "assets",
@@ -384,8 +550,14 @@ ALL_TABLES = [
     "entities",
     "chunks",
     "chapters",
+    "library_entries",
     "sources",
     "novels",
+    "quota_usage",
+    "email_tokens",
+    "sessions",
+    "oauth_accounts",
+    "users",
 ]
 
 

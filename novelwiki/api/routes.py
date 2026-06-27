@@ -1,10 +1,13 @@
 import logging
 import json
 import os
-from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Request
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Request, Depends
 from pydantic import BaseModel
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
+from novelwiki.auth.deps import current_user
+from novelwiki.auth.access import require_readable, require_editable
+from novelwiki import quota
 from novelwiki.scraper.runner import scrape_source, scrape_novel, set_source_offset
 from novelwiki.scraper.adapters import list_adapters
 from novelwiki.ingest.chunk import chunk_all_chapters
@@ -81,6 +84,9 @@ class NovelUpdate(BaseModel):
     shelf: str | None = None          # to_read|reading|completed|"" (empty string clears the shelf)
     status_tags: list[str] | None = None
 
+class VisibilityUpdate(BaseModel):
+    visibility: str          # private|public|global
+
 class ProgressUpdate(BaseModel):
     last_chapter: float
     scroll_pct: float = 0
@@ -143,25 +149,31 @@ async def api_adapters():
 # ── Library / Novels ──────────────────────────────────────────────────────
 
 @router.get("/novels")
-async def api_list_novels():
-    """The library grid: each novel with chapter span + reading progress."""
+async def api_list_novels(user: dict = Depends(current_user)):
+    """The caller's library grid: the Global shared library + novels they own or added,
+    each with their own shelf/tags and reading progress."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT n.id, n.title, n.author, n.cover_url, n.description, n.codex_enabled,
-                   n.shelf, n.status_tags,
+                   n.visibility, n.owner_id,
+                   COALESCE(le.shelf, n.shelf) AS shelf,
+                   COALESCE(le.status_tags, n.status_tags) AS status_tags,
                    COUNT(c.number) AS chapter_count,
                    MIN(c.number) AS min_chapter, MAX(c.number) AS max_chapter,
                    p.last_chapter, p.max_chapter_read,
                    (SELECT bool_or(s.is_raw)     FROM sources s WHERE s.novel_id = n.id) AS has_raw,
                    (SELECT bool_or(NOT s.is_raw)  FROM sources s WHERE s.novel_id = n.id) AS has_eng
             FROM novels n
+            LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
+            LEFT JOIN reading_progress p ON p.novel_id = n.id AND p.user_id = $1
             LEFT JOIN chapters c ON c.novel_id = n.id
-            LEFT JOIN reading_progress p ON p.novel_id = n.id
-            GROUP BY n.id, p.last_chapter, p.max_chapter_read
+            WHERE n.visibility = 'global' OR n.owner_id = $1 OR le.id IS NOT NULL
+            GROUP BY n.id, le.shelf, le.status_tags, p.last_chapter, p.max_chapter_read
             ORDER BY n.updated_at DESC NULLS LAST, n.id DESC;
-            """
+            """,
+            user["id"],
         )
     return [
         {
@@ -171,6 +183,9 @@ async def api_list_novels():
             "cover_url": r["cover_url"],
             "description": r["description"],
             "codex_enabled": r["codex_enabled"],
+            "visibility": r["visibility"],
+            "is_owner": r["owner_id"] == user["id"],
+            "can_edit": r["owner_id"] == user["id"] or user.get("role") == "admin",
             "shelf": r["shelf"],
             "status_tags": list(r["status_tags"] or []),
             "translation_type": _translation_type(r["has_raw"], r["has_eng"]),
@@ -185,18 +200,25 @@ async def api_list_novels():
 
 
 @router.post("/novels")
-async def api_create_novel(payload: NovelCreate):
-    """Create a novel and (optionally) its first source."""
+async def api_create_novel(payload: NovelCreate, user: dict = Depends(current_user)):
+    """Create a novel (owned by the caller, private by default) and optionally its first source."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             novel_id = await conn.fetchval(
                 """
-                INSERT INTO novels (title, author, description, cover_url, original_language, codex_enabled)
-                VALUES ($1, $2, $3, $4, $5, $6) RETURNING id;
+                INSERT INTO novels (title, author, description, cover_url, original_language, codex_enabled,
+                                    owner_id, visibility)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'private') RETURNING id;
                 """,
                 payload.title, payload.author, payload.description, payload.cover_url,
-                payload.original_language, payload.codex_enabled,
+                payload.original_language, payload.codex_enabled, user["id"],
+            )
+            # The owner's novel shows up in their library immediately.
+            await conn.execute(
+                "INSERT INTO library_entries (user_id, novel_id) VALUES ($1, $2) "
+                "ON CONFLICT (user_id, novel_id) DO NOTHING;",
+                user["id"], novel_id,
             )
             source_id = None
             if payload.source:
@@ -213,7 +235,8 @@ async def api_create_novel(payload: NovelCreate):
 
 
 @router.get("/novels/{novel_id}")
-async def api_get_novel(novel_id: int):
+async def api_get_novel(novel_id: int, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         novel = await conn.fetchrow("SELECT * FROM novels WHERE id = $1;", novel_id)
@@ -230,7 +253,13 @@ async def api_get_novel(novel_id: int):
             """,
             novel_id,
         )
-        progress = await conn.fetchrow("SELECT * FROM reading_progress WHERE novel_id = $1;", novel_id)
+        progress = await conn.fetchrow(
+            "SELECT * FROM reading_progress WHERE novel_id = $1 AND user_id = $2;", novel_id, user["id"]
+        )
+        entry = await conn.fetchrow(
+            "SELECT shelf, status_tags FROM library_entries WHERE novel_id = $1 AND user_id = $2;",
+            novel_id, user["id"],
+        )
     has_raw = any(s["is_raw"] for s in sources) if sources else None
     has_eng = any(not s["is_raw"] for s in sources) if sources else None
     return {
@@ -241,8 +270,12 @@ async def api_get_novel(novel_id: int):
         "cover_url": novel["cover_url"],
         "original_language": novel["original_language"],
         "codex_enabled": novel["codex_enabled"],
-        "shelf": novel["shelf"],
-        "status_tags": list(novel["status_tags"] or []),
+        "visibility": novel["visibility"],
+        "is_owner": novel["owner_id"] == user["id"],
+        "can_edit": novel["owner_id"] == user["id"] or user.get("role") == "admin",
+        "contribution_policy": novel["contribution_policy"],
+        "shelf": (entry["shelf"] if entry else None) or novel["shelf"],
+        "status_tags": list((entry["status_tags"] if entry else None) or novel["status_tags"] or []),
         "translation_type": _translation_type(has_raw, has_eng),
         "chapter_count": int(span["count"]),
         "min_chapter": float(span["min"]) if span["min"] is not None else None,
@@ -265,38 +298,61 @@ async def api_get_novel(novel_id: int):
 
 
 @router.patch("/novels/{novel_id}")
-async def api_update_novel(novel_id: int, payload: NovelUpdate):
-    """Edit novel metadata (title, author, description, cover, codex toggle, shelf, tags)."""
+async def api_update_novel(novel_id: int, payload: NovelUpdate, user: dict = Depends(current_user)):
+    """Edit a novel. Shelf/tags are *per-user* (stored in library_entries) and any reader may
+    set them. Metadata (title, author, description, cover, codex toggle) is owner/admin only."""
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         return {"status": "noop"}
-    # Normalize the user-curation fields: blank shelf clears it; tags are whitelisted.
-    if "shelf" in fields:
-        shelf = (fields["shelf"] or "").strip().lower()
+    novel = await require_readable(novel_id, user)
+
+    # Per-user curation → library_entries (upsert). Blank shelf clears; tags whitelisted.
+    shelf_set = "shelf" in fields
+    tags_set = "status_tags" in fields
+    shelf_val = None
+    if shelf_set:
+        shelf = (fields.pop("shelf") or "").strip().lower()
         if shelf and shelf not in SHELVES:
             raise HTTPException(status_code=422, detail=f"Unknown shelf '{shelf}'.")
-        fields["shelf"] = shelf or None
-    if "status_tags" in fields:
-        tags = [t.strip().lower() for t in (fields["status_tags"] or [])]
-        fields["status_tags"] = [t for t in dict.fromkeys(tags) if t in STATUS_TAGS]
-    sets, args = [], []
-    for k, v in fields.items():
-        args.append(v)
-        sets.append(f"{k} = ${len(args)}")
-    args.append(novel_id)
+        shelf_val = shelf or None
+    tags_val = None
+    if tags_set:
+        tags = [t.strip().lower() for t in (fields.pop("status_tags") or [])]
+        tags_val = [t for t in dict.fromkeys(tags) if t in STATUS_TAGS]
+
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            f"UPDATE novels SET {', '.join(sets)}, updated_at = now() WHERE id = ${len(args)} RETURNING id;",
-            *args,
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="Novel not found.")
+        if shelf_set or tags_set:
+            await conn.execute(
+                """
+                INSERT INTO library_entries (user_id, novel_id, shelf, status_tags)
+                VALUES ($1, $2, $3, COALESCE($4::text[], '{}'::text[]))
+                ON CONFLICT (user_id, novel_id) DO UPDATE SET
+                    shelf = CASE WHEN $5 THEN EXCLUDED.shelf ELSE library_entries.shelf END,
+                    status_tags = CASE WHEN $6 THEN EXCLUDED.status_tags ELSE library_entries.status_tags END;
+                """,
+                user["id"], novel_id, shelf_val, tags_val, shelf_set, tags_set,
+            )
+
+        # Remaining keys are base metadata — owner/admin only.
+        if fields:
+            if not (novel["owner_id"] == user["id"] or user.get("role") == "admin"):
+                raise HTTPException(status_code=403, detail="You don't have permission to edit this novel.")
+            sets, args = [], []
+            for k, v in fields.items():
+                args.append(v)
+                sets.append(f"{k} = ${len(args)}")
+            args.append(novel_id)
+            await conn.execute(
+                f"UPDATE novels SET {', '.join(sets)}, updated_at = now() WHERE id = ${len(args)};",
+                *args,
+            )
     return {"status": "success"}
 
 
 @router.delete("/novels/{novel_id}")
-async def api_delete_novel(novel_id: int):
+async def api_delete_novel(novel_id: int, user: dict = Depends(current_user)):
+    await require_editable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         # Collect the novel's import scratch dirs before the cascade nulls the references,
@@ -313,8 +369,103 @@ async def api_delete_novel(novel_id: int):
     return {"status": "success"}
 
 
+# ── Visibility, discovery & personal library ────────────────────────────────
+
+VISIBILITIES = {"private", "public", "global"}
+
+
+@router.patch("/novels/{novel_id}/visibility")
+async def api_set_visibility(novel_id: int, payload: VisibilityUpdate, user: dict = Depends(current_user)):
+    """Change a novel's visibility. Owner/admin only; only an admin may set/clear `global`
+    (the curated shared library). Publishing to `global` reassigns ownership to the admin."""
+    v = (payload.visibility or "").strip().lower()
+    if v not in VISIBILITIES:
+        raise HTTPException(status_code=422, detail=f"visibility must be one of {sorted(VISIBILITIES)}.")
+    novel = await require_editable(novel_id, user)
+    is_admin = user.get("role") == "admin"
+    if (v == "global" or novel["visibility"] == "global") and not is_admin:
+        raise HTTPException(status_code=403, detail="Only an admin can manage the Global library.")
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        if v == "global":
+            # Promote into the curated library: the admin becomes the steward/owner.
+            await conn.execute(
+                "UPDATE novels SET visibility = 'global', owner_id = $2, updated_at = now() WHERE id = $1;",
+                novel_id, user["id"],
+            )
+        else:
+            await conn.execute(
+                "UPDATE novels SET visibility = $2, updated_at = now() WHERE id = $1;", novel_id, v,
+            )
+    return {"status": "success", "visibility": v}
+
+
+@router.get("/discover")
+async def api_discover(user: dict = Depends(current_user), q: str | None = None):
+    """Browse the shared library — Global + Public novels the caller hasn't added yet."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT n.id, n.title, n.author, n.cover_url, n.description, n.visibility,
+                   u.username AS owner_username,
+                   COUNT(c.number) AS chapter_count
+            FROM novels n
+            LEFT JOIN users u ON u.id = n.owner_id
+            LEFT JOIN chapters c ON c.novel_id = n.id
+            LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
+            WHERE n.visibility IN ('global', 'public')
+              AND n.owner_id IS DISTINCT FROM $1
+              AND le.id IS NULL
+              AND ($2::text IS NULL OR n.title ILIKE '%' || $2 || '%')
+            GROUP BY n.id, u.username
+            ORDER BY (n.visibility = 'global') DESC, n.updated_at DESC NULLS LAST, n.id DESC
+            LIMIT 200;
+            """,
+            user["id"], q,
+        )
+    return [
+        {"id": int(r["id"]), "title": r["title"], "author": r["author"], "cover_url": r["cover_url"],
+         "description": r["description"], "visibility": r["visibility"], "owner_username": r["owner_username"],
+         "chapter_count": int(r["chapter_count"] or 0)}
+        for r in rows
+    ]
+
+
+@router.post("/novels/{novel_id}/library")
+async def api_add_to_library(novel_id: int, user: dict = Depends(current_user)):
+    """Add a readable (global/public/owned) novel to the caller's personal library."""
+    await require_readable(novel_id, user)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO library_entries (user_id, novel_id) VALUES ($1, $2) "
+            "ON CONFLICT (user_id, novel_id) DO NOTHING;",
+            user["id"], novel_id,
+        )
+    return {"status": "success"}
+
+
+@router.delete("/novels/{novel_id}/library")
+async def api_remove_from_library(novel_id: int, user: dict = Depends(current_user)):
+    """Remove a novel from the caller's library (their progress/bookmarks are kept)."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM library_entries WHERE user_id = $1 AND novel_id = $2;", user["id"], novel_id,
+        )
+    return {"status": "success"}
+
+
+@router.get("/me/usage")
+async def api_my_usage(user: dict = Depends(current_user)):
+    """The caller's monthly spend vs. their quota (drives the account panel)."""
+    return await quota.usage_and_limits(user)
+
+
 @router.post("/novels/{novel_id}/sources")
-async def api_add_source(novel_id: int, payload: SourceCreate):
+async def api_add_source(novel_id: int, payload: SourceCreate, user: dict = Depends(current_user)):
+    await require_editable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         source_id = await conn.fetchval(
@@ -329,10 +480,11 @@ async def api_add_source(novel_id: int, payload: SourceCreate):
 
 
 @router.patch("/novels/{novel_id}/sources/{source_id}")
-async def api_update_source(novel_id: int, source_id: int, payload: SourceUpdate):
+async def api_update_source(novel_id: int, source_id: int, payload: SourceUpdate, user: dict = Depends(current_user)):
     """Edits an existing source. Changing `chapter_offset` also renumbers that source's
     already-scraped chapters onto the new global numbering (e.g. set -1 when a raw source
     is one chapter ahead of the translation), so the fix is immediate — no re-scrape."""
+    await require_editable(novel_id, user)
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         return {"status": "noop"}
@@ -368,8 +520,9 @@ async def api_update_source(novel_id: int, source_id: int, payload: SourceUpdate
 # ── Chapters / Reader ─────────────────────────────────────────────────────
 
 @router.get("/novels/{novel_id}/chapters")
-async def api_list_chapters(novel_id: int):
+async def api_list_chapters(novel_id: int, user: dict = Depends(current_user)):
     """The table of contents for the reader."""
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -400,10 +553,11 @@ async def api_list_chapters(novel_id: int):
 
 
 @router.get("/novels/{novel_id}/chapter/{number}")
-async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTasks):
+async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTasks, user: dict = Depends(current_user)):
     """Returns one chapter's readable content for the reader, plus prev/next numbers.
     Raw chapters are translated on demand here (and the next few are prefetched in the
     background), so the reader always gets English text — keyed off `translation_status`."""
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -431,14 +585,19 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
     content = row["content"]
     status = row["translation_status"]
     is_translated = row["is_translated"]
-    # On-demand translation for a raw chapter that hasn't been translated yet.
+    # On-demand translation for a raw chapter that hasn't been translated yet. Metered
+    # against the reader's monthly quota; if they're over (or unverified), we serve the
+    # chapter untranslated with a `quota_exceeded` status instead of failing the read.
     if content is None and row["has_original"]:
-        result = await translate_chapter(novel_id, number)
-        content = result.get("content")
-        status = result.get("status")
-        is_translated = status == "done"
-        # Warm the next few chapters so reading flows without waiting at each boundary.
-        bg_tasks.add_task(prefetch_translations, novel_id, number, settings.TRANSLATE_PREFETCH)
+        if await quota.try_reserve(user, "translated_chapters", 1):
+            result = await translate_chapter(novel_id, number)
+            content = result.get("content")
+            status = result.get("status")
+            is_translated = status == "done"
+            # Warm the next few chapters (also metered) so reading flows at each boundary.
+            bg_tasks.add_task(prefetch_translations, novel_id, number, settings.TRANSLATE_PREFETCH, user)
+        else:
+            status = "quota_exceeded"
 
     # Only file-import sources (epub/pdf) store sanitized rich HTML in raw_html; scraped
     # sources put the raw page dump there, which must never be rendered. And for a *raw*
@@ -463,10 +622,13 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
 # ── Reading progress ──────────────────────────────────────────────────────
 
 @router.get("/novels/{novel_id}/progress")
-async def api_get_progress(novel_id: int):
+async def api_get_progress(novel_id: int, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM reading_progress WHERE novel_id = $1;", novel_id)
+        row = await conn.fetchrow(
+            "SELECT * FROM reading_progress WHERE novel_id = $1 AND user_id = $2;", novel_id, user["id"]
+        )
     if not row:
         return {"last_chapter": None, "max_chapter_read": None, "scroll_pct": 0}
     return {
@@ -477,20 +639,21 @@ async def api_get_progress(novel_id: int):
 
 
 @router.put("/novels/{novel_id}/progress")
-async def api_set_progress(novel_id: int, payload: ProgressUpdate):
+async def api_set_progress(novel_id: int, payload: ProgressUpdate, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO reading_progress (novel_id, last_chapter, max_chapter_read, scroll_pct, updated_at)
-            VALUES ($1, $2, $2, $3, now())
-            ON CONFLICT (novel_id) DO UPDATE SET
+            INSERT INTO reading_progress (user_id, novel_id, last_chapter, max_chapter_read, scroll_pct, updated_at)
+            VALUES ($1, $2, $3, $3, $4, now())
+            ON CONFLICT (user_id, novel_id) DO UPDATE SET
                 last_chapter = EXCLUDED.last_chapter,
                 max_chapter_read = GREATEST(COALESCE(reading_progress.max_chapter_read, 0), EXCLUDED.last_chapter),
                 scroll_pct = EXCLUDED.scroll_pct,
                 updated_at = now();
             """,
-            novel_id, payload.last_chapter, payload.scroll_pct,
+            user["id"], novel_id, payload.last_chapter, payload.scroll_pct,
         )
     return {"status": "success"}
 
@@ -498,12 +661,14 @@ async def api_set_progress(novel_id: int, payload: ProgressUpdate):
 # ── Bookmarks ─────────────────────────────────────────────────────────────
 
 @router.get("/novels/{novel_id}/bookmarks")
-async def api_list_bookmarks(novel_id: int):
+async def api_list_bookmarks(novel_id: int, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, chapter, note, created_at FROM bookmarks WHERE novel_id = $1 ORDER BY chapter ASC;",
-            novel_id,
+            "SELECT id, chapter, note, created_at FROM bookmarks "
+            "WHERE novel_id = $1 AND user_id = $2 ORDER BY chapter ASC;",
+            novel_id, user["id"],
         )
     return [
         {"id": int(r["id"]), "chapter": float(r["chapter"]), "note": r["note"],
@@ -513,30 +678,36 @@ async def api_list_bookmarks(novel_id: int):
 
 
 @router.post("/novels/{novel_id}/bookmarks")
-async def api_add_bookmark(novel_id: int, payload: BookmarkCreate):
+async def api_add_bookmark(novel_id: int, payload: BookmarkCreate, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         bid = await conn.fetchval(
-            "INSERT INTO bookmarks (novel_id, chapter, note) VALUES ($1, $2, $3) RETURNING id;",
-            novel_id, payload.chapter, payload.note,
+            "INSERT INTO bookmarks (user_id, novel_id, chapter, note) VALUES ($1, $2, $3, $4) RETURNING id;",
+            user["id"], novel_id, payload.chapter, payload.note,
         )
     return {"id": int(bid)}
 
 
 @router.delete("/novels/{novel_id}/bookmarks/{bookmark_id}")
-async def api_delete_bookmark(novel_id: int, bookmark_id: int):
+async def api_delete_bookmark(novel_id: int, bookmark_id: int, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM bookmarks WHERE id = $1 AND novel_id = $2;", bookmark_id, novel_id)
+        await conn.execute(
+            "DELETE FROM bookmarks WHERE id = $1 AND novel_id = $2 AND user_id = $3;",
+            bookmark_id, novel_id, user["id"],
+        )
     return {"status": "success"}
 
 
 # ── Scraping ──────────────────────────────────────────────────────────────
 
 @router.post("/novels/{novel_id}/scrape")
-async def api_scrape(novel_id: int, payload: ScrapeTrigger, bg_tasks: BackgroundTasks):
+async def api_scrape(novel_id: int, payload: ScrapeTrigger, bg_tasks: BackgroundTasks, user: dict = Depends(current_user)):
     """Kicks off scraping in the background. Targets one source if source_id is given,
     else every source of the novel."""
+    await require_editable(novel_id, user)
     if payload.source_id is not None:
         bg_tasks.add_task(scrape_source, payload.source_id, force=payload.force, max_chapters=payload.max_chapters)
     else:
@@ -547,26 +718,46 @@ async def api_scrape(novel_id: int, payload: ScrapeTrigger, bg_tasks: Background
 # ── Translation + glossary ────────────────────────────────────────────────
 
 @router.post("/novels/{novel_id}/translate")
-async def api_translate(novel_id: int, payload: TranslateTrigger, bg_tasks: BackgroundTasks):
+async def api_translate(novel_id: int, payload: TranslateTrigger, bg_tasks: BackgroundTasks, user: dict = Depends(current_user)):
     """Translate raw chapters in a range in the background (manual batch; reading
     itself uses on-demand + prefetch). Optionally seed the glossary from the codex first."""
+    # Spend on the shared base is owner/admin only (per-user self-translation is Phase 5).
+    await require_editable(novel_id, user)
+    # Meter against the caller's monthly quota: count the chapters this run will actually
+    # translate (pending raws in range, or all raws in range when force=True).
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        pending = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM chapters
+            WHERE novel_id = $1 AND original_text IS NOT NULL
+              AND ($4 OR content IS NULL)
+              AND ($2::numeric IS NULL OR number >= $2)
+              AND ($3::numeric IS NULL OR number <= $3);
+            """,
+            novel_id, payload.from_chapter, payload.to_chapter, payload.force,
+        )
+    await quota.check_and_reserve(user, "translated_chapters", int(pending or 0))
+
     async def _job():
         if payload.seed_from_codex:
             await seed_glossary_from_entities(novel_id)
         await translate_range(novel_id, payload.from_chapter, payload.to_chapter, payload.force)
     bg_tasks.add_task(_job)
-    return {"status": "success", "message": "Translation job scheduled in background."}
+    return {"status": "success", "message": "Translation job scheduled in background.", "chapters": int(pending or 0)}
 
 
 @router.post("/novels/{novel_id}/glossary/seed")
-async def api_seed_glossary(novel_id: int):
+async def api_seed_glossary(novel_id: int, user: dict = Depends(current_user)):
     """Seed the glossary's English spellings from the established codex entities."""
+    await require_editable(novel_id, user)
     n = await seed_glossary_from_entities(novel_id)
     return {"status": "success", "seeded": n}
 
 
 @router.get("/novels/{novel_id}/glossary")
-async def api_list_glossary(novel_id: int):
+async def api_list_glossary(novel_id: int, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -585,8 +776,9 @@ async def api_list_glossary(novel_id: int):
 
 
 @router.put("/novels/{novel_id}/glossary")
-async def api_upsert_glossary(novel_id: int, payload: GlossaryUpsert):
+async def api_upsert_glossary(novel_id: int, payload: GlossaryUpsert, user: dict = Depends(current_user)):
     """Add or update a glossary term (manual edits win and are typically locked)."""
+    await require_editable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         gid = await conn.fetchval(
@@ -605,7 +797,8 @@ async def api_upsert_glossary(novel_id: int, payload: GlossaryUpsert):
 
 
 @router.delete("/novels/{novel_id}/glossary/{term_id}")
-async def api_delete_glossary(novel_id: int, term_id: int):
+async def api_delete_glossary(novel_id: int, term_id: int, user: dict = Depends(current_user)):
+    await require_editable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM translation_glossary WHERE id = $1 AND novel_id = $2;", term_id, novel_id)
@@ -615,8 +808,9 @@ async def api_delete_glossary(novel_id: int, term_id: int):
 # ── Codex: meta / stats ───────────────────────────────────────────────────
 
 @router.get("/novels/{novel_id}/meta")
-async def api_meta_chapters(novel_id: int):
+async def api_meta_chapters(novel_id: int, user: dict = Depends(current_user)):
     """Chapter span + display title/blurb so the codex ceiling control can be bounded."""
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         novel = await conn.fetchrow("SELECT title, description FROM novels WHERE id = $1;", novel_id)
@@ -636,8 +830,9 @@ async def api_meta_chapters(novel_id: int):
 
 
 @router.get("/novels/{novel_id}/stats")
-async def api_meta_stats(novel_id: int, ceiling: float):
+async def api_meta_stats(novel_id: int, ceiling: float, user: dict = Depends(current_user)):
     """Spoiler-safe aggregate stats for the codex home surface (all bounded by ceiling)."""
+    await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         entities_revealed = await conn.fetchval(
@@ -673,7 +868,14 @@ async def api_meta_stats(novel_id: int, ceiling: float):
 # ── Codex: structured wiki ────────────────────────────────────────────────
 
 @router.get("/novels/{novel_id}/entities")
-async def api_list_entities(novel_id: int, ceiling: float, type: str | None = None, q: str | None = None):
+async def api_list_entities(
+    novel_id: int,
+    ceiling: float,
+    type: str | None = None,
+    q: str | None = None,
+    user: dict = Depends(current_user),
+):
+    await require_readable(novel_id, user)
     try:
         return await list_entities(novel_id, chapter_ceiling=ceiling, entity_type=type, name_query=q)
     except Exception as e:
@@ -682,7 +884,8 @@ async def api_list_entities(novel_id: int, ceiling: float, type: str | None = No
 
 
 @router.get("/novels/{novel_id}/entity/resolve")
-async def api_resolve_entity(novel_id: int, name: str, ceiling: float):
+async def api_resolve_entity(novel_id: int, name: str, ceiling: float, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     try:
         return await resolve_entity(novel_id, name=name, chapter_ceiling=ceiling)
     except Exception as e:
@@ -691,8 +894,14 @@ async def api_resolve_entity(novel_id: int, name: str, ceiling: float):
 
 
 @router.get("/novels/{novel_id}/entity/{entity_id}")
-async def api_get_entity_profile(novel_id: int, entity_id: int, ceiling: float):
+async def api_get_entity_profile(
+    novel_id: int,
+    entity_id: int,
+    ceiling: float,
+    user: dict = Depends(current_user),
+):
     """Structured profile at the ceiling, using the wiki_cache fast path."""
+    await require_readable(novel_id, user)
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
@@ -756,7 +965,14 @@ async def api_get_entity_profile(novel_id: int, entity_id: int, ceiling: float):
 
 
 @router.get("/novels/{novel_id}/entity/{entity_id}/relationships")
-async def api_get_relationships(novel_id: int, entity_id: int, ceiling: float, other_id: int | None = None):
+async def api_get_relationships(
+    novel_id: int,
+    entity_id: int,
+    ceiling: float,
+    other_id: int | None = None,
+    user: dict = Depends(current_user),
+):
+    await require_readable(novel_id, user)
     try:
         return await get_relationships(novel_id, entity_id=entity_id, chapter_ceiling=ceiling, other_id=other_id)
     except Exception as e:
@@ -765,7 +981,8 @@ async def api_get_relationships(novel_id: int, entity_id: int, ceiling: float, o
 
 
 @router.get("/novels/{novel_id}/entity/{entity_id}/timeline")
-async def api_get_timeline(novel_id: int, entity_id: int, ceiling: float):
+async def api_get_timeline(novel_id: int, entity_id: int, ceiling: float, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     try:
         return await get_timeline(novel_id, entity_id=entity_id, chapter_ceiling=ceiling)
     except Exception as e:
@@ -774,7 +991,8 @@ async def api_get_timeline(novel_id: int, entity_id: int, ceiling: float):
 
 
 @router.get("/novels/{novel_id}/entity/{entity_id}/identities")
-async def api_get_identities(novel_id: int, entity_id: int, ceiling: float):
+async def api_get_identities(novel_id: int, entity_id: int, ceiling: float, user: dict = Depends(current_user)):
+    await require_readable(novel_id, user)
     try:
         return await get_identity_links(novel_id, entity_id=entity_id, chapter_ceiling=ceiling)
     except Exception as e:
@@ -785,8 +1003,9 @@ async def api_get_identities(novel_id: int, entity_id: int, ceiling: float):
 # ── Codex: Q&A + build ────────────────────────────────────────────────────
 
 @router.post("/novels/{novel_id}/ask", response_model=AskResponse)
-async def ask_question(novel_id: int, req: AskRequest):
+async def ask_question(novel_id: int, req: AskRequest, user: dict = Depends(current_user)):
     """Agentic spoiler-safe Q&A scoped to one novel."""
+    await require_readable(novel_id, user)
     try:
         await get_bm25_manager(novel_id).ensure_loaded()
         result = await answer_question(novel_id, req.question, req.ceiling)
@@ -809,8 +1028,10 @@ async def _build_codex(novel_id: int, force: bool, from_chapter: float | None, t
 
 
 @router.post("/novels/{novel_id}/codex/build")
-async def api_codex_build(novel_id: int, payload: CodexBuild, bg_tasks: BackgroundTasks):
+async def api_codex_build(novel_id: int, payload: CodexBuild, bg_tasks: BackgroundTasks, user: dict = Depends(current_user)):
     """Builds (or rebuilds) the spoiler-safe codex for a novel in the background."""
+    await require_editable(novel_id, user)
+    await quota.check_and_reserve(user, "codex_builds", 1)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute("UPDATE novels SET codex_enabled = TRUE WHERE id = $1;", novel_id)
@@ -819,7 +1040,8 @@ async def api_codex_build(novel_id: int, payload: CodexBuild, bg_tasks: Backgrou
 
 
 @router.post("/novels/{novel_id}/merge-entities")
-async def trigger_merge(novel_id: int, payload: MergePayload):
+async def trigger_merge(novel_id: int, payload: MergePayload, user: dict = Depends(current_user)):
+    await require_editable(novel_id, user)
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
@@ -886,8 +1108,24 @@ def _job_view(job: dict) -> dict:
     }
 
 
+# Import jobs are owned by their uploader. Owner-or-admin may view/act on a job; everyone
+# else gets a 404 (so a job's existence isn't leaked).
+def _job_owned(job: dict, user: dict) -> bool:
+    if user.get("role") == "admin":
+        return True
+    return job.get("user_id") is not None and job["user_id"] == user["id"]
+
+
+async def _require_own_job(job_id: int, user: dict) -> dict:
+    from novelwiki.importer import jobs as import_jobs
+    job = await import_jobs.get_job(job_id)
+    if not job or not _job_owned(job, user):
+        raise HTTPException(status_code=404, detail="Import job not found.")
+    return job
+
+
 @router.post("/import/upload")
-async def api_import_upload(file: UploadFile = File(...)):
+async def api_import_upload(file: UploadFile = File(...), user: dict = Depends(current_user)):
     """Accept an uploaded EPUB, stash it under a fresh job id, and queue it for parsing."""
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
@@ -904,7 +1142,7 @@ async def api_import_upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=413, detail=f"File exceeds the {settings.MAX_UPLOAD_MB} MB upload cap.")
 
     # Insert as 'receiving' so the worker can't grab it before the blob lands on disk.
-    job_id = await import_jobs.create_job(fmt, original_path="", status="receiving")
+    job_id = await import_jobs.create_job(fmt, original_path="", status="receiving", user_id=user["id"])
     path = import_storage.save_original(job_id, data, ext)
     sha = import_storage.sha256_bytes(data)
     await import_jobs.update_job(
@@ -935,7 +1173,7 @@ def _iter_import_files(root: str, recursive: bool):
                 yield src, name
 
 
-async def _enqueue_batch(files, *, auto_commit: bool, group_series: bool):
+async def _enqueue_batch(files, *, auto_commit: bool, group_series: bool, user_id: int | None = None):
     """Stage a list of (path, filename) into fresh import jobs sharing one batch id, so the
     worker can group/auto-commit them. Returns the queued job descriptors."""
     import uuid
@@ -949,7 +1187,7 @@ async def _enqueue_batch(files, *, auto_commit: bool, group_series: bool):
     for src, name in files:
         ext = os.path.splitext(name)[1].lower()
         fmt = _IMPORT_FORMATS[ext]
-        job_id = await import_jobs.create_job(fmt, original_path="", options=options, status="receiving")
+        job_id = await import_jobs.create_job(fmt, original_path="", options=options, status="receiving", user_id=user_id)
         with open(src, "rb") as f:
             data = f.read()
         path = import_storage.save_original(job_id, data, ext)
@@ -962,16 +1200,16 @@ async def _enqueue_batch(files, *, auto_commit: bool, group_series: bool):
 
 
 @router.post("/import/scan-incoming")
-async def api_import_scan_incoming():
+async def api_import_scan_incoming(user: dict = Depends(current_user)):
     """Enqueue any EPUB/PDF dropped into IMPORT_INCOMING_DIR (the watched-folder path for big
     files that bypass the multipart upload cap). Non-recursive, manual review per book."""
     files = list(_iter_import_files(settings.IMPORT_INCOMING_DIR, recursive=False))
-    _batch_id, queued = await _enqueue_batch(files, auto_commit=False, group_series=False)
+    _batch_id, queued = await _enqueue_batch(files, auto_commit=False, group_series=False, user_id=user["id"])
     return {"queued": queued, "count": len(queued)}
 
 
 @router.post("/import/batch")
-async def api_import_batch(payload: ImportBatch):
+async def api_import_batch(payload: ImportBatch, user: dict = Depends(current_user)):
     """Bulk-import a folder (e.g. a Calibre library). Recurses by default, can auto-commit
     each book without review, and can group EPUB volumes of one series into a single novel."""
     root = payload.path or settings.IMPORT_INCOMING_DIR
@@ -981,7 +1219,7 @@ async def api_import_batch(payload: ImportBatch):
     if not files:
         raise HTTPException(status_code=404, detail=f"No .epub/.pdf files found under {root}.")
     batch_id, queued = await _enqueue_batch(
-        files, auto_commit=payload.auto_commit, group_series=payload.group_series)
+        files, auto_commit=payload.auto_commit, group_series=payload.group_series, user_id=user["id"])
     return {"batch_id": batch_id, "queued": queued, "count": len(queued)}
 
 
@@ -991,7 +1229,7 @@ async def api_import_batch(payload: ImportBatch):
 # worker trigger) until complete flips it to 'uploaded'.
 
 @router.post("/import/upload/init")
-async def api_import_upload_init(payload: ImportInit):
+async def api_import_upload_init(payload: ImportInit, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
 
@@ -1001,19 +1239,17 @@ async def api_import_upload_init(payload: ImportInit):
         raise HTTPException(status_code=400, detail="Only .epub and .pdf files are supported.")
     job_id = await import_jobs.create_job(
         fmt, original_path="", options={"upload": {"size": int(payload.size or 0), "ext": ext.lstrip('.')}},
-        status="receiving")
+        status="receiving", user_id=user["id"])
     path = import_storage.init_upload(job_id, ext)
     await import_jobs.update_job(job_id, original_path=str(path))
     return {"id": job_id, "offset": 0, "format": fmt}
 
 
 @router.get("/import/upload/{job_id}/status")
-async def api_import_upload_status(job_id: int):
+async def api_import_upload_status(job_id: int, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
-    job = await import_jobs.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Import job not found.")
+    job = await _require_own_job(job_id, user)
     up = (job.get("options") or {}).get("upload") or {}
     ext = up.get("ext", job["format"])
     return {"id": job_id, "offset": import_storage.upload_offset(job_id, ext),
@@ -1021,12 +1257,11 @@ async def api_import_upload_status(job_id: int):
 
 
 @router.put("/import/upload/{job_id}/chunk")
-async def api_import_upload_chunk(job_id: int, request: Request):
+async def api_import_upload_chunk(job_id: int, request: Request, user: dict = Depends(current_user)):
     """Append one chunk at the byte offset given in the `Upload-Offset` header."""
-    from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
-    job = await import_jobs.get_job(job_id)
-    if not job or job["status"] != "receiving":
+    job = await _require_own_job(job_id, user)
+    if job["status"] != "receiving":
         raise HTTPException(status_code=409, detail="Upload session is not open.")
     up = (job.get("options") or {}).get("upload") or {}
     ext = up.get("ext", job["format"])
@@ -1042,12 +1277,10 @@ async def api_import_upload_chunk(job_id: int, request: Request):
 
 
 @router.post("/import/upload/{job_id}/complete")
-async def api_import_upload_complete(job_id: int):
+async def api_import_upload_complete(job_id: int, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
-    job = await import_jobs.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Import job not found.")
+    job = await _require_own_job(job_id, user)
     if job["status"] != "receiving":
         return {"id": job_id, "status": job["status"]}    # already finalized (idempotent)
     up = (job.get("options") or {}).get("upload") or {}
@@ -1063,16 +1296,13 @@ async def api_import_upload_complete(job_id: int):
 
 
 @router.post("/import/commit-series")
-async def api_import_commit_series(payload: CommitSeries):
+async def api_import_commit_series(payload: CommitSeries, user: dict = Depends(current_user)):
     """Fold several parsed jobs into one multi-volume novel (ordered by series index)."""
-    from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import commit as import_commit
     if len(payload.job_ids) < 1:
         raise HTTPException(status_code=422, detail="Provide at least one job id.")
     for jid in payload.job_ids:
-        job = await import_jobs.get_job(jid)
-        if not job:
-            raise HTTPException(status_code=404, detail=f"Import job {jid} not found.")
+        job = await _require_own_job(jid, user)
         if job["status"] not in ("awaiting_review", "failed"):
             raise HTTPException(status_code=409, detail=f"Job {jid} is '{job['status']}', not ready to commit.")
     try:
@@ -1083,31 +1313,28 @@ async def api_import_commit_series(payload: CommitSeries):
 
 
 @router.get("/import/jobs")
-async def api_import_jobs():
+async def api_import_jobs(user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
-    return [_job_view(j) for j in await import_jobs.list_jobs()]
+    # Admins see every job; everyone else only their own uploads.
+    scope = None if user.get("role") == "admin" else user["id"]
+    return [_job_view(j) for j in await import_jobs.list_jobs(user_id=scope)]
 
 
 @router.get("/import/jobs/{job_id}")
-async def api_import_job(job_id: int):
-    from novelwiki.importer import jobs as import_jobs
-    job = await import_jobs.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Import job not found.")
+async def api_import_job(job_id: int, user: dict = Depends(current_user)):
+    job = await _require_own_job(job_id, user)
     return _job_view(job)
 
 
 @router.put("/import/jobs/{job_id}/plan")
-async def api_import_update_plan(job_id: int, payload: PlanUpdate):
+async def api_import_update_plan(job_id: int, payload: PlanUpdate, user: dict = Depends(current_user)):
     """Replace the editable segmentation plan (merge/split/rename/include/number/kind are
     all client-side edits that produce a new plan). Block ranges are validated against the
     stored block stream so a bad edit can't point off the end of the document."""
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
 
-    job = await import_jobs.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Import job not found.")
+    job = await _require_own_job(job_id, user)
     if job["status"] in ("committing", "committed"):
         raise HTTPException(status_code=409, detail="This job has already been committed.")
 
@@ -1130,13 +1357,20 @@ async def api_import_update_plan(job_id: int, payload: PlanUpdate):
 
 
 @router.post("/import/jobs/{job_id}/commit")
-async def api_import_commit(job_id: int, payload: ImportCommit):
+async def api_import_commit(job_id: int, payload: ImportCommit, user: dict = Depends(current_user)):
     """Hand the job to the worker for commit: stamp the target into options and flip the
     status to 'committing'. The worker writes chapters via the scraper persist path."""
     from novelwiki.importer import jobs as import_jobs
-    job = await import_jobs.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Import job not found.")
+    job = await _require_own_job(job_id, user)
+    # When appending/replacing, the user must also be able to edit the target novel.
+    if payload.mode == "append" and payload.novel_id:
+        await require_editable(payload.novel_id, user)
+    elif payload.mode == "replace" and payload.source_id:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            tgt_novel = await conn.fetchval("SELECT novel_id FROM sources WHERE id = $1;", payload.source_id)
+        if tgt_novel:
+            await require_editable(int(tgt_novel), user)
     # 'committed' is intentionally excluded: a finished job already produced its novel, and
     # re-committing 'new' would duplicate it. Re-import the file for a fresh copy instead.
     if job["status"] not in ("awaiting_review", "failed"):
@@ -1166,15 +1400,18 @@ async def api_import_commit(job_id: int, payload: ImportCommit):
 
 
 @router.post("/import/jobs/{job_id}/confirm-ocr")
-async def api_import_confirm_ocr(job_id: int, payload: OcrConfirm):
+async def api_import_confirm_ocr(job_id: int, payload: OcrConfirm, user: dict = Depends(current_user)):
     """Approve the (expensive) OCR run for a scanned PDF: the job leaves the confirm gate and
     the worker starts reading pages (sidecar + Gemini escalation, budget-guarded)."""
     from novelwiki.importer import jobs as import_jobs
-    job = await import_jobs.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Import job not found.")
+    job = await _require_own_job(job_id, user)
     if job["status"] not in ("awaiting_ocr_confirm", "ocr_paused"):
         raise HTTPException(status_code=409, detail=f"Job is '{job['status']}', not awaiting OCR confirmation.")
+    # Reserve the estimated OCR pages against the user's monthly quota up front (this is the
+    # user-facing approval gate, so a 429 here is the right place to surface "over quota").
+    pages = int(((job.get("cost_estimate") or {}).get("pages")) or ((job.get("progress") or {}).get("total")) or 0)
+    if pages > 0:
+        await quota.check_and_reserve(user, "ocr_pages", pages)
     options = {**(job.get("options") or {}), "gemini_first": payload.gemini_first}
     await import_jobs.update_job(job_id, options=options, status="ocr_pending",
                                  stage="OCR queued", error=None)
@@ -1182,20 +1419,18 @@ async def api_import_confirm_ocr(job_id: int, payload: OcrConfirm):
 
 
 @router.post("/import/jobs/{job_id}/cancel")
-async def api_import_cancel(job_id: int):
+async def api_import_cancel(job_id: int, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
-    job = await import_jobs.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Import job not found.")
+    await _require_own_job(job_id, user)
     await import_jobs.update_job(job_id, status="canceled", stage="canceled")
     return {"status": "canceled"}
 
 
 @router.delete("/import/jobs/{job_id}")
-async def api_import_delete(job_id: int):
+async def api_import_delete(job_id: int, user: dict = Depends(current_user)):
     """Delete a job row and free its scratch dir + staged assets."""
-    from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
+    await _require_own_job(job_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM import_jobs WHERE id = $1;", job_id)

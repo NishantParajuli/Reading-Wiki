@@ -101,6 +101,50 @@ class Settings(BaseSettings):
     OCR_ENABLED: bool = True
     OCR_CONFIDENCE_ESCALATE: float = 0.80    # page mean confidence below this → Gemini
 
+    # ── Multi-user / auth ──────────────────────────────────────────────────
+    # Server-side opaque sessions backed by a DB table; the browser only holds an
+    # httpOnly+Secure cookie. SESSION_SECRET signs/peppers tokens — set a long random
+    # value in prod (a changed secret invalidates all sessions).
+    SESSION_SECRET: str = "dev-insecure-change-me"
+    SESSION_COOKIE: str = "tg_session"
+    SESSION_TTL_DAYS: int = 30
+    # Browsers reject `Access-Control-Allow-Origin: *` together with credentialed
+    # requests, so list explicit origins. The SPA is served same-origin in prod; these
+    # cover the tunnel domain + local dev. Comma-separated in the env var.
+    ALLOWED_ORIGINS: str = "http://localhost:8001,http://localhost:8000"
+    # Marked Secure so the cookie only rides HTTPS. Set False for plain-HTTP localhost dev.
+    COOKIE_SECURE: bool = True
+
+    # First admin, bootstrapped by the migration / `python -m novelwiki.db.migrate_multiuser`.
+    # The existing (pre-multi-user) library is reassigned to this user as the Global shelf.
+    ADMIN_EMAIL: str = "admin@example.com"
+    ADMIN_PASSWORD: str = ""                  # required to bootstrap; leave blank to skip
+    ADMIN_USERNAME: str = "admin"
+
+    # Transactional email (verification + password reset). Without an SMTP host the app
+    # still runs but logs the verification link instead of sending it (handy in dev).
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = "Tideglass <no-reply@tideglass.local>"
+    SMTP_STARTTLS: bool = True
+    # Public base URL used to build links in emails + OAuth redirects (no trailing slash).
+    PUBLIC_BASE_URL: str = "http://localhost:8001"
+
+    # OAuth providers (optional; leave blank to hide the button). Redirect URI is
+    # {PUBLIC_BASE_URL}/api/auth/oauth/{provider}/callback.
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    DISCORD_CLIENT_ID: str = ""
+    DISCORD_CLIENT_SECRET: str = ""
+
+    # Monthly per-user spend quotas (admin-adjustable per user; NULL on the user row
+    # falls back to these). Generous by default for a normal reader.
+    DEFAULT_QUOTA_TRANSLATED_CHAPTERS: int = 1000
+    DEFAULT_QUOTA_OCR_PAGES: int = 3000
+    DEFAULT_QUOTA_CODEX_BUILDS: int = 20
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

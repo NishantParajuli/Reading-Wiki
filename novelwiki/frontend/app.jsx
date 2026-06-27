@@ -70,7 +70,7 @@ const CONTEXT_NAV = [
   { id: "ask", label: "Ask", icon: "sparkles" },
 ];
 
-function App() {
+function App({ user, onLogout }) {
   const [theme, setTheme] = useState(() => localStorage.getItem("nw-theme") || "light");
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
@@ -126,6 +126,7 @@ function App() {
 
   // ── navigation ──
   const openLibrary = () => { setNovelId(null); setRoute({ view: "library", params: {} }); };
+  const openDiscover = () => { setNovelId(null); setRoute({ view: "discover", params: {} }); };
   const openImport = () => { setNovelId(null); setRoute({ view: "import", params: {} }); };
   const openNovel = (id) => { setNovelId(id); setRoute({ view: "novel", params: {} }); };
   const openReader = (number) => setRoute({ view: "reader", params: { number } });
@@ -151,10 +152,12 @@ function App() {
   let screen;
   if (route.view === "import") {
     screen = React.createElement(ImportView, { openNovel, openLibrary });
+  } else if (route.view === "discover") {
+    screen = React.createElement(Discover, { openNovel, openLibrary });
   } else if (!inNovel || route.view === "library") {
-    screen = React.createElement(Library, { openNovel, openImport });
+    screen = React.createElement(Library, { openNovel, openImport, openDiscover });
   } else if (route.view === "novel") {
-    screen = React.createElement(NovelDetail, { novelId, novel, reloadNovel, openReader, nav, openLibrary });
+    screen = React.createElement(NovelDetail, { novelId, novel, reloadNovel, openReader, nav, openLibrary, user });
   } else if (route.view === "reader") {
     screen = React.createElement(Reader, { novelId, number: route.params.number, openReader, backToNovel: () => setView("novel"), onRead });
   } else if (route.view === "browse") {
@@ -191,7 +194,8 @@ function App() {
           React.createElement("button", {
             className: "icon-btn", onClick: () => setTheme(th => th === "light" ? "dark" : "light"),
             "aria-label": "Toggle theme",
-          }, React.createElement(Icon, { name: theme === "light" ? "moon" : "sun", size: 18 }))
+          }, React.createElement(Icon, { name: theme === "light" ? "moon" : "sun", size: 18 })),
+          user && React.createElement(UserMenu, { user, onLogout })
         )
       ),
       showCeiling && React.createElement(CeilingBar, { ceiling, setCeiling, meta: codexMeta, stats }),
@@ -220,4 +224,33 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+/* AuthGate: resolve the session on load. Anonymous → AuthScreen; signed-in → the app.
+   A mid-session 401 (expired cookie) routes back to the login screen via window.__onUnauthorized. */
+function Root() {
+  const [state, setState] = useState({ loading: true, user: null });
+
+  useEffect(() => {
+    let cancel = false;
+    window.API.auth.me()
+      .then(u => { if (!cancel) setState({ loading: false, user: u }); })
+      .catch(() => { if (!cancel) setState({ loading: false, user: null }); });
+    window.__onUnauthorized = () => setState(s => s.user ? { loading: false, user: null } : s);
+    return () => { cancel = true; window.__onUnauthorized = null; };
+  }, []);
+
+  if (state.loading) {
+    return React.createElement("div", { className: "auth-wrap" },
+      React.createElement("div", { className: "muted" }, "Loading…"));
+  }
+  if (!state.user) {
+    return React.createElement(AuthScreen, {
+      onAuthed: (u) => { window.location.hash = ""; setState({ loading: false, user: u }); },
+    });
+  }
+  return React.createElement(App, {
+    user: state.user,
+    onLogout: () => setState({ loading: false, user: null }),
+  });
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(Root));

@@ -224,13 +224,19 @@ async def _pending_after(novel_id: int, after_number: float, count: int) -> list
     return [float(r["number"]) for r in rows]
 
 
-async def prefetch_translations(novel_id: int, after_number: float, count: int | None = None):
+async def prefetch_translations(novel_id: int, after_number: float, count: int | None = None,
+                                meter_user: dict | None = None):
     """Background task: translate the next few pending raw chapters so the reader
-    rarely waits at a chapter boundary."""
+    rarely waits at a chapter boundary. When `meter_user` is given, each prefetched
+    chapter is charged to that user's monthly quota and prefetch stops once they're out."""
     count = count if count is not None else settings.TRANSLATE_PREFETCH
     if count <= 0:
         return
     for num in await _pending_after(novel_id, after_number, count):
+        if meter_user is not None:
+            from novelwiki import quota
+            if not await quota.try_reserve(meter_user, "translated_chapters", 1):
+                break
         try:
             await translate_chapter(novel_id, num)
         except Exception as e:
