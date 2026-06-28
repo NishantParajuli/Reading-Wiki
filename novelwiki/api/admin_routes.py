@@ -252,3 +252,33 @@ async def admin_list_novels(visibility: str | None = None, q: str | None = None,
          "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None}
         for r in rows
     ]
+
+
+@router.get("/global-novels")
+async def admin_global_novels(admin: dict = Depends(require_admin)):
+    """The curated Global library with per-novel pipeline status, for the Global jobs tab.
+    The triggers themselves reuse the shared per-novel endpoints (scrape / translate /
+    codex/build), which already let an admin act on any novel — this just lists what's there."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT n.id, n.title, n.codex_enabled, n.updated_at,
+                   (SELECT COUNT(*) FROM chapters c WHERE c.novel_id = n.id) AS chapter_count,
+                   (SELECT COUNT(*) FROM sources s WHERE s.novel_id = n.id) AS source_count,
+                   COALESCE((SELECT bool_or(s.is_raw) FROM sources s WHERE s.novel_id = n.id), FALSE) AS has_raw,
+                   (SELECT MAX(s.last_scraped_at) FROM sources s WHERE s.novel_id = n.id) AS last_scraped_at,
+                   (SELECT COUNT(*) FROM chapters c
+                      WHERE c.novel_id = n.id AND c.original_text IS NOT NULL AND c.content IS NULL) AS untranslated
+            FROM novels n WHERE n.visibility = 'global'
+            ORDER BY n.updated_at DESC NULLS LAST, n.id DESC;
+            """,
+        )
+    return [
+        {"id": int(r["id"]), "title": r["title"], "codex_enabled": r["codex_enabled"],
+         "chapter_count": int(r["chapter_count"] or 0), "source_count": int(r["source_count"] or 0),
+         "has_raw": bool(r["has_raw"]), "untranslated": int(r["untranslated"] or 0),
+         "last_scraped_at": r["last_scraped_at"].isoformat() if r["last_scraped_at"] else None,
+         "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None}
+        for r in rows
+    ]

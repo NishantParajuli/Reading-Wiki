@@ -103,6 +103,9 @@ class ResolveOverlay(BaseModel):
     choice: str                       # base|mine|merge
     content: str | None = None        # required when choice == 'merge'
 
+class ContributionAccept(BaseModel):
+    content: str | None = None        # optional resolved text when accepting a conflicted contribution
+
 class ContributionPolicy(BaseModel):
     contribution_policy: str          # manual|auto
 
@@ -724,6 +727,7 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
     Raw chapters are translated on demand here (and the next few are prefetched in the
     background), so the reader always gets English text — keyed off `translation_status`."""
     novel = await require_readable(novel_id, user)
+    active_user = user if isinstance(user, dict) else None
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -747,11 +751,13 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
             "SELECT number FROM chapters WHERE novel_id = $1 AND number > $2 ORDER BY number ASC LIMIT 1;",
             novel_id, number,
         )
-        overlay = await conn.fetchrow(
-            "SELECT content, base_version, origin, conflict FROM chapter_overlays "
-            "WHERE user_id = $1 AND novel_id = $2 AND chapter = $3;",
-            user["id"], novel_id, number,
-        )
+        overlay = None
+        if active_user is not None:
+            overlay = await conn.fetchrow(
+                "SELECT content, base_version, origin, conflict FROM chapter_overlays "
+                "WHERE user_id = $1 AND novel_id = $2 AND chapter = $3;",
+                active_user["id"], novel_id, number,
+            )
 
     content = row["content"]
     status = row["translation_status"]
@@ -760,13 +766,13 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
     # against the reader's monthly quota; if they're over (or unverified), we serve the
     # chapter untranslated with a `quota_exceeded` status instead of failing the read.
     if content is None and row["has_original"]:
-        result = await translate_chapter(novel_id, number, meter_user=user)
+        result = await translate_chapter(novel_id, number, meter_user=active_user)
         content = result.get("content")
         status = result.get("status")
         is_translated = status == "done"
         # Warm the next few chapters only after the current translation actually succeeded.
         if status == "done":
-            bg_tasks.add_task(prefetch_translations, novel_id, number, settings.TRANSLATE_PREFETCH, user)
+            bg_tasks.add_task(prefetch_translations, novel_id, number, settings.TRANSLATE_PREFETCH, active_user)
 
     # Only file-import sources (epub/pdf) store sanitized rich HTML in raw_html; scraped
     # sources put the raw page dump there, which must never be rendered. And for a *raw*
@@ -800,8 +806,8 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
         # Overlay / contribute-back context for the reader's editor + conflict UI.
         "content_version": base_version,
         "has_original": bool(row["has_original"]),
-        "can_edit_base": can_edit(novel, user),
-        "is_owner": novel.get("owner_id") == user["id"],
+        "can_edit_base": can_edit(novel, active_user),
+        "is_owner": active_user is not None and novel.get("owner_id") == active_user["id"],
         "contribution_policy": novel.get("contribution_policy") or "manual",
         "overlay": overlay_active,
         "overlay_origin": overlay["origin"] if overlay_active else None,
@@ -912,13 +918,20 @@ async def api_self_translate(novel_id: int, number: float, user: dict = Depends(
     """Translate a raw chapter into the reader's own overlay (counts against their monthly
     translated-chapters quota). Only applies to chapters that have source-language text."""
     await require_readable(novel_id, user)
-    await quota.check_and_reserve(user, "translated_chapters", 1)
-    translation = await translate_raw_text(novel_id, number)
-    if not translation:
-        raise HTTPException(status_code=409, detail="This chapter has no source text to translate.")
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         ch = await _chapter_or_404(conn, novel_id, number)
+        has_source = await conn.fetchval(
+            "SELECT original_text IS NOT NULL FROM chapters WHERE novel_id = $1 AND number = $2;",
+            novel_id, number,
+        )
+    if not has_source:
+        raise HTTPException(status_code=409, detail="This chapter has no source text to translate.")
+    await quota.check_and_reserve(user, "translated_chapters", 1)
+    translation = await translate_raw_text(novel_id, number)
+    if not translation:
+        raise HTTPException(status_code=409, detail="This chapter could not be translated.")
+    async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO chapter_overlays (user_id, novel_id, chapter, content, base_version, origin, conflict)
@@ -1039,25 +1052,40 @@ async def api_list_contributions(novel_id: int, status: str = "pending", user: d
 
 
 @router.post("/novels/{novel_id}/contributions/{contribution_id}/accept")
-async def api_accept_contribution(novel_id: int, contribution_id: int, user: dict = Depends(current_user)):
-    """Owner/admin: merge a pending contribution into the shared base (bumps the version and
-    flags everyone else's overlays of this chapter as conflicts)."""
+async def api_accept_contribution(
+    novel_id: int,
+    contribution_id: int,
+    payload: ContributionAccept | None = None,
+    user: dict = Depends(current_user),
+):
+    """Owner/admin: merge a pending contribution into the shared base. If the shared base
+    changed after the contribution was offered, callers must provide resolved content so a
+    stale proposal cannot overwrite newer translation work by accident."""
     await require_editable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         c = await conn.fetchrow(
-            "SELECT id, chapter, content, from_user_id, status FROM contributions WHERE id = $1 AND novel_id = $2;",
+            "SELECT id, chapter, content, from_user_id, base_version, status FROM contributions WHERE id = $1 AND novel_id = $2;",
             contribution_id, novel_id,
         )
         if c is None:
             raise HTTPException(status_code=404, detail="Contribution not found.")
         if c["status"] not in ("pending",):
             raise HTTPException(status_code=409, detail=f"Contribution is already '{c['status']}'.")
+        ch = await _chapter_or_404(conn, novel_id, float(c["chapter"]))
+        is_conflict = int(c["base_version"] or 1) < int(ch["content_version"] or 1)
+        resolved = ((payload.content if payload else None) or "").strip()
+        if is_conflict and not resolved:
+            raise HTTPException(
+                status_code=409,
+                detail="This contribution conflicts with the current base. Provide resolved content to accept it.",
+            )
+        content = resolved or c["content"]
         async with conn.transaction():
-            await _write_base_content(conn, novel_id, float(c["chapter"]), c["content"], keep_overlay_user=c["from_user_id"])
+            await _write_base_content(conn, novel_id, float(c["chapter"]), content, keep_overlay_user=c["from_user_id"])
             await conn.execute(
-                "UPDATE contributions SET status = 'accepted', reviewed_by = $2, reviewed_at = now() WHERE id = $1;",
-                contribution_id, user["id"],
+                "UPDATE contributions SET status = 'accepted', content = $3, reviewed_by = $2, reviewed_at = now() WHERE id = $1;",
+                contribution_id, user["id"], content,
             )
     return {"status": "accepted"}
 

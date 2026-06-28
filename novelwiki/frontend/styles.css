@@ -955,6 +955,7 @@ input[type="range"].slider::-moz-range-thumb {
   border-radius: var(--radius-sm); background: var(--surface); flex-wrap: wrap; }
 .admin-novel-title { background: none; border: none; text-align: left; font: inherit; font-weight: 600; color: var(--ink); cursor: pointer; }
 .admin-novel-title:hover { color: var(--accent); }
+.admin-job-row { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
 
 /* ── Reader: translation overlay tools (Phase 5) ── */
 .icon-btn.has-conflict { color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); position: relative; }
@@ -980,3 +981,11 @@ input[type="range"].slider::-moz-range-thumb {
 .contrib-row:last-child { border-bottom: none; }
 .contrib-preview { font-size: 13px; line-height: 1.55; color: var(--ink-2); max-height: 90px; overflow: hidden;
   background: var(--bg-2); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }
+.contrib-merge { margin-top: 10px; border: 1px solid var(--danger, #c0392b); border-radius: 10px; padding: 10px;
+  background: color-mix(in oklch, var(--danger, #c0392b) 7%, transparent); }
+.contrib-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.contrib-sides summary { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--ink-2); }
+.contrib-text { margin-top: 6px; max-height: 160px; overflow: auto; white-space: pre-wrap; font-size: 13px; line-height: 1.55;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.contrib-merge-text { margin-top: 8px; background: var(--surface); }
+@media (max-width: 720px) { .contrib-sides { grid-template-columns: 1fr; } }

@@ -186,7 +186,7 @@ function App({ user, onLogout, onUserUpdate }) {
   } else if (route.view === "novel") {
     screen = React.createElement(NovelDetail, { novelId, novel, reloadNovel, openReader, nav, openLibrary, user });
   } else if (route.view === "reader") {
-    screen = React.createElement(Reader, { novelId, number: route.params.number, openReader, backToNovel: () => setView("novel"), onRead });
+    screen = React.createElement(Reader, { novelId, number: route.params.number, openReader, backToNovel: () => setView("novel"), onRead, user, onUserUpdate });
   } else if (route.view === "browse") {
     screen = React.createElement(Browser, { novelId, ceiling, meta: codexMeta, nav });
   } else if (route.view === "entity") {

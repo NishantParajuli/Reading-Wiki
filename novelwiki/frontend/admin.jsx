@@ -10,6 +10,7 @@ const ADMIN_TABS = [
   { id: "users", label: "Users", icon: "users" },
   { id: "usage", label: "Usage & cost", icon: "database" },
   { id: "moderation", label: "Moderation", icon: "shield" },
+  { id: "jobs", label: "Global jobs", icon: "spider" },
 ];
 
 function blankToNull(v) {
@@ -218,6 +219,83 @@ function ModerationTab({ openNovel }) {
   );
 }
 
+/* ── Global jobs ──
+   Run the ingestion pipeline on the curated Global library: scrape new chapters, batch
+   pre-translate raw chapters, (re)build the spoiler-safe codex. Triggers reuse the shared
+   per-novel endpoints (admins may act on any novel); jobs run in the background server-side. */
+function GlobalJobsTab({ openNovel }) {
+  const [novels, setNovels] = useState(null);
+  const [msg, setMsg] = useState({});       // novelId -> { kind: 'pending'|'ok'|'err', text }
+  const [busy, setBusy] = useState({});     // novelId -> bool
+
+  const load = useCallback(() => {
+    setNovels(null);
+    window.API.admin.globalNovels().then(setNovels).catch(() => setNovels([]));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const run = async (n, label, fn) => {
+    setBusy(b => ({ ...b, [n.id]: true }));
+    setMsg(m => ({ ...m, [n.id]: { kind: "pending", text: label + "…" } }));
+    try {
+      const r = await fn();
+      setMsg(m => ({ ...m, [n.id]: { kind: "ok", text: (r && r.message) || (label + " scheduled.") } }));
+    } catch (e) {
+      setMsg(m => ({ ...m, [n.id]: { kind: "err", text: e.message || "Failed." } }));
+    } finally {
+      setBusy(b => ({ ...b, [n.id]: false }));
+    }
+  };
+
+  const fmtDate = (s) => s ? new Date(s).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "never";
+
+  return (
+    <div>
+      <div className="row" style={{ marginBottom: 14 }}>
+        <p className="grow muted" style={{ margin: 0 }}>Scrape, pre-translate, and build the codex for the shared Global library. Jobs run in the background.</p>
+        <button className="btn btn-ghost" onClick={load}><Icon name="refresh" size={15} /> Refresh</button>
+      </div>
+      {novels == null ? <Loading label="Loading Global library…" />
+        : novels.length === 0 ? <EmptyState icon="book" title="No global novels" body="Promote a public novel to Global from the Moderation tab." />
+          : (
+            <div className="admin-user-list">
+              {novels.map(n => {
+                const m = msg[n.id]; const b = !!busy[n.id];
+                const mClass = m && (m.kind === "ok" ? "acct-ok" : m.kind === "err" ? "acct-err" : "muted");
+                return (
+                  <div key={n.id} className="admin-job-row">
+                    <div className="row" style={{ gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                      <button className="admin-novel-title" onClick={() => openNovel(n.id)} title="Open novel">{n.title}</button>
+                      <span className="muted mono" style={{ fontSize: 12 }}>
+                        {n.chapter_count} ch · {n.source_count} src · scraped {fmtDate(n.last_scraped_at)}
+                        {n.has_raw ? ` · ${n.untranslated} untranslated` : ""}
+                        {n.codex_enabled ? " · codex" : ""}
+                      </span>
+                    </div>
+                    <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                      <button className="btn btn-ghost sm" disabled={b} onClick={() => run(n, "Scrape", () => window.API.scrape(n.id, {}))}>
+                        <Icon name="spider" size={14} /> Scrape
+                      </button>
+                      {n.has_raw && (
+                        <button className="btn btn-ghost sm" disabled={b || n.untranslated === 0}
+                                onClick={() => run(n, "Translate", () => window.API.translate(n.id, {}))}>
+                          <Icon name="refresh" size={14} /> Translate raws
+                        </button>
+                      )}
+                      <button className="btn btn-ghost sm" disabled={b} onClick={() => run(n, "Codex build", () => window.API.codexBuild(n.id, {}))}>
+                        <Icon name="brain" size={14} /> {n.codex_enabled ? "Rebuild codex" : "Build codex"}
+                      </button>
+                      {m && <span className={mClass} style={{ fontSize: 12.5, alignSelf: "center" }}>{m.text}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+    </div>
+  );
+}
+
 function Admin({ openLibrary, openNovel, currentUser }) {
   const [tab, setTab] = useState("users");
   if (!currentUser || currentUser.role !== "admin") {
@@ -247,6 +325,7 @@ function Admin({ openLibrary, openNovel, currentUser }) {
         {tab === "users" && <UsersTab me={currentUser} />}
         {tab === "usage" && <UsageTab />}
         {tab === "moderation" && <ModerationTab openNovel={openNovel} />}
+        {tab === "jobs" && <GlobalJobsTab openNovel={openNovel} />}
       </div>
     </div>
   );

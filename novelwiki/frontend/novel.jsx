@@ -318,6 +318,7 @@ function ContributionPolicyControl({ novel, reloadNovel }) {
 function ContributionsInbox({ novelId, reloadNovel }) {
   const [items, setItems] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [drafts, setDrafts] = useState({});
   const load = useCallback(() => {
     window.API.contributions(novelId).then(setItems).catch(() => setItems([]));
   }, [novelId]);
@@ -326,9 +327,14 @@ function ContributionsInbox({ novelId, reloadNovel }) {
   if (items == null || items.length === 0) return null;
 
   const act = async (c, accept) => {
+    const resolved = (drafts[c.id] || "").trim();
+    if (accept && c.is_conflict && !resolved) {
+      alert("Resolve this conflict before accepting it.");
+      return;
+    }
     setBusyId(c.id);
     try {
-      if (accept) await window.API.acceptContribution(novelId, c.id);
+      if (accept) await window.API.acceptContribution(novelId, c.id, c.is_conflict ? resolved : undefined);
       else await window.API.rejectContribution(novelId, c.id);
       load(); reloadNovel && reloadNovel();
     } catch (e) { alert(e.message || "Action failed."); }
@@ -338,22 +344,51 @@ function ContributionsInbox({ novelId, reloadNovel }) {
   return React.createElement(React.Fragment, null,
     React.createElement("p", { className: "section-eyebrow", style: { marginTop: 28 } }, `Contribution requests (${items.length})`),
     React.createElement("div", { className: "card", style: { padding: 12 } },
-      items.map(c => React.createElement("div", { key: c.id, className: "contrib-row" },
-        React.createElement("div", { className: "row", style: { gap: 8, alignItems: "center", marginBottom: 6 } },
-          React.createElement("span", { className: "chip mono" }, `Ch. ${c.chapter}`),
-          React.createElement("span", { style: { fontWeight: 600 } }, c.from_display_name),
-          React.createElement("span", { className: "muted", style: { fontSize: 12.5 } }, "@" + c.from_username),
-          c.is_conflict && React.createElement("span", { className: "chip", style: { background: "var(--rose, #c0392b)", color: "#fff" }, title: "Base changed since this was offered" }, "conflict"),
-          React.createElement("div", { className: "grow" })
-        ),
-        React.createElement("div", { className: "contrib-preview" }, (c.content || "").slice(0, 280) + ((c.content || "").length > 280 ? "…" : "")),
-        React.createElement("div", { className: "row", style: { gap: 8, marginTop: 8 } },
-          React.createElement("button", { className: "btn btn-primary", disabled: busyId === c.id, onClick: () => act(c, true), title: "Merge into the shared base" },
-            React.createElement(Icon, { name: "check", size: 15 }), "Accept"),
-          React.createElement("button", { className: "btn btn-ghost", disabled: busyId === c.id, onClick: () => act(c, false) },
-            React.createElement(Icon, { name: "x", size: 15 }), "Reject")
-        )
-      ))
+      items.map(c => {
+        const draft = drafts[c.id] || "";
+        const preview = (c.content || "").slice(0, 280) + ((c.content || "").length > 280 ? "…" : "");
+        return React.createElement("div", { key: c.id, className: "contrib-row" },
+          React.createElement("div", { className: "row", style: { gap: 8, alignItems: "center", marginBottom: 6 } },
+            React.createElement("span", { className: "chip mono" }, `Ch. ${c.chapter}`),
+            React.createElement("span", { style: { fontWeight: 600 } }, c.from_display_name),
+            React.createElement("span", { className: "muted", style: { fontSize: 12.5 } }, "@" + c.from_username),
+            c.is_conflict && React.createElement("span", { className: "chip", style: { background: "var(--danger, #c0392b)", color: "#fff" }, title: "Base changed since this was offered" }, "conflict"),
+            React.createElement("div", { className: "grow" })
+          ),
+          React.createElement("div", { className: "contrib-preview" }, preview),
+          c.is_conflict && React.createElement("div", { className: "contrib-merge" },
+            React.createElement("div", { className: "contrib-sides" },
+              React.createElement("details", null,
+                React.createElement("summary", null, "Latest base"),
+                React.createElement("div", { className: "contrib-text" }, c.base_content || "")
+              ),
+              React.createElement("details", null,
+                React.createElement("summary", null, "Proposed edit"),
+                React.createElement("div", { className: "contrib-text" }, c.content || "")
+              )
+            ),
+            React.createElement("div", { className: "row", style: { gap: 8, marginTop: 8, flexWrap: "wrap" } },
+              React.createElement("button", { className: "btn btn-ghost sm", onClick: () => setDrafts(d => ({ ...d, [c.id]: c.content || "" })) }, "Use proposed"),
+              React.createElement("button", { className: "btn btn-ghost sm", onClick: () => setDrafts(d => ({ ...d, [c.id]: c.base_content || "" })) }, "Use latest base")
+            ),
+            React.createElement("textarea", {
+              className: "tt-textarea contrib-merge-text", rows: 6, value: draft,
+              onChange: e => setDrafts(d => ({ ...d, [c.id]: e.target.value })),
+              placeholder: "Paste or edit the resolved translation to merge..."
+            })
+          ),
+          React.createElement("div", { className: "row", style: { gap: 8, marginTop: 8 } },
+            React.createElement("button", {
+              className: "btn btn-primary",
+              disabled: busyId === c.id || (c.is_conflict && !draft.trim()),
+              onClick: () => act(c, true),
+              title: c.is_conflict ? "Merge the resolved text into the shared base" : "Merge into the shared base",
+            }, React.createElement(Icon, { name: "check", size: 15 }), c.is_conflict ? "Accept merge" : "Accept"),
+            React.createElement("button", { className: "btn btn-ghost", disabled: busyId === c.id, onClick: () => act(c, false) },
+              React.createElement(Icon, { name: "x", size: 15 }), "Reject")
+          )
+        );
+      })
     )
   );
 }

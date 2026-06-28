@@ -9,9 +9,13 @@ const WIDTHS = { narrow: 620, normal: 760, wide: 960, ultra: 1200 };
 // Auto-scroll: speed 1..10 maps to px/second (gentle reading pace ≈ 28–280 px/s).
 const AUTOSCROLL_PX_PER_SEC = (speed) => Math.max(1, speed) * 28;
 
-function loadReaderPrefs() {
-  try { return { ...READER_DEFAULTS, ...JSON.parse(localStorage.getItem("nw-reader") || "{}") }; }
-  catch (e) { return { ...READER_DEFAULTS }; }
+function loadReaderPrefs(user) {
+  let local = {};
+  try { local = JSON.parse(localStorage.getItem("nw-reader") || "{}") || {}; }
+  catch (e) { local = {}; }
+  const synced = user && user.prefs && user.prefs.reader && typeof user.prefs.reader === "object"
+    ? user.prefs.reader : {};
+  return { ...READER_DEFAULTS, ...local, ...synced };
 }
 
 function ReaderSettings({ prefs, setPrefs, onClose }) {
@@ -130,10 +134,10 @@ function TranslationTools({ novelId, ch, onClose, onChanged }) {
   );
 }
 
-function Reader({ novelId, number, openReader, backToNovel, onRead }) {
+function Reader({ novelId, number, openReader, backToNovel, onRead, user, onUserUpdate }) {
   const [ch, setCh] = useState(null);     // null = loading
   const [status, setStatus] = useState("loading");
-  const [prefs, setPrefs] = useState(loadReaderPrefs);
+  const [prefs, setPrefs] = useState(() => loadReaderPrefs(user));
   const [showSettings, setShowSettings] = useState(false);
   const [toc, setToc] = useState(null);
   const [showToc, setShowToc] = useState(false);
@@ -143,7 +147,16 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
   const [showTools, setShowTools] = useState(false);   // translation overlay editor (Phase 5)
   const scrollSaved = useRef(0);
 
-  useEffect(() => { localStorage.setItem("nw-reader", JSON.stringify(prefs)); }, [prefs]);
+  useEffect(() => {
+    localStorage.setItem("nw-reader", JSON.stringify(prefs));
+    if (!user) return;
+    const t = setTimeout(() => {
+      window.API.updateMe({ prefs: { reader: prefs } })
+        .then(u => { onUserUpdate && onUserUpdate(u); })
+        .catch(() => {});
+    }, 700);
+    return () => clearTimeout(t);
+  }, [prefs, user && user.id]);
 
   // Load the chapter + record progress. If we're reopening the exact chapter the
   // server says we last left off in, restore the saved scroll fraction so reading

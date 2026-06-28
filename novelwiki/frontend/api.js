@@ -106,6 +106,7 @@
         const qs = p.toString();
         return getJSON(`${API_BASE}/admin/novels${qs ? `?${qs}` : ""}`);
       },
+      globalNovels() { return getJSON(`${API_BASE}/admin/global-novels`); },
     },
 
     // ── Library / novels ──
@@ -142,7 +143,9 @@
     resolveOverlay(id, number, choice, content) { return postJSON(`${N(id)}/chapter/${number}/resolve`, { choice, content: content || null }); },
     contribute(id, number) { return postJSON(`${N(id)}/chapter/${number}/contribute`, {}); },
     contributions(id, status) { return getJSON(`${N(id)}/contributions${status ? `?status=${status}` : ""}`); },
-    acceptContribution(id, cid) { return postJSON(`${N(id)}/contributions/${cid}/accept`, {}); },
+    acceptContribution(id, cid, content) {
+      return postJSON(`${N(id)}/contributions/${cid}/accept`, content ? { content } : {});
+    },
     rejectContribution(id, cid) { return postJSON(`${N(id)}/contributions/${cid}/reject`, {}); },
 
     // ── Translation + glossary ──
