@@ -29,7 +29,8 @@ async def lifespan(app: FastAPI):
         from novelwiki.db.migrate_multiuser import maybe_migrate
         await maybe_migrate()
     except Exception as e:
-        logger.warning(f"Multi-user migration at startup failed (continuing): {e}")
+        logger.error(f"Multi-user migration at startup failed: {e}")
+        raise
 
     # BM25 indexes are per-novel and lazy: each novel's index is built/loaded on its
     # first codex query, so there's nothing to preload here.

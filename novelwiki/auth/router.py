@@ -277,8 +277,9 @@ async def _find_or_create_oauth_user(conn, provider: str, identity: dict) -> dic
         return dict(linked)
 
     email = identity.get("email")
-    # 2. Link to an existing account with the same (verified) email.
-    if email:
+    email_verified = bool(identity.get("email_verified"))
+    # 2. Link to an existing account only when the provider verified the email.
+    if email and email_verified:
         existing = await conn.fetchrow("SELECT * FROM users WHERE email = $1;", email)
         if existing is not None:
             await conn.execute(
@@ -291,13 +292,13 @@ async def _find_or_create_oauth_user(conn, provider: str, identity: dict) -> dic
     # 3. Brand-new user. OAuth email is trusted as verified when the provider says so.
     base = identity.get("name") or (email.split("@")[0] if email else provider + "_user")
     username = await unique_username(conn, base)
-    placeholder_email = email or f"{username}@{provider}.oauth.local"
+    placeholder_email = email if email_verified else f"{username}@{provider}.oauth.local"
     new = await conn.fetchrow(
         """
         INSERT INTO users (email, username, display_name, email_verified, password_hash)
         VALUES ($1, $2, $3, $4, NULL) RETURNING *;
         """,
-        placeholder_email, username, identity.get("name") or username, bool(identity.get("email_verified")),
+        placeholder_email, username, identity.get("name") or username, email_verified,
     )
     await conn.execute(
         "INSERT INTO oauth_accounts (user_id, provider, provider_account_id) VALUES ($1, $2, $3);",

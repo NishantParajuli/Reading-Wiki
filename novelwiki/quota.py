@@ -26,6 +26,16 @@ def is_exempt(user: dict) -> bool:
     return user.get("role") == "admin"
 
 
+def spend_allowed(user: dict) -> bool:
+    """Whether this account may trigger API-costing work at all."""
+    return is_exempt(user) or bool(user.get("email_verified"))
+
+
+def require_spend_allowed(user: dict) -> None:
+    if not spend_allowed(user):
+        raise HTTPException(status_code=403, detail="Verify your email to use translation, OCR, codex, or import features.")
+
+
 async def get_usage(user_id: int) -> dict:
     pool = await get_db_pool()
     async with pool.acquire() as conn:
@@ -64,10 +74,30 @@ async def _bump(user_id: int, kind: str, n: int) -> None:
 
 async def remaining(user: dict, kind: str) -> int | None:
     """Units left this month, or None for unlimited (admin)."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown quota kind: {kind}")
     if is_exempt(user):
         return None
     used = (await get_usage(user["id"]))[kind]
     return max(0, quota_limits(user)[kind] - used)
+
+
+async def check_available(user: dict, kind: str, n: int = 1) -> None:
+    """Preflight a spend without reserving it. Actual workers should still call
+    try_reserve close to the work, because this check is intentionally non-locking."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown quota kind: {kind}")
+    require_spend_allowed(user)
+    if n <= 0 or is_exempt(user):
+        return
+    limit = quota_limits(user)[kind]
+    used = (await get_usage(user["id"]))[kind]
+    if used + n > limit:
+        label = kind.replace("_", " ")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Monthly quota reached for {label} ({limit}/mo). Ask an admin to raise your limit.",
+        )
 
 
 async def try_reserve(user: dict, kind: str, n: int = 1) -> bool:
@@ -80,7 +110,7 @@ async def try_reserve(user: dict, kind: str, n: int = 1) -> bool:
     if is_exempt(user):
         await _bump(user["id"], kind, n)
         return True
-    if not user.get("email_verified"):
+    if not spend_allowed(user):
         return False
     limit = quota_limits(user)[kind]
     pool = await get_db_pool()
@@ -105,8 +135,7 @@ async def try_reserve(user: dict, kind: str, n: int = 1) -> bool:
 
 async def check_and_reserve(user: dict, kind: str, n: int = 1) -> None:
     """try_reserve, but raise the right HTTP error instead of returning False."""
-    if not is_exempt(user) and not user.get("email_verified"):
-        raise HTTPException(status_code=403, detail="Verify your email to use translation, OCR, or codex features.")
+    require_spend_allowed(user)
     if not await try_reserve(user, kind, n):
         limit = quota_limits(user)[kind]
         label = kind.replace("_", " ")

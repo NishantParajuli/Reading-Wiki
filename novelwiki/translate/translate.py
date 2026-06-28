@@ -130,9 +130,12 @@ async def _upsert_terms(novel_id: int, terms: list[dict], conn):
         )
 
 
-async def translate_chapter(novel_id: int, number: float, force: bool = False) -> dict:
+async def translate_chapter(novel_id: int, number: float, force: bool = False,
+                            meter_user: dict | None = None) -> dict:
     """Translate one raw chapter into chapters.content. Idempotent: returns the
-    existing translation unless force=True. Returns {status, content, new_terms}."""
+    existing translation unless force=True. If meter_user is given, quota is reserved
+    only after the chapter is confirmed still untranslated under the per-chapter lock.
+    Returns {status, content, new_terms}."""
     async with _lock_for(novel_id, number):
         pool = await get_db_pool()
         async with pool.acquire() as conn:
@@ -150,6 +153,10 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False) -
                 return {"status": "done", "content": ch["content"]}
             if not ch["original_text"]:
                 return {"status": ch["translation_status"] or "none", "content": ch["content"]}
+            if meter_user is not None:
+                from novelwiki import quota
+                if not await quota.try_reserve(meter_user, "translated_chapters", 1):
+                    return {"status": "quota_exceeded", "content": ch["content"]}
             language = ch["language"] or "the source language"
             confirmed_g, established_g = _format_glossary(await _load_glossary(novel_id, conn))
             await conn.execute(
@@ -233,18 +240,17 @@ async def prefetch_translations(novel_id: int, after_number: float, count: int |
     if count <= 0:
         return
     for num in await _pending_after(novel_id, after_number, count):
-        if meter_user is not None:
-            from novelwiki import quota
-            if not await quota.try_reserve(meter_user, "translated_chapters", 1):
-                break
         try:
-            await translate_chapter(novel_id, num)
+            res = await translate_chapter(novel_id, num, meter_user=meter_user)
+            if res.get("status") == "quota_exceeded":
+                break
         except Exception as e:
             logger.warning(f"Prefetch translation failed for novel {novel_id} ch {num}: {e}")
 
 
 async def translate_range(novel_id: int, from_chapter: float | None = None,
-                          to_chapter: float | None = None, force: bool = False) -> int:
+                          to_chapter: float | None = None, force: bool = False,
+                          meter_user: dict | None = None) -> int:
     """Translate all (pending, unless force) raw chapters in a range. Used by the
     manual 'Translate' action / CLI; reading itself uses on-demand + prefetch."""
     pool = await get_db_pool()
@@ -262,7 +268,9 @@ async def translate_range(novel_id: int, from_chapter: float | None = None,
         )
     done = 0
     for r in rows:
-        res = await translate_chapter(novel_id, float(r["number"]), force=force)
+        res = await translate_chapter(novel_id, float(r["number"]), force=force, meter_user=meter_user)
+        if res.get("status") == "quota_exceeded":
+            break
         if res.get("status") == "done":
             done += 1
     return done

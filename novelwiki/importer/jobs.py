@@ -69,6 +69,21 @@ def _row_to_job(row) -> dict:
     return job
 
 
+async def _job_owner_can_spend(job: dict) -> bool:
+    """Queued jobs may have been created before the current route guards. Re-check the
+    owner before parser/OCR work that can spend API budget."""
+    user_id = job.get("user_id")
+    if user_id is None:
+        return True
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM users WHERE id = $1;", user_id)
+    if row is None:
+        return False
+    from novelwiki import quota
+    return quota.spend_allowed(dict(row))
+
+
 async def create_job(format: str, original_path: str, file_sha256: str | None = None,
                      options: dict | None = None, detected_meta: dict | None = None,
                      status: str = "uploaded", user_id: int | None = None) -> int:
@@ -430,8 +445,14 @@ async def _process(job: dict) -> None:
     job_id = int(job["id"])
     try:
         if job["status"] == "uploaded":
+            if not await _job_owner_can_spend(job):
+                await fail_job(job_id, "Verify your email before importing files.")
+                return
             await _do_parse(job)
         elif job["status"] == "ocr_pending":
+            if not await _job_owner_can_spend(job):
+                await fail_job(job_id, "Verify your email before running OCR.")
+                return
             await _do_ocr(job)
         elif job["status"] == "committing":
             await _do_commit(job)

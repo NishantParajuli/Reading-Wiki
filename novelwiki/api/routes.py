@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File,
 from pydantic import BaseModel
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
-from novelwiki.auth.deps import current_user
+from novelwiki.auth.deps import current_user, require_admin
 from novelwiki.auth.access import require_readable, require_editable
 from novelwiki import quota
 from novelwiki.scraper.runner import scrape_source, scrape_novel, set_source_offset
@@ -589,15 +589,13 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
     # against the reader's monthly quota; if they're over (or unverified), we serve the
     # chapter untranslated with a `quota_exceeded` status instead of failing the read.
     if content is None and row["has_original"]:
-        if await quota.try_reserve(user, "translated_chapters", 1):
-            result = await translate_chapter(novel_id, number)
-            content = result.get("content")
-            status = result.get("status")
-            is_translated = status == "done"
-            # Warm the next few chapters (also metered) so reading flows at each boundary.
+        result = await translate_chapter(novel_id, number, meter_user=user)
+        content = result.get("content")
+        status = result.get("status")
+        is_translated = status == "done"
+        # Warm the next few chapters only after the current translation actually succeeded.
+        if status == "done":
             bg_tasks.add_task(prefetch_translations, novel_id, number, settings.TRANSLATE_PREFETCH, user)
-        else:
-            status = "quota_exceeded"
 
     # Only file-import sources (epub/pdf) store sanitized rich HTML in raw_html; scraped
     # sources put the raw page dump there, which must never be rendered. And for a *raw*
@@ -737,12 +735,12 @@ async def api_translate(novel_id: int, payload: TranslateTrigger, bg_tasks: Back
             """,
             novel_id, payload.from_chapter, payload.to_chapter, payload.force,
         )
-    await quota.check_and_reserve(user, "translated_chapters", int(pending or 0))
+    await quota.check_available(user, "translated_chapters", int(pending or 0))
 
     async def _job():
         if payload.seed_from_codex:
             await seed_glossary_from_entities(novel_id)
-        await translate_range(novel_id, payload.from_chapter, payload.to_chapter, payload.force)
+        await translate_range(novel_id, payload.from_chapter, payload.to_chapter, payload.force, meter_user=user)
     bg_tasks.add_task(_job)
     return {"status": "success", "message": "Translation job scheduled in background.", "chapters": int(pending or 0)}
 
@@ -1130,6 +1128,8 @@ async def api_import_upload(file: UploadFile = File(...), user: dict = Depends(c
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
 
+    quota.require_spend_allowed(user)
+
     ext = os.path.splitext(file.filename or "")[1].lower()
     fmt = _IMPORT_FORMATS.get(ext)
     if not fmt:
@@ -1200,7 +1200,7 @@ async def _enqueue_batch(files, *, auto_commit: bool, group_series: bool, user_i
 
 
 @router.post("/import/scan-incoming")
-async def api_import_scan_incoming(user: dict = Depends(current_user)):
+async def api_import_scan_incoming(user: dict = Depends(require_admin)):
     """Enqueue any EPUB/PDF dropped into IMPORT_INCOMING_DIR (the watched-folder path for big
     files that bypass the multipart upload cap). Non-recursive, manual review per book."""
     files = list(_iter_import_files(settings.IMPORT_INCOMING_DIR, recursive=False))
@@ -1209,7 +1209,7 @@ async def api_import_scan_incoming(user: dict = Depends(current_user)):
 
 
 @router.post("/import/batch")
-async def api_import_batch(payload: ImportBatch, user: dict = Depends(current_user)):
+async def api_import_batch(payload: ImportBatch, user: dict = Depends(require_admin)):
     """Bulk-import a folder (e.g. a Calibre library). Recurses by default, can auto-commit
     each book without review, and can group EPUB volumes of one series into a single novel."""
     root = payload.path or settings.IMPORT_INCOMING_DIR
@@ -1232,6 +1232,8 @@ async def api_import_batch(payload: ImportBatch, user: dict = Depends(current_us
 async def api_import_upload_init(payload: ImportInit, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
+
+    quota.require_spend_allowed(user)
 
     ext = os.path.splitext(payload.filename or "")[1].lower()
     fmt = _IMPORT_FORMATS.get(ext)
@@ -1280,6 +1282,7 @@ async def api_import_upload_chunk(job_id: int, request: Request, user: dict = De
 async def api_import_upload_complete(job_id: int, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
+    quota.require_spend_allowed(user)
     job = await _require_own_job(job_id, user)
     if job["status"] != "receiving":
         return {"id": job_id, "status": job["status"]}    # already finalized (idempotent)
@@ -1404,6 +1407,7 @@ async def api_import_confirm_ocr(job_id: int, payload: OcrConfirm, user: dict = 
     """Approve the (expensive) OCR run for a scanned PDF: the job leaves the confirm gate and
     the worker starts reading pages (sidecar + Gemini escalation, budget-guarded)."""
     from novelwiki.importer import jobs as import_jobs
+    quota.require_spend_allowed(user)
     job = await _require_own_job(job_id, user)
     if job["status"] not in ("awaiting_ocr_confirm", "ocr_paused"):
         raise HTTPException(status_code=409, detail=f"Job is '{job['status']}', not awaiting OCR confirmation.")

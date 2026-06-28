@@ -315,7 +315,10 @@ async def commit_job(job: dict) -> dict:
             await _finalize_job(conn, job_id, novel_id, source["id"], result_stats)
 
     if codex_enabled or settings.IMPORT_AUTO_BUILD_CODEX:
-        _schedule_codex(novel_id, lo, hi)
+        if await _reserve_auto_codex(job.get("user_id")):
+            _schedule_codex(novel_id, lo, hi)
+        else:
+            logger.info(f"Skipped automatic codex build for imported novel {novel_id}: owner is not quota-eligible.")
 
     return {"novel_id": novel_id, "source_id": source["id"], "stats": result_stats}
 
@@ -415,12 +418,30 @@ async def commit_series(job_ids: list[int]) -> dict:
             codex_enabled = await conn.fetchval("SELECT codex_enabled FROM novels WHERE id = $1;", novel_id)
 
     if codex_enabled or settings.IMPORT_AUTO_BUILD_CODEX:
-        _schedule_codex(novel_id, lo_all, hi_all)
+        if await _reserve_auto_codex(owner_id):
+            _schedule_codex(novel_id, lo_all, hi_all)
+        else:
+            logger.info(f"Skipped automatic codex build for imported series {novel_id}: owner is not quota-eligible.")
 
     logger.info(f"Committed series '{series_name}' → novel {novel_id} ({len(loaded)} volumes, "
                 f"ch. {lo_all}–{hi_all}).")
     return {"novel_id": novel_id, "volumes": len(loaded),
             "stats": {"from_chapter": lo_all, "to_chapter": hi_all, "series": series_name}}
+
+
+async def _reserve_auto_codex(user_id: int | None) -> bool:
+    """Reserve the codex quota for import-triggered background builds. Trusted CLI/system
+    imports (no user_id) keep the old behavior; user-owned imports must be verified and
+    under quota before the build is scheduled."""
+    if user_id is None:
+        return True
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM users WHERE id = $1;", user_id)
+    if row is None:
+        return False
+    from novelwiki import quota
+    return await quota.try_reserve(dict(row), "codex_builds", 1)
 
 
 def _schedule_codex(novel_id: int, frm: float, to: float) -> None:

@@ -140,11 +140,12 @@ async def maybe_migrate() -> None:
             return  # already multi-user
 
         if admin is None:
-            logger.warning(
+            msg = (
                 "Legacy single-user data detected but no admin exists. Set ADMIN_PASSWORD in the "
                 "environment and run `python -m novelwiki.db.migrate_multiuser` to complete migration."
             )
-            return
+            logger.error(msg)
+            raise RuntimeError(msg)
 
         async with conn.transaction():
             summary = await run_migration(conn, admin["id"])
