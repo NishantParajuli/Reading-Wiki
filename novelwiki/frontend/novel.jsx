@@ -313,7 +313,8 @@ function ShelfTagsControls({ novel, reloadNovel }) {
     if (busy) return;
     setBusy(true);
     try { await window.API.updateNovel(novel.id, body); reloadNovel(); }
-    catch (e) { alert(e.message || "Update failed."); setBusy(false); }
+    catch (e) { alert(e.message || "Update failed."); }
+    finally { setBusy(false); }   // always release, or every later click is blocked
   };
   const setShelf = (s) => patch({ shelf: shelf === s ? "" : s });   // tap the active shelf to clear it
   const onToggleTag = (t, group) => patch({ status_tags: toggleTag(tags, t, group) });
