@@ -240,37 +240,109 @@ function GlossaryEditor({ novelId, glossary, reload }) {
   );
 }
 
+// Toggle a tag with radio (one-per-group) or checkbox semantics. `group` is a radio
+// group ({id,label,tags}) or null for a free checkbox tag.
+function toggleTag(tags, t, group) {
+  if (tags.includes(t)) return tags.filter(x => x !== t);
+  if (group) return [...tags.filter(x => !group.tags.includes(x)), t];
+  return [...tags, t];
+}
+
+// The shared tag picker: mutually-exclusive radio groups + multi-select genre checkboxes.
+function TagEditor({ tags, onToggle, disabled }) {
+  const h = React.createElement;
+  return h("div", { className: "tag-editor" },
+    window.STATUS_TAG_RADIO_GROUPS.map(g => h("div", { key: g.id, className: "tag-group" },
+      h("span", { className: "st-label" }, g.label),
+      h("div", { className: "st-tags" },
+        g.tags.map(t => h("button", {
+          key: t, type: "button", disabled,
+          className: "tag-toggle radio" + (tags.includes(t) ? " on" : ""),
+          onClick: () => onToggle(t, g),
+        }, window.STATUS_TAG_LABELS[t])))
+    )),
+    h("div", { className: "tag-group" },
+      h("span", { className: "st-label" }, "Genres"),
+      h("div", { className: "st-tags" },
+        window.GENRE_TAGS.map(t => h("button", {
+          key: t, type: "button", disabled,
+          className: "tag-toggle" + (tags.includes(t) ? " on" : ""),
+          onClick: () => onToggle(t, null),
+        }, window.STATUS_TAG_LABELS[t])))
+    )
+  );
+}
+
+// Reader-facing form to propose a tag set to the owner/admin of a shared novel.
+function TagSuggestForm({ novel, current, onClose }) {
+  const h = React.createElement;
+  const [tags, setTags] = useState(current || []);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  async function submit() {
+    setBusy(true);
+    try { await window.API.suggestTags(novel.id, tags, note); setDone(true); }
+    catch (e) { alert(e.message || "Couldn't send your suggestion."); setBusy(false); }
+  }
+  if (done) return h("div", { className: "card", style: { padding: 12, marginTop: 8 } },
+    h("div", { className: "acct-ok" }, "Tag suggestion sent to the owner for review."),
+    h("button", { className: "btn btn-ghost sm", style: { marginTop: 8 }, onClick: onClose }, "Close"));
+  return h("div", { className: "card", style: { padding: 12, marginTop: 8 } },
+    h("p", { className: "section-eyebrow", style: { marginTop: 0 } }, "Suggest tags"),
+    h(TagEditor, { tags, onToggle: (t, g) => setTags(prev => toggleTag(prev, t, g)), disabled: busy }),
+    h("textarea", { className: "tt-textarea", rows: 2, style: { marginTop: 8 }, value: note,
+      placeholder: "Optional note for the owner…", onChange: e => setNote(e.target.value) }),
+    h("div", { className: "row", style: { gap: 8, marginTop: 8 } },
+      h("button", { className: "btn btn-primary", disabled: busy, onClick: submit },
+        h(Icon, { name: "send", size: 14 }), "Send suggestion"),
+      h("button", { className: "btn btn-ghost", disabled: busy, onClick: onClose }, "Cancel"))
+  );
+}
+
 function ShelfTagsControls({ novel, reloadNovel }) {
+  const h = React.createElement;
   const shelf = novel.shelf || "";
   const tags = novel.status_tags || [];
   const tt = novel.translation_type ? window.TRANSLATION_TYPE_LABELS[novel.translation_type] : null;
+  const canEdit = !!novel.can_edit;
   const [busy, setBusy] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
 
   const patch = async (body) => {
     if (busy) return;
     setBusy(true);
     try { await window.API.updateNovel(novel.id, body); reloadNovel(); }
-    finally { setBusy(false); }
+    catch (e) { alert(e.message || "Update failed."); setBusy(false); }
   };
   const setShelf = (s) => patch({ shelf: shelf === s ? "" : s });   // tap the active shelf to clear it
-  const toggleTag = (t) => patch({ status_tags: tags.includes(t) ? tags.filter(x => x !== t) : [...tags, t] });
+  const onToggleTag = (t, group) => patch({ status_tags: toggleTag(tags, t, group) });
 
-  return React.createElement("div", { className: "shelf-tags" },
-    React.createElement("div", { className: "st-group" },
-      React.createElement("span", { className: "st-label" }, "Shelf"),
-      React.createElement("div", { className: "rs-seg" },
-        window.SHELF_ORDER.map(s => React.createElement("button", {
+  return h("div", { className: "shelf-tags" },
+    h("div", { className: "st-group" },
+      h("span", { className: "st-label" }, "Shelf"),
+      h("div", { className: "rs-seg" },
+        window.SHELF_ORDER.map(s => h("button", {
           key: s, className: shelf === s ? "active" : "", onClick: () => setShelf(s),
         }, window.SHELF_LABELS[s])))
     ),
-    React.createElement("div", { className: "st-group" },
-      React.createElement("span", { className: "st-label" }, "Tags"),
-      React.createElement("div", { className: "st-tags" },
-        window.STATUS_TAG_ORDER.map(t => React.createElement("button", {
-          key: t, className: "tag-toggle" + (tags.includes(t) ? " on" : ""), onClick: () => toggleTag(t),
-        }, window.STATUS_TAG_LABELS[t])),
-        tt && React.createElement("span", { className: "chip tt-chip", title: "Auto-detected from sources" }, tt))
-    )
+    // Owner/admin edit tags inline; everyone else sees them read-only and (on shared
+    // novels) can propose a set via "Suggest tags".
+    canEdit
+      ? h("div", { className: "st-group" },
+          h("span", { className: "st-label" }, "Tags"),
+          h(TagEditor, { tags, onToggle: onToggleTag, disabled: busy }),
+          tt && h("span", { className: "chip tt-chip", title: "Auto-detected from sources" }, tt))
+      : h("div", { className: "st-group" },
+          h("span", { className: "st-label" }, "Tags"),
+          h("div", { className: "st-tags" },
+            tags.length === 0 && h("span", { className: "muted", style: { fontSize: 13 } }, "No tags yet"),
+            tags.map(t => h("span", { key: t, className: "chip tag-chip" }, window.STATUS_TAG_LABELS[t] || t)),
+            tt && h("span", { className: "chip tt-chip", title: "Auto-detected from sources" }, tt)),
+          novel.can_suggest_tags && !suggesting && h("button", {
+            className: "btn btn-ghost sm", style: { marginTop: 6 }, onClick: () => setSuggesting(true),
+          }, h(Icon, { name: "sparkles", size: 14 }), "Suggest tags")),
+    suggesting && h(TagSuggestForm, { novel, current: tags, onClose: () => setSuggesting(false) })
   );
 }
 
@@ -346,7 +418,6 @@ function ContributionsInbox({ novelId, reloadNovel }) {
     React.createElement("div", { className: "card", style: { padding: 12 } },
       items.map(c => {
         const draft = drafts[c.id] || "";
-        const preview = (c.content || "").slice(0, 280) + ((c.content || "").length > 280 ? "…" : "");
         return React.createElement("div", { key: c.id, className: "contrib-row" },
           React.createElement("div", { className: "row", style: { gap: 8, alignItems: "center", marginBottom: 6 } },
             React.createElement("span", { className: "chip mono" }, `Ch. ${c.chapter}`),
@@ -355,18 +426,12 @@ function ContributionsInbox({ novelId, reloadNovel }) {
             c.is_conflict && React.createElement("span", { className: "chip", style: { background: "var(--danger, #c0392b)", color: "#fff" }, title: "Base changed since this was offered" }, "conflict"),
             React.createElement("div", { className: "grow" })
           ),
-          React.createElement("div", { className: "contrib-preview" }, preview),
+          // GitHub-style review: current base on top, proposed edit below with +/- changes.
+          React.createElement(window.DiffView, {
+            oldText: c.base_content || "", newText: c.content || "",
+            oldLabel: "Current base", newLabel: "Proposed edit",
+          }),
           c.is_conflict && React.createElement("div", { className: "contrib-merge" },
-            React.createElement("div", { className: "contrib-sides" },
-              React.createElement("details", null,
-                React.createElement("summary", null, "Latest base"),
-                React.createElement("div", { className: "contrib-text" }, c.base_content || "")
-              ),
-              React.createElement("details", null,
-                React.createElement("summary", null, "Proposed edit"),
-                React.createElement("div", { className: "contrib-text" }, c.content || "")
-              )
-            ),
             React.createElement("div", { className: "row", style: { gap: 8, marginTop: 8, flexWrap: "wrap" } },
               React.createElement("button", { className: "btn btn-ghost sm", onClick: () => setDrafts(d => ({ ...d, [c.id]: c.content || "" })) }, "Use proposed"),
               React.createElement("button", { className: "btn btn-ghost sm", onClick: () => setDrafts(d => ({ ...d, [c.id]: c.base_content || "" })) }, "Use latest base")
@@ -389,6 +454,54 @@ function ContributionsInbox({ novelId, reloadNovel }) {
           )
         );
       })
+    )
+  );
+}
+
+/* Owner/admin inbox of reader tag suggestions. Hidden when there's nothing pending. */
+function TagSuggestionsInbox({ novelId, reloadNovel }) {
+  const h = React.createElement;
+  const [items, setItems] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const load = useCallback(() => {
+    window.API.tagSuggestions(novelId).then(setItems).catch(() => setItems([]));
+  }, [novelId]);
+  useEffect(() => { load(); }, [load]);
+
+  if (items == null || items.length === 0) return null;
+
+  const act = async (s, accept) => {
+    setBusyId(s.id);
+    try {
+      if (accept) await window.API.acceptTagSuggestion(novelId, s.id);
+      else await window.API.rejectTagSuggestion(novelId, s.id);
+      load(); reloadNovel && reloadNovel();
+    } catch (e) { alert(e.message || "Action failed."); }
+    finally { setBusyId(null); }
+  };
+
+  return h(React.Fragment, null,
+    h("p", { className: "section-eyebrow", style: { marginTop: 28 } }, `Tag suggestions (${items.length})`),
+    h("div", { className: "card", style: { padding: 12 } },
+      items.map(s => h("div", { key: s.id, className: "contrib-row" },
+        h("div", { className: "row", style: { gap: 8, alignItems: "center", marginBottom: 6 } },
+          h("span", { style: { fontWeight: 600 } }, s.from_display_name),
+          h("span", { className: "muted", style: { fontSize: 12.5 } }, "@" + s.from_username),
+          h("div", { className: "grow" })
+        ),
+        h("div", { className: "st-tags", style: { marginBottom: s.note ? 6 : 0 } },
+          s.tags.length === 0
+            ? h("span", { className: "muted", style: { fontSize: 13 } }, "(clear all tags)")
+            : s.tags.map(t => h("span", { key: t, className: "chip tag-chip" }, window.STATUS_TAG_LABELS[t] || t))
+        ),
+        s.note && h("div", { className: "muted", style: { fontSize: 13 } }, s.note),
+        h("div", { className: "row", style: { gap: 8, marginTop: 8 } },
+          h("button", { className: "btn btn-primary", disabled: busyId === s.id, onClick: () => act(s, true) },
+            h(Icon, { name: "check", size: 15 }), "Apply"),
+          h("button", { className: "btn btn-ghost", disabled: busyId === s.id, onClick: () => act(s, false) },
+            h(Icon, { name: "x", size: 15 }), "Reject")
+        )
+      ))
     )
   );
 }
@@ -576,6 +689,9 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
 
     // contribute-back inbox (owner/admin)
     canEdit && React.createElement(ContributionsInbox, { novelId, reloadNovel }),
+
+    // reader tag-suggestion inbox (owner/admin)
+    canEdit && React.createElement(TagSuggestionsInbox, { novelId, reloadNovel }),
 
     // bookmarks
     bookmarks.length > 0 && React.createElement(React.Fragment, null,

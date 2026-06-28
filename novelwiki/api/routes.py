@@ -33,9 +33,37 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Shelves a novel can sit on (user reading status) and the user-applied status tags.
+# Shelves a novel can sit on. The shelf is *per-user reading status* (lives in
+# library_entries) — one reader's "reading" is another's "completed".
 SHELVES = {"to_read", "reading", "completed"}
-STATUS_TAGS = {"ongoing", "finished", "translation_ongoing"}
+
+# Status tags describe the *novel itself* (not a reader's progress) and are therefore
+# owner/admin-controlled metadata stored on the novel. Two of the groups are mutually
+# exclusive ("radio" — at most one may be set); the rest are free "checkbox" genres.
+STATUS_TAG_RADIO_GROUPS = {
+    "status":      ["ongoing", "finished", "hiatus"],            # publication status
+    "translation": ["translation_ongoing", "translation_completed"],
+}
+RADIO_TAGS = {t for grp in STATUS_TAG_RADIO_GROUPS.values() for t in grp}
+GENRE_TAGS = {
+    "action", "adventure", "romance", "fantasy", "sci_fi", "comedy",
+    "drama", "horror", "mystery", "slice_of_life",
+}
+STATUS_TAGS = RADIO_TAGS | GENRE_TAGS   # every tag a novel may legitimately carry
+
+
+def _clean_status_tags(raw: list[str] | None) -> list[str]:
+    """Whitelist + de-dupe novel status tags and enforce one-per-radio-group.
+    Raises 422 if a single update sets two mutually-exclusive tags from one group."""
+    tags = [t.strip().lower() for t in (raw or [])]
+    tags = [t for t in dict.fromkeys(tags) if t in STATUS_TAGS]
+    for group, members in STATUS_TAG_RADIO_GROUPS.items():
+        if sum(1 for t in tags if t in members) > 1:
+            raise HTTPException(
+                status_code=422,
+                detail=f"At most one '{group}' tag may be set ({', '.join(members)}).",
+            )
+    return tags
 
 
 def _translation_type(has_raw, has_eng) -> str | None:
@@ -109,6 +137,10 @@ class ContributionAccept(BaseModel):
 class ContributionPolicy(BaseModel):
     contribution_policy: str          # manual|auto
 
+class TagSuggestion(BaseModel):
+    tags: list[str]                   # full proposed status_tags set
+    note: str | None = None
+
 class ProgressUpdate(BaseModel):
     last_chapter: float
     scroll_pct: float = 0
@@ -172,16 +204,17 @@ async def api_adapters():
 
 @router.get("/novels")
 async def api_list_novels(user: dict = Depends(current_user)):
-    """The caller's library grid: the Global shared library + novels they own or added,
-    each with their own shelf/tags and reading progress."""
+    """The caller's library grid: only novels they own or have explicitly added to their
+    library. Shared (global/public) novels are *not* in the library until added from Discover.
+    Shelf is per-user; status tags are the novel's own (owner/admin-curated) metadata."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT n.id, n.title, n.author, n.cover_url, n.description, n.codex_enabled,
                    n.visibility, n.owner_id,
-                   COALESCE(le.shelf, n.shelf) AS shelf,
-                   COALESCE(le.status_tags, n.status_tags) AS status_tags,
+                   le.shelf AS shelf,
+                   n.status_tags AS status_tags,
                    COUNT(c.number) AS chapter_count,
                    MIN(c.number) AS min_chapter, MAX(c.number) AS max_chapter,
                    p.last_chapter, p.max_chapter_read,
@@ -191,8 +224,8 @@ async def api_list_novels(user: dict = Depends(current_user)):
             LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
             LEFT JOIN reading_progress p ON p.novel_id = n.id AND p.user_id = $1
             LEFT JOIN chapters c ON c.novel_id = n.id
-            WHERE n.visibility = 'global' OR n.owner_id = $1 OR le.id IS NOT NULL
-            GROUP BY n.id, le.shelf, le.status_tags, p.last_chapter, p.max_chapter_read
+            WHERE le.id IS NOT NULL OR n.owner_id = $1
+            GROUP BY n.id, le.shelf, p.last_chapter, p.max_chapter_read
             ORDER BY n.updated_at DESC NULLS LAST, n.id DESC;
             """,
             user["id"],
@@ -279,7 +312,7 @@ async def api_get_novel(novel_id: int, user: dict = Depends(current_user)):
             "SELECT * FROM reading_progress WHERE novel_id = $1 AND user_id = $2;", novel_id, user["id"]
         )
         entry = await conn.fetchrow(
-            "SELECT shelf, status_tags FROM library_entries WHERE novel_id = $1 AND user_id = $2;",
+            "SELECT shelf FROM library_entries WHERE novel_id = $1 AND user_id = $2;",
             novel_id, user["id"],
         )
     has_raw = any(s["is_raw"] for s in sources) if sources else None
@@ -295,9 +328,12 @@ async def api_get_novel(novel_id: int, user: dict = Depends(current_user)):
         "visibility": novel["visibility"],
         "is_owner": novel["owner_id"] == user["id"],
         "can_edit": novel["owner_id"] == user["id"] or user.get("role") == "admin",
+        # A reader who can't edit but can see a shared (public/global) novel may suggest tags.
+        "can_suggest_tags": not (novel["owner_id"] == user["id"] or user.get("role") == "admin")
+                            and novel["visibility"] in ("public", "global"),
         "contribution_policy": novel["contribution_policy"],
-        "shelf": (entry["shelf"] if entry else None) or novel["shelf"],
-        "status_tags": list((entry["status_tags"] if entry else None) or novel["status_tags"] or []),
+        "shelf": entry["shelf"] if entry else None,
+        "status_tags": list(novel["status_tags"] or []),
         "translation_type": _translation_type(has_raw, has_eng),
         "chapter_count": int(span["count"]),
         "min_chapter": float(span["min"]) if span["min"] is not None else None,
@@ -321,44 +357,49 @@ async def api_get_novel(novel_id: int, user: dict = Depends(current_user)):
 
 @router.patch("/novels/{novel_id}")
 async def api_update_novel(novel_id: int, payload: NovelUpdate, user: dict = Depends(current_user)):
-    """Edit a novel. Shelf/tags are *per-user* (stored in library_entries) and any reader may
-    set them. Metadata (title, author, description, cover, codex toggle) is owner/admin only."""
+    """Edit a novel. The shelf is *per-user* (stored in library_entries) and any reader may set
+    it — shelving a novel also adds it to that reader's library. Status tags and base metadata
+    (title, author, description, cover, codex toggle) are the novel's own data: owner/admin only.
+    Other readers propose tags via the tag-suggestion endpoints instead."""
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         return {"status": "noop"}
     novel = await require_readable(novel_id, user)
+    is_editor = novel["owner_id"] == user["id"] or user.get("role") == "admin"
 
-    # Per-user curation → library_entries (upsert). Blank shelf clears; tags whitelisted.
+    # Per-user shelf → library_entries (upsert). Blank shelf clears it.
     shelf_set = "shelf" in fields
-    tags_set = "status_tags" in fields
     shelf_val = None
     if shelf_set:
         shelf = (fields.pop("shelf") or "").strip().lower()
         if shelf and shelf not in SHELVES:
             raise HTTPException(status_code=422, detail=f"Unknown shelf '{shelf}'.")
         shelf_val = shelf or None
-    tags_val = None
-    if tags_set:
-        tags = [t.strip().lower() for t in (fields.pop("status_tags") or [])]
-        tags_val = [t for t in dict.fromkeys(tags) if t in STATUS_TAGS]
+
+    # Status tags are novel metadata — owner/admin only (others use tag suggestions).
+    if "status_tags" in fields:
+        if not is_editor:
+            raise HTTPException(
+                status_code=403,
+                detail="Only the owner or an admin can change a novel's tags — suggest them instead.",
+            )
+        fields["status_tags"] = _clean_status_tags(fields["status_tags"])
 
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        if shelf_set or tags_set:
+        if shelf_set:
             await conn.execute(
                 """
-                INSERT INTO library_entries (user_id, novel_id, shelf, status_tags)
-                VALUES ($1, $2, $3, COALESCE($4::text[], '{}'::text[]))
-                ON CONFLICT (user_id, novel_id) DO UPDATE SET
-                    shelf = CASE WHEN $5 THEN EXCLUDED.shelf ELSE library_entries.shelf END,
-                    status_tags = CASE WHEN $6 THEN EXCLUDED.status_tags ELSE library_entries.status_tags END;
+                INSERT INTO library_entries (user_id, novel_id, shelf)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, novel_id) DO UPDATE SET shelf = EXCLUDED.shelf;
                 """,
-                user["id"], novel_id, shelf_val, tags_val, shelf_set, tags_set,
+                user["id"], novel_id, shelf_val,
             )
 
-        # Remaining keys are base metadata — owner/admin only.
+        # Remaining keys are novel metadata — owner/admin only.
         if fields:
-            if not (novel["owner_id"] == user["id"] or user.get("role") == "admin"):
+            if not is_editor:
                 raise HTTPException(status_code=403, detail="You don't have permission to edit this novel.")
             if "contribution_policy" in fields and fields["contribution_policy"] not in ("manual", "auto"):
                 raise HTTPException(status_code=422, detail="contribution_policy must be 'manual' or 'auto'.")
@@ -1103,6 +1144,104 @@ async def api_reject_contribution(novel_id: int, contribution_id: int, user: dic
         )
     if updated is None:
         raise HTTPException(status_code=404, detail="No pending contribution with that id.")
+    return {"status": "rejected"}
+
+
+# ── Tag suggestions ────────────────────────────────────────────────────────
+# Status tags are owner/admin-controlled. A reader of a shared (public/global) novel can
+# propose a tag set; the owner/admin accepts (applies it) or rejects it.
+
+@router.post("/novels/{novel_id}/tag-suggestions")
+async def api_suggest_tags(novel_id: int, payload: TagSuggestion, user: dict = Depends(current_user)):
+    """A reader proposes a status-tag set for a shared novel they can see but can't edit."""
+    novel = await require_readable(novel_id, user)
+    if novel["owner_id"] == user["id"] or user.get("role") == "admin":
+        raise HTTPException(status_code=400, detail="You can edit this novel's tags directly.")
+    if novel["visibility"] not in ("public", "global"):
+        raise HTTPException(status_code=403, detail="Tags can only be suggested on shared novels.")
+    tags = _clean_status_tags(payload.tags)
+    note = (payload.note or "").strip() or None
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        sid = await conn.fetchval(
+            """
+            INSERT INTO tag_suggestions (novel_id, from_user_id, tags, note)
+            VALUES ($1, $2, $3, $4) RETURNING id;
+            """,
+            novel_id, user["id"], tags, note,
+        )
+    return {"status": "pending", "id": int(sid)}
+
+
+@router.get("/novels/{novel_id}/tag-suggestions")
+async def api_list_tag_suggestions(novel_id: int, status: str = "pending", user: dict = Depends(current_user)):
+    """Owner/admin inbox of tag-suggestion proposals (defaults to pending)."""
+    await require_editable(novel_id, user)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT t.id, t.tags, t.note, t.status, t.created_at,
+                   u.username AS from_username, u.display_name AS from_display_name
+            FROM tag_suggestions t
+            JOIN users u ON u.id = t.from_user_id
+            WHERE t.novel_id = $1 AND ($2 = 'all' OR t.status = $2)
+            ORDER BY t.created_at DESC LIMIT 200;
+            """,
+            novel_id, status,
+        )
+    return [
+        {
+            "id": int(r["id"]), "tags": list(r["tags"] or []), "note": r["note"],
+            "status": r["status"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "from_username": r["from_username"],
+            "from_display_name": r["from_display_name"] or r["from_username"],
+        }
+        for r in rows
+    ]
+
+
+@router.post("/novels/{novel_id}/tag-suggestions/{suggestion_id}/accept")
+async def api_accept_tag_suggestion(novel_id: int, suggestion_id: int, user: dict = Depends(current_user)):
+    """Owner/admin: apply a suggested tag set to the novel and mark the suggestion accepted."""
+    await require_editable(novel_id, user)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        s = await conn.fetchrow(
+            "SELECT id, tags, status FROM tag_suggestions WHERE id = $1 AND novel_id = $2;",
+            suggestion_id, novel_id,
+        )
+        if s is None:
+            raise HTTPException(status_code=404, detail="Tag suggestion not found.")
+        if s["status"] != "pending":
+            raise HTTPException(status_code=409, detail=f"Suggestion is already '{s['status']}'.")
+        tags = _clean_status_tags(list(s["tags"] or []))
+        async with conn.transaction():
+            await conn.execute(
+                "UPDATE novels SET status_tags = $2, updated_at = now() WHERE id = $1;",
+                novel_id, tags,
+            )
+            await conn.execute(
+                "UPDATE tag_suggestions SET status = 'accepted', reviewed_by = $2, reviewed_at = now() WHERE id = $1;",
+                suggestion_id, user["id"],
+            )
+    return {"status": "accepted", "tags": tags}
+
+
+@router.post("/novels/{novel_id}/tag-suggestions/{suggestion_id}/reject")
+async def api_reject_tag_suggestion(novel_id: int, suggestion_id: int, user: dict = Depends(current_user)):
+    """Owner/admin: decline a tag suggestion."""
+    await require_editable(novel_id, user)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        updated = await conn.fetchval(
+            "UPDATE tag_suggestions SET status = 'rejected', reviewed_by = $3, reviewed_at = now() "
+            "WHERE id = $1 AND novel_id = $2 AND status = 'pending' RETURNING id;",
+            suggestion_id, novel_id, user["id"],
+        )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="No pending tag suggestion with that id.")
     return {"status": "rejected"}
 
 

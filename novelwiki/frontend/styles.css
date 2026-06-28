@@ -755,6 +755,11 @@ input[type="range"].slider::-moz-range-thumb {
 }
 .tag-toggle:hover { color: var(--ink); border-color: var(--border-2); }
 .tag-toggle.on { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+/* Radio-group tags (one-per-group) get a pill outline so they read as a choice set. */
+.tag-toggle.radio { border-radius: 8px; }
+.tag-editor { display: flex; flex-direction: column; gap: 10px; }
+.tag-group { display: flex; flex-direction: column; gap: 6px; }
+.tag-group .st-label { font-size: 10.5px; }
 
 /* Collapsible section header (e.g. translation glossary) */
 .collapse-head {
@@ -989,3 +994,20 @@ input[type="range"].slider::-moz-range-thumb {
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 .contrib-merge-text { margin-top: 8px; background: var(--surface); }
 @media (max-width: 720px) { .contrib-sides { grid-template-columns: 1fr; } }
+
+/* GitHub/GitLab-style diff: original on top, unified +/- changes below. */
+.diff-view { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.diff-pane { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+.diff-pane-head { font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--muted); padding: 6px 10px; background: var(--bg-2); border-bottom: 1px solid var(--border); }
+.diff-orig { margin: 0; max-height: 200px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-size: 13px; line-height: 1.55; color: var(--ink-2); padding: 8px 10px; font-family: inherit; }
+.diff-lines { max-height: 280px; overflow: auto; font-size: 13px; line-height: 1.55; }
+.diff-line { display: flex; gap: 8px; padding: 0 10px; white-space: pre-wrap; word-break: break-word; }
+.diff-gutter { flex: 0 0 1ch; user-select: none; text-align: center; opacity: 0.7; font-family: var(--mono); }
+.diff-text { flex: 1; }
+.diff-add { background: color-mix(in oklch, oklch(0.72 0.16 145) 16%, transparent); }
+.diff-add .diff-gutter { color: oklch(0.5 0.14 145); }
+.diff-del { background: color-mix(in oklch, var(--danger, #c0392b) 13%, transparent); }
+.diff-del .diff-gutter { color: var(--danger, #c0392b); }
+.diff-ctx { color: var(--ink-2); }

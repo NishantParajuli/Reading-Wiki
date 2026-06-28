@@ -148,6 +148,12 @@
     },
     rejectContribution(id, cid) { return postJSON(`${N(id)}/contributions/${cid}/reject`, {}); },
 
+    // ── Tag suggestions (reader proposes owner/admin-controlled novel tags) ──
+    suggestTags(id, tags, note) { return postJSON(`${N(id)}/tag-suggestions`, { tags, note: note || null }); },
+    tagSuggestions(id, status) { return getJSON(`${N(id)}/tag-suggestions${status ? `?status=${status}` : ""}`); },
+    acceptTagSuggestion(id, sid) { return postJSON(`${N(id)}/tag-suggestions/${sid}/accept`, {}); },
+    rejectTagSuggestion(id, sid) { return postJSON(`${N(id)}/tag-suggestions/${sid}/reject`, {}); },
+
     // ── Translation + glossary ──
     translate(id, body) { return postJSON(`${N(id)}/translate`, body || {}); },
     glossary(id) { return getJSON(`${N(id)}/glossary`); },

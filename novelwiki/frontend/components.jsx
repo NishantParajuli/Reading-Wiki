@@ -58,12 +58,30 @@ function Icon({ name, size = 18, sw = 1.7, className = "", style }) {
 const TYPE_ICON = { character: "user", location: "mapPin", faction: "users", item: "gem", concept: "spark", organization: "users" };
 const TYPE_LABEL = { character: "Character", location: "Location", faction: "Faction", item: "Item", concept: "Concept", organization: "Org" };
 
-// User reading shelves (manual), user status tags (manual), and the auto-derived
-// translation type. Shared by the library grid and the novel detail page.
+// Per-user reading shelves (one reader's "reading" is another's "completed"), the
+// owner/admin-controlled novel status tags, and the auto-derived translation type.
+// Shared by the library grid and the novel detail page.
 const SHELF_LABELS = { to_read: "To read", reading: "Reading", completed: "Completed" };
 const SHELF_ORDER = ["reading", "to_read", "completed"];
-const STATUS_TAG_LABELS = { ongoing: "Ongoing", finished: "Finished", translation_ongoing: "Translation ongoing" };
-const STATUS_TAG_ORDER = ["ongoing", "finished", "translation_ongoing"];
+
+// Status tags describe the novel itself. Two mutually-exclusive groups render as radios
+// ("at most one"); genres render as multi-select checkboxes. Must mirror the backend
+// STATUS_TAG_RADIO_GROUPS / GENRE_TAGS in api/routes.py.
+const STATUS_TAG_RADIO_GROUPS = [
+  { id: "status", label: "Status", tags: ["ongoing", "finished", "hiatus"] },
+  { id: "translation", label: "Translation", tags: ["translation_ongoing", "translation_completed"] },
+];
+const GENRE_TAGS = ["action", "adventure", "romance", "fantasy", "sci_fi", "comedy", "drama", "horror", "mystery", "slice_of_life"];
+const STATUS_TAG_LABELS = {
+  ongoing: "Ongoing", finished: "Finished", hiatus: "Hiatus",
+  translation_ongoing: "Translation ongoing", translation_completed: "Translation complete",
+  action: "Action", adventure: "Adventure", romance: "Romance", fantasy: "Fantasy",
+  sci_fi: "Sci-fi", comedy: "Comedy", drama: "Drama", horror: "Horror",
+  mystery: "Mystery", slice_of_life: "Slice of life",
+};
+const STATUS_TAG_ORDER = [
+  ...STATUS_TAG_RADIO_GROUPS.flatMap(g => g.tags), ...GENRE_TAGS,
+];
 const TRANSLATION_TYPE_LABELS = { translated: "Translated", raws: "Raws", "raws+translated": "Raws + Translated" };
 
 /* ---------- Placeholder avatar ---------- */
@@ -349,11 +367,62 @@ function ConfirmDialog({ title, body, confirmLabel = "Delete", cancelLabel = "Ca
   );
 }
 
+/* ---------- Line diff (GitHub/GitLab style) ---------- */
+// LCS-based line diff. Returns rows tagged ctx (unchanged) / del (removed) / add (added).
+function lineDiff(oldText, newText) {
+  const a = String(oldText == null ? "" : oldText).split("\n");
+  const b = String(newText == null ? "" : newText).split("\n");
+  const n = a.length, m = b.length;
+  // Guard the O(n*m) table against pathologically large inputs.
+  if (n * m > 4000000) {
+    return [...a.map(t => ({ t: "del", text: t })), ...b.map(t => ({ t: "add", text: t }))];
+  }
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push({ t: "ctx", text: a[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ t: "del", text: a[i] }); i++; }
+    else { out.push({ t: "add", text: b[j] }); j++; }
+  }
+  while (i < n) out.push({ t: "del", text: a[i++] });
+  while (j < m) out.push({ t: "add", text: b[j++] });
+  return out;
+}
+
+/* Two stacked boxes: the upper box shows the original text plain; the lower box shows the
+   new text as a unified diff (removed lines red with "−", added lines green with "+",
+   unchanged lines as muted context) — like a GitHub/GitLab review. */
+function DiffView({ oldText, newText, oldLabel, newLabel }) {
+  const h = React.createElement;
+  const rows = lineDiff(oldText, newText);
+  const SIGN = { add: "+", del: "−", ctx: " " };
+  return h("div", { className: "diff-view" },
+    h("div", { className: "diff-pane" },
+      h("div", { className: "diff-pane-head" }, oldLabel || "Original"),
+      h("pre", { className: "diff-orig" }, String(oldText == null ? "" : oldText) || "​")
+    ),
+    h("div", { className: "diff-pane" },
+      h("div", { className: "diff-pane-head" }, newLabel || "Proposed changes"),
+      h("div", { className: "diff-lines" },
+        rows.map((r, k) => h("div", { key: k, className: "diff-line diff-" + r.t },
+          h("span", { className: "diff-gutter" }, SIGN[r.t]),
+          h("span", { className: "diff-text" }, r.text === "" ? "​" : r.text)
+        ))
+      )
+    )
+  );
+}
+
 Object.assign(window, {
   Icon, Avatar, TypeBadge, Reveal, CiteProvider, CiteContext, Cite,
   Loading, SkeletonGrid, EmptyState, useDebounce, ConfirmDialog,
-  Markdown, AnswerBody, renderMarkdown,
+  Markdown, AnswerBody, renderMarkdown, DiffView,
   TYPE_ICON, TYPE_LABEL,
   SHELF_LABELS, SHELF_ORDER, STATUS_TAG_LABELS, STATUS_TAG_ORDER, TRANSLATION_TYPE_LABELS,
+  STATUS_TAG_RADIO_GROUPS, GENRE_TAGS,
   useState, useEffect, useRef, useMemo, useCallback, createContext, useContext,
 });

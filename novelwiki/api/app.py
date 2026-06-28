@@ -103,7 +103,22 @@ except Exception as e:
 # Serve the UI static files (index.html at root).
 # IMPORTANT: a Mount at "/" matches every path, so it MUST be registered AFTER
 # the API router, /health, and /assets, otherwise it shadows them.
+#
+# The SPA ships unbundled .jsx/.js/.css under stable filenames with no content
+# hashes, and index.html references them without a ?v= query. Under the default
+# StaticFiles headers (ETag/Last-Modified but no Cache-Control) browsers apply
+# heuristic caching and may keep a stale api.js across a deploy while loading a
+# fresh app.jsx — e.g. an old api.js without `auth` against an app.jsx that calls
+# window.API.auth.me(), which throws and blanks the page. `no-cache` keeps the
+# files cacheable but forces an ETag revalidation on every load: unchanged files
+# still 304 (cheap), and a redeploy is picked up immediately.
+class RevalidatingStaticFiles(StaticFiles):
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
 try:
-    app.mount("/", StaticFiles(directory="novelwiki/frontend", html=True), name="frontend")
+    app.mount("/", RevalidatingStaticFiles(directory="novelwiki/frontend", html=True), name="frontend")
 except Exception as e:
     logger.warning(f"Could not mount static frontend folder: {e}")

@@ -102,10 +102,11 @@ function TranslationTools({ novelId, ch, onClose, onChanged }) {
       h("div", { style: { fontWeight: 600, marginBottom: 4 } }, "The shared base changed since your version."),
       h("p", { className: "muted", style: { fontSize: 12.5, margin: "0 0 8px" } },
         "Keep yours, switch to the latest base, or edit below and Save to merge."),
-      ch.base_content && h("details", { className: "tt-base" },
-        h("summary", { className: "muted" }, "Show latest base text"),
-        h("div", { className: "tt-base-text" }, ch.base_content)
-      ),
+      // GitHub-style diff: latest base on top, your version below with +/- changes.
+      ch.base_content && h(window.DiffView, {
+        oldText: ch.base_content, newText: ch.content || "",
+        oldLabel: "Latest base", newLabel: "Your version",
+      }),
       h("div", { className: "row", style: { gap: 8, marginTop: 8 } },
         h("button", { className: "btn btn-ghost", disabled: busy, onClick: resolveMine }, "Keep mine"),
         h("button", { className: "btn btn-ghost", disabled: busy, onClick: resolveBase }, "Use latest base")

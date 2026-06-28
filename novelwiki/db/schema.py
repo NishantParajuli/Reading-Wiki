@@ -537,10 +537,30 @@ DDL_QUERIES = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS contributions_novel_status_idx ON contributions (novel_id, status);",
+
+    # ── 20. Tag suggestions ────────────────────────────────────────────────
+    # Status tags are owner/admin-controlled novel metadata. A reader of a shared
+    # (public/global) novel can propose a tag set; the owner/admin accepts (applies it
+    # to the novel) or rejects it. `tags` is the full proposed status_tags array.
+    """
+    CREATE TABLE IF NOT EXISTS tag_suggestions (
+      id           BIGSERIAL PRIMARY KEY,
+      novel_id     BIGINT  NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+      from_user_id BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      tags         TEXT[]  NOT NULL DEFAULT '{}',
+      note         TEXT,
+      status       TEXT    DEFAULT 'pending',                 -- pending|accepted|rejected
+      reviewed_by  BIGINT  REFERENCES users(id) ON DELETE SET NULL,
+      created_at   TIMESTAMPTZ DEFAULT now(),
+      reviewed_at  TIMESTAMPTZ
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS tag_suggestions_novel_status_idx ON tag_suggestions (novel_id, status);",
 ]
 
 # Tables in dependency order (children first) — used by reset_db to drop cleanly.
 ALL_TABLES = [
+    "tag_suggestions",
     "contributions",
     "chapter_overlays",
     "import_jobs",
