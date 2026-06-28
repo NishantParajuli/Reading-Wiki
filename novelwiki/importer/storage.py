@@ -198,6 +198,38 @@ async def commit_asset(
     return rel
 
 
+# ── User avatars (multi-user, Phase 3) ───────────────────────────────────────
+# Avatars live under ASSET_DIR/_users/<id>/ so the existing /assets mount serves them.
+# Content-addressed (truncated sha) so re-uploading the same image is a no-op and the
+# URL changes when the image does (cache-busting). The DB stores the ASSET_DIR-relative
+# path in users.avatar_path; the URL is "/assets/" + that path.
+
+_AVATAR_EXT = {"jpg", "jpeg", "png", "webp", "gif"}
+
+
+def _user_dir(user_id: int) -> Path:
+    d = _asset_root() / "_users" / str(user_id)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def user_avatar_rel(user_id: int, name: str) -> str:
+    return f"_users/{user_id}/{name}"
+
+
+def save_user_avatar(user_id: int, data: bytes, ext: str) -> str:
+    """Write an avatar image and return its path relative to ASSET_DIR. Older avatars for
+    the user are left on disk (cheap); the DB row points at the latest filename."""
+    ext = (ext or "png").lower().lstrip(".")
+    if ext == "jpeg":
+        ext = "jpg"
+    if ext not in _AVATAR_EXT:
+        ext = "png"
+    name = f"{sha256_bytes(data)[:16]}.{ext}"
+    (_user_dir(user_id) / name).write_bytes(data)
+    return user_avatar_rel(user_id, name)
+
+
 # ── Cleanup ─────────────────────────────────────────────────────────────────
 
 def cleanup_job(job_id: int) -> None:

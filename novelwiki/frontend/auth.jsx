@@ -144,7 +144,7 @@ function QuotaLine({ label, used, limit }) {
   );
 }
 
-function UserMenu({ user, onLogout }) {
+function UserMenu({ user, onLogout, onProfile, onAccount, onAdmin }) {
   const [open, setOpen] = useState(false);
   const [usage, setUsage] = useState(null);
   const ref = useRef(null);
@@ -161,25 +161,33 @@ function UserMenu({ user, onLogout }) {
   }, [open, usage]);
   const name = user.display_name || user.username;
   const initial = (name || "?").trim().charAt(0).toUpperCase();
+  const go = (fn) => () => { setOpen(false); fn && fn(); };
   const doLogout = async () => {
     try { await window.API.auth.logout(); } catch (e) {}
     onLogout();
   };
+  const avatar = user.avatar_url
+    ? h("img", { className: "usermenu-avatar usermenu-avatar-img", src: user.avatar_url, alt: "", onClick: () => setOpen((o) => !o), title: name })
+    : h("button", { className: "usermenu-avatar", onClick: () => setOpen((o) => !o), "aria-label": "Account menu", title: name }, initial);
   return h("div", { className: "usermenu", ref },
-    h("button", { className: "usermenu-avatar", onClick: () => setOpen((o) => !o), "aria-label": "Account menu", title: name }, initial),
+    avatar,
     open && h("div", { className: "usermenu-pop" },
       h("div", { className: "usermenu-head" },
         h("div", { className: "usermenu-name" }, name),
         h("div", { className: "usermenu-email muted" }, user.email)
       ),
       !user.email_verified && h("div", { className: "usermenu-warn" }, "Email not verified — check your inbox to unlock translation & uploads."),
-      user.role === "admin" && h("div", { className: "usermenu-tag" }, "Admin"),
       usage && !usage.unlimited && h("div", { className: "usermenu-usage" },
         h("div", { className: "usermenu-usage-title muted" }, "This month"),
         h(QuotaLine, { label: "Chapters translated", used: usage.usage.translated_chapters, limit: usage.limits.translated_chapters }),
         h(QuotaLine, { label: "OCR pages", used: usage.usage.ocr_pages, limit: usage.limits.ocr_pages })
       ),
       usage && usage.unlimited && h("div", { className: "usermenu-tag" }, "Unlimited usage"),
+      h("div", { className: "usermenu-sep" }),
+      h("button", { className: "usermenu-item", onClick: go(() => onProfile && onProfile(user.username)) }, "Profile"),
+      h("button", { className: "usermenu-item", onClick: go(onAccount) }, "Account & quota"),
+      user.role === "admin" && h("button", { className: "usermenu-item", onClick: go(onAdmin) }, "Admin"),
+      h("div", { className: "usermenu-sep" }),
       h("button", { className: "usermenu-item", onClick: doLogout }, "Sign out")
     )
   );

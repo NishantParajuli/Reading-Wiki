@@ -70,7 +70,7 @@ const CONTEXT_NAV = [
   { id: "ask", label: "Ask", icon: "sparkles" },
 ];
 
-function App({ user, onLogout }) {
+function App({ user, onLogout, onUserUpdate }) {
   const [theme, setTheme] = useState(() => localStorage.getItem("nw-theme") || "light");
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
@@ -125,14 +125,35 @@ function App({ user, onLogout }) {
   }, [t]);
 
   // ── navigation ──
-  const openLibrary = () => { setNovelId(null); setRoute({ view: "library", params: {} }); };
-  const openDiscover = () => { setNovelId(null); setRoute({ view: "discover", params: {} }); };
-  const openImport = () => { setNovelId(null); setRoute({ view: "import", params: {} }); };
-  const openNovel = (id) => { setNovelId(id); setRoute({ view: "novel", params: {} }); };
+  // Deep-linkable surfaces (profile/account/admin) sync to the URL hash so they can be
+  // shared/reloaded; everything else clears the hash and routes via React state only.
+  const clearHash = () => { if (window.location.hash) history.replaceState(null, "", window.location.pathname + window.location.search); };
+  const openLibrary = () => { setNovelId(null); setRoute({ view: "library", params: {} }); clearHash(); };
+  const openDiscover = () => { setNovelId(null); setRoute({ view: "discover", params: {} }); clearHash(); };
+  const openImport = () => { setNovelId(null); setRoute({ view: "import", params: {} }); clearHash(); };
+  const openNovel = (id) => { setNovelId(id); setRoute({ view: "novel", params: {} }); clearHash(); };
   const openReader = (number) => setRoute({ view: "reader", params: { number } });
+  const openProfile = (username) => { setNovelId(null); setRoute({ view: "profile", params: { username } }); window.location.hash = "#/u/" + encodeURIComponent(username); };
+  const openAccount = () => { setNovelId(null); setRoute({ view: "account", params: {} }); window.location.hash = "#/account"; };
+  const openAdmin = () => { setNovelId(null); setRoute({ view: "admin", params: {} }); window.location.hash = "#/admin"; };
   const nav = (view, params = {}) => setRoute({ view, params });
   const setView = (view) => setRoute({ view, params: {} });
   const reloadNovel = () => { if (novelId != null) loadNovel(novelId); };
+
+  // Hash routing for deep-linkable surfaces. Runs on load (direct link) and on back/forward.
+  useEffect(() => {
+    const onHash = () => {
+      const raw = (window.location.hash || "").replace(/^#\/?/, "");
+      const path = raw.split("?")[0];
+      const parts = path.split("/");
+      if (parts[0] === "u" && parts[1]) { setNovelId(null); setRoute({ view: "profile", params: { username: decodeURIComponent(parts[1]) } }); }
+      else if (path === "account") { setNovelId(null); setRoute({ view: "account", params: {} }); }
+      else if (path === "admin") { setNovelId(null); setRoute({ view: "admin", params: {} }); }
+    };
+    onHash();
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   // Reader reports progress → reflect it locally so the codex ceiling follows reading.
   const onRead = (number) => {
@@ -154,6 +175,12 @@ function App({ user, onLogout }) {
     screen = React.createElement(ImportView, { openNovel, openLibrary });
   } else if (route.view === "discover") {
     screen = React.createElement(Discover, { openNovel, openLibrary });
+  } else if (route.view === "profile") {
+    screen = React.createElement(Profile, { username: route.params.username, currentUser: user, openNovel, openLibrary, openAccount });
+  } else if (route.view === "account") {
+    screen = React.createElement(AccountPanel, { user, onUserUpdate, openLibrary, openProfile });
+  } else if (route.view === "admin") {
+    screen = React.createElement(Admin, { openLibrary, openNovel, currentUser: user });
   } else if (!inNovel || route.view === "library") {
     screen = React.createElement(Library, { openNovel, openImport, openDiscover });
   } else if (route.view === "novel") {
@@ -195,7 +222,7 @@ function App({ user, onLogout }) {
             className: "icon-btn", onClick: () => setTheme(th => th === "light" ? "dark" : "light"),
             "aria-label": "Toggle theme",
           }, React.createElement(Icon, { name: theme === "light" ? "moon" : "sun", size: 18 })),
-          user && React.createElement(UserMenu, { user, onLogout })
+          user && React.createElement(UserMenu, { user, onLogout, onProfile: openProfile, onAccount: openAccount, onAdmin: openAdmin })
         )
       ),
       showCeiling && React.createElement(CeilingBar, { ceiling, setCeiling, meta: codexMeta, stats }),
@@ -250,6 +277,7 @@ function Root() {
   return React.createElement(App, {
     user: state.user,
     onLogout: () => setState({ loading: false, user: null }),
+    onUserUpdate: (u) => setState((s) => ({ ...s, user: u })),
   });
 }
 

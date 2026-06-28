@@ -6,7 +6,8 @@ from pydantic import BaseModel
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
 from novelwiki.auth.deps import current_user, require_admin
-from novelwiki.auth.access import require_readable, require_editable
+from novelwiki.auth.access import require_readable, require_editable, can_edit
+from novelwiki.auth.users import self_user, public_user, valid_username, normalize_username
 from novelwiki import quota
 from novelwiki.scraper.runner import scrape_source, scrape_novel, set_source_offset
 from novelwiki.scraper.adapters import list_adapters
@@ -16,6 +17,7 @@ from novelwiki.ingest.extract import extract_all_chapters
 from novelwiki.ingest.link import merge_entities
 from novelwiki.translate.translate import (
     translate_chapter, prefetch_translations, translate_range, seed_glossary_from_entities,
+    translate_raw_text,
 )
 from novelwiki.retrieval.bm25 import get_bm25_manager
 from novelwiki.retrieval.tools import (
@@ -83,9 +85,26 @@ class NovelUpdate(BaseModel):
     codex_enabled: bool | None = None
     shelf: str | None = None          # to_read|reading|completed|"" (empty string clears the shelf)
     status_tags: list[str] | None = None
+    contribution_policy: str | None = None   # manual|auto: how contribute-back offers merge (owner/admin)
 
 class VisibilityUpdate(BaseModel):
     visibility: str          # private|public|global
+
+class ProfileUpdate(BaseModel):
+    display_name: str | None = None
+    bio: str | None = None
+    username: str | None = None
+    prefs: dict | None = None
+
+class OverlayUpdate(BaseModel):
+    content: str
+
+class ResolveOverlay(BaseModel):
+    choice: str                       # base|mine|merge
+    content: str | None = None        # required when choice == 'merge'
+
+class ContributionPolicy(BaseModel):
+    contribution_policy: str          # manual|auto
 
 class ProgressUpdate(BaseModel):
     last_chapter: float
@@ -338,6 +357,8 @@ async def api_update_novel(novel_id: int, payload: NovelUpdate, user: dict = Dep
         if fields:
             if not (novel["owner_id"] == user["id"] or user.get("role") == "admin"):
                 raise HTTPException(status_code=403, detail="You don't have permission to edit this novel.")
+            if "contribution_policy" in fields and fields["contribution_policy"] not in ("manual", "auto"):
+                raise HTTPException(status_code=422, detail="contribution_policy must be 'manual' or 'auto'.")
             sets, args = [], []
             for k, v in fields.items():
                 args.append(v)
@@ -463,6 +484,151 @@ async def api_my_usage(user: dict = Depends(current_user)):
     return await quota.usage_and_limits(user)
 
 
+# ── Profiles & account (Phase 3) ────────────────────────────────────────────
+
+@router.patch("/me")
+async def api_update_me(payload: ProfileUpdate, user: dict = Depends(current_user)):
+    """Update the signed-in account's profile (display name, bio, username) and synced
+    reader prefs. `prefs` is shallow-merged into the existing JSON so a partial update
+    (e.g. just the reader font) doesn't clobber the rest."""
+    fields = payload.model_dump(exclude_unset=True)
+    sets, args = [], []
+    if "display_name" in fields:
+        dn = (fields["display_name"] or "").strip()[:80] or None
+        args.append(dn); sets.append(f"display_name = ${len(args)}")
+    if "bio" in fields:
+        bio = (fields["bio"] or "").strip()[:600] or None
+        args.append(bio); sets.append(f"bio = ${len(args)}")
+    if "prefs" in fields and isinstance(fields["prefs"], dict):
+        args.append(json.dumps(fields["prefs"]))
+        sets.append(f"prefs = COALESCE(prefs, '{{}}'::jsonb) || ${len(args)}::jsonb")
+
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        if "username" in fields and fields["username"] is not None:
+            uname = normalize_username(fields["username"])
+            if not valid_username(uname):
+                raise HTTPException(status_code=422, detail="Username must be 3–24 chars: a–z, 0–9, underscore.")
+            if uname != user["username"]:
+                taken = await conn.fetchval("SELECT 1 FROM users WHERE username = $1 AND id <> $2;", uname, user["id"])
+                if taken:
+                    raise HTTPException(status_code=409, detail="That username is already taken.")
+                args.append(uname); sets.append(f"username = ${len(args)}")
+        if not sets:
+            return self_user(user)
+        args.append(user["id"])
+        row = await conn.fetchrow(
+            f"UPDATE users SET {', '.join(sets)}, updated_at = now() WHERE id = ${len(args)} RETURNING *;",
+            *args,
+        )
+    return self_user(dict(row))
+
+
+@router.post("/me/avatar")
+async def api_upload_avatar(file: UploadFile = File(...), user: dict = Depends(current_user)):
+    """Upload (replace) the account avatar. Stored under ASSET_DIR/_users/<id>/ and served
+    by the /assets mount; the DB keeps the relative path."""
+    from novelwiki.importer import storage as import_storage
+    ext = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
+    if (file.content_type or "").split("/")[0] != "image" and ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+        raise HTTPException(status_code=400, detail="Avatar must be an image (jpg, png, webp, gif).")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Avatar must be under 5 MB.")
+    rel = import_storage.save_user_avatar(user["id"], data, ext or "png")
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET avatar_path = $1, updated_at = now() WHERE id = $2;", rel, user["id"])
+    return {"avatar_path": rel, "avatar_url": "/assets/" + rel}
+
+
+@router.get("/users/{username}")
+async def api_user_profile(username: str, user: dict = Depends(current_user)):
+    """A public profile: identity, reading stats, and recent activity. When viewing your
+    own profile (or as an admin) private novels are included; otherwise activity is limited
+    to the shared library (global/public) so a reader's private list isn't leaked."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        target = await conn.fetchrow("SELECT * FROM users WHERE username = $1;", (username or "").lower())
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+        tid = target["id"]
+        include_private = (user["id"] == tid) or user.get("role") == "admin"
+
+        stats = await conn.fetchrow(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE le.id IS NOT NULL) AS library_count,
+              COUNT(*) FILTER (WHERE le.shelf = 'reading') AS reading_count,
+              COUNT(*) FILTER (WHERE le.shelf = 'completed') AS completed_count,
+              COALESCE(SUM(p.max_chapter_read), 0) AS chapters_read
+            FROM library_entries le
+            JOIN novels n ON n.id = le.novel_id
+            LEFT JOIN reading_progress p ON p.novel_id = n.id AND p.user_id = le.user_id
+            WHERE le.user_id = $1 AND ($2 OR n.visibility IN ('global', 'public'));
+            """,
+            tid, include_private,
+        )
+
+        reading = await conn.fetch(
+            """
+            SELECT n.id, n.title, n.cover_url, n.visibility, p.last_chapter, p.max_chapter_read, p.updated_at,
+                   (SELECT MAX(number) FROM chapters c WHERE c.novel_id = n.id) AS max_chapter
+            FROM reading_progress p
+            JOIN novels n ON n.id = p.novel_id
+            WHERE p.user_id = $1 AND p.last_chapter IS NOT NULL
+              AND ($2 OR n.visibility IN ('global', 'public'))
+            ORDER BY p.updated_at DESC NULLS LAST LIMIT 8;
+            """,
+            tid, include_private,
+        )
+        finished = await conn.fetch(
+            """
+            SELECT n.id, n.title, n.cover_url, n.visibility
+            FROM library_entries le JOIN novels n ON n.id = le.novel_id
+            WHERE le.user_id = $1 AND le.shelf = 'completed'
+              AND ($2 OR n.visibility IN ('global', 'public'))
+            ORDER BY le.added_at DESC LIMIT 8;
+            """,
+            tid, include_private,
+        )
+        published = await conn.fetch(
+            """
+            SELECT n.id, n.title, n.cover_url, n.visibility,
+                   (SELECT COUNT(*) FROM chapters c WHERE c.novel_id = n.id) AS chapter_count
+            FROM novels n
+            WHERE n.owner_id = $1 AND n.visibility IN ('public', 'global')
+            ORDER BY n.updated_at DESC NULLS LAST LIMIT 12;
+            """,
+            tid,
+        )
+
+    def _novel_brief(r):
+        out = {"id": int(r["id"]), "title": r["title"], "cover_url": r["cover_url"], "visibility": r["visibility"]}
+        if "last_chapter" in r and r["last_chapter"] is not None:
+            out["last_chapter"] = float(r["last_chapter"])
+            out["max_chapter"] = float(r["max_chapter"]) if r["max_chapter"] is not None else None
+        if "chapter_count" in r and r["chapter_count"] is not None:
+            out["chapter_count"] = int(r["chapter_count"])
+        return out
+
+    profile = public_user(dict(target))
+    profile["is_self"] = user["id"] == tid
+    profile["role"] = target.get("role", "user") if include_private else None
+    profile["stats"] = {
+        "library_count": int(stats["library_count"] or 0),
+        "reading_count": int(stats["reading_count"] or 0),
+        "completed_count": int(stats["completed_count"] or 0),
+        "chapters_read": int(stats["chapters_read"] or 0),
+    }
+    profile["currently_reading"] = [_novel_brief(r) for r in reading]
+    profile["recently_finished"] = [_novel_brief(r) for r in finished]
+    profile["published"] = [_novel_brief(r) for r in published]
+    return profile
+
+
 @router.post("/novels/{novel_id}/sources")
 async def api_add_source(novel_id: int, payload: SourceCreate, user: dict = Depends(current_user)):
     await require_editable(novel_id, user)
@@ -557,12 +723,12 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
     """Returns one chapter's readable content for the reader, plus prev/next numbers.
     Raw chapters are translated on demand here (and the next few are prefetched in the
     background), so the reader always gets English text — keyed off `translation_status`."""
-    await require_readable(novel_id, user)
+    novel = await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT c.number, c.title, c.content, c.raw_html,
+            SELECT c.number, c.title, c.content, c.raw_html, c.content_version,
                    (c.original_text IS NOT NULL) AS has_original,
                    c.language, c.is_translated, c.translation_status,
                    s.adapter, COALESCE(s.is_raw, FALSE) AS source_is_raw
@@ -580,6 +746,11 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
         next_num = await conn.fetchval(
             "SELECT number FROM chapters WHERE novel_id = $1 AND number > $2 ORDER BY number ASC LIMIT 1;",
             novel_id, number,
+        )
+        overlay = await conn.fetchrow(
+            "SELECT content, base_version, origin, conflict FROM chapter_overlays "
+            "WHERE user_id = $1 AND novel_id = $2 AND chapter = $3;",
+            user["id"], novel_id, number,
         )
 
     content = row["content"]
@@ -604,6 +775,18 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
     # import sources whose content matches it.
     rich_html = row["raw_html"] if (row["adapter"] in ("epub", "pdf") and not row["source_is_raw"]) else None
 
+    # Per-user translation overlay (Phase 5): if this reader has saved/contributed an override
+    # for this chapter, the reader shows *their* text; the base is sent alongside so the
+    # conflict resolver can diff base-vs-mine. `conflict` is true once the shared base has
+    # advanced past the version the overlay was forked from.
+    base_content = content
+    base_version = int(row["content_version"] or 1)
+    overlay_active = overlay is not None
+    overlay_conflict = bool(overlay and (overlay["conflict"] or overlay["base_version"] < base_version))
+    if overlay_active:
+        content = overlay["content"]
+        rich_html = None   # an overlay is plain text and replaces any rich rendering
+
     return {
         "number": float(row["number"]),
         "title": row["title"],
@@ -614,7 +797,285 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
         "translation_status": status,
         "prev": float(prev_num) if prev_num is not None else None,
         "next": float(next_num) if next_num is not None else None,
+        # Overlay / contribute-back context for the reader's editor + conflict UI.
+        "content_version": base_version,
+        "has_original": bool(row["has_original"]),
+        "can_edit_base": can_edit(novel, user),
+        "is_owner": novel.get("owner_id") == user["id"],
+        "contribution_policy": novel.get("contribution_policy") or "manual",
+        "overlay": overlay_active,
+        "overlay_origin": overlay["origin"] if overlay_active else None,
+        "overlay_base_version": int(overlay["base_version"]) if overlay_active else None,
+        "overlay_conflict": overlay_conflict,
+        "base_content": base_content if overlay_active else None,
     }
+
+
+# ── Translation overlays + contribute-back (Phase 5) ───────────────────────
+# A reader can override a shared novel's translation for their own account (an "overlay")
+# and offer it back to the owner (a "contribution"). When the shared base later changes,
+# overlays forked from the old version are flagged so the reader can resolve the conflict.
+
+async def _chapter_or_404(conn, novel_id: int, number: float) -> dict:
+    row = await conn.fetchrow(
+        "SELECT content, content_version FROM chapters WHERE novel_id = $1 AND number = $2;",
+        novel_id, number,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Chapter not found.")
+    return dict(row)
+
+
+async def _write_base_content(conn, novel_id: int, number: float, content: str,
+                              keep_overlay_user: int | None = None) -> int:
+    """Write the shared base content, bump content_version, and flag every per-user overlay
+    that was forked from an older version as conflicted. The contributor whose text became the
+    new base (keep_overlay_user) is exempted and re-synced to the new version instead."""
+    new_version = await conn.fetchval(
+        """
+        UPDATE chapters
+        SET content = $3, is_translated = TRUE, translation_status = 'done',
+            content_version = content_version + 1
+        WHERE novel_id = $1 AND number = $2 RETURNING content_version;
+        """,
+        novel_id, number, content,
+    )
+    await conn.execute(
+        "UPDATE chapter_overlays SET conflict = TRUE, updated_at = now() "
+        "WHERE novel_id = $1 AND chapter = $2 AND base_version < $3 AND ($4::bigint IS NULL OR user_id <> $4);",
+        novel_id, number, new_version, keep_overlay_user,
+    )
+    if keep_overlay_user is not None:
+        await conn.execute(
+            "UPDATE chapter_overlays SET base_version = $3, conflict = FALSE, updated_at = now() "
+            "WHERE novel_id = $1 AND chapter = $2 AND user_id = $4;",
+            novel_id, number, new_version, keep_overlay_user,
+        )
+    return int(new_version)
+
+
+@router.put("/novels/{novel_id}/chapter/{number}/content")
+async def api_edit_base_content(novel_id: int, number: float, payload: OverlayUpdate, user: dict = Depends(current_user)):
+    """Owner/admin: edit the shared base translation directly. Bumps the content version, so
+    other readers' overlays of this chapter become conflicts they can resolve."""
+    await require_editable(novel_id, user)
+    text = (payload.content or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Content can't be empty.")
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await _chapter_or_404(conn, novel_id, number)
+        async with conn.transaction():
+            version = await _write_base_content(conn, novel_id, number, text)
+    return {"status": "success", "content_version": version}
+
+
+@router.put("/novels/{novel_id}/chapter/{number}/overlay")
+async def api_save_overlay(novel_id: int, number: float, payload: OverlayUpdate, user: dict = Depends(current_user)):
+    """Save the reader's personal translation override for this chapter, forked from the
+    current base version. Replaces any existing overlay and clears its conflict flag."""
+    await require_readable(novel_id, user)
+    text = (payload.content or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Content can't be empty.")
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        ch = await _chapter_or_404(conn, novel_id, number)
+        await conn.execute(
+            """
+            INSERT INTO chapter_overlays (user_id, novel_id, chapter, content, base_version, origin, conflict)
+            VALUES ($1, $2, $3, $4, $5, 'manual_edit', FALSE)
+            ON CONFLICT (user_id, novel_id, chapter) DO UPDATE SET
+                content = EXCLUDED.content, base_version = EXCLUDED.base_version,
+                origin = 'manual_edit', conflict = FALSE, updated_at = now();
+            """,
+            user["id"], novel_id, number, text, int(ch["content_version"] or 1),
+        )
+    return {"status": "success"}
+
+
+@router.delete("/novels/{novel_id}/chapter/{number}/overlay")
+async def api_delete_overlay(novel_id: int, number: float, user: dict = Depends(current_user)):
+    """Drop the reader's overlay for this chapter and fall back to the shared base."""
+    await require_readable(novel_id, user)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM chapter_overlays WHERE user_id = $1 AND novel_id = $2 AND chapter = $3;",
+            user["id"], novel_id, number,
+        )
+    return {"status": "success"}
+
+
+@router.post("/novels/{novel_id}/chapter/{number}/self-translate")
+async def api_self_translate(novel_id: int, number: float, user: dict = Depends(current_user)):
+    """Translate a raw chapter into the reader's own overlay (counts against their monthly
+    translated-chapters quota). Only applies to chapters that have source-language text."""
+    await require_readable(novel_id, user)
+    await quota.check_and_reserve(user, "translated_chapters", 1)
+    translation = await translate_raw_text(novel_id, number)
+    if not translation:
+        raise HTTPException(status_code=409, detail="This chapter has no source text to translate.")
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        ch = await _chapter_or_404(conn, novel_id, number)
+        await conn.execute(
+            """
+            INSERT INTO chapter_overlays (user_id, novel_id, chapter, content, base_version, origin, conflict)
+            VALUES ($1, $2, $3, $4, $5, 'self_translated', FALSE)
+            ON CONFLICT (user_id, novel_id, chapter) DO UPDATE SET
+                content = EXCLUDED.content, base_version = EXCLUDED.base_version,
+                origin = 'self_translated', conflict = FALSE, updated_at = now();
+            """,
+            user["id"], novel_id, number, translation, int(ch["content_version"] or 1),
+        )
+    return {"status": "success", "content": translation}
+
+
+@router.post("/novels/{novel_id}/chapter/{number}/resolve")
+async def api_resolve_overlay(novel_id: int, number: float, payload: ResolveOverlay, user: dict = Depends(current_user)):
+    """Resolve a base-vs-overlay conflict: keep the base (drop the overlay), keep mine
+    (re-anchor the overlay to the current base), or save a merged result."""
+    await require_readable(novel_id, user)
+    choice = (payload.choice or "").lower()
+    if choice not in ("base", "mine", "merge"):
+        raise HTTPException(status_code=422, detail="choice must be 'base', 'mine', or 'merge'.")
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        ch = await _chapter_or_404(conn, novel_id, number)
+        version = int(ch["content_version"] or 1)
+        if choice == "base":
+            await conn.execute(
+                "DELETE FROM chapter_overlays WHERE user_id = $1 AND novel_id = $2 AND chapter = $3;",
+                user["id"], novel_id, number,
+            )
+        elif choice == "mine":
+            await conn.execute(
+                "UPDATE chapter_overlays SET base_version = $4, conflict = FALSE, updated_at = now() "
+                "WHERE user_id = $1 AND novel_id = $2 AND chapter = $3;",
+                user["id"], novel_id, number, version,
+            )
+        else:  # merge
+            text = (payload.content or "").strip()
+            if not text:
+                raise HTTPException(status_code=422, detail="A merge needs the resolved content.")
+            await conn.execute(
+                """
+                INSERT INTO chapter_overlays (user_id, novel_id, chapter, content, base_version, origin, conflict)
+                VALUES ($1, $2, $3, $4, $5, 'manual_edit', FALSE)
+                ON CONFLICT (user_id, novel_id, chapter) DO UPDATE SET
+                    content = EXCLUDED.content, base_version = EXCLUDED.base_version,
+                    conflict = FALSE, updated_at = now();
+                """,
+                user["id"], novel_id, number, text, version,
+            )
+    return {"status": "success"}
+
+
+@router.post("/novels/{novel_id}/chapter/{number}/contribute")
+async def api_contribute(novel_id: int, number: float, user: dict = Depends(current_user)):
+    """Offer the reader's overlay back to the novel owner. With contribution_policy='auto'
+    and no conflict (the base hasn't moved since the overlay forked) it merges into the base
+    immediately; otherwise it lands in the owner's review inbox as a pending contribution."""
+    novel = await require_readable(novel_id, user)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        overlay = await conn.fetchrow(
+            "SELECT content, base_version FROM chapter_overlays WHERE user_id = $1 AND novel_id = $2 AND chapter = $3;",
+            user["id"], novel_id, number,
+        )
+        if overlay is None:
+            raise HTTPException(status_code=409, detail="You have no edit to offer for this chapter.")
+        ch = await _chapter_or_404(conn, novel_id, number)
+        version = int(ch["content_version"] or 1)
+        is_clean = overlay["base_version"] >= version
+        auto = (novel.get("contribution_policy") == "auto") and is_clean
+
+        async with conn.transaction():
+            status = "auto_merged" if auto else "pending"
+            cid = await conn.fetchval(
+                """
+                INSERT INTO contributions (novel_id, from_user_id, chapter, content, base_version, status, reviewed_at)
+                VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7 THEN now() ELSE NULL END)
+                RETURNING id;
+                """,
+                novel_id, user["id"], number, overlay["content"], int(overlay["base_version"]), status, auto,
+            )
+            if auto:
+                await _write_base_content(conn, novel_id, number, overlay["content"], keep_overlay_user=user["id"])
+    return {"status": "auto_merged" if auto else "pending", "id": int(cid)}
+
+
+@router.get("/novels/{novel_id}/contributions")
+async def api_list_contributions(novel_id: int, status: str = "pending", user: dict = Depends(current_user)):
+    """Owner/admin inbox of contribute-back offers (defaults to pending)."""
+    await require_editable(novel_id, user)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT k.id, k.chapter, k.content, k.base_version, k.status, k.created_at,
+                   u.username AS from_username, u.display_name AS from_display_name,
+                   c.content AS base_content, c.content_version
+            FROM contributions k
+            JOIN users u ON u.id = k.from_user_id
+            LEFT JOIN chapters c ON c.novel_id = k.novel_id AND c.number = k.chapter
+            WHERE k.novel_id = $1 AND ($2 = 'all' OR k.status = $2)
+            ORDER BY k.created_at DESC LIMIT 200;
+            """,
+            novel_id, status,
+        )
+    return [
+        {
+            "id": int(r["id"]), "chapter": float(r["chapter"]), "content": r["content"],
+            "base_version": int(r["base_version"]), "status": r["status"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "from_username": r["from_username"], "from_display_name": r["from_display_name"] or r["from_username"],
+            "base_content": r["base_content"],
+            "is_conflict": r["content_version"] is not None and int(r["base_version"]) < int(r["content_version"]),
+        }
+        for r in rows
+    ]
+
+
+@router.post("/novels/{novel_id}/contributions/{contribution_id}/accept")
+async def api_accept_contribution(novel_id: int, contribution_id: int, user: dict = Depends(current_user)):
+    """Owner/admin: merge a pending contribution into the shared base (bumps the version and
+    flags everyone else's overlays of this chapter as conflicts)."""
+    await require_editable(novel_id, user)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        c = await conn.fetchrow(
+            "SELECT id, chapter, content, from_user_id, status FROM contributions WHERE id = $1 AND novel_id = $2;",
+            contribution_id, novel_id,
+        )
+        if c is None:
+            raise HTTPException(status_code=404, detail="Contribution not found.")
+        if c["status"] not in ("pending",):
+            raise HTTPException(status_code=409, detail=f"Contribution is already '{c['status']}'.")
+        async with conn.transaction():
+            await _write_base_content(conn, novel_id, float(c["chapter"]), c["content"], keep_overlay_user=c["from_user_id"])
+            await conn.execute(
+                "UPDATE contributions SET status = 'accepted', reviewed_by = $2, reviewed_at = now() WHERE id = $1;",
+                contribution_id, user["id"],
+            )
+    return {"status": "accepted"}
+
+
+@router.post("/novels/{novel_id}/contributions/{contribution_id}/reject")
+async def api_reject_contribution(novel_id: int, contribution_id: int, user: dict = Depends(current_user)):
+    """Owner/admin: decline a pending contribution (the contributor keeps their overlay)."""
+    await require_editable(novel_id, user)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        updated = await conn.fetchval(
+            "UPDATE contributions SET status = 'rejected', reviewed_by = $3, reviewed_at = now() "
+            "WHERE id = $1 AND novel_id = $2 AND status = 'pending' RETURNING id;",
+            contribution_id, novel_id, user["id"],
+        )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="No pending contribution with that id.")
+    return {"status": "rejected"}
 
 
 # ── Reading progress ──────────────────────────────────────────────────────

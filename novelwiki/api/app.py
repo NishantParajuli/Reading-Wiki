@@ -80,9 +80,12 @@ app.add_middleware(
 # user object additionally declare `Depends(current_user)` — FastAPI caches it per request.
 from fastapi import Depends
 from novelwiki.auth.router import router as auth_router
-from novelwiki.auth.deps import current_user
+from novelwiki.auth.deps import current_user, require_admin
+from novelwiki.api.admin_routes import router as admin_router
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(router, prefix="/api", dependencies=[Depends(current_user)])
+# Admin dashboard — every route gated behind an admin session (require_admin → current_user).
+app.include_router(admin_router, prefix="/api/admin", dependencies=[Depends(require_admin)])
 
 @app.get("/health")
 async def health_check():

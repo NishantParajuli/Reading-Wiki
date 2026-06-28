@@ -44,6 +44,92 @@ function ReaderSettings({ prefs, setPrefs, onClose }) {
   );
 }
 
+/* Translation tools panel (Phase 5): edit the shared base (owner/admin) or your personal
+   overlay, self-translate a raw chapter, offer your edit back to the owner, and resolve a
+   conflict when the shared base has moved on since your overlay. */
+function TranslationTools({ novelId, ch, onClose, onChanged }) {
+  const [draft, setDraft] = useState(ch.content || "");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const canEditBase = !!ch.can_edit_base;
+  const hasOverlay = !!ch.overlay;
+  const conflict = !!ch.overlay_conflict;
+  const isOwner = !!ch.is_owner;
+
+  const run = (fn, reload = true) => async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fn();
+      if (reload) { onChanged(); } else { setBusy(false); }
+      return r;
+    } catch (e) {
+      setMsg({ ok: false, text: e.message || "Something went wrong." });
+      setBusy(false);
+    }
+  };
+
+  const saveBase = run(() => window.API.editBaseContent(novelId, ch.number, draft));
+  const saveMine = run(() => window.API.saveOverlay(novelId, ch.number, draft));
+  const selfTranslate = run(() => window.API.selfTranslate(novelId, ch.number));
+  const revert = run(() => window.API.deleteOverlay(novelId, ch.number));
+  const resolveMine = run(() => window.API.resolveOverlay(novelId, ch.number, "mine"));
+  const resolveBase = run(() => window.API.resolveOverlay(novelId, ch.number, "base"));
+  const resolveMerge = run(() => window.API.resolveOverlay(novelId, ch.number, "merge", draft));
+
+  async function offer() {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await window.API.contribute(novelId, ch.number);
+      if (r.status === "auto_merged") { onChanged(); return; }
+      setMsg({ ok: true, text: "Sent to the owner for review." });
+      setBusy(false);
+    } catch (e) { setMsg({ ok: false, text: e.message || "Couldn't offer this edit." }); setBusy(false); }
+  }
+
+  const h = React.createElement;
+  return h("div", { className: "translate-tools card", onClick: e => e.stopPropagation() },
+    h("div", { className: "row", style: { alignItems: "center", marginBottom: 10 } },
+      h("b", { className: "grow" }, canEditBase ? "Edit translation (shared)" : "Your translation"),
+      h("button", { className: "icon-btn", onClick: onClose }, h(Icon, { name: "x", size: 16 }))
+    ),
+
+    conflict && h("div", { className: "tt-conflict" },
+      h("div", { style: { fontWeight: 600, marginBottom: 4 } }, "The shared base changed since your version."),
+      h("p", { className: "muted", style: { fontSize: 12.5, margin: "0 0 8px" } },
+        "Keep yours, switch to the latest base, or edit below and Save to merge."),
+      ch.base_content && h("details", { className: "tt-base" },
+        h("summary", { className: "muted" }, "Show latest base text"),
+        h("div", { className: "tt-base-text" }, ch.base_content)
+      ),
+      h("div", { className: "row", style: { gap: 8, marginTop: 8 } },
+        h("button", { className: "btn btn-ghost", disabled: busy, onClick: resolveMine }, "Keep mine"),
+        h("button", { className: "btn btn-ghost", disabled: busy, onClick: resolveBase }, "Use latest base")
+      )
+    ),
+
+    h("textarea", {
+      className: "tt-textarea", value: draft, disabled: busy,
+      onChange: e => setDraft(e.target.value), rows: 12, placeholder: "Chapter translation…",
+    }),
+
+    msg && h("div", { className: msg.ok ? "acct-ok" : "acct-err", style: { marginTop: 8 } }, msg.text),
+
+    h("div", { className: "row", style: { gap: 8, marginTop: 10, flexWrap: "wrap" } },
+      canEditBase
+        ? h("button", { className: "btn btn-primary", disabled: busy || !draft.trim(), onClick: saveBase }, "Save for everyone")
+        : conflict
+          ? h("button", { className: "btn btn-primary", disabled: busy || !draft.trim(), onClick: resolveMerge }, "Save merged")
+          : h("button", { className: "btn btn-primary", disabled: busy || !draft.trim(), onClick: saveMine }, "Save my version"),
+      ch.has_original && h("button", { className: "btn btn-ghost", disabled: busy, onClick: selfTranslate, title: "Re-translate this raw chapter into your own copy (uses quota)" },
+        h(Icon, { name: "refresh", size: 15 }), "Re-translate for me"),
+      hasOverlay && !canEditBase && !isOwner && h("button", { className: "btn btn-ghost", disabled: busy, onClick: offer, title: "Offer your version to the owner" },
+        h(Icon, { name: "send", size: 15 }), "Offer to owner"),
+      hasOverlay && h("button", { className: "btn btn-ghost is-danger", disabled: busy, onClick: revert }, "Revert to original")
+    )
+  );
+}
+
 function Reader({ novelId, number, openReader, backToNovel, onRead }) {
   const [ch, setCh] = useState(null);     // null = loading
   const [status, setStatus] = useState("loading");
@@ -54,6 +140,7 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
   const [bookmarks, setBookmarks] = useState([]);
   const [chrome, setChrome] = useState(true);   // toolbar + floating nav visibility (tap to toggle)
   const [reloadKey, setReloadKey] = useState(0);
+  const [showTools, setShowTools] = useState(false);   // translation overlay editor (Phase 5)
   const scrollSaved = useRef(0);
 
   useEffect(() => { localStorage.setItem("nw-reader", JSON.stringify(prefs)); }, [prefs]);
@@ -178,8 +265,9 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
 
   // Tap the page (not a control) to toggle the toolbar + floating nav.
   const tapToggle = (e) => {
-    if (e.target.closest("button, a, input, select, textarea, .reader-settings, .drawer")) return;
+    if (e.target.closest("button, a, input, select, textarea, .reader-settings, .translate-tools, .drawer")) return;
     if (showSettings) { setShowSettings(false); return; }
+    if (showTools) { setShowTools(false); return; }
     setChrome(c => !c);
   };
 
@@ -198,6 +286,20 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
       }, React.createElement(Icon, { name: prefs.autoScroll ? "pause" : "play", size: 17 })),
       React.createElement("button", { className: "icon-btn" + (bookmark ? " active" : ""), onClick: toggleBookmark, title: bookmark ? "Remove bookmark" : "Bookmark" },
         React.createElement(Icon, { name: bookmark ? "check" : "book", size: 18 })),
+      // Translation tools: edit the shared base / your overlay, contribute back, resolve conflicts.
+      status === "ok" && ch && (ch.content != null || ch.has_original) && React.createElement("div", { style: { position: "relative" } },
+        React.createElement("button", {
+          className: "icon-btn" + (ch.overlay ? " active" : "") + (ch.overlay_conflict ? " has-conflict" : ""),
+          onClick: e => { e.stopPropagation(); setShowTools(s => !s); },
+          title: ch.overlay_conflict ? "Translation update available" : (ch.overlay ? "Your translation edit" : "Edit translation"),
+        }, React.createElement(Icon, { name: "edit", size: 17 }),
+           ch.overlay_conflict && React.createElement("span", { className: "tt-badge" }, "1")),
+        showTools && React.createElement(TranslationTools, {
+          novelId, ch,
+          onClose: () => setShowTools(false),
+          onChanged: () => { setShowTools(false); setReloadKey(k => k + 1); },
+        })
+      ),
       React.createElement("div", { style: { position: "relative" } },
         React.createElement("button", { className: "icon-btn", onClick: e => { e.stopPropagation(); setShowSettings(s => !s); }, title: "Reading settings" },
           React.createElement("span", { style: { fontWeight: 700, fontSize: 15 } }, "Aa")),
@@ -217,6 +319,11 @@ function Reader({ novelId, number, openReader, backToNovel, onRead }) {
     status === "ok" && ch && React.createElement("div", { className: "reader-col", style: colStyle },
       React.createElement("h1", { className: "reader-title" }, ch.title || `Chapter ${ch.number}`),
       React.createElement("div", { className: "reader-chapnum mono" }, `Chapter ${ch.number}`),
+      (ch.overlay || ch.overlay_conflict) && React.createElement("button", {
+        className: "tt-chip" + (ch.overlay_conflict ? " conflict" : ""),
+        onClick: e => { e.stopPropagation(); setShowTools(true); },
+      }, React.createElement(Icon, { name: ch.overlay_conflict ? "alert" : "edit", size: 13 }),
+         ch.overlay_conflict ? "Update available" : "Your translation"),
       (!ch.content && !ch.rich_html)
         ? React.createElement("div", { className: "reader-raw-note card" },
             React.createElement(Icon, { name: "x", size: 18, className: "muted" }),

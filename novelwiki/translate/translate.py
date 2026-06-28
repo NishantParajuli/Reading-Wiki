@@ -195,7 +195,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
                         """
                         UPDATE chapters
                         SET title = $1, content = $2, is_translated = TRUE, translation_status = 'done',
-                            translation_model = $3, word_count = $4
+                            translation_model = $3, word_count = $4, content_version = content_version + 1
                         WHERE novel_id = $5 AND number = $6;
                         """,
                         title_translated, translation, settings.MODEL_TRANSLATE, word_count, novel_id, number,
@@ -205,14 +205,52 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
                         """
                         UPDATE chapters
                         SET content = $1, is_translated = TRUE, translation_status = 'done',
-                            translation_model = $2, word_count = $3
+                            translation_model = $2, word_count = $3, content_version = content_version + 1
                         WHERE novel_id = $4 AND number = $5;
                         """,
                         translation, settings.MODEL_TRANSLATE, word_count, novel_id, number,
                     )
+                # A re-translation of the shared base supersedes per-user overlays forked from
+                # an older version — flag them so the reader shows a conflict badge (Phase 5).
+                await conn.execute(
+                    """
+                    UPDATE chapter_overlays SET conflict = TRUE, updated_at = now()
+                    WHERE novel_id = $1 AND chapter = $2
+                      AND base_version < (SELECT content_version FROM chapters WHERE novel_id = $1 AND number = $2);
+                    """,
+                    novel_id, number,
+                )
                 await _upsert_terms(novel_id, new_terms, conn)
         logger.info(f"Translated novel {novel_id} ch {number} ({word_count} words, +{len(new_terms)} glossary terms).")
         return {"status": "done", "content": translation, "new_terms": len(new_terms)}
+
+
+async def translate_raw_text(novel_id: int, number: float) -> str | None:
+    """Translate a raw chapter's original_text and RETURN the text without touching the
+    shared base. Used by per-user self-translation overlays (Phase 5): the result is stored
+    in chapter_overlays, never in chapters.content. Returns None if there's nothing to translate."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        ch = await conn.fetchrow(
+            "SELECT title, original_text, language FROM chapters WHERE novel_id = $1 AND number = $2;",
+            novel_id, number,
+        )
+        if not ch or not ch["original_text"]:
+            return None
+        confirmed_g, established_g = _format_glossary(await _load_glossary(novel_id, conn))
+
+    language = ch["language"] or "the source language"
+    title = f": {ch['title']}" if ch["title"] else ""
+    text = ch["original_text"][: settings.TRANSLATE_MAX_INPUT_CHARS]
+    messages = [
+        {"role": "system", "content": TRANSLATE_SYSTEM.format(language=language)},
+        {"role": "user", "content": TRANSLATE_USER.format(
+            language=language, confirmed=confirmed_g, established=established_g,
+            number=number, title=title, text=text)},
+    ]
+    raw = await call_chat_completion(model=settings.MODEL_TRANSLATE, messages=messages, temperature=0.2)
+    _title, translation, _terms = _parse_translation(raw)
+    return translation or None
 
 
 async def _pending_after(novel_id: int, after_number: float, count: int) -> list[float]:

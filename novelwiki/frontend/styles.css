@@ -895,3 +895,88 @@ input[type="range"].slider::-moz-range-thumb {
 .usermenu-usage-title { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .usermenu-quota { display: flex; flex-direction: column; gap: 4px; }
 .usermenu-quota-top { display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--ink-2); }
+
+/* ============================================================
+   Multi-user Phase 3–5: profiles, account, admin, translation overlays
+   ============================================================ */
+
+/* ── Profile ── */
+.profile-avatar { border-radius: 50%; object-fit: cover; border: 2px solid var(--border-2); display: block; }
+.profile-avatar-ph { display: grid; place-items: center; background: var(--accent); color: var(--on-accent); font-weight: 700; }
+.profile-head { display: flex; gap: 20px; align-items: center; padding: 22px; margin-top: 16px; }
+.profile-head-body { min-width: 0; }
+.profile-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 18px; margin-top: 14px; }
+.profile-stat { text-align: center; }
+.profile-stat-num { font-size: 26px; font-weight: 700; font-family: var(--serif); }
+.profile-stat-label { font-size: 12px; }
+.mini-novel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.mini-novel { display: flex; gap: 10px; text-align: left; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); cursor: pointer; transition: border-color 0.16s ease, transform 0.16s ease; align-items: flex-start; }
+.mini-novel:hover { border-color: var(--border-2); transform: translateY(-2px); }
+.mini-novel-cover { width: 44px; height: 60px; border-radius: 6px; overflow: hidden; flex-shrink: 0; background: var(--bg-2); }
+.mini-novel-cover img { width: 100%; height: 100%; object-fit: cover; }
+.mini-novel-cover .novel-cover-ph { width: 100%; height: 100%; display: grid; place-items: center; color: var(--muted); }
+.mini-novel-body { min-width: 0; flex: 1; }
+.mini-novel-title { font-weight: 600; font-size: 13.5px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+/* ── Account panel ── */
+.acct-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; margin-top: 18px; align-items: start; }
+.acct-card { padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+.acct-quota { margin-top: 6px; }
+.acct-quota-top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+.acct-ok { font-size: 13px; color: var(--accent); }
+.acct-err { font-size: 13px; color: var(--danger, #c0392b); }
+@media (max-width: 760px) { .acct-grid { grid-template-columns: 1fr; } .profile-stats { grid-template-columns: repeat(2, 1fr); } }
+
+/* ── Admin ── */
+.btn.sm { padding: 5px 11px; font-size: 12.5px; }
+.usermenu-avatar.sm { width: 30px; height: 30px; font-size: 13px; flex-shrink: 0; }
+.usermenu-avatar-img { object-fit: cover; padding: 0; border: 1px solid var(--border-2); }
+.usermenu-sep { height: 1px; background: var(--border); margin: 6px 0; }
+.admin-user-list { display: flex; flex-direction: column; gap: 8px; }
+.admin-user-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); flex-wrap: wrap; }
+.admin-user-id { display: flex; align-items: center; gap: 10px; flex: 1 1 220px; min-width: 0; }
+.admin-user-name { font-weight: 600; font-size: 14px; }
+.admin-user-email { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-user-usage { font-size: 11.5px; flex: 0 0 auto; }
+.admin-status { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 999px; }
+.admin-status.ok { background: color-mix(in oklch, var(--accent) 22%, transparent); color: var(--ink); }
+.admin-status.warn { background: #e6a23c33; color: #b8860b; }
+.admin-status.err { background: #c0392b22; color: #c0392b; }
+.admin-user-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.admin-quota-edit { display: flex; align-items: flex-end; gap: 10px; padding: 12px; flex-wrap: wrap; margin: -2px 0 4px; }
+.admin-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.admin-metric { padding: 16px; text-align: center; }
+.admin-metric-num { font-size: 30px; font-weight: 700; font-family: var(--serif); }
+.admin-spender-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.admin-spender-row:last-child { border-bottom: none; }
+.admin-novel-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); flex-wrap: wrap; }
+.admin-novel-title { background: none; border: none; text-align: left; font: inherit; font-weight: 600; color: var(--ink); cursor: pointer; }
+.admin-novel-title:hover { color: var(--accent); }
+
+/* ── Reader: translation overlay tools (Phase 5) ── */
+.icon-btn.has-conflict { color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); position: relative; }
+.tt-badge { position: absolute; top: -4px; right: -4px; background: var(--danger, #c0392b); color: #fff; font-size: 9px;
+  font-weight: 700; min-width: 14px; height: 14px; line-height: 14px; border-radius: 999px; text-align: center; padding: 0 2px; }
+.translate-tools { position: absolute; right: 0; top: calc(100% + 8px); width: min(440px, 86vw); z-index: 60;
+  padding: 14px; box-shadow: var(--shadow-pop); }
+.tt-textarea { width: 100%; border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+  border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.55; outline: none; resize: vertical; font-family: inherit; }
+.tt-textarea:focus { border-color: var(--accent); }
+.tt-conflict { border: 1px solid var(--danger, #c0392b); background: color-mix(in oklch, var(--danger, #c0392b) 8%, transparent);
+  border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.tt-base { margin-top: 4px; }
+.tt-base summary { cursor: pointer; font-size: 12.5px; }
+.tt-base-text { max-height: 160px; overflow: auto; font-size: 13px; line-height: 1.55; white-space: pre-wrap;
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 6px; background: var(--bg-2); }
+.tt-chip { display: inline-flex; align-items: center; gap: 5px; margin: 6px 0 0; padding: 3px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--border-2); background: var(--surface); color: var(--ink-2); }
+.tt-chip.conflict { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
+
+/* ── Contributions inbox (novel detail) ── */
+.contrib-row { padding: 12px; border-bottom: 1px solid var(--border); }
+.contrib-row:last-child { border-bottom: none; }
+.contrib-preview { font-size: 13px; line-height: 1.55; color: var(--ink-2); max-height: 90px; overflow: hidden;
+  background: var(--bg-2); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }

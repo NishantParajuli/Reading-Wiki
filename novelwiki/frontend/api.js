@@ -72,6 +72,40 @@
       reset(token, password) { return postJSON(`${API_BASE}/auth/reset`, { token, password }); },
       providers() { return getJSON(`${API_BASE}/auth/providers`); },
       oauthStart(provider) { window.location.href = `${API_BASE}/auth/oauth/${provider}/start`; },
+      links() { return getJSON(`${API_BASE}/auth/links`); },
+      changePassword(currentPassword, newPassword) {
+        return postJSON(`${API_BASE}/auth/change-password`, { current_password: currentPassword || null, new_password: newPassword });
+      },
+    },
+
+    // ── Profiles / account (Phase 3) ──
+    profile(username) { return getJSON(`${API_BASE}/users/${encodeURIComponent(username)}`); },
+    updateMe(body) { return req("PATCH", `${API_BASE}/me`, body); },
+    async uploadAvatar(file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`${API_BASE}/me/avatar`, { method: "POST", credentials: "include", body: fd });
+      if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
+        const err = new Error(detail); err.status = res.status; throw err;
+      }
+      return res.json();
+    },
+
+    // ── Admin dashboard (Phase 4) ──
+    admin: {
+      users(q) { return getJSON(`${API_BASE}/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`); },
+      updateUser(id, body) { return req("PATCH", `${API_BASE}/admin/users/${id}`, body); },
+      deleteUser(id) { return delJSON(`${API_BASE}/admin/users/${id}`); },
+      usage() { return getJSON(`${API_BASE}/admin/usage`); },
+      novels(opts = {}) {
+        const p = new URLSearchParams();
+        if (opts.visibility) p.set("visibility", opts.visibility);
+        if (opts.q) p.set("q", opts.q);
+        const qs = p.toString();
+        return getJSON(`${API_BASE}/admin/novels${qs ? `?${qs}` : ""}`);
+      },
     },
 
     // ── Library / novels ──
@@ -99,6 +133,17 @@
     bookmarks(id) { return getJSON(`${N(id)}/bookmarks`); },
     addBookmark(id, body) { return postJSON(`${N(id)}/bookmarks`, body); },
     delBookmark(id, bid) { return delJSON(`${N(id)}/bookmarks/${bid}`); },
+
+    // ── Translation overlays + contribute-back (Phase 5) ──
+    editBaseContent(id, number, content) { return putJSON(`${N(id)}/chapter/${number}/content`, { content }); },
+    saveOverlay(id, number, content) { return putJSON(`${N(id)}/chapter/${number}/overlay`, { content }); },
+    deleteOverlay(id, number) { return delJSON(`${N(id)}/chapter/${number}/overlay`); },
+    selfTranslate(id, number) { return postJSON(`${N(id)}/chapter/${number}/self-translate`, {}); },
+    resolveOverlay(id, number, choice, content) { return postJSON(`${N(id)}/chapter/${number}/resolve`, { choice, content: content || null }); },
+    contribute(id, number) { return postJSON(`${N(id)}/chapter/${number}/contribute`, {}); },
+    contributions(id, status) { return getJSON(`${N(id)}/contributions${status ? `?status=${status}` : ""}`); },
+    acceptContribution(id, cid) { return postJSON(`${N(id)}/contributions/${cid}/accept`, {}); },
+    rejectContribution(id, cid) { return postJSON(`${N(id)}/contributions/${cid}/reject`, {}); },
 
     // ── Translation + glossary ──
     translate(id, body) { return postJSON(`${N(id)}/translate`, body || {}); },

@@ -16,6 +16,12 @@ def _prefs(raw) -> dict:
     return {}
 
 
+def avatar_url(user: dict) -> str | None:
+    """The /assets URL for a user's avatar (avatar_path is ASSET_DIR-relative), or None."""
+    p = user.get("avatar_path")
+    return ("/assets/" + p) if p else None
+
+
 def quota_limits(user: dict) -> dict:
     """Effective monthly limits: the per-user override if set, else the settings default."""
     def limit(key: str, default: int) -> int:
@@ -39,6 +45,7 @@ def self_user(user: dict) -> dict:
         "display_name": user.get("display_name"),
         "bio": user.get("bio"),
         "avatar_path": user.get("avatar_path"),
+        "avatar_url": avatar_url(user),
         "role": user.get("role", "user"),
         "prefs": _prefs(user.get("prefs")),
         "quota_limits": quota_limits(user),
@@ -53,6 +60,7 @@ def public_user(user: dict) -> dict:
         "display_name": user.get("display_name") or user["username"],
         "bio": user.get("bio"),
         "avatar_path": user.get("avatar_path"),
+        "avatar_url": avatar_url(user),
         "created_at": user["created_at"].isoformat() if user.get("created_at") else None,
     }
 

@@ -76,6 +76,11 @@ class ResetPayload(BaseModel):
     password: str = Field(min_length=8, max_length=200)
 
 
+class ChangePasswordPayload(BaseModel):
+    current_password: str | None = None          # required only if a password is already set
+    new_password: str = Field(min_length=8, max_length=200)
+
+
 # ── helpers ───────────────────────────────────────────────────────────────
 
 async def _issue_email_token(conn, user_id: int, kind: str, ttl: dt.timedelta) -> str:
@@ -156,6 +161,36 @@ async def logout(request: Request, response: Response):
 @router.get("/me")
 async def me(user: dict = Depends(current_user)):
     return self_user(user)
+
+
+@router.get("/links")
+async def oauth_links(user: dict = Depends(current_user)):
+    """Which OAuth providers are linked to the signed-in account (account panel)."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT provider FROM oauth_accounts WHERE user_id = $1 ORDER BY provider;", user["id"],
+        )
+    return {"linked": [r["provider"] for r in rows], "has_password": bool(user.get("password_hash"))}
+
+
+@router.post("/change-password")
+async def change_password(payload: ChangePasswordPayload, request: Request, response: Response,
+                          user: dict = Depends(current_user)):
+    """Set or change the account password. If one is already set, the current one must match.
+    Succeeds for OAuth-only users (no current password) so they can add password login.
+    All other sessions are revoked; this device gets a fresh session so it stays signed in."""
+    if user.get("password_hash"):
+        if not payload.current_password or not verify_password(user["password_hash"], payload.current_password):
+            raise HTTPException(status_code=403, detail="Current password is incorrect.")
+    new_hash = hash_password(payload.new_password)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2;", new_hash, user["id"])
+        await revoke_user_sessions(conn, user["id"])
+        session = await create_session(conn, user["id"], request.headers.get("user-agent"))
+    set_session_cookie(response, session)
+    return {"status": "ok"}
 
 
 @router.get("/verify")
