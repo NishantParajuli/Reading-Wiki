@@ -609,13 +609,23 @@ input[type="range"].slider::-moz-range-thumb {
 .toc-row.current, .drawer-toc-row.current { background: var(--accent-soft); color: var(--accent-ink); }
 .toc-num { flex: 0 0 48px; color: var(--muted); font-size: 12.5px; }
 .toc-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Imported-book TOC: volume/part headings + non-chapter section rows. */
-.toc-part {
-  margin: 14px 6px 4px; padding: 4px 6px; font-size: 12px; font-weight: 600;
-  letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
-  border-bottom: 1px solid var(--border);
+/* Imported-book TOC: collapsible volume groups + non-chapter section rows. */
+.toc-vol { border-bottom: 1px solid var(--border); }
+.toc-vol:last-child { border-bottom: none; }
+.toc-vol-head {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  border: none; background: transparent; color: var(--ink); cursor: pointer;
+  padding: 12px 10px; border-radius: var(--radius-sm);
+  font-size: 13.5px; font-weight: 600; transition: background 0.15s ease;
 }
-.toc-part:first-child { margin-top: 4px; }
+.toc-vol-head:hover { background: var(--surface-2); }
+.toc-vol-head.has-current { color: var(--accent-ink); }
+.toc-vol-caret { color: var(--muted); transform: rotate(-90deg); transition: transform 0.18s ease; flex: 0 0 auto; }
+.toc-vol.open > .toc-vol-head .toc-vol-caret { transform: rotate(0deg); }
+.toc-vol-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toc-vol-count { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
+.toc-vol-reading { background: var(--accent-soft); color: var(--accent-ink); text-transform: none; }
+.toc-vol-body { padding-left: 14px; margin-bottom: 4px; border-left: 2px solid var(--border); margin-left: 14px; }
 .toc-section .toc-title { color: var(--muted); font-style: italic; }
 .toc-kind { background: var(--surface-2); color: var(--muted); text-transform: capitalize; }
 

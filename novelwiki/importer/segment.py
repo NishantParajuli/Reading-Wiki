@@ -36,9 +36,17 @@ _LEADING_NUM = re.compile(r"^\s*(\d+(?:\.\d+)?)\b")
 
 _FRONT_KW = ("copyright", "title page", "cover", "dedication", "acknowledg", "contents",
              "table of contents", "colophon", "also by", "praise for", "front matter",
-             "imprint", "publisher", "isbn", "legal", "disclaimer", "newsletter")
-_BACK_KW = ("about the author", "afterword", "back matter", "appendix", "glossary",
-            "bonus", "extras", "preview", "teaser", "also available", "acknowledgements")
+             "imprint", "publisher", "isbn", "legal", "disclaimer", "newsletter",
+             "foreword", "synopsis", "credits")
+_BACK_KW = ("about the author", "back matter", "preview", "teaser", "also available",
+            "acknowledgements")
+# Readable, unnumbered volume extras: illustration galleries, pathway/world guides, side
+# stories. Kept in the book but never assigned a story-chapter number, so they can't collide
+# with real chapter numbers and they group under their volume in the TOC.
+_EXTRA_KW = ("image gallery", "gallery", "illustration", "artwork", "character sheet",
+             "character profile", "characters", "locations", "pathways guide", "pathway guide",
+             "world guide", "appendix", "glossary", "side story", "side stories", "audio drama",
+             "drama cd", "omake", "bonus chapter", "bonus story", "short story", "afterword")
 _PART_RE = re.compile(r"(?i)^\s*(?:volume|book|part|vol\.?|act|arc)\s+([0-9ivxlcdm]+|[a-z]+)\b")
 _PROLOGUE_RE = re.compile(r"(?i)\b(prologue|prolog)\b")
 _EPILOGUE_RE = re.compile(r"(?i)\b(epilogue|epilog)\b")
@@ -165,18 +173,27 @@ def _first_line(blocks) -> str:
 
 
 def _classify(title: str, number: float | None) -> tuple[str, bool]:
-    """Return (kind, include_default) from the title + parsed number."""
+    """Return (kind, include_default) from the title + parsed number.
+
+    A real chapter number (or an explicit "Chapter N") always wins over keyword matching —
+    e.g. "Chapter 718: Characters in the Book" is a story chapter, not a character gallery —
+    so only genuinely unnumbered sections fall through to extras/front/back matter."""
     low = (title or "").lower()
+    if number is not None or re.search(r"(?i)\bchapter\b", low):
+        return ("interlude", True) if _INTERLUDE_RE.search(low) else ("chapter", True)
     if _INTERLUDE_RE.search(low):
         return "interlude", True
-    if _EPILOGUE_RE.search(low):
+    if _PROLOGUE_RE.search(low):
+        return "chapter", True
+    # Readable extras (galleries, guides, side stories, epilogues, afterword): kept, but never
+    # numbered as a story chapter. Tagged backmatter so the reader labels them and the commit
+    # slots them in the gap after the prior chapter instead of stealing its number.
+    if _EPILOGUE_RE.search(low) or any(k in low for k in _EXTRA_KW):
         return "backmatter", True
     if any(k in low for k in _BACK_KW):
         return "backmatter", False
     if any(k in low for k in _FRONT_KW):
         return "frontmatter", False
-    if _PROLOGUE_RE.search(low) or number is not None or re.search(r"(?i)\bchapter\b", low):
-        return "chapter", True
     return "chapter", True
 
 
@@ -238,7 +255,9 @@ def _assign_numbers_and_parts(segments: list[dict]) -> None:
             s["include"] = False
             s["number"] = None
             continue
-        if current_part and s["kind"] in ("chapter", "interlude"):
+        # Everything inside a volume's run nests under it in the TOC — including the volume's
+        # trailing extras (pathways guide, image gallery) so they group with that volume.
+        if current_part and s["kind"] in ("chapter", "interlude", "backmatter"):
             s["part_label"] = current_part
         if s["kind"] == "chapter":
             if _PROLOGUE_RE.search(title.lower()) and s["number"] is None:
@@ -265,38 +284,60 @@ _REFINE_SYSTEM = (
 )
 
 
+# A confidently-numbered chapter ("Chapter 138" parsed straight from its title) needs no
+# second opinion, so only ambiguous segments are sent. On a 1,400-chapter book this shrinks
+# the ask from ~1,500 items to a few dozen, so the call stays small and reliable instead of
+# overflowing the context and silently falling back to the raw heuristic — exactly the book
+# where the heuristic's gallery/guide handling matters most.
+_REFINE_BATCH = 150
+
+
+def _needs_refine(s: dict) -> bool:
+    return not (s.get("kind") == "chapter" and s.get("number") is not None
+                and (s.get("confidence") or 0) >= 0.95)
+
+
 async def refine_plan(plan: dict, document: Document) -> dict:
-    """Best-effort LLM pass that corrects kinds/titles/numbers/includes. Any failure
-    (no API key, network, bad JSON) returns the heuristic plan unchanged."""
+    """Best-effort LLM pass that corrects kinds/titles/numbers/includes for the segments the
+    heuristic is unsure about. Any failure (no API key, network, bad JSON) leaves the plan
+    unchanged; batches are independent so one bad batch can't sink the rest."""
     if not settings.OPENROUTER_API_KEY:
         return plan
     segs = plan.get("segments", [])
-    if not segs:
+    ambiguous = [s for s in segs if _needs_refine(s)]
+    if not ambiguous:
         return plan
+    by_id = {s["id"]: s for s in segs}
+    book_title = str(document.meta.get("title"))
+    for i in range(0, len(ambiguous), _REFINE_BATCH):
+        await _refine_batch(ambiguous[i:i + _REFINE_BATCH], by_id, book_title)
+    return plan
+
+
+async def _refine_batch(batch: list[dict], by_id: dict, book_title: str) -> None:
+    """Refine one batch of ambiguous segments in place. Isolated try/except: a failed batch
+    just leaves its segments on the heuristic result."""
     compact = [
         {"id": s["id"], "title": s["title"], "kind": s["kind"], "number": s["number"],
          "word_count": s["word_count"], "first_line": (s.get("first_line") or "")[:120]}
-        for s in segs
+        for s in batch
     ]
     try:
         from novelwiki.agent.llm_client import call_llm
         from json_repair import repair_json
         messages = [
             {"role": "system", "content": _REFINE_SYSTEM},
-            {"role": "user", "content": "Book title: " + str(document.meta.get("title")) +
+            {"role": "user", "content": "Book title: " + book_title +
              "\nSegments:\n" + json.dumps(compact, ensure_ascii=False)},
         ]
         raw = await call_llm(messages, needs_vision=False, model=settings.SEGMENT_MODEL,
                              response_format={"type": "json_object"})
         data = json.loads(repair_json(raw))
     except Exception as e:
-        logger.info(f"Segment refinement skipped ({type(e).__name__}: {e}); using heuristic plan.")
-        return plan
-
-    by_id = {s["id"]: s for s in segs}
+        logger.info(f"Segment refinement batch skipped ({type(e).__name__}: {e}); keeping heuristic.")
+        return
     for upd in (data.get("segments") or []):
-        sid = upd.get("id")
-        s = by_id.get(sid)
+        s = by_id.get(upd.get("id"))
         if not s:
             continue
         if upd.get("kind") in ("chapter", "frontmatter", "interlude", "backmatter"):
@@ -309,4 +350,3 @@ async def refine_plan(plan: dict, document: Document) -> dict:
             s["part_label"] = upd["part_label"]
         if isinstance(upd.get("include"), bool):
             s["include"] = upd["include"]
-    return plan

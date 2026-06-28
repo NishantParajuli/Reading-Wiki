@@ -376,13 +376,10 @@ function Reader({ novelId, number, openReader, backToNovel, onRead, user, onUser
         toc == null
           ? React.createElement(Loading, { label: "Loading…" })
           : React.createElement("div", { className: "drawer-toc" },
-              toc.map(c => React.createElement("button", {
-                key: c.number, className: "drawer-toc-row" + (c.number === Number(number) ? " current" : ""),
-                onClick: () => { setShowToc(false); openReader(c.number); },
-              },
-                React.createElement("span", { className: "toc-num mono" }, c.number),
-                React.createElement("span", { className: "toc-title" }, c.title || `Chapter ${c.number}`)
-              )))
+              React.createElement(VolumeTOC, {
+                toc, currentNumber: Number(number),
+                onOpen: (n) => { setShowToc(false); openReader(n); },
+              }))
       )
     )
   );

@@ -6,31 +6,80 @@
 // Non-chapter sections from file imports get a short tag instead of a number.
 const TOC_KIND_LABEL = { frontmatter: "front", interlude: "interlude", backmatter: "extra" };
 
-// Build the TOC as a flat element list, inserting a heading whenever the imported
-// `part_label` (e.g. "Volume 1") changes and tagging non-chapter sections.
-function buildToc(toc, progress, openReader) {
-  const out = [];
-  let lastPart;
+// Group the flat chapter list into ordered TOC nodes: consecutive chapters that share a
+// `part_label` (e.g. "Volume 1: Clown") fold into one collapsible volume; chapters with no
+// label stay as top-level rows. This is what lets a 1,400-chapter / 8-volume import (LOTM,
+// ReZero…) open as a tidy list of volumes you expand one at a time.
+function groupToc(toc) {
+  const nodes = [];
+  let cur = null;
   toc.forEach(ch => {
-    if (ch.part_label && ch.part_label !== lastPart) {
-      out.push(React.createElement("div", { key: "part:" + ch.part_label, className: "toc-part" }, ch.part_label));
+    const pl = ch.part_label || null;
+    if (pl) {
+      if (!cur || cur.label !== pl) { cur = { type: "vol", label: pl, chapters: [] }; nodes.push(cur); }
+      cur.chapters.push(ch);
+    } else {
+      cur = null;
+      nodes.push({ type: "loose", chapter: ch });
     }
-    lastPart = ch.part_label || lastPart;
-    const isSection = ch.kind && ch.kind !== "chapter";
-    out.push(React.createElement("button", {
-      key: ch.number,
-      className: "toc-row" + (progress.last_chapter === ch.number ? " current" : "") + (isSection ? " toc-section" : ""),
-      onClick: () => openReader(ch.number),
-    },
-      React.createElement("span", { className: "toc-num mono" }, isSection ? "—" : ch.number),
-      React.createElement("span", { className: "toc-title" }, ch.title || `Chapter ${ch.number}`),
-      isSection ? React.createElement("span", { className: "chip toc-kind", title: "Non-chapter section" }, TOC_KIND_LABEL[ch.kind] || ch.kind) : null,
-      (!ch.has_content && ch.translation_status === "pending")
-        ? React.createElement("span", { className: "chip", title: "Raw — translates on open" }, "raw") : null,
-      React.createElement(Icon, { name: "arrowRight", size: 15, className: "muted" })
-    ));
   });
-  return out;
+  return nodes;
+}
+
+// One chapter / section row, shared by the grouped TOC and the reader drawer.
+function TocRow({ ch, currentNumber, onOpen }) {
+  const isSection = ch.kind && ch.kind !== "chapter";
+  return React.createElement("button", {
+    className: "toc-row" + (currentNumber === ch.number ? " current" : "") + (isSection ? " toc-section" : ""),
+    onClick: () => onOpen(ch.number),
+  },
+    React.createElement("span", { className: "toc-num mono" }, isSection ? "—" : ch.number),
+    React.createElement("span", { className: "toc-title" }, ch.title || `Chapter ${ch.number}`),
+    isSection ? React.createElement("span", { className: "chip toc-kind", title: "Non-chapter section" }, TOC_KIND_LABEL[ch.kind] || ch.kind) : null,
+    (!ch.has_content && ch.translation_status === "pending")
+      ? React.createElement("span", { className: "chip", title: "Raw — translates on open" }, "raw") : null,
+    React.createElement(Icon, { name: "arrowRight", size: 15, className: "muted" })
+  );
+}
+
+// Collapsible, volume-grouped table of contents. Every volume starts collapsed (the
+// compressed overview) except the one holding the chapter you last read.
+function VolumeTOC({ toc, currentNumber, onOpen }) {
+  const nodes = useMemo(() => groupToc(toc), [toc]);
+  const currentVol = useMemo(() => {
+    if (currentNumber == null) return null;
+    const hit = toc.find(c => c.number === currentNumber);
+    return hit ? (hit.part_label || null) : null;
+  }, [toc, currentNumber]);
+  const [open, setOpen] = useState({});
+  // Auto-open the volume you're reading (and re-open it if progress moves to a new volume).
+  useEffect(() => { if (currentVol) setOpen(o => (o[currentVol] ? o : { ...o, [currentVol]: true })); }, [currentVol]);
+  const toggle = (label) => setOpen(o => ({ ...o, [label]: !o[label] }));
+
+  return React.createElement(React.Fragment, null,
+    nodes.map((node, i) => {
+      if (node.type === "loose") {
+        return React.createElement(TocRow, { key: "l" + node.chapter.number, ch: node.chapter, currentNumber, onOpen });
+      }
+      const isOpen = !!open[node.label];
+      const chapterCount = node.chapters.filter(c => !c.kind || c.kind === "chapter").length;
+      const hasCurrent = node.chapters.some(c => c.number === currentNumber);
+      return React.createElement("div", { key: "v" + i, className: "toc-vol" + (isOpen ? " open" : "") },
+        React.createElement("button", {
+          className: "toc-vol-head" + (hasCurrent ? " has-current" : ""),
+          onClick: () => toggle(node.label), "aria-expanded": isOpen,
+        },
+          React.createElement(Icon, { name: "chevronDown", size: 16, className: "toc-vol-caret" }),
+          React.createElement("span", { className: "toc-vol-label" }, node.label),
+          hasCurrent ? React.createElement("span", { className: "chip toc-vol-reading", title: "You're reading here" }, "reading") : null,
+          React.createElement("span", { className: "toc-vol-count mono" }, chapterCount)
+        ),
+        isOpen ? React.createElement("div", { className: "toc-vol-body" },
+          node.chapters.map(ch => React.createElement(TocRow, { key: ch.number, ch, currentNumber, onOpen }))
+        ) : null
+      );
+    })
+  );
 }
 
 function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
@@ -718,7 +767,8 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
       ? React.createElement(Loading, { label: "Loading chapters…" })
       : toc.length === 0
         ? React.createElement(EmptyState, { icon: "book", title: "No chapters yet", body: "Use Scrape above to fetch chapters from the source." })
-        : React.createElement("div", { className: "card toc" }, buildToc(toc, progress, openReader)),
+        : React.createElement("div", { className: "card toc" },
+            React.createElement(VolumeTOC, { toc, currentNumber: progress.last_chapter, onOpen: openReader })),
 
     confirmDelete && React.createElement(ConfirmDialog, {
       title: `Delete “${novel.title}”?`,
