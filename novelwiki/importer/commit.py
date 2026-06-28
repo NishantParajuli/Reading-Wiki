@@ -78,6 +78,20 @@ async def _resolve_target(conn, job: dict, meta: dict):
         offset = float(target.get("offset", src_row["chapter_offset"]) or 0)
         old = await conn.fetchrow(
             "SELECT MIN(number) AS lo, MAX(number) AS hi FROM chapters WHERE source_id = $1;", sid)
+        old_rows = await conn.fetch(
+            "SELECT number, content_version FROM chapters WHERE source_id = $1;", sid)
+        old_versions = {
+            float(r["number"]): int(r["content_version"] or 1)
+            for r in old_rows
+        }
+        if old_versions:
+            await conn.execute(
+                """
+                UPDATE chapter_overlays SET conflict = TRUE, updated_at = now()
+                WHERE novel_id = $1 AND chapter = ANY($2::numeric[]);
+                """,
+                novel_id, list(old_versions.keys()),
+            )
         # Drop the old chapters first (chunks FK-cascade) so the collision guard and the new
         # writes see a clean slate for this source.
         await conn.execute("DELETE FROM chapters WHERE source_id = $1;", sid)
@@ -89,7 +103,8 @@ async def _resolve_target(conn, job: dict, meta: dict):
             sid, fmt, job["original_path"], language, is_raw, offset,
             f"Imported {fmt.upper()} (replaced)",
         )
-        source = {"id": sid, "novel_id": novel_id, "is_raw": is_raw, "language": language}
+        source = {"id": sid, "novel_id": novel_id, "is_raw": is_raw, "language": language,
+                  "old_versions": old_versions}
         invalidate = (float(old["lo"]), float(old["hi"])) if old and old["lo"] is not None else None
         return novel_id, source, offset, None, invalidate
 
@@ -160,6 +175,34 @@ async def _commit_assets(conn, novel_id: int, job_id: int, shas: set[str], meta:
             "width": am.get("width"), "height": am.get("height"), "mime": am.get("mime"),
         }
     return resolver
+
+
+async def _preserve_replaced_content_version(conn, novel_id: int, number: float, source: dict) -> int | None:
+    """A replace import deletes old chapters before inserting the new render. Carry the old
+    content_version forward so pending overlays/contributions see the replacement as a newer
+    base instead of a clean version-1 chapter."""
+    old_versions = source.get("old_versions") or {}
+    prior = old_versions.get(float(number))
+    if prior is None:
+        return None
+    new_version = int(prior) + 1
+    actual = await conn.fetchval(
+        """
+        UPDATE chapters
+        SET content_version = GREATEST(COALESCE(content_version, 1), $3)
+        WHERE novel_id = $1 AND number = $2
+        RETURNING content_version;
+        """,
+        novel_id, number, new_version,
+    )
+    await conn.execute(
+        """
+        UPDATE chapter_overlays SET conflict = TRUE, updated_at = now()
+        WHERE novel_id = $1 AND chapter = $2 AND base_version < $3;
+        """,
+        novel_id, number, int(actual or new_version),
+    )
+    return int(actual or new_version)
 
 
 async def _load_for_commit(job: dict) -> tuple:
@@ -245,6 +288,7 @@ async def _write_segments(conn, job_id: int, blocks: list, meta: dict, included:
             "UPDATE chapters SET kind = $3, part_label = $4 WHERE novel_id = $1 AND number = $2;",
             novel_id, s["_global"], s.get("kind", "chapter"), force_part_label or s.get("part_label"),
         )
+        await _preserve_replaced_content_version(conn, novel_id, s["_global"], source)
         written += 1
 
     # Autofill the cover from this book — but never clobber a cover already set (so a series'

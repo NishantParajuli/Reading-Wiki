@@ -18,7 +18,7 @@ async def _persist_chapter(conn, source: dict, global_number: float, ch, force: 
     language = source["language"]
 
     exists = await conn.fetchrow(
-        "SELECT number, title FROM chapters WHERE novel_id = $1 AND number = $2;",
+        "SELECT number, title, content, original_text, content_version FROM chapters WHERE novel_id = $1 AND number = $2;",
         novel_id, global_number,
     )
     if exists and not force:
@@ -38,7 +38,14 @@ async def _persist_chapter(conn, source: dict, global_number: float, ch, force: 
         original_text, content = None, ch.content
         translation_status, is_translated = "none", False
 
-    await conn.execute(
+    base_changed = bool(
+        exists
+        and (
+            exists["content"] != content
+            or exists["original_text"] != original_text
+        )
+    )
+    new_version = await conn.fetchval(
         """
         INSERT INTO chapters
             (novel_id, number, source_id, title, url, raw_html, original_text, content,
@@ -49,11 +56,25 @@ async def _persist_chapter(conn, source: dict, global_number: float, ch, force: 
             raw_html = EXCLUDED.raw_html, original_text = EXCLUDED.original_text,
             content = EXCLUDED.content, language = EXCLUDED.language,
             is_translated = EXCLUDED.is_translated, translation_status = EXCLUDED.translation_status,
-            word_count = EXCLUDED.word_count, scraped_at = now();
+            word_count = EXCLUDED.word_count, scraped_at = now(),
+            content_version = CASE
+                WHEN $13 THEN COALESCE(chapters.content_version, 1) + 1
+                ELSE COALESCE(chapters.content_version, 1)
+            END
+        RETURNING content_version;
         """,
         novel_id, global_number, source["id"], ch.title, ch.url, ch.raw_html,
         original_text, content, language, is_translated, translation_status, word_count,
+        base_changed,
     )
+    if base_changed:
+        await conn.execute(
+            """
+            UPDATE chapter_overlays SET conflict = TRUE, updated_at = now()
+            WHERE novel_id = $1 AND chapter = $2 AND base_version < $3;
+            """,
+            novel_id, global_number, int(new_version or 1),
+        )
     logger.info(f"Saved Chapter {global_number}: '{ch.title}' ({word_count} words)")
     return True
 

@@ -172,7 +172,7 @@ function App({ user, onLogout, onUserUpdate }) {
 
   let screen;
   if (route.view === "import") {
-    screen = React.createElement(ImportView, { openNovel, openLibrary });
+    screen = React.createElement(ImportView, { openNovel, openLibrary, user });
   } else if (route.view === "discover") {
     screen = React.createElement(Discover, { openNovel, openLibrary });
   } else if (route.view === "profile") {

@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: str = "admin@example.com"
     ADMIN_PASSWORD: str = ""                  # required to bootstrap; leave blank to skip
     ADMIN_USERNAME: str = "admin"
+    # Data-rewriting legacy migration guard. Leave false for normal app starts; set true
+    # only after taking/restoring/testing a pg_dump, or use the CLI's explicit prompt.
+    MULTIUSER_MIGRATION_BACKUP_CONFIRMED: bool = False
 
     # Transactional email (verification + password reset). Without an SMTP host the app
     # still runs but logs the verification link instead of sending it (handy in dev).

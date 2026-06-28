@@ -19,6 +19,7 @@ CLI for an explicit, supervised migration:
 Test against a restored copy before running on production.
 """
 import logging
+import json
 
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
@@ -26,6 +27,7 @@ from novelwiki.auth.passwords import hash_password
 from novelwiki.auth.users import unique_username
 
 logger = logging.getLogger(__name__)
+MIGRATION_NAME = "multiuser_v1"
 
 
 async def _pk_columns(conn, table: str) -> list[str]:
@@ -41,25 +43,55 @@ async def _pk_columns(conn, table: str) -> list[str]:
     return [r["attname"] for r in rows]
 
 
-async def ensure_admin(conn) -> dict | None:
-    """Return the admin user, creating/promoting one from settings if needed (idempotent)."""
-    admin = await conn.fetchrow("SELECT * FROM users WHERE role = 'admin' ORDER BY id LIMIT 1;")
-    if admin is not None:
-        return dict(admin)
+async def _is_marked(conn) -> bool:
+    return bool(await conn.fetchval("SELECT 1 FROM app_migrations WHERE name = $1;", MIGRATION_NAME))
 
-    email = (settings.ADMIN_EMAIL or "").lower()
-    if email:
-        existing = await conn.fetchrow("SELECT * FROM users WHERE email = $1;", email)
-        if existing is not None:
-            await conn.execute(
-                "UPDATE users SET role = 'admin', email_verified = TRUE WHERE id = $1;", existing["id"]
-            )
-            logger.info("Promoted existing user %s to admin.", email)
-            return dict(await conn.fetchrow("SELECT * FROM users WHERE id = $1;", existing["id"]))
 
-    if not settings.ADMIN_PASSWORD:
-        return None
+async def _mark_migrated(conn, details: dict | None = None) -> None:
+    await conn.execute(
+        """
+        INSERT INTO app_migrations (name, details)
+        VALUES ($1, $2::jsonb)
+        ON CONFLICT (name) DO UPDATE SET details = EXCLUDED.details;
+        """,
+        MIGRATION_NAME, json.dumps(details or {}),
+    )
 
+
+async def _legacy_state(conn) -> dict:
+    row = await conn.fetchrow(
+        """
+        SELECT
+          EXISTS(SELECT 1 FROM novels WHERE owner_id IS NULL) AS ownerless_novels,
+          EXISTS(SELECT 1 FROM reading_progress WHERE user_id IS NULL) AS progress_missing_user,
+          EXISTS(SELECT 1 FROM bookmarks WHERE user_id IS NULL) AS bookmarks_missing_user,
+          (SELECT COUNT(*) FROM users) AS user_count;
+        """
+    )
+    state = dict(row)
+    state["pk_legacy"] = await _pk_columns(conn, "reading_progress") == ["novel_id"]
+    return state
+
+
+def _needs_data_rewrite(state: dict) -> bool:
+    return bool(
+        state.get("ownerless_novels")
+        or state.get("progress_missing_user")
+        or state.get("bookmarks_missing_user")
+        or state.get("pk_legacy")
+    )
+
+
+def _ownerless_only(state: dict) -> bool:
+    return bool(
+        state.get("ownerless_novels")
+        and not state.get("progress_missing_user")
+        and not state.get("bookmarks_missing_user")
+        and not state.get("pk_legacy")
+    )
+
+
+async def _create_admin(conn, email: str | None = None) -> dict:
     username = await unique_username(conn, settings.ADMIN_USERNAME or "admin")
     row = await conn.fetchrow(
         """
@@ -69,8 +101,36 @@ async def ensure_admin(conn) -> dict | None:
         email or f"{username}@admin.local", username,
         hash_password(settings.ADMIN_PASSWORD), settings.ADMIN_USERNAME or "Admin",
     )
-    logger.info("Bootstrapped admin user '%s' (%s).", username, email)
+    logger.info("Bootstrapped admin user '%s' (%s).", username, email or row["email"])
     return dict(row)
+
+
+async def ensure_admin(conn) -> dict | None:
+    """Return the configured admin user, creating/promoting one from settings if needed."""
+    email = (settings.ADMIN_EMAIL or "").lower()
+    if email:
+        existing = await conn.fetchrow("SELECT * FROM users WHERE email = $1;", email)
+        if existing is not None:
+            if existing["role"] != "admin" or not existing["email_verified"]:
+                await conn.execute(
+                    "UPDATE users SET role = 'admin', email_verified = TRUE WHERE id = $1;", existing["id"]
+                )
+                logger.info("Promoted existing user %s to admin.", email)
+            return dict(await conn.fetchrow("SELECT * FROM users WHERE id = $1;", existing["id"]))
+
+        if settings.ADMIN_PASSWORD:
+            return await _create_admin(conn, email)
+
+        return None
+
+    admin = await conn.fetchrow("SELECT * FROM users WHERE role = 'admin' ORDER BY id LIMIT 1;")
+    if admin is not None:
+        return dict(admin)
+
+    if settings.ADMIN_PASSWORD:
+        return await _create_admin(conn)
+
+    return None
 
 
 async def run_migration(conn, admin_id: int) -> dict:
@@ -121,23 +181,51 @@ async def run_migration(conn, admin_id: int) -> dict:
     return summary
 
 
-async def maybe_migrate() -> None:
-    """Idempotent entry point for app startup: bootstrap admin + backfill legacy data."""
+async def maybe_migrate(allow_data_rewrite: bool | None = None) -> None:
+    """Idempotent entry point for app startup: bootstrap admin + backfill legacy data.
+
+    Data rewrites are opt-in. Normal app startup can safely mark an already-multi-user DB,
+    but legacy data is reassigned only after an explicit backup confirmation.
+    """
+    allow_data_rewrite = (
+        settings.MULTIUSER_MIGRATION_BACKUP_CONFIRMED
+        if allow_data_rewrite is None
+        else allow_data_rewrite
+    )
     pool = await get_db_pool()
     async with pool.acquire() as conn:
+        if await _is_marked(conn):
+            return
+
+        # NB: import_jobs is intentionally excluded — new uploads may legitimately carry
+        # NULL user_id during older deployments, so it must not trigger legacy migration.
+        state = await _legacy_state(conn)
+        if not _needs_data_rewrite(state):
+            await _mark_migrated(conn, {"status": "already_multiuser", "state": state})
+            return
+
+        # Ownerless novels are valid after an admin deletes a user (FK ON DELETE SET NULL).
+        # If this DB already has users and no old progress/bookmark/PK shape remains, do not
+        # reinterpret those rows as single-user legacy data.
+        if _ownerless_only(state) and int(state.get("user_count") or 0) > 0 and not allow_data_rewrite:
+            logger.warning(
+                "Ownerless novels found without a migration marker; leaving them unchanged "
+                "and marking multiuser_v1 complete to avoid accidental Global promotion."
+            )
+            await _mark_migrated(conn, {"status": "ownerless_rows_preserved", "state": state})
+            return
+
+        if not allow_data_rewrite:
+            msg = (
+                "Legacy single-user data detected, but Tideglass will not rewrite paid content "
+                "without an explicit backup confirmation. Take a pg_dump, test on a restored copy, "
+                "then run `python -m novelwiki.db.migrate_multiuser` and type MIGRATE, or set "
+                "MULTIUSER_MIGRATION_BACKUP_CONFIRMED=true for this one migration run."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
+
         admin = await ensure_admin(conn)
-        # NB: import_jobs is intentionally excluded — new uploads legitimately carry a NULL
-        # user_id until Phase 1 wires upload ownership, so it must not re-trigger migration.
-        legacy = await conn.fetchval(
-            """
-            SELECT EXISTS(SELECT 1 FROM novels WHERE owner_id IS NULL)
-                OR EXISTS(SELECT 1 FROM reading_progress WHERE user_id IS NULL)
-                OR EXISTS(SELECT 1 FROM bookmarks WHERE user_id IS NULL);
-            """
-        )
-        pk_legacy = await _pk_columns(conn, "reading_progress") == ["novel_id"]
-        if not legacy and not pk_legacy:
-            return  # already multi-user
 
         if admin is None:
             msg = (
@@ -149,6 +237,7 @@ async def maybe_migrate() -> None:
 
         async with conn.transaction():
             summary = await run_migration(conn, admin["id"])
+            await _mark_migrated(conn, {"status": "migrated", "summary": summary, "state": state})
         logger.info("Multi-user migration complete (admin id=%s): %s", admin["id"], summary)
 
 
@@ -159,7 +248,17 @@ async def _cli() -> None:
     print("⚠️  Take a backup first:  pg_dump \"$DATABASE_URL\" > backup_before_multiuser.sql")
     print(f"Target database: {settings.DATABASE_URL.rsplit('/', 1)[-1]}")
     await init_database()       # ensure the multi-user schema exists
-    await maybe_migrate()
+    allow = settings.MULTIUSER_MIGRATION_BACKUP_CONFIRMED
+    if not allow:
+        try:
+            confirm = input("Type MIGRATE after testing a backup copy, or anything else to abort: ").strip()
+        except EOFError:
+            confirm = ""
+        allow = confirm == "MIGRATE"
+        if not allow:
+            print("Aborted; no data was changed.")
+            return
+    await maybe_migrate(allow_data_rewrite=allow)
     print("Done.")
 
 

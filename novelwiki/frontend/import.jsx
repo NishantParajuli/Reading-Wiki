@@ -317,7 +317,7 @@ function OcrProgress({ job }) {
   );
 }
 
-function ImportView({ openNovel, openLibrary }) {
+function ImportView({ openNovel, openLibrary, user }) {
   const [jobs, setJobs] = useState(null);
   const [sel, setSel] = useState(null);        // selected job id
   const [job, setJob] = useState(null);        // selected job detail
@@ -417,7 +417,7 @@ function ImportView({ openNovel, openLibrary }) {
     ),
 
     React.createElement(UploadDrop, { onUploaded }),
-    React.createElement(FolderImport, { onQueued: loadJobs }),
+    user && user.role === "admin" && React.createElement(FolderImport, { onQueued: loadJobs }),
     dupWarn && React.createElement(DuplicateWarning, { dups: dupWarn, onOpenNovel: openNovel }),
     msg && React.createElement("div", { className: "card", style: { padding: "10px 16px", margin: "12px 0", fontSize: 13.5 } }, msg),
 

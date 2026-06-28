@@ -10,6 +10,17 @@ DDL_QUERIES = [
     "CREATE EXTENSION IF NOT EXISTS vector;",
     "CREATE EXTENSION IF NOT EXISTS pg_trgm;",
 
+    # Durable one-time migration markers. This prevents guarded data migrations from
+    # reinterpreting valid post-migration rows (for example ownerless novels after a
+    # user delete) as legacy single-user data on a later restart.
+    """
+    CREATE TABLE IF NOT EXISTS app_migrations (
+      name       TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ DEFAULT now(),
+      details    JSONB DEFAULT '{}'
+    );
+    """,
+
     # ══ Multi-user layer ═══════════════════════════════════════════════════
     # Accounts. One row per human. `password_hash` is NULL for OAuth-only logins.
     # `role` gates the admin surface; `status` lets an admin suspend/ban without
@@ -558,6 +569,7 @@ ALL_TABLES = [
     "sessions",
     "oauth_accounts",
     "users",
+    "app_migrations",
 ]
 
 
