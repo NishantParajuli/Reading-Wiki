@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from novelwiki.db.connection import get_db_pool
 from novelwiki.auth.users import quota_limits
 
-KINDS = ("translated_chapters", "ocr_pages", "codex_builds")
+KINDS = ("translated_chapters", "ocr_pages", "codex_builds", "tts_chapters")
 
 
 def _period() -> dt.date:
@@ -40,7 +40,7 @@ async def get_usage(user_id: int) -> dict:
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT translated_chapters, ocr_pages, codex_builds FROM quota_usage "
+            "SELECT translated_chapters, ocr_pages, codex_builds, tts_chapters FROM quota_usage "
             "WHERE user_id = $1 AND period = $2;",
             user_id, _period(),
         )

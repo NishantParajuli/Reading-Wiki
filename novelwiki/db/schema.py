@@ -100,9 +100,13 @@ DDL_QUERIES = [
       translated_chapters INT NOT NULL DEFAULT 0,
       ocr_pages          INT NOT NULL DEFAULT 0,
       codex_builds       INT NOT NULL DEFAULT 0,
+      tts_chapters       INT NOT NULL DEFAULT 0,
       PRIMARY KEY (user_id, period)
     );
     """,
+    # Idempotent backfills so an existing live DB gains the new quota kind / per-user override.
+    "ALTER TABLE quota_usage ADD COLUMN IF NOT EXISTS tts_chapters INT NOT NULL DEFAULT 0;",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_tts_chapters INT;",
 
     # ── 0. Novels ──────────────────────────────────────────────────────────
     # The library. One row per novel the user is reading. A novel is a single
@@ -556,6 +560,62 @@ DDL_QUERIES = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS tag_suggestions_novel_status_idx ON tag_suggestions (novel_id, status);",
+
+    # ── 21. TTS jobs (audiobook narration) ─────────────────────────────────
+    # Durable, resumable narration jobs, mirroring import_jobs. A single DB-polled worker
+    # advances these one chapter at a time on the GPU sidecar and survives restarts. `scope`
+    # is 'chapter' (one chapter) or 'book' (a bounded, cancellable batch). `options` carries
+    # the explicit chapter list for a book job; `progress` carries {done,total,current_chapter,
+    # stopped_reason?}. Status: queued → generating → done (+ failed, canceled).
+    """
+    CREATE TABLE IF NOT EXISTS tts_jobs (
+      id          BIGSERIAL PRIMARY KEY,
+      novel_id    BIGINT  NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+      user_id     BIGINT  REFERENCES users(id) ON DELETE CASCADE,    -- who requested it (quota owner)
+      scope       TEXT    NOT NULL DEFAULT 'chapter',                -- chapter|book
+      voice_id    TEXT    NOT NULL,
+      status      TEXT    NOT NULL DEFAULT 'queued',                 -- queued|generating|done|failed|canceled
+      stage       TEXT,                                              -- human-readable current step
+      progress    JSONB   DEFAULT '{}',                              -- {done,total,current_chapter,stopped_reason?}
+      options     JSONB   DEFAULT '{}',                              -- {chapters:[..], language?}
+      error       TEXT,
+      created_at  TIMESTAMPTZ DEFAULT now(),
+      updated_at  TIMESTAMPTZ DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS tts_jobs_status_idx ON tts_jobs (status);",
+    "CREATE INDEX IF NOT EXISTS tts_jobs_user_idx ON tts_jobs (user_id);",
+    "CREATE INDEX IF NOT EXISTS tts_jobs_novel_idx ON tts_jobs (novel_id);",
+
+    # ── 22. Chapter audio (narration cache / manifest) ─────────────────────
+    # One row per generated narration. Shared base audio has user_id IS NULL and is reused by
+    # every reader of the novel; a per-user overlay (edited translation) gets user_id set.
+    # `content_version` is the chapters.content_version it was rendered from, so a base-content
+    # change naturally invalidates the cache (a new version regenerates). Bytes live on disk
+    # under ASSET_DIR; this row is the pointer.
+    """
+    CREATE TABLE IF NOT EXISTS chapter_audio (
+      id               BIGSERIAL PRIMARY KEY,
+      novel_id         BIGINT  NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+      chapter          NUMERIC NOT NULL,
+      user_id          BIGINT  REFERENCES users(id) ON DELETE CASCADE,   -- NULL = shared base
+      voice_id         TEXT    NOT NULL,
+      language         TEXT,
+      content_version  INT     NOT NULL DEFAULT 1,
+      audio_path       TEXT    NOT NULL,                                 -- relative under ASSET_DIR
+      duration_seconds INT,
+      file_bytes       INT,
+      created_at       TIMESTAMPTZ DEFAULT now(),
+      FOREIGN KEY (novel_id, chapter) REFERENCES chapters(novel_id, number) ON DELETE CASCADE
+    );
+    """,
+    # Two partial unique indexes because user_id is nullable: at most one shared row and one
+    # per-user row per (novel, chapter, voice, version). Expression indexes treat NULL distinctly.
+    "CREATE UNIQUE INDEX IF NOT EXISTS chapter_audio_base_uq ON chapter_audio "
+    "(novel_id, chapter, voice_id, content_version) WHERE user_id IS NULL;",
+    "CREATE UNIQUE INDEX IF NOT EXISTS chapter_audio_user_uq ON chapter_audio "
+    "(novel_id, chapter, voice_id, content_version, user_id) WHERE user_id IS NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS chapter_audio_lookup_idx ON chapter_audio (novel_id, chapter, voice_id);",
 ]
 
 # Tables in dependency order (children first) — used by reset_db to drop cleanly.
@@ -563,6 +623,8 @@ ALL_TABLES = [
     "tag_suggestions",
     "contributions",
     "chapter_overlays",
+    "chapter_audio",
+    "tts_jobs",
     "import_jobs",
     "provider_budget",
     "assets",

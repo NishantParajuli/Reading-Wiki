@@ -101,6 +101,23 @@ class Settings(BaseSettings):
     OCR_ENABLED: bool = True
     OCR_CONFIDENCE_ESCALATE: float = 0.80    # page mean confidence below this → Gemini
 
+    # ── Audiobook TTS (OmniVoice sidecar) ──────────────────────────────────
+    # Narration runs on a separate GPU sidecar (localhost:8078) and is generated as durable
+    # background jobs, then cached + streamed to the reader. Voice cloning with a fixed clip
+    # per narrator keeps one consistent voice across a whole book.
+    TTS_SIDECAR_URL: str = "http://localhost:8078"
+    TTS_ENABLED: bool = True
+    # Generated narration lives here, deliberately OUTSIDE ASSET_DIR (which is mounted public
+    # at /assets) so private-novel audio is only reachable via the access-controlled route.
+    AUDIO_DIR: str = "./data/audio"
+    TTS_NUM_STEP: int = 32                    # OmniVoice diffusion steps (16 = faster/rougher)
+    TTS_SPEED: float = 1.0                    # narration speed factor (>1 faster)
+    TTS_PARA_SILENCE_MS: int = 350            # silence inserted between paragraphs
+    TTS_DEFAULT_VOICE: str = "aria"
+    TTS_MAX_BATCH_CHAPTERS: int = 100         # hard cap of chapters per "narrate book" job
+    TTS_OPUS_BITRATE: str = "48k"             # ffmpeg libopus bitrate for stored audio
+    TTS_TITLE_INTRO: bool = True              # prepend "Chapter N. <title>." spoken intro
+
     # ── Multi-user / auth ──────────────────────────────────────────────────
     # Server-side opaque sessions backed by a DB table; the browser only holds an
     # httpOnly+Secure cookie. SESSION_SECRET signs/peppers tokens — set a long random
@@ -147,6 +164,7 @@ class Settings(BaseSettings):
     DEFAULT_QUOTA_TRANSLATED_CHAPTERS: int = 1000
     DEFAULT_QUOTA_OCR_PAGES: int = 3000
     DEFAULT_QUOTA_CODEX_BUILDS: int = 20
+    DEFAULT_QUOTA_TTS_CHAPTERS: int = 200    # chapters narrated per month (charged only on actual generation)
 
     model_config = SettingsConfigDict(
         env_file=".env",

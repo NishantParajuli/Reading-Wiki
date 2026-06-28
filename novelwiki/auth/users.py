@@ -32,6 +32,7 @@ def quota_limits(user: dict) -> dict:
         "translated_chapters": limit("quota_translated_chapters", settings.DEFAULT_QUOTA_TRANSLATED_CHAPTERS),
         "ocr_pages": limit("quota_ocr_pages", settings.DEFAULT_QUOTA_OCR_PAGES),
         "codex_builds": limit("quota_codex_builds", settings.DEFAULT_QUOTA_CODEX_BUILDS),
+        "tts_chapters": limit("quota_tts_chapters", settings.DEFAULT_QUOTA_TTS_CHAPTERS),
     }
 
 

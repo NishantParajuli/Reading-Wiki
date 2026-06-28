@@ -33,6 +33,33 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # TTS sidecar (audiobook narration via OmniVoice). GPU-only and OPTIONAL — the web app runs
+  # fine without it (audio-generation jobs just fail with "sidecar unavailable" until it's up).
+  # Holds the OmniVoice model + cached voice-clone prompts; the durable TTS worker in the web
+  # app calls it one chapter at a time. Start it on a GPU host with: docker compose up -d tts
+  # On a single small GPU (e.g. 6 GB), avoid running `ocr` and `tts` heavy work simultaneously —
+  # start whichever you're actively using.
+  tts:
+    build:
+      context: ./sidecar-tts
+      dockerfile: Dockerfile
+    container_name: novelwiki-tts
+    network_mode: "host"            # serves on localhost:8078, which the web app reaches
+    restart: unless-stopped
+    profiles: ["tts"]               # only starts when explicitly requested / GPU is present
+    volumes:
+      # Persist the Hugging Face cache so OmniVoice isn't re-downloaded on every rebuild.
+      - tts_hf_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
 volumes:
   wiki_data:
     name: novelwiki_data
+  tts_hf_cache:
+    name: novelwiki_tts_hf_cache

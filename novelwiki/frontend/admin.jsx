@@ -28,6 +28,7 @@ function UserRow({ u, me, onChanged }) {
     translated_chapters: u.quota_overrides.translated_chapters ?? "",
     ocr_pages: u.quota_overrides.ocr_pages ?? "",
     codex_builds: u.quota_overrides.codex_builds ?? "",
+    tts_chapters: u.quota_overrides.tts_chapters ?? "",
   });
   const [confirmDel, setConfirmDel] = useState(false);
   const isSelf = me && u.id === me.id;
@@ -41,6 +42,7 @@ function UserRow({ u, me, onChanged }) {
     quota_translated_chapters: blankToNull(q.translated_chapters),
     quota_ocr_pages: blankToNull(q.ocr_pages),
     quota_codex_builds: blankToNull(q.codex_builds),
+    quota_tts_chapters: blankToNull(q.tts_chapters),
   });
   const del = async () => {
     setBusy(true);
@@ -61,7 +63,7 @@ function UserRow({ u, me, onChanged }) {
           </div>
         </div>
         <div className="admin-user-usage muted mono">
-          {u.usage.translated_chapters}/{u.limits.translated_chapters} ch · {u.usage.ocr_pages}/{u.limits.ocr_pages} ocr · {u.usage.codex_builds}/{u.limits.codex_builds} cdx
+          {u.usage.translated_chapters}/{u.limits.translated_chapters} ch · {u.usage.ocr_pages}/{u.limits.ocr_pages} ocr · {u.usage.codex_builds}/{u.limits.codex_builds} cdx · {u.usage.tts_chapters}/{u.limits.tts_chapters} tts
         </div>
         <span className={`admin-status ${statusClass}`}>{u.status}</span>
         <div className="admin-user-actions">
@@ -80,7 +82,7 @@ function UserRow({ u, me, onChanged }) {
       {open && (
         <div className="admin-quota-edit card">
           <span className="muted" style={{ fontSize: 12.5 }}>Per-user monthly limits (blank = default):</span>
-          {[["translated_chapters", "Chapters"], ["ocr_pages", "OCR pages"], ["codex_builds", "Codex builds"]].map(([k, lbl]) => (
+          {[["translated_chapters", "Chapters"], ["ocr_pages", "OCR pages"], ["codex_builds", "Codex builds"], ["tts_chapters", "Narration"]].map(([k, lbl]) => (
             <label key={k} className="field" style={{ flex: "0 0 120px" }}>
               <span>{lbl}</span>
               <input value={q[k]} inputMode="numeric" placeholder="default"

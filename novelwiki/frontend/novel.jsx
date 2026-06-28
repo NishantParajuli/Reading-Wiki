@@ -27,8 +27,11 @@ function groupToc(toc) {
 }
 
 // One chapter / section row, shared by the grouped TOC and the reader drawer.
-function TocRow({ ch, currentNumber, onOpen }) {
+// `audioSet` (optional) is a Set of chapter numbers that already have narration, so the row
+// can show a small headphones marker.
+function TocRow({ ch, currentNumber, onOpen, audioSet }) {
   const isSection = ch.kind && ch.kind !== "chapter";
+  const narrated = audioSet && audioSet.has(ch.number);
   return React.createElement("button", {
     className: "toc-row" + (currentNumber === ch.number ? " current" : "") + (isSection ? " toc-section" : ""),
     onClick: () => onOpen(ch.number),
@@ -38,13 +41,14 @@ function TocRow({ ch, currentNumber, onOpen }) {
     isSection ? React.createElement("span", { className: "chip toc-kind", title: "Non-chapter section" }, TOC_KIND_LABEL[ch.kind] || ch.kind) : null,
     (!ch.has_content && ch.translation_status === "pending")
       ? React.createElement("span", { className: "chip", title: "Raw — translates on open" }, "raw") : null,
+    narrated ? React.createElement(Icon, { name: "headphones", size: 14, className: "muted toc-audio", title: "Narrated" }) : null,
     React.createElement(Icon, { name: "arrowRight", size: 15, className: "muted" })
   );
 }
 
 // Collapsible, volume-grouped table of contents. Every volume starts collapsed (the
 // compressed overview) except the one holding the chapter you last read.
-function VolumeTOC({ toc, currentNumber, onOpen }) {
+function VolumeTOC({ toc, currentNumber, onOpen, audioSet }) {
   const nodes = useMemo(() => groupToc(toc), [toc]);
   const currentVol = useMemo(() => {
     if (currentNumber == null) return null;
@@ -59,7 +63,7 @@ function VolumeTOC({ toc, currentNumber, onOpen }) {
   return React.createElement(React.Fragment, null,
     nodes.map((node, i) => {
       if (node.type === "loose") {
-        return React.createElement(TocRow, { key: "l" + node.chapter.number, ch: node.chapter, currentNumber, onOpen });
+        return React.createElement(TocRow, { key: "l" + node.chapter.number, ch: node.chapter, currentNumber, onOpen, audioSet });
       }
       const isOpen = !!open[node.label];
       const chapterCount = node.chapters.filter(c => !c.kind || c.kind === "chapter").length;
@@ -75,7 +79,7 @@ function VolumeTOC({ toc, currentNumber, onOpen }) {
           React.createElement("span", { className: "toc-vol-count mono" }, chapterCount)
         ),
         isOpen ? React.createElement("div", { className: "toc-vol-body" },
-          node.chapters.map(ch => React.createElement(TocRow, { key: ch.number, ch, currentNumber, onOpen }))
+          node.chapters.map(ch => React.createElement(TocRow, { key: ch.number, ch, currentNumber, onOpen, audioSet }))
         ) : null
       );
     })
@@ -556,6 +560,103 @@ function TagSuggestionsInbox({ novelId, reloadNovel }) {
   );
 }
 
+/* Whole-book narration (available to any reader). Picks a narrator + how many chapters, queues
+   a bounded, cancellable batch through the durable TTS worker, and shows live progress. A long
+   book is narrated in successive capped batches; cached chapters are skipped automatically. */
+function NarrateBookControl({ novelId, user, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [voices, setVoices] = useState(null);   // null=loading | [] offline
+  const [voice, setVoice] = useState(null);
+  const [count, setCount] = useState("");        // blank = as many as allowed
+  const [job, setJob] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const pollRef = useRef(null);
+  const h = React.createElement;
+
+  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  useEffect(() => () => stopPoll(), []);
+
+  useEffect(() => {
+    window.API.ttsVoices().then(r => {
+      const list = (r.voices || []).filter(v => v.ready);
+      setVoices(list);
+      const pref = user && user.prefs && user.prefs.tts && user.prefs.tts.voice;
+      setVoice(pref || r.default || (list[0] && list[0].id) || null);
+    }).catch(() => setVoices([]));
+  }, []);
+
+  function poll(id) {
+    stopPoll();
+    pollRef.current = setInterval(async () => {
+      try {
+        const j = await window.API.ttsJob(id);
+        setJob(j);
+        if (["done", "failed", "canceled"].includes(j.status)) { stopPoll(); onChange && onChange(); }
+      } catch (e) { stopPoll(); }
+    }, 1800);
+  }
+
+  async function start() {
+    if (!voice) return;
+    setMsg(null); setJob(null);
+    try {
+      const r = await window.API.generateBookAudio(novelId, voice, null, count.trim() ? parseInt(count) : null);
+      if (r.status === "ready") { setMsg(r.message || "Every chapter is already narrated in this voice."); return; }
+      setMsg(r.capped
+        ? `Queued ${r.total} chapters (max per batch — run again for more).`
+        : `Queued ${r.total} chapter${r.total === 1 ? "" : "s"}.`);
+      setJob({ id: r.job_id, status: "queued", progress: { total: r.total, done: 0 } });
+      poll(r.job_id);
+    } catch (e) {
+      setMsg(e.status === 429 ? (e.message || "Monthly narration quota reached.") : (e.message || "Couldn't start narration."));
+    }
+  }
+
+  async function cancel() {
+    if (!job) return;
+    try { await window.API.cancelTtsJob(job.id); } catch (e) {}
+  }
+
+  if (voices == null || voices.length === 0) return null;   // hidden while loading / sidecar offline
+
+  const running = job && ["queued", "generating"].includes(job.status);
+  const prog = (job && job.progress) || {};
+  const pct = prog.total ? Math.round((100 * (prog.done || 0)) / prog.total) : 0;
+  const stopped = prog.stopped_reason;
+
+  return h("div", { className: "narrate-ctl", style: { position: "relative" } },
+    h("button", { className: "btn btn-ghost", onClick: () => setOpen(o => !o) },
+      h(Icon, { name: "headphones", size: 16 }), "Narrate book"),
+    open && h("div", { className: "card narrate-panel", onClick: e => e.stopPropagation() },
+      h("div", { className: "row", style: { gap: 8, alignItems: "flex-end", flexWrap: "wrap" } },
+        h("label", { className: "field", style: { flex: 1, minWidth: 130 } },
+          h("span", null, "Narrator"),
+          h("select", { value: voice || "", onChange: e => setVoice(e.target.value) },
+            voices.map(v => h("option", { key: v.id, value: v.id }, v.name + (v.accent ? ` · ${v.accent}` : ""))))),
+        h("label", { className: "field", style: { flex: "0 0 92px" } },
+          h("span", null, "Chapters"),
+          h("input", { value: count, onChange: e => setCount(e.target.value), placeholder: "max", inputMode: "numeric" }))),
+      h("div", { className: "row", style: { gap: 8, marginTop: 10 } },
+        running
+          ? h("button", { className: "btn btn-ghost is-danger", onClick: cancel }, h(Icon, { name: "x", size: 14 }), "Cancel")
+          : h("button", { className: "btn btn-primary", onClick: start, disabled: !voice },
+              h(Icon, { name: "play", size: 14 }), "Start narrating")),
+      job && h("div", { style: { marginTop: 12 } },
+        h("div", { className: "narrate-progress" }, h("div", { className: "narrate-progress-fill", style: { width: pct + "%" } })),
+        h("div", { className: "muted", style: { fontSize: 12.5, marginTop: 6 } },
+          `${prog.done || 0} / ${prog.total || 0} narrated` +
+          (prog.skipped ? ` · ${prog.skipped} skipped` : "") +
+          (stopped === "quota" ? " · stopped: monthly quota reached" :
+           stopped === "canceled" ? " · canceled" :
+           job.status === "done" ? " · done" :
+           job.status === "failed" ? " · failed" : ""))),
+      job && job.status === "failed" && job.error && h("div", { className: "acct-err", style: { marginTop: 8 } }, job.error),
+      msg && !job && h("div", { className: "muted", style: { fontSize: 12.5, marginTop: 8 } }, msg),
+      h("p", { className: "muted", style: { fontSize: 12, marginTop: 10, marginBottom: 0 } },
+        "Generates audio on the server and caches it for everyone. Capped per batch; re-run to continue a long book."))
+  );
+}
+
 function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary, user }) {
   const [toc, setToc] = useState(null);    // null = loading
   const [adapters, setAdapters] = useState([]);
@@ -568,11 +669,26 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
   const [msg, setMsg] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [audioSet, setAudioSet] = useState(null);   // Set of narrated chapter numbers (TOC icons)
 
   const loadToc = useCallback(() => {
     if (novelId == null) return;
     window.API.chapters(novelId).then(setToc).catch(() => setToc([]));
   }, [novelId]);
+  // Which chapters already have narration (in the reader's preferred voice) — drives the TOC
+  // headphones markers and refreshes when a narration batch finishes.
+  const loadAudioSet = useCallback(() => {
+    if (novelId == null) return;
+    const pref = user && user.prefs && user.prefs.tts && user.prefs.tts.voice;
+    Promise.resolve(pref ? { default: pref } : window.API.ttsVoices().catch(() => null))
+      .then(r => {
+        const voice = pref || (r && r.default);
+        if (!voice) { setAudioSet(null); return; }
+        return window.API.novelAudioChapters(novelId, voice)
+          .then(res => setAudioSet(new Set((res.chapters || []).map(Number))))
+          .catch(() => setAudioSet(null));
+      });
+  }, [novelId, user && user.id]);
   const loadBookmarks = useCallback(() => {
     if (novelId == null) return;
     window.API.bookmarks(novelId).then(setBookmarks).catch(() => setBookmarks([]));
@@ -582,7 +698,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
     window.API.glossary(novelId).then(setGlossary).catch(() => setGlossary([]));
   }, [novelId]);
 
-  useEffect(() => { loadToc(); loadBookmarks(); loadGlossary(); }, [loadToc, loadBookmarks, loadGlossary]);
+  useEffect(() => { loadToc(); loadBookmarks(); loadGlossary(); loadAudioSet(); }, [loadToc, loadBookmarks, loadGlossary, loadAudioSet]);
   useEffect(() => { window.API.adapters().then(setAdapters).catch(() => setAdapters([])); }, []);
 
   if (!novel) return React.createElement("div", { className: "page" }, React.createElement(Loading, { label: "Loading novel…" }));
@@ -657,6 +773,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
             novel.max_chapter != null && React.createElement("span", { className: "chip mono" }, `ch. ${novel.min_chapter}–${novel.max_chapter}`),
             novel.codex_enabled && React.createElement("button", { className: "btn btn-ghost", onClick: () => nav("browse") },
               React.createElement(Icon, { name: "compass", size: 16 }), "Open codex"),
+            hasChapters && React.createElement(NarrateBookControl, { novelId, user, onChange: loadAudioSet }),
             canEdit && React.createElement(VisibilityControl, {
               novel, reloadNovel, isAdmin: !!(user && user.role === "admin"),
             }),
@@ -768,7 +885,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
       : toc.length === 0
         ? React.createElement(EmptyState, { icon: "book", title: "No chapters yet", body: "Use Scrape above to fetch chapters from the source." })
         : React.createElement("div", { className: "card toc" },
-            React.createElement(VolumeTOC, { toc, currentNumber: progress.last_chapter, onOpen: openReader })),
+            React.createElement(VolumeTOC, { toc, currentNumber: progress.last_chapter, onOpen: openReader, audioSet })),
 
     confirmDelete && React.createElement(ConfirmDialog, {
       title: `Delete “${novel.title}”?`,

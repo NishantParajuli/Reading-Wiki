@@ -25,7 +25,7 @@ router = APIRouter()
 
 USER_STATUSES = {"active", "suspended", "banned"}
 USER_ROLES = {"user", "admin"}
-_QUOTA_COLS = ("quota_translated_chapters", "quota_ocr_pages", "quota_codex_builds")
+_QUOTA_COLS = ("quota_translated_chapters", "quota_ocr_pages", "quota_codex_builds", "quota_tts_chapters")
 
 
 def _period() -> dt.date:
@@ -42,6 +42,7 @@ class AdminUserUpdate(BaseModel):
     quota_translated_chapters: int | None = None   # null ⇒ reset to settings default
     quota_ocr_pages: int | None = None
     quota_codex_builds: int | None = None
+    quota_tts_chapters: int | None = None
 
 
 @router.get("/users")
@@ -54,9 +55,11 @@ async def admin_list_users(q: str | None = None, admin: dict = Depends(require_a
             SELECT u.id, u.email, u.username, u.display_name, u.avatar_path, u.role, u.status,
                    u.email_verified, u.created_at,
                    u.quota_translated_chapters, u.quota_ocr_pages, u.quota_codex_builds,
+                   u.quota_tts_chapters,
                    COALESCE(qz.translated_chapters, 0) AS used_translated,
                    COALESCE(qz.ocr_pages, 0)          AS used_ocr,
                    COALESCE(qz.codex_builds, 0)       AS used_codex,
+                   COALESCE(qz.tts_chapters, 0)       AS used_tts,
                    (SELECT COUNT(*) FROM novels n WHERE n.owner_id = u.id) AS novels_owned
             FROM users u
             LEFT JOIN quota_usage qz ON qz.user_id = u.id AND qz.period = $1
@@ -79,16 +82,19 @@ async def admin_list_users(q: str | None = None, admin: dict = Depends(require_a
                 "translated_chapters": int(r["used_translated"]),
                 "ocr_pages": int(r["used_ocr"]),
                 "codex_builds": int(r["used_codex"]),
+                "tts_chapters": int(r["used_tts"]),
             },
             "quota_overrides": {
                 "translated_chapters": r["quota_translated_chapters"],
                 "ocr_pages": r["quota_ocr_pages"],
                 "codex_builds": r["quota_codex_builds"],
+                "tts_chapters": r["quota_tts_chapters"],
             },
             "limits": {
                 "translated_chapters": _limit(r["quota_translated_chapters"], settings.DEFAULT_QUOTA_TRANSLATED_CHAPTERS),
                 "ocr_pages": _limit(r["quota_ocr_pages"], settings.DEFAULT_QUOTA_OCR_PAGES),
                 "codex_builds": _limit(r["quota_codex_builds"], settings.DEFAULT_QUOTA_CODEX_BUILDS),
+                "tts_chapters": _limit(r["quota_tts_chapters"], settings.DEFAULT_QUOTA_TTS_CHAPTERS),
             },
         }
         for r in rows

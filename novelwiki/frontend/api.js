@@ -154,6 +154,30 @@
     acceptTagSuggestion(id, sid) { return postJSON(`${N(id)}/tag-suggestions/${sid}/accept`, {}); },
     rejectTagSuggestion(id, sid) { return postJSON(`${N(id)}/tag-suggestions/${sid}/reject`, {}); },
 
+    // ── Audiobook TTS (narration) ──
+    ttsVoices() { return getJSON(`${API_BASE}/tts/voices`); },
+    // Per-chapter: returns {status:"ready",cached:true,...} if already generated, else {status:"queued",job_id}.
+    generateChapterAudio(id, number, voiceId, force) {
+      return postJSON(`${N(id)}/chapter/${number}/audio`, { voice_id: voiceId, force: !!force });
+    },
+    chapterAudioStatus(id, number, voiceId) {
+      return getJSON(`${N(id)}/chapter/${number}/audio/status?voice_id=${encodeURIComponent(voiceId)}`);
+    },
+    // Bounded, cancellable whole-book batch (skips already-cached chapters; capped server-side).
+    generateBookAudio(id, voiceId, start, count) {
+      return postJSON(`${N(id)}/audiobook`, { voice_id: voiceId, start: start ?? null, count: count ?? null });
+    },
+    ttsJob(jobId) { return getJSON(`${API_BASE}/tts/jobs/${jobId}`); },
+    cancelTtsJob(jobId) { return postJSON(`${API_BASE}/tts/jobs/${jobId}/cancel`, {}); },
+    // Chapters that already have shared audio in a voice (drives TOC speaker icons).
+    novelAudioChapters(id, voiceId) {
+      return getJSON(`${N(id)}/audio/chapters?voice_id=${encodeURIComponent(voiceId)}`);
+    },
+    // The <audio src> URL for a chapter's narration (access-controlled, range-capable).
+    chapterAudioUrl(id, number, voiceId) {
+      return `${N(id)}/chapter/${number}/audio.opus?voice_id=${encodeURIComponent(voiceId)}`;
+    },
+
     // ── Translation + glossary ──
     translate(id, body) { return postJSON(`${N(id)}/translate`, body || {}); },
     glossary(id) { return getJSON(`${N(id)}/glossary`); },

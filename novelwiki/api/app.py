@@ -44,6 +44,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not start the import worker (continuing): {e}")
 
+    # The TTS worker is a second durable, DB-polled background task: it advances audiobook
+    # narration jobs (resolve text → narrate via the GPU sidecar → cache Opus) and resumes
+    # ones a restart interrupted. Like the import worker it only touches its own tables.
+    try:
+        from novelwiki.tts.worker import start_worker as start_tts_worker
+        start_tts_worker()
+    except Exception as e:
+        logger.warning(f"Could not start the TTS worker (continuing): {e}")
+
     yield
 
     # ── Shutdown Phase ──
@@ -52,6 +61,12 @@ async def lifespan(app: FastAPI):
         await stop_worker()
     except Exception as e:
         logger.warning(f"Error stopping import worker: {e}")
+
+    try:
+        from novelwiki.tts.worker import stop_worker as stop_tts_worker
+        await stop_tts_worker()
+    except Exception as e:
+        logger.warning(f"Error stopping TTS worker: {e}")
 
     logger.info("Closing database connection pool...")
     await close_db_pool()
@@ -82,8 +97,11 @@ from fastapi import Depends
 from novelwiki.auth.router import router as auth_router
 from novelwiki.auth.deps import current_user, require_admin
 from novelwiki.api.admin_routes import router as admin_router
+from novelwiki.api.routes_tts import router as tts_router
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(router, prefix="/api", dependencies=[Depends(current_user)])
+# Audiobook TTS endpoints (same auth model as the main router).
+app.include_router(tts_router, prefix="/api", dependencies=[Depends(current_user)])
 # Admin dashboard — every route gated behind an admin session (require_admin → current_user).
 app.include_router(admin_router, prefix="/api/admin", dependencies=[Depends(require_admin)])
 

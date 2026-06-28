@@ -1,0 +1,7 @@
+# TTS sidecar dependencies — GPU-only, NOT installed into the main web image.
+# NOTE: torch/torchaudio are installed separately in the Dockerfile from the CUDA wheel
+# index (cu128), so they are intentionally NOT pinned here.
+omnivoice>=0.1.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+numpy>=1.26.4

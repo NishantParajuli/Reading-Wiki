@@ -135,6 +135,169 @@ function TranslationTools({ novelId, ch, onClose, onChanged }) {
   );
 }
 
+/* Audiobook player (Phase: TTS). A slim persistent bar under the toolbar: pick a narrator,
+   generate this chapter's narration on demand (durable job; we poll until ready), then play
+   with seek/speed. Position is remembered per chapter and playback auto-advances to the next
+   chapter so a hands-free listen flows continuously. Generated audio is cached server-side and
+   shared across readers, so a chapter is only ever synthesized once per voice. */
+const TTS_SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
+// Module-level intent flag so auto-advance keeps playing into the next chapter (set once the
+// user presses play; cleared when they pause).
+let __ttsContinue = false;
+
+function readTtsPrefs(user) {
+  const p = (user && user.prefs && user.prefs.tts) || {};
+  return { voice: p.voice || null, speed: Number(p.speed) || 1, autoplay: p.autoplay !== false };
+}
+
+function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
+  const [voices, setVoices] = useState(null);          // null=loading | [] none/offline
+  const [voice, setVoice] = useState(() => readTtsPrefs(user).voice);
+  const [speed, setSpeed] = useState(() => readTtsPrefs(user).speed);
+  const [src, setSrc] = useState(null);                // audio URL once ready
+  const [state, setState] = useState("idle");          // idle|checking|generating|ready|error|untranslated
+  const [msg, setMsg] = useState(null);
+  const audioRef = useRef(null);
+  const pollRef = useRef(null);
+  const posKey = `nw-tts:${novelId}:${number}`;
+
+  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+
+  // Narrator catalog (ready voices only). Default from prefs → server default → first ready.
+  useEffect(() => {
+    let cancel = false;
+    window.API.ttsVoices().then(r => {
+      if (cancel) return;
+      const list = (r.voices || []).filter(v => v.ready);
+      setVoices(list);
+      setVoice(v => v || readTtsPrefs(user).voice || r.default || (list[0] && list[0].id) || null);
+    }).catch(() => { if (!cancel) setVoices([]); });
+    return () => { cancel = true; };
+  }, []);
+
+  // On chapter/voice change: drop any loaded audio and check whether this chapter is already
+  // cached for the chosen voice (→ ready to play, possibly auto-played from the previous one).
+  useEffect(() => {
+    stopPoll(); setSrc(null); setMsg(null);
+    if (!voice) { setState("idle"); return; }
+    let cancel = false;
+    setState("checking");
+    window.API.chapterAudioStatus(novelId, number, voice).then(r => {
+      if (cancel) return;
+      if (r.cached) {
+        setSrc(window.API.chapterAudioUrl(novelId, number, voice));
+        setState("ready");
+      } else {
+        setState("idle");
+      }
+    }).catch(() => { if (!cancel) setState("idle"); });
+    return () => { cancel = true; stopPoll(); };
+  }, [novelId, number, voice]);
+
+  // Apply playback speed to the element whenever it (or the speed) changes.
+  useEffect(() => { if (audioRef.current) audioRef.current.playbackRate = speed; }, [speed, src]);
+
+  // If we arrived here mid-listen (auto-advance) and the audio is ready, keep playing.
+  useEffect(() => {
+    if (state === "ready" && src && __ttsContinue && audioRef.current) {
+      const p = audioRef.current.play();
+      if (p && p.catch) p.catch(() => {});   // browsers may block; ignore
+    }
+  }, [state, src]);
+
+  function persist(next) {
+    if (!user) return;
+    window.API.updateMe({ prefs: { tts: { voice, speed, ...next } } })
+      .then(u => onUserUpdate && onUserUpdate(u)).catch(() => {});
+  }
+  function pickVoice(v) { setVoice(v); persist({ voice: v }); }
+  function pickSpeed(s) { setSpeed(s); if (audioRef.current) audioRef.current.playbackRate = s; persist({ speed: s }); }
+
+  async function generate(force) {
+    if (!voice) return;
+    setState("generating"); setMsg(null); stopPoll();
+    try {
+      const r = await window.API.generateChapterAudio(novelId, number, voice, force);
+      if (r.status === "ready") {
+        setSrc(window.API.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
+        setState("ready");
+        return;
+      }
+      const jobId = r.job_id;
+      pollRef.current = setInterval(async () => {
+        try {
+          const j = await window.API.ttsJob(jobId);
+          if (j.status === "done") {
+            stopPoll();
+            setSrc(window.API.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
+            setState("ready");
+          } else if (j.status === "failed") {
+            stopPoll(); setState("error"); setMsg(j.error || "Narration failed.");
+          } else if (j.status === "canceled") {
+            stopPoll(); setState("idle");
+          }
+        } catch (e) { stopPoll(); setState("error"); setMsg(e.message || "Narration failed."); }
+      }, 1500);
+    } catch (e) {
+      if (e.status === 409) { setState("untranslated"); setMsg("Translate this chapter before narrating it."); }
+      else if (e.status === 429) { setState("error"); setMsg(e.message || "Monthly narration quota reached."); }
+      else { setState("error"); setMsg(e.message || "Couldn't start narration."); }
+    }
+  }
+
+  const h = React.createElement;
+  // Hidden until the catalog resolves; if the sidecar is offline (no ready voices) stay hidden.
+  if (voices == null) return null;
+  if (voices.length === 0) return null;
+
+  const voiceSel = h("select", {
+    className: "ab-voice", value: voice || "", onChange: e => pickVoice(e.target.value),
+    title: "Narrator voice", onClick: e => e.stopPropagation(),
+  }, voices.map(v => h("option", { key: v.id, value: v.id },
+    v.name + (v.accent ? ` · ${v.accent}` : ""))));
+
+  const speedSel = h("select", {
+    className: "ab-speed", value: speed, onChange: e => pickSpeed(Number(e.target.value)),
+    title: "Playback speed", onClick: e => e.stopPropagation(),
+  }, TTS_SPEEDS.map(s => h("option", { key: s, value: s }, s + "×")));
+
+  return h("div", { className: "audio-bar", onClick: e => e.stopPropagation() },
+    h(Icon, { name: "headphones", size: 17, className: "muted" }),
+    voiceSel,
+    state === "ready" && src
+      ? h(React.Fragment, null,
+          h("audio", {
+            ref: audioRef, src, controls: true, preload: "none", className: "ab-audio",
+            onPlay: () => { __ttsContinue = true; },
+            onPause: () => { __ttsContinue = false; },
+            onLoadedMetadata: () => {
+              const a = audioRef.current; if (!a) return;
+              a.playbackRate = speed;
+              const saved = parseFloat(localStorage.getItem(posKey) || "0");
+              if (saved > 1 && saved < (a.duration || 1e9) - 2) a.currentTime = saved;
+            },
+            onTimeUpdate: () => {
+              const a = audioRef.current; if (!a) return;
+              if (Math.floor(a.currentTime) % 5 === 0) localStorage.setItem(posKey, String(a.currentTime));
+            },
+            onEnded: () => {
+              localStorage.removeItem(posKey);
+              if (readTtsPrefs(user).autoplay && ch && ch.next != null) openReader(ch.next);
+            },
+          }),
+          speedSel,
+          h("button", { className: "icon-btn ab-regen", title: "Regenerate", onClick: () => generate(true) },
+            h(Icon, { name: "refresh", size: 14 })))
+      : state === "generating" || state === "checking"
+        ? h("span", { className: "ab-status muted" },
+            h(Icon, { name: "refresh", size: 14, className: "spin" }),
+            state === "generating" ? "Narrating…" : "Checking…")
+        : h("button", { className: "btn btn-ghost ab-gen", onClick: () => generate(false) },
+            h(Icon, { name: "play", size: 14 }), "Narrate chapter"),
+    msg && h("span", { className: "ab-msg" }, msg)
+  );
+}
+
 function Reader({ novelId, number, openReader, backToNovel, onRead, user, onUserUpdate }) {
   const [ch, setCh] = useState(null);     // null = loading
   const [status, setStatus] = useState("loading");
@@ -320,6 +483,11 @@ function Reader({ novelId, number, openReader, backToNovel, onRead, user, onUser
         showSettings && React.createElement(ReaderSettings, { prefs, setPrefs, onClose: () => setShowSettings(false) })
       )
     ),
+
+    // audiobook player (hidden when the TTS sidecar is offline / no ready voices)
+    status === "ok" && ch && (ch.content || ch.rich_html) && React.createElement(AudioBar, {
+      novelId, number, ch, user, onUserUpdate, openReader,
+    }),
 
     // body
     status === "loading" && React.createElement("div", { className: "reader-col", style: colStyle }, React.createElement(Loading, { label: "Loading chapter…" })),

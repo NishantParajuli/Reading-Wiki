@@ -1,0 +1,50 @@
+{
+  "_comment": "Curated narrator catalog for the TTS sidecar. Each voice needs a 3-10s mono reference clip at `file` (next to this JSON) plus its EXACT transcription in `ref_text` (required: the sidecar runs with load_asr=False, so it never transcribes the clip itself). A voice whose clip is missing is reported `ready:false` and rejected at synth time. Use public-domain / CC0 audio only (e.g. LibriVox). See README.md.",
+  "voices": [
+    {
+      "id": "aria",
+      "name": "Aria",
+      "language": "en",
+      "gender": "female",
+      "accent": "US",
+      "file": "aria.wav",
+      "ref_text": ""
+    },
+    {
+      "id": "james",
+      "name": "James",
+      "language": "en",
+      "gender": "male",
+      "accent": "UK",
+      "file": "james.wav",
+      "ref_text": ""
+    },
+    {
+      "id": "mei",
+      "name": "Mei",
+      "language": "en",
+      "gender": "female",
+      "accent": "neutral",
+      "file": "mei.wav",
+      "ref_text": ""
+    },
+    {
+      "id": "lin",
+      "name": "Lin",
+      "language": "zh",
+      "gender": "female",
+      "accent": "Mandarin",
+      "file": "lin.wav",
+      "ref_text": ""
+    },
+    {
+      "id": "haru",
+      "name": "Haru",
+      "language": "ja",
+      "gender": "female",
+      "accent": "standard",
+      "file": "haru.wav",
+      "ref_text": ""
+    }
+  ]
+}
