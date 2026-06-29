@@ -50,6 +50,8 @@ services:
     volumes:
       # Persist the Hugging Face cache so OmniVoice isn't re-downloaded on every rebuild.
       - tts_hf_cache:/root/.cache/huggingface
+      # Manage narrator clips from the host (add/replace a voice → restart, no image rebuild).
+      - ./sidecar-tts/voices:/app/voices:ro
     deploy:
       resources:
         reservations:

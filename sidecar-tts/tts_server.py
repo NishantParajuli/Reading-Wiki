@@ -117,9 +117,11 @@ def _ensure_model():
         return _model
     import torch
     from omnivoice import OmniVoice
-    logger.info(f"Loading OmniVoice ({MODEL_NAME}) on {DEVICE} (fp16, ASR off)…")
+    # fp16 on GPU; CPU lacks half-precision kernels for many ops, so fall back to fp32 there.
+    dtype = torch.float32 if DEVICE.startswith("cpu") else torch.float16
+    logger.info(f"Loading OmniVoice ({MODEL_NAME}) on {DEVICE} ({dtype}, ASR off)…")
     _model = OmniVoice.from_pretrained(
-        MODEL_NAME, device_map=DEVICE, dtype=torch.float16, load_asr=False,
+        MODEL_NAME, device_map=DEVICE, dtype=dtype, load_asr=False,
     )
     _sr = int(getattr(_model, "sampling_rate", 24000))
     logger.info(f"OmniVoice ready (sampling_rate={_sr}).")

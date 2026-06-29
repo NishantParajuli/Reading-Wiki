@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     TTS_NUM_STEP: int = 32                    # OmniVoice diffusion steps (16 = faster/rougher)
     TTS_SPEED: float = 1.0                    # narration speed factor (>1 faster)
     TTS_PARA_SILENCE_MS: int = 350            # silence inserted between paragraphs
-    TTS_DEFAULT_VOICE: str = "aria"
+    TTS_DEFAULT_VOICE: str = "narrator"
     TTS_MAX_BATCH_CHAPTERS: int = 100         # hard cap of chapters per "narrate book" job
     TTS_OPUS_BITRATE: str = "48k"             # ffmpeg libopus bitrate for stored audio
     TTS_TITLE_INTRO: bool = True              # prepend "Chapter N. <title>." spoken intro

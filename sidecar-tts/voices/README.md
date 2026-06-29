@@ -35,5 +35,19 @@ it, and prints the `voices.json` snippet:
 python3 prepare_voice.py raw_clip.mp3 aria.wav --text "the exact words spoken in the clip"
 ```
 
-The five voices shipped in `voices.json` (`aria`, `james`, `mei`, `lin`, `haru`) are
-placeholders — drop in clips + transcriptions to activate them, or edit the catalog.
+## Shipped voices
+
+`voices.json` ships five **ready** English narrators built from [CMU ARCTIC](http://festvox.org/cmu_arctic/)
+(festvox.org — distributed free for use; each utterance ships its exact transcript):
+
+| id | vibe | source speaker |
+|----|------|----------------|
+| `suzu`  | bright young female — *anime approximation* | ARCTIC `clb` |
+| `orson` | deep, measured male narrator | ARCTIC `rms` |
+| `mira`  | warm mature female — *motherly approximation* | ARCTIC `slt` |
+| `dan`   | neutral conversational male (default) | ARCTIC `bdl` |
+| `angus` | distinctive Scottish narrator | ARCTIC `awb` |
+
+These are neutral audiobook-style readers, **not** character-acted anime/celebrity voices. For
+a true anime-girl or "ara ara" timbre, record a 3–10 s clip yourself (full rights, exact vibe)
+and replace `suzu.wav`/`mira.wav` + their `ref_text` — `prepare_voice.py` formats it for you.
