@@ -52,6 +52,8 @@ services:
       - tts_hf_cache:/root/.cache/huggingface
       # Manage narrator clips from the host (add/replace a voice → restart, no image rebuild).
       - ./sidecar-tts/voices:/app/voices:ro
+      # Mount the server too, so sidecar code tweaks apply on restart without a CUDA rebuild.
+      - ./sidecar-tts/tts_server.py:/app/tts_server.py:ro
     deploy:
       resources:
         reservations:

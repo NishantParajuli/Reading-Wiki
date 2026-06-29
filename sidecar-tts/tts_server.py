@@ -175,6 +175,16 @@ def _pcm_to_opus(pcm, sr: int, bitrate: str) -> bytes:
     return proc.stdout
 
 
+def _norm_lang(lang: str | None) -> str | None:
+    """OmniVoice wants a base language id ('en', 'zh', 'ja', …), not a BCP-47 tag. Chapters
+    store tags like 'en-GB'/'zh-CN', so strip the region subtag. (Accent comes from the voice
+    clone, not this param.) Returns None for blank input → language-agnostic mode."""
+    if not lang:
+        return None
+    base = str(lang).strip().lower().replace("_", "-").split("-")[0]
+    return base or None
+
+
 def _generate(text: str, voice: dict, language: str | None, speed: float | None, num_step: int | None):
     """Run one OmniVoice generation with the voice's cached clone prompt. Caller holds _lock."""
     from omnivoice import OmniVoiceGenerationConfig
@@ -186,7 +196,7 @@ def _generate(text: str, voice: dict, language: str | None, speed: float | None,
     )
     audio = model.generate(
         text=text,
-        language=language or voice.get("language") or None,
+        language=_norm_lang(language or voice.get("language")),
         voice_clone_prompt=prompt,
         speed=float(speed) if speed else None,
         generation_config=cfg,
