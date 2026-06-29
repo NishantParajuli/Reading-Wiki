@@ -94,7 +94,8 @@ async def api_generate_chapter_audio(novel_id: int, number: float, payload: Chap
     # Preflight only (zero-remaining / unverified → 429). The actual unit is charged in the worker.
     await quota.check_available(user, "tts_chapters", 1)
     job_id = await tts_worker.create_job(
-        novel_id, user["id"], "chapter", voice, options={"chapters": [float(number)]},
+        novel_id, user["id"], "chapter", voice,
+        options={"chapters": [float(number)], "force": bool(payload.force)},
     )
     return {"status": "queued", "cached": False, "job_id": job_id, "voice_id": voice}
 

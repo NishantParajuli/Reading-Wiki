@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 
 from novelwiki.config.settings import settings
@@ -231,7 +232,9 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
     """
     novel_id = int(job["novel_id"])
     voice_id = job["voice_id"]
-    lang_override = (job.get("options") or {}).get("language")
+    opts = job.get("options") or {}
+    lang_override = opts.get("language")
+    force = bool(opts.get("force"))   # regenerate even if cached (the ⟳ button)
 
     info = await resolve_chapter_text(novel_id, number, user)
     if info["reason"] == "not_found":
@@ -244,7 +247,7 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
     version = info["content_version"]
     uid = user["id"] if info["is_overlay"] else None
 
-    if await find_audio(novel_id, number, voice_id, version, uid):
+    if not force and await find_audio(novel_id, number, voice_id, version, uid):
         return "cached"
 
     # Charge quota right before the (expensive) generation, mirroring how the importer reserves
@@ -264,7 +267,12 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
     rel = audio_rel(novel_id, number, voice_id, version, uid)
     dest = audio_abs(rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(opus)
+    # Atomic publish: write a temp file then os.replace, so a force-regenerate can't corrupt
+    # the audio for someone currently streaming the old version (their open fd keeps the old
+    # inode), and a crash mid-write never leaves a half-written file behind the DB row.
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    tmp.write_bytes(opus)
+    os.replace(tmp, dest)
     await _upsert_audio(novel_id, number, uid, voice_id, language, version, rel, duration, len(opus))
     return "generated"
 
