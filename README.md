@@ -1,49 +1,117 @@
-# 📖 A self-hosted webnovel reading platform
+# 🌊 Tideglass
 
-A single-user, self-hosted platform for reading webnovels end to end: **scrape → read → translate → (optionally) build a spoiler-safe codex.** Point it at a chapter URL, let it crawl, and read in a cozy, distraction-free reader. Raw (foreign-language) chapters are translated on demand as you open them, and any novel can opt into an agentic, **spoiler-gated** knowledge base.
+A self-hosted, **multi-user** reading platform for webnovels and ebooks. Bring a story in
+from anywhere — **scrape** it chapter-by-chapter from a site, or **import** an EPUB/PDF (digital
+*or* scanned) — and read it in a cozy, distraction-free reader. Raw foreign-language chapters
+are **translated on demand** as you open them, any chapter can be **narrated as an audiobook**,
+and any novel can opt into an agentic, **spoiler-gated codex** (a chapter-bounded knowledge base).
 
-The codex upholds **THE ONE INVARIANT**:
+Multiple people can use one instance: each reader has their own account, library, reading
+progress, and quotas. Novels can be kept **private**, **shared publicly**, or curated into a
+**global** library that everyone can read.
 
-> When you are reading at **chapter N**, no information from any chapter **> N** may ever appear in a codex entry, a stat, or a Q&A answer.
+---
 
-That boundary is enforced at the **database and retrieval layers** (`WHERE chapter <= ceiling` on every read) — never by trusting the LLM to hold back.
+## THE ONE INVARIANT (the codex)
+
+The codex upholds a single, hard rule:
+
+> When you are reading at **chapter N**, no information from any chapter **> N** may ever
+> appear in a codex entry, a stat, or a Q&A answer.
+
+That boundary is enforced at the **database and retrieval layers** (`WHERE chapter <= ceiling`
+on every read) — never by trusting the LLM to hold back. Each reader's ceiling is driven by
+their own `max_chapter_read`, so the same shared novel reveals different amounts to different
+people.
 
 ---
 
 ## ✨ What it does
 
-- **Library** — Track every novel you're reading on shelves (`to_read` / `reading` / `completed`) with status tags, covers, and reading progress.
-- **Multi-source scraping** — A novel can be stitched from several sources (e.g. an English site that ends at ch. 124 + a raw site that continues at 125). Each source carries a `chapter_offset` that maps its local numbering onto one continuous **global** chapter sequence. Scraping is incremental and stops cleanly when it hits premium/paywalled chapters.
-- **Reader** — Immersive tap-to-toggle UI, adjustable width, themes, configurable auto-scroll, and persistent scroll-position recovery. Prev/next spans all sources by global chapter number. Reading progress and bookmarks are saved per novel.
-- **On-demand translation** — Opening a raw chapter translates it inline (and prefetches the next few in the background) so reading flows without waiting at each boundary. A per-novel **glossary** keeps names/terms consistent across chapters and across a source switch (e.g. `林轩 → Lin Xuan` once, everywhere after).
-- **Spoiler-safe codex** *(opt-in per novel)* — Chunk → embed → forward-only entity/fact/relationship extraction → hybrid retrieval → agentic Q&A, all bounded to your current chapter. Browse entities, read synthesized profiles, follow relationships and timelines, see identity-reveal banners only once the reveal chapter is within your ceiling, and ask freeform questions with inline citations.
+### 📚 Library & accounts
+- **Per-user libraries** — Every reader has their own shelves (`to_read` / `reading` / `completed`),
+  reading progress, bookmarks, and synced reader preferences. One person's "reading" is another's
+  "completed."
+- **Accounts & auth** — Email + password (Argon2-hashed), opaque server-side sessions in an
+  httpOnly cookie, email verification, password reset, and optional **Google / Discord OAuth**.
+- **Profiles** — Public profile pages (`/u/<username>`) with reading stats, currently-reading,
+  recently-finished, and published novels, plus an avatar.
+- **Sharing & discovery** — A novel is `private`, `public`, or `global` (an admin-curated shared
+  library). The **Discover** page browses the shared library; "add to library" lets many readers
+  share one underlying text.
+- **Admin dashboard** — Manage users (suspend / ban / promote / adjust quotas / delete),
+  watch platform-wide monthly spend and top spenders, and moderate novels.
+- **Quotas** — Anything that costs API money (translation, OCR, codex builds, narration) is
+  metered per user per calendar month, with admin-adjustable per-user caps. A verified email is
+  required to spend.
+
+### 🕸 Getting stories in
+- **Multi-source scraping** — A novel can be stitched from several sources (e.g. an English site
+  that ends at ch. 124 + a raw site that continues at 125). Each source carries a `chapter_offset`
+  mapping its local numbering onto one continuous **global** sequence. Scraping is incremental and
+  stops cleanly at premium/paywalled chapters. Built-in adapters cover several sites; new ones are
+  a small subclass.
+- **File import (EPUB / PDF)** — Upload (or drop into a watched folder) an EPUB or PDF. Digital
+  PDFs and EPUBs are parsed directly; **scanned PDFs** are OCR'd (local PaddleOCR sidecar, with
+  Gemini-vision escalation for low-confidence pages). Imports run as **durable, resumable jobs**
+  with an editable segmentation plan you review before committing, a heuristic quality score,
+  chunked uploads for big files, and **batch / multi-volume series** import.
+
+### 🌐 Translation
+- **On-demand + prefetch** — Opening a raw chapter translates it inline and prefetches the next
+  few in the background, so reading flows without waiting at each boundary.
+- **Per-novel glossary** — Recurring names/terms stay spelled the same across chapters and across
+  a source switch (e.g. `林轩 → Lin Xuan` once, everywhere after). User-pinned (`locked`) terms are
+  never overwritten.
+- **Personal overlays & contribute-back** — On a shared novel, a reader can override a chapter's
+  translation for their own account (an *overlay*) or self-translate it, then **offer it back** to
+  the owner as a contribution. The owner merges or rejects it; when the shared base later changes,
+  overlays forked from the old version are flagged as conflicts with a base-vs-mine resolver.
+
+### 🎧 Audiobook narration (TTS)
+- **Whole-book or per-chapter** — Narrate the chapter you're reading, or kick off a bounded,
+  cancellable **whole-book** job. Audio is generated by a GPU sidecar (OmniVoice), cached as Opus,
+  and streamed to a custom transport UI in the reader.
+- **Consistent cloned voices** — Several shipped narrators (voice-cloned from a fixed reference
+  clip each) keep one consistent voice across an entire book. Generation is a durable, resumable,
+  quota-metered background job.
+
+### 🧠 Spoiler-safe codex *(opt-in per novel)*
+Chunk → embed → forward-only entity/fact/relationship extraction → hybrid retrieval → agentic
+Q&A, all bounded to your current chapter. Browse entities, read synthesized profiles, follow
+relationships and timelines, see identity-reveal banners only once the reveal chapter is within
+your ceiling, and ask freeform questions with inline, popover-backed citations.
 
 ---
 
 ## 🏛 Architecture overview
 
 ```
-   webnovel site ──► Scraper (adapter per site) ──► chapters (global numbering, content / original_text)
-                                                          │
-                          ┌───────────────────────────────┼───────────────────────────────┐
-                          ▼                                ▼                                 ▼
-                       READER                       TRANSLATION                      CODEX (opt-in)
-              progress · bookmarks ·       on-demand on open + prefetch ·    chunk → embed → forward-only
-              scroll recovery · TOC        per-novel glossary (name           extraction (entities/facts/
-              across all sources           consistency, cross-source)         relations/events/identities)
-                                                                                       │
-                                                              ┌────────────────────────┴───────────────────────┐
-                                                              │                  RETRIEVAL LAYER                 │
-                                                              │  BM25 (bm25s) ⊕ dense (pgvector) → RRF → rerank  │
-                                                              │  + structured tools (facts / graph / timeline)  │
-                                                              │  ── every read bounded by WHERE chapter <= N ──  │
-                                                              └────────────────────────┬─────────────────────────┘
-                                                                                       │
-                                                                          AGENTIC ORCHESTRATOR
-                                                                  Pro plans → Flash retrieves & distills →
-                                                                  Pro reasons → Flash verifies (loop, capped)
-                                                                                       │
-                                              FastAPI  ──►  React UI (Library · Reader · Codex)
+   webnovel site ─► Scraper (adapter per site) ─┐
+   EPUB / PDF ────► Importer (parse · OCR · ────┤─► chapters (global numbering;
+                    segment · review · commit)   │   content / original_text / rich_html)
+                                                 │
+        ┌────────────────────────────────────────┼───────────────────────────────────────┐
+        ▼                  ▼                      ▼                  ▼                      ▼
+     READER          TRANSLATION             AUDIOBOOK            CODEX (opt-in)      MULTI-USER
+  progress ·      on-demand + prefetch ·   durable TTS jobs ·  chunk → embed →     accounts · sessions
+  bookmarks ·     per-novel glossary ·     OmniVoice GPU       forward-only        OAuth · quotas ·
+  scroll ·        per-user overlays +      sidecar → cached    extraction          private/public/global ·
+  themes · TOC    contribute-back          Opus → reader       (entities/facts/    overlays + contribute-back
+                                                               relations/events)         │
+                                                                          ┌──────────────┴──────────────┐
+                                                                          │       RETRIEVAL LAYER        │
+                                                                          │ BM25 (bm25s) ⊕ dense (pgvec) │
+                                                                          │   → RRF → rerank + tools     │
+                                                                          │  ── WHERE chapter <= N ──    │
+                                                                          └──────────────┬──────────────┘
+                                                                                  AGENTIC ORCHESTRATOR
+                                                                          Pro plans → Flash distills →
+                                                                          Pro reasons (loop, capped)
+                                                                                         │
+   FastAPI  ──►  React SPA (Library · Discover · Reader · Codex · Profile · Admin)   ◄── auth (cookie)
+
+   Optional GPU sidecars (separate images):   OCR :8077 (PaddleOCR)   ·   TTS :8078 (OmniVoice)
 ```
 
 ---
@@ -52,10 +120,19 @@ That boundary is enforced at the **database and retrieval layers** (`WHERE chapt
 
 - **Backend:** Python 3.12+, FastAPI + Uvicorn, `asyncpg`
 - **Database:** PostgreSQL with `pgvector` (dense vectors / HNSW) and `pg_trgm` (fuzzy name matching)
+- **Auth:** server-side sessions, `argon2-cffi` password hashing, hand-rolled Google/Discord OAuth
+  (httpx only), `aiosmtplib` for transactional email
 - **Retrieval:** `bm25s` (sparse/lexical) ⊕ pgvector (dense) → Reciprocal Rank Fusion → reranker
-- **LLM:** [OpenRouter](https://openrouter.ai) — a "Flash reads, Pro thinks" split for extraction/Q&A, plus a translation model. Embeddings and reranking are configurable model IDs.
-- **Scraping:** `curl-cffi` (TLS-fingerprint-resistant fetch) + `selectolax` / `lxml` parsing, `json-repair` for robust LLM/JSON handling
-- **Frontend:** React 18 (production UMD builds) with in-browser Babel JSX — **no build step**, served as static files by FastAPI
+- **LLM:** [OpenRouter](https://openrouter.ai) — a "Flash reads, Pro thinks" split for
+  extraction/Q&A, plus translation and segmentation models. Embeddings + reranking are configurable
+  model IDs.
+- **Vision / OCR:** PaddleOCR (PP-StructureV3) in a GPU sidecar + Gemini vision (OpenAI-compatible
+  endpoint) as the quality escalation
+- **TTS:** OmniVoice voice-cloning in a GPU sidecar; stored as Opus via `ffmpeg`
+- **Scraping:** `curl-cffi` (TLS-fingerprint-resistant fetch) + `selectolax` / `lxml`, `json-repair`
+- **File import:** `ebooklib` (EPUB), `pymupdf` (PDF), `nh3` (HTML sanitize), `pillow`, `ftfy`
+- **Frontend:** React 18 (production UMD builds) with in-browser Babel JSX — **no build step**,
+  served as static files by FastAPI
 - **Packaging:** `uv` (with `pyproject.toml` + `uv.lock`)
 
 ---
@@ -65,7 +142,9 @@ That boundary is enforced at the **database and retrieval layers** (`WHERE chapt
 ### 1. Prerequisites
 - **Python 3.12+** (and [`uv`](https://github.com/astral-sh/uv), recommended)
 - **PostgreSQL** with the `vector` and `pg_trgm` extensions available
-- An **OpenRouter API key** (for translation, extraction, embeddings, reranking, and Q&A)
+- An **OpenRouter API key** (translation, extraction, embeddings, reranking, Q&A, segmentation)
+- *(Optional)* a **Gemini API key** for scanned-PDF OCR escalation
+- *(Optional)* an **NVIDIA GPU** to run the OCR and/or TTS sidecars
 
 ### 2. Install dependencies
 
@@ -81,7 +160,8 @@ python -m venv .venv && source .venv/bin/activate && pip install -e .
 cp .env.example .env
 ```
 
-Then fill in `.env`. Key settings (see [novelwiki/config/settings.py](novelwiki/config/settings.py) for the full list and defaults):
+Then fill in `.env`. Key settings (see [novelwiki/config/settings.py](novelwiki/config/settings.py)
+for the full list and defaults):
 
 | Variable | Purpose |
 | --- | --- |
@@ -89,15 +169,38 @@ Then fill in `.env`. Key settings (see [novelwiki/config/settings.py](novelwiki/
 | `DB_SUPERUSER_URL` | Superuser connection used to auto-create the DB on first run |
 | `OPENROUTER_API_KEY` | Unified key for chat, translation, embeddings, and rerank calls |
 | `MODEL_PRO` / `MODEL_FLASH` | Planner/reasoner vs. cheap reader/distiller (may be the same model) |
-| `MODEL_TRANSLATE` | Model used to translate raw chapters |
+| `MODEL_TRANSLATE` / `SEGMENT_MODEL` | Raw-chapter translation / import segmentation models |
 | `EMBED_MODEL` / `EMBED_DIM` | Embedding model and its vector dimension |
 | `RERANK_MODEL` | Reranker model |
+| `SESSION_SECRET` | Signs/peppers session tokens — **set a long random value in prod** |
+| `ALLOWED_ORIGINS` / `PUBLIC_BASE_URL` / `COOKIE_SECURE` | CORS origins, link/redirect base URL, cookie scope |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_USERNAME` | First admin, bootstrapped on first run |
+| `SMTP_*` | Transactional email (leave `SMTP_HOST` blank to log links instead of sending — handy in dev) |
+| `GOOGLE_*` / `DISCORD_*` | OAuth client credentials (leave blank to hide the button) |
+| `GEMINI_API_KEY` / `OCR_*` | Scanned-PDF OCR (Gemini vision + PaddleOCR sidecar) |
+| `TTS_*` / `TTS_SIDECAR_URL` | Audiobook narration (OmniVoice sidecar) |
+| `DEFAULT_QUOTA_*` | Monthly per-user spend caps (translation / OCR / codex / TTS) |
 
-> **Schema is auto-created.** On server startup (and CLI use) the app connects with `DB_SUPERUSER_URL`, creates the `novelwiki` database if missing, then applies idempotent DDL. You can also run it explicitly:
+> **Schema is auto-created.** On server startup (and CLI use) the app connects with
+> `DB_SUPERUSER_URL`, creates the `novelwiki` database if missing, then applies idempotent DDL.
+> You can also run it explicitly:
 >
 > ```bash
 > python -m novelwiki.db.schema
 > ```
+
+### 4. Bootstrap the first admin
+
+On first startup the app runs an **idempotent multi-user migration** that creates the admin from
+`ADMIN_EMAIL` / `ADMIN_PASSWORD` and adopts any pre-existing (single-user) library as the admin's
+global shelf. To run it explicitly and supervised:
+
+```bash
+python -m novelwiki.db.migrate_multiuser
+```
+
+> ⚠️ The migration rewrites existing data. **Take a `pg_dump` first** and test against a restored
+> copy before running on a production DB with real content.
 
 ---
 
@@ -109,89 +212,166 @@ uvicorn novelwiki.api.app:app --reload --host 0.0.0.0 --port 8000
 python main.py            # serves on :8000
 ```
 
-Open **http://localhost:8000** — the React UI is served directly by FastAPI (no separate frontend build/server). The browser only ever talks to the chapter-bounded API, so nothing past your ceiling reaches it.
+Open **http://localhost:8000**, register an account (or log in as the admin), and start adding
+novels. The React SPA is served directly by FastAPI (no separate frontend build/server). The
+browser only ever talks to the chapter-bounded, auth-gated API, so nothing past a reader's
+ceiling reaches it.
 
-**UI surfaces:**
-1. **Library** — your shelves of novels with progress and quick actions.
-2. **Novel detail** — manage sources (add/edit, set `chapter_offset`), trigger scraping, manage the translation glossary, and build/rebuild the codex.
-3. **Reader** — the immersive reading view (themes, width, auto-scroll, bookmarks, scroll recovery).
-4. **Codex** *(if enabled)* — a chapter-ceiling slider plus Home stats, Browse/search entities, Entity pages (synthesized profile + facts + relationships + timeline + identity-reveal banners), and **Ask** (agentic Q&A with inline, popover-backed citations).
+**App surfaces:**
+1. **Library** — your shelves, reading progress, and quick actions.
+2. **Discover** — the shared (global/public) library; add a shared novel to read it.
+3. **Novel detail** — manage sources (add/edit, set `chapter_offset`), trigger scraping, manage
+   the translation glossary, review contributions/tag suggestions, set visibility, and build the codex.
+4. **Reader** — the immersive reading view (themes, width, auto-scroll, bookmarks, scroll recovery,
+   TOC with volume grouping, the audiobook transport, and per-chapter translation editing).
+5. **Codex** *(if enabled)* — a chapter-ceiling slider plus Home stats, Browse/search entities,
+   Entity pages (synthesized profile + facts + relationships + timeline + identity-reveal banners),
+   and **Ask** (agentic Q&A with inline citations).
+6. **Profile / Account** — public profile, reading stats, avatar, and account/quota settings.
+7. **Admin** *(admins only)* — users, platform spend, and moderation.
 
 ---
 
 ## 🛠 Command-line interface
 
-The CLI drives the full ingestion pipeline. Invoke it as a module from the repo root:
+The CLI drives ingestion from the terminal. Invoke it as a module from the repo root:
 
 ```bash
 python -m novelwiki.cli --help
 ```
 
 ```bash
-# 1. Create a novel + its first source (prints the new ids)
+# ── Scraping ──
+# Create a novel + its first source (prints the new ids)
 python -m novelwiki.cli add-novel "Example Novel" "https://fenrirealm.com/novel/example/chapter-1" --adapter fenrirealm
-
-# 2. Scrape (all sources of a novel, or one with --source); stops cleanly at premium
+# Scrape (all sources, or one with --source); stops cleanly at premium
 python -m novelwiki.cli scrape <novel_id> --max 50
 
-# 3. Translate raw chapters (on-demand glossary-consistent); --seed pulls names from the codex
-python -m novelwiki.cli translate <novel_id> --from 1 --to 50
+# ── File import (EPUB / digital PDF) ──
+python -m novelwiki.cli import path/to/book.epub                 # new novel (heuristic segmentation)
+python -m novelwiki.cli import path/to/vol2.epub --novel <id> --offset 100   # append to an existing novel
+python -m novelwiki.cli import-batch ~/Calibre --series          # bulk import a folder, grouping series
+python -m novelwiki.cli import-series vol1.epub vol2.epub         # several volumes → one multi-volume novel
+python -m novelwiki.cli import-worker                            # run the durable import worker standalone
 
-# ── Codex pipeline (only for codex-enabled novels) ──
+# ── Translation ──
+python -m novelwiki.cli translate <novel_id> --from 1 --to 50    # --seed pulls names from the codex first
+
+# ── Codex pipeline (codex-enabled novels) ──
 python -m novelwiki.cli chunk <novel_id>          # paragraph-aware chunking
 python -m novelwiki.cli embed <novel_id>          # batch vector embeddings
 python -m novelwiki.cli extract <novel_id>        # forward-only metadata extraction
 python -m novelwiki.cli rebuild-bm25 <novel_id>   # build/refresh the per-novel BM25 index
-
-# Merge two duplicate entities
-python -m novelwiki.cli merge <novel_id> --keep <id> --drop <id>
+python -m novelwiki.cli merge <novel_id> --keep <id> --drop <id>   # merge two duplicate entities
 
 # Drop ALL tables and re-apply schema (destructive)
 python -m novelwiki.cli reset-db
 ```
 
-> The UI's codex "Build" button runs `chunk → embed → extract → rebuild-bm25` for you in the background; the CLI exposes each step individually.
+> The UI's codex **Build** button runs `chunk → embed → extract → rebuild-bm25` for you in the
+> background; the CLI exposes each step individually. Scanned-PDF imports need the OCR cost-confirm
+> gate and are done from the web UI, not the CLI.
 
 ---
 
 ## 🔌 Scraper adapters
 
-Each source picks an adapter by key. Built-in adapters live in [novelwiki/scraper/adapters.py](novelwiki/scraper/adapters.py):
+Each source picks an adapter by key. Built-in adapters live in
+[novelwiki/scraper/adapters.py](novelwiki/scraper/adapters.py):
 
-`fenrirealm` · `readhive` · `boti-translations` · `69shuba`
+`fenrirealm` · `readhive` · `boti-translations` · `69shuba` · `wetriedtls`
 
-Add a new site by subclassing `BaseAdapter` (or `_PagedHtmlAdapter`) and registering it in the `ADAPTERS` dict — it then appears automatically in the Add-Source dropdown via `list_adapters()`.
+Add a new site by subclassing `BaseAdapter` (or `_PagedHtmlAdapter`) and registering it in the
+`ADAPTERS` dict — it then appears automatically in the Add-Source dropdown via `list_adapters()`.
+
+---
+
+## 📥 File import pipeline
+
+Uploaded EPUB/PDF files flow through a durable, resumable job (state in `import_jobs`, big artifacts
+on disk) so an import survives a deploy/restart and a multi-day OCR run survives the Gemini
+free-tier quota. The pipeline:
+
+1. **Upload** (single-shot or chunked for big files) or drop into the watched `IMPORT_INCOMING_DIR`.
+2. **Parse** to a normalized block-stream IR — EPUB XHTML, digital-PDF spans, or OCR blocks.
+   Scanned PDFs are OCR'd by the PaddleOCR sidecar with **Gemini-vision escalation** for
+   low-confidence pages (and a cost-confirm gate before any paid OCR).
+3. **Segment** into a draft plan (heuristics first — spine/headings — then an optional cheap LLM
+   refinement of kinds/titles/numbers), with a **quality score**.
+4. **Review** the plan in the UI (rename/renumber/include-exclude segments, group volumes).
+5. **Commit** included segments into `chapters` through the same path the scraper uses — so codex,
+   translation, and narration work on imported books with zero extra wiring. CJK-detected scans are
+   flagged as a raw source and flow into translation.
+
+---
+
+## 🎧 Audiobook narration (TTS sidecar)
+
+Narration runs on a **separate GPU sidecar** (OmniVoice, on `:8078`) so the web image stays
+GPU-free. A durable, DB-polled worker advances narration jobs one chapter at a time, caches the
+result as Opus, and the reader streams it. Voices are cloned from a fixed reference clip so a whole
+book gets one consistent narrator; see [sidecar-tts/voices/README.md](sidecar-tts/voices/README.md)
+to add your own (use public-domain / consented audio only).
+
+```bash
+docker compose up -d tts        # start the TTS sidecar on a GPU host
+```
 
 ---
 
 ## 🗄 Data model
 
-Everything is **novel-scoped** (single shared Postgres DB, `novel_id` on every table — no schema-per-novel). Schema is defined in [novelwiki/db/schema.py](novelwiki/db/schema.py):
+Everything is **novel-scoped and user-scoped** (single shared Postgres DB, no schema-per-novel).
+Schema is defined in [novelwiki/db/schema.py](novelwiki/db/schema.py):
 
-- **Reading:** `novels`, `sources`, `chapters` (PK `(novel_id, number)`; `content` = readable text, `original_text` = source language for re-translation without re-scrape), `reading_progress`, `bookmarks`
-- **Translation:** `translation_glossary` (per-novel name/term anchors; `locked` rows are user-pinned)
-- **Codex:** `chunks` (+`embedding`), `entities`, `entity_descriptions`, `entity_aliases`, `identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state` (running story-so-far), `wiki_cache` (synthesized profiles), `query_cache`
+- **Accounts:** `users`, `oauth_accounts`, `sessions`, `email_tokens`, `quota_usage`, `provider_budget`
+- **Library:** `novels` (with `owner_id` / `visibility` / `contribution_policy` / `series`),
+  `library_entries` (per-user shelf + tags), `sources`, `reading_progress` (per-user), `bookmarks`
+- **Reading:** `chapters` (PK `(novel_id, number)`; `content` = readable text, `original_text` =
+  source language, `raw_html` = sanitized rich HTML for imports, `content_version` anchors overlays;
+  `kind` / `part_label` for import structure)
+- **Translation:** `translation_glossary`, `chapter_overlays` (per-user override), `contributions`
+  (contribute-back), `tag_suggestions`
+- **Import:** `import_jobs`, `assets` (content-addressed images on disk)
+- **Audiobook:** `tts_jobs`, `chapter_audio` (shared base + per-user audio cache)
+- **Codex:** `chunks` (+`embedding`), `entities`, `entity_descriptions`, `entity_aliases`,
+  `identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state`, `wiki_cache`,
+  `query_cache`
 
 ---
 
 ## 🧪 Testing
 
-Spoiler boundaries, cache invalidation, and pipeline tasks are verified with `pytest`:
+Spoiler boundaries, import pipelines, and the multi-user layer are verified with `pytest`:
 
 ```bash
-uv run pytest                 # runs novelwiki/eval/*_tests.py (see pyproject.toml)
-# or target the suites directly:
-uv run pytest novelwiki/eval/spoiler_tests.py novelwiki/eval/pipeline_tests.py
+uv run pytest                    # runs novelwiki/eval/*_tests.py (see pyproject.toml)
+# or target a suite directly, e.g.:
+uv run pytest novelwiki/eval/spoiler_tests.py
+uv run pytest novelwiki/eval/import_tests.py novelwiki/eval/multiuser_regression_tests.py
 ```
+
+> The suites isolate themselves to disposable test databases — they never touch your real DB.
 
 ---
 
-## 🐳 Docker
+## 🐳 Docker & deployment
 
-A multi-stage [Dockerfile](Dockerfile) builds a `uv`-synced runtime image (non-root, serves on **:8001**). The source and frontend are **baked into the image at build time** — only `/app/data` (BM25 indexes + scrape cache) is a persistent volume, so deploying changes means rebuilding the image.
+A multi-stage [Dockerfile](Dockerfile) builds a `uv`-synced runtime image (non-root, serves on
+**:8001**). The source and frontend are **baked into the image at build time** — only `/app/data`
+(BM25 indexes, import scratch, extracted assets, generated audio) is a persistent volume, so
+deploying changes means rebuilding the image.
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build          # web app only
+docker compose up -d ocr              # + OCR sidecar (GPU; scanned PDFs)
+docker compose up -d tts              # + TTS sidecar (GPU; audiobooks)
 ```
 
-`docker-compose.yml` uses `network_mode: host` so the container can reach a PostgreSQL running on the host's `localhost`, and reads configuration from `.env`.
+`docker-compose.yml` uses `network_mode: host` so the web container reaches a PostgreSQL on the
+host's `localhost` plus the sidecars (`:8077` OCR, `:8078` TTS), and reads configuration from `.env`.
+The two GPU sidecars are **optional and independent** — the web app runs fine without them (digital
+imports and reading work; scanned-PDF OCR and audiobook jobs simply require their sidecar). On a
+single small GPU, run only the sidecar you're actively using. In production the app typically sits
+behind a Cloudflare tunnel (set `ALLOWED_ORIGINS` / `PUBLIC_BASE_URL` to your domain and keep
+`COOKIE_SECURE=true`).
