@@ -157,6 +157,9 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
   const [src, setSrc] = useState(null);                // audio URL once ready
   const [state, setState] = useState("idle");          // idle|checking|generating|ready|error|untranslated
   const [msg, setMsg] = useState(null);
+  const [playing, setPlaying] = useState(false);
+  const [cur, setCur] = useState(0);                   // current playback time (s)
+  const [dur, setDur] = useState(0);                   // total duration (s)
   const audioRef = useRef(null);
   const pollRef = useRef(null);
   const posKey = `nw-tts:${novelId}:${number}`;
@@ -245,56 +248,91 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
     }
   }
 
+  // ── Transport (custom UI driving a headless <audio>) ──
+  function togglePlay() {
+    const a = audioRef.current; if (!a) return;
+    if (a.paused) { const p = a.play(); if (p && p.catch) p.catch(() => {}); } else { a.pause(); }
+  }
+  function seek(e) {
+    const a = audioRef.current; const t = Number(e.target.value);
+    setCur(t); if (a) a.currentTime = t;
+  }
+  function cycleSpeed() {
+    const i = TTS_SPEEDS.indexOf(speed);
+    pickSpeed(TTS_SPEEDS[(i + 1) % TTS_SPEEDS.length]);
+  }
+  const fmt = (s) => {
+    if (!isFinite(s) || s < 0) s = 0;
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+    return `${m}:${String(sec).padStart(2, "0")}`;
+  };
+
   const h = React.createElement;
   // Hidden until the catalog resolves; if the sidecar is offline (no ready voices) stay hidden.
   if (voices == null) return null;
   if (voices.length === 0) return null;
 
-  const voiceSel = h("select", {
-    className: "ab-voice", value: voice || "", onChange: e => pickVoice(e.target.value),
-    title: "Narrator voice", onClick: e => e.stopPropagation(),
-  }, voices.map(v => h("option", { key: v.id, value: v.id },
-    v.name + (v.accent ? ` · ${v.accent}` : ""))));
+  const voiceSel = h("div", { className: "ab-select" },
+    h(Icon, { name: "headphones", size: 14, className: "ab-select-ic" }),
+    h("select", {
+      className: "ab-voice", value: voice || "", onChange: e => pickVoice(e.target.value),
+      title: "Narrator voice", onClick: e => e.stopPropagation(),
+    }, voices.map(v => h("option", { key: v.id, value: v.id },
+      v.name + (v.accent ? ` · ${v.accent}` : "")))),
+    h(Icon, { name: "chevronDown", size: 13, className: "ab-select-caret" }));
 
-  const speedSel = h("select", {
-    className: "ab-speed", value: speed, onChange: e => pickSpeed(Number(e.target.value)),
-    title: "Playback speed", onClick: e => e.stopPropagation(),
-  }, TTS_SPEEDS.map(s => h("option", { key: s, value: s }, s + "×")));
+  const pct = dur > 0 ? (cur / dur) * 100 : 0;
 
-  return h("div", { className: "audio-bar", onClick: e => e.stopPropagation() },
-    h(Icon, { name: "headphones", size: 17, className: "muted" }),
-    voiceSel,
-    state === "ready" && src
-      ? h(React.Fragment, null,
-          h("audio", {
-            ref: audioRef, src, controls: true, preload: "none", className: "ab-audio",
-            onPlay: () => { __ttsContinue = true; },
-            onPause: () => { __ttsContinue = false; },
-            onLoadedMetadata: () => {
-              const a = audioRef.current; if (!a) return;
-              a.playbackRate = speed;
-              const saved = parseFloat(localStorage.getItem(posKey) || "0");
-              if (saved > 1 && saved < (a.duration || 1e9) - 2) a.currentTime = saved;
-            },
-            onTimeUpdate: () => {
-              const a = audioRef.current; if (!a) return;
-              if (Math.floor(a.currentTime) % 5 === 0) localStorage.setItem(posKey, String(a.currentTime));
-            },
-            onEnded: () => {
-              localStorage.removeItem(posKey);
-              if (readTtsPrefs(user).autoplay && ch && ch.next != null) openReader(ch.next);
-            },
-          }),
-          speedSel,
-          h("button", { className: "icon-btn ab-regen", title: "Regenerate", onClick: () => generate(true) },
-            h(Icon, { name: "refresh", size: 14 })))
-      : state === "generating" || state === "checking"
-        ? h("span", { className: "ab-status muted" },
-            h(Icon, { name: "refresh", size: 14, className: "spin" }),
-            state === "generating" ? "Narrating…" : "Checking…")
-        : h("button", { className: "btn btn-ghost ab-gen", onClick: () => generate(false) },
-            h(Icon, { name: "play", size: 14 }), "Narrate chapter"),
-    msg && h("span", { className: "ab-msg" }, msg)
+  let body;
+  if (state === "ready" && src) {
+    body = h(React.Fragment, null,
+      h("audio", {
+        ref: audioRef, src, preload: "metadata", style: { display: "none" },
+        onPlay: () => { __ttsContinue = true; setPlaying(true); },
+        onPause: () => { __ttsContinue = false; setPlaying(false); },
+        onDurationChange: () => setDur(audioRef.current ? audioRef.current.duration || 0 : 0),
+        onLoadedMetadata: () => {
+          const a = audioRef.current; if (!a) return;
+          a.playbackRate = speed; setDur(a.duration || 0);
+          const saved = parseFloat(localStorage.getItem(posKey) || "0");
+          if (saved > 1 && saved < (a.duration || 1e9) - 2) { a.currentTime = saved; setCur(saved); }
+        },
+        onTimeUpdate: () => {
+          const a = audioRef.current; if (!a) return;
+          setCur(a.currentTime);
+          if (Math.floor(a.currentTime) % 5 === 0) localStorage.setItem(posKey, String(a.currentTime));
+        },
+        onEnded: () => {
+          localStorage.removeItem(posKey); setPlaying(false);
+          if (readTtsPrefs(user).autoplay && ch && ch.next != null) openReader(ch.next);
+        },
+      }),
+      h("button", { className: "ab-play", onClick: togglePlay, title: playing ? "Pause" : "Play" },
+        h(Icon, { name: playing ? "pause" : "play", size: 18 })),
+      h("input", {
+        type: "range", className: "ab-seek", min: 0, max: dur || 0, step: 0.1, value: Math.min(cur, dur || 0),
+        onChange: seek, style: { "--pct": pct + "%" }, "aria-label": "Seek",
+      }),
+      h("span", { className: "ab-time mono" }, `${fmt(cur)} / ${fmt(dur)}`),
+      h("button", { className: "ab-speed", onClick: cycleSpeed, title: "Playback speed" }, speed + "×"),
+      voiceSel,
+      h("button", { className: "icon-btn ab-regen", title: "Regenerate this narration", onClick: () => generate(true) },
+        h(Icon, { name: "refresh", size: 14 })));
+  } else if (state === "generating" || state === "checking") {
+    body = h(React.Fragment, null,
+      voiceSel,
+      h("span", { className: "ab-status muted" },
+        h(Icon, { name: "refresh", size: 14, className: "spin" }),
+        state === "generating" ? "Narrating…" : "Checking…"));
+  } else {
+    body = h(React.Fragment, null,
+      voiceSel,
+      h("button", { className: "btn btn-ghost ab-gen", onClick: () => generate(false) },
+        h(Icon, { name: "play", size: 14 }), "Narrate chapter"),
+      msg && h("span", { className: "ab-msg" }, msg));
+  }
+
+  return h("div", { className: "audio-bar", onClick: e => e.stopPropagation() }, body
   );
 }
 
