@@ -658,6 +658,121 @@ class WeTriedTLSAdapter(BaseAdapter):
                 return
 
 
+class Novel543Adapter(_PagedHtmlAdapter):
+    """Concrete adapter for novel543.com."""
+    name = "novel543"
+    label = "Novel543 (novel543.com)"
+    requires = ["start_url"]
+    default_language = "zh"
+
+    def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
+        node = parser.css_first(".chapter-content h1") or parser.css_first("h1")
+        if node:
+            return node.text(strip=True)
+        return "Untitled Chapter"
+
+    def _extract_content(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
+        node = parser.css_first(".chapter-content .content") or parser.css_first("div.content")
+        if not node:
+            return ""
+
+        for tag in ("script", "style", "iframe", "ins", ".adBlock", ".gadBlock", ".clickforceads", "#teadunit"):
+            for el in node.css(tag):
+                el.decompose()
+
+        raw_text = node.text(separator="\n", strip=True)
+        paragraphs = []
+        for line in raw_text.split("\n"):
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            # Filter out promotional/ad lines
+            if any(x in line_stripped for x in ("温馨提示", "溫馨提示", "站內信", "免廣告", "切換簡繁體", "VIP會員", "免广告")):
+                continue
+            paragraphs.append(line_stripped)
+            
+        return "\n\n".join(paragraphs)
+
+    def _extract_next_url(self, parser: HTMLParser, current_url: str, ctx: ScrapeContext) -> str:
+        for node in parser.css(".foot-nav a, a"):
+            text = node.text(strip=True)
+            href = node.attributes.get("href", "")
+            if not href or href == "#":
+                continue
+            if "下一章" in text:
+                return _absolutize(href, current_url)
+        return ""
+
+    async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
+        current_url = ctx.start_url
+        count = 0
+        pending_chapter = None
+
+        while current_url:
+            if ctx.max_chapters is not None and count >= ctx.max_chapters:
+                if pending_chapter:
+                    yield pending_chapter
+                return
+
+            html = await ctx.fetch_text(current_url)
+            if html is None:
+                if pending_chapter:
+                    yield pending_chapter
+                return
+
+            parser = HTMLParser(html)
+            title = self._extract_title(parser, ctx)
+            content = self._extract_content(parser, ctx)
+            number = parse_chapter_number(current_url, title)
+            next_url = self._extract_next_url(parser, current_url, ctx)
+
+            # Strip part info from title like (1/2) or (2/2)
+            title_clean = re.sub(r"\s*[(（]\d+/\d+[)）]\s*$", "", title)
+
+            if not content or len(content) < 50:
+                if ctx.stop_on_premium:
+                    if pending_chapter:
+                        yield pending_chapter
+                    logger.info(f"Empty/locked chapter at {current_url}; treating as premium boundary and stopping.")
+                    raise PremiumReached(number=number, title=title)
+                next_url = next_url or _predict_next_url(current_url, number)
+                if not next_url:
+                    if pending_chapter:
+                        yield pending_chapter
+                    return
+                current_url = next_url
+                continue
+
+            is_continuation = False
+            if pending_chapter is not None:
+                if pending_chapter.number == number and number is not None:
+                    is_continuation = True
+                elif re.search(r"_\d+_[2-9]\.html$", current_url):
+                    is_continuation = True
+
+            if is_continuation and pending_chapter is not None:
+                pending_chapter.content += "\n\n" + content
+            else:
+                if pending_chapter is not None:
+                    yield pending_chapter
+                    count += 1
+                    if ctx.max_chapters is not None and count >= ctx.max_chapters:
+                        return
+                pending_chapter = ChapterData(number=number, title=title_clean, content=content, url=current_url, raw_html=html)
+
+            if not next_url:
+                next_url = _predict_next_url(current_url, number)
+            if not next_url:
+                logger.info("No next chapter URL found and could not predict next. Crawl complete.")
+                if pending_chapter:
+                    yield pending_chapter
+                return
+            current_url = next_url
+
+        if pending_chapter:
+            yield pending_chapter
+
+
 # ── Adapter registry ──────────────────────────────────────────────────────
 ADAPTERS: dict[str, type[BaseAdapter]] = {
     "fenrirealm": FenriRealmAdapter,
@@ -665,6 +780,7 @@ ADAPTERS: dict[str, type[BaseAdapter]] = {
     "boti-translations": BotiTranslationAdapter,
     "69shuba": SixtyNineShubaAdapter,
     "wetriedtls": WeTriedTLSAdapter,
+    "novel543": Novel543Adapter,
 }
 
 
