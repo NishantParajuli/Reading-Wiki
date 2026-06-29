@@ -707,6 +707,7 @@ class Novel543Adapter(_PagedHtmlAdapter):
         current_url = ctx.start_url
         count = 0
         pending_chapter = None
+        last_number = None
 
         while current_url:
             if ctx.max_chapters is not None and count >= ctx.max_chapters:
@@ -723,7 +724,7 @@ class Novel543Adapter(_PagedHtmlAdapter):
             parser = HTMLParser(html)
             title = self._extract_title(parser, ctx)
             content = self._extract_content(parser, ctx)
-            number = parse_chapter_number(current_url, title)
+            parsed_num = parse_chapter_number(current_url, title)
             next_url = self._extract_next_url(parser, current_url, ctx)
 
             # Strip part info from title like (1/2) or (2/2)
@@ -734,14 +735,31 @@ class Novel543Adapter(_PagedHtmlAdapter):
                     if pending_chapter:
                         yield pending_chapter
                     logger.info(f"Empty/locked chapter at {current_url}; treating as premium boundary and stopping.")
-                    raise PremiumReached(number=number, title=title)
-                next_url = next_url or _predict_next_url(current_url, number)
+                    raise PremiumReached(number=parsed_num, title=title)
+                next_url = next_url or _predict_next_url(current_url, parsed_num)
                 if not next_url:
                     if pending_chapter:
                         yield pending_chapter
                     return
                 current_url = next_url
                 continue
+
+            # Determine the chapter number
+            if last_number is None:
+                number = parsed_num if parsed_num is not None else 1.0
+            else:
+                if parsed_num is not None and parsed_num > last_number:
+                    number = parsed_num
+                else:
+                    has_digits = any(c.isdigit() for c in title)
+                    is_extra = (not has_digits) or any(x in title for x in (
+                        "番外", "外传", "外傳", "特別", "插画", "插畫", "立绘", "立繪", 
+                        "感言", "通知", "請假", "请假", "懸賞", "悬赏"
+                    ))
+                    if is_extra:
+                        number = round(last_number + 0.01, 2)
+                    else:
+                        number = float(int(last_number) + 1)
 
             is_continuation = False
             if pending_chapter is not None:
@@ -759,6 +777,7 @@ class Novel543Adapter(_PagedHtmlAdapter):
                     if ctx.max_chapters is not None and count >= ctx.max_chapters:
                         return
                 pending_chapter = ChapterData(number=number, title=title_clean, content=content, url=current_url, raw_html=html)
+                last_number = number
 
             if not next_url:
                 next_url = _predict_next_url(current_url, number)
