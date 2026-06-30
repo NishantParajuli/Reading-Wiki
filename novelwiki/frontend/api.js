@@ -167,6 +167,9 @@
     generateBookAudio(id, voiceId, start, end) {
       return postJSON(`${N(id)}/audiobook`, { voice_id: voiceId, start: start ?? null, end: end ?? null });
     },
+    bookAudioStatus(id, voiceId) {
+      return getJSON(`${N(id)}/audiobook/status?voice_id=${encodeURIComponent(voiceId)}`);
+    },
     ttsJob(jobId) { return getJSON(`${API_BASE}/tts/jobs/${jobId}`); },
     cancelTtsJob(jobId) { return postJSON(`${API_BASE}/tts/jobs/${jobId}/cancel`, {}); },
     // Chapters that already have shared audio in a voice (drives TOC speaker icons).

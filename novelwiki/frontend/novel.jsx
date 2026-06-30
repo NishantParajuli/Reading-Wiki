@@ -602,6 +602,23 @@ function NarrateBookControl({ novelId, novel, user, onChange }) {
     }, 1800);
   }
 
+  useEffect(() => {
+    if (!voice) return;
+    let cancel = false;
+    window.API.bookAudioStatus(novelId, voice).then(r => {
+      if (cancel) return;
+      if (r.active && r.job) {
+        setMsg(null);
+        setJob(r.job);
+        setOpen(true);
+        poll(r.job.id);
+      } else {
+        setJob(j => j && ["queued", "generating"].includes(j.status) ? null : j);
+      }
+    }).catch(() => {});
+    return () => { cancel = true; };
+  }, [novelId, voice]);
+
   async function start() {
     if (!voice) return;
     setMsg(null); setJob(null);
@@ -613,7 +630,9 @@ function NarrateBookControl({ novelId, novel, user, onChange }) {
         endCh.trim() ? parseFloat(endCh) : null
       );
       if (r.status === "ready") { setMsg(r.message || "Every chapter is already narrated in this voice."); return; }
-      setMsg(r.capped
+      setMsg(r.existing
+        ? "Already narrating this book in that voice."
+        : r.capped
         ? `Queued ${r.total} chapters (max per batch — run again for more).`
         : `Queued ${r.total} chapter${r.total === 1 ? "" : "s"}.`);
       setJob({ id: r.job_id, status: "queued", progress: { total: r.total, done: 0 } });

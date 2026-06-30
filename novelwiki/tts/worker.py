@@ -179,6 +179,25 @@ async def find_active_chapter_job(novel_id: int, number, voice_id: str, version:
     return _row_to_job(row) if row else None
 
 
+async def find_active_book_job(novel_id: int, voice_id: str) -> dict | None:
+    """Return the active whole-book batch for a novel/voice, if one is already running."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT * FROM tts_jobs
+            WHERE status = ANY($1::text[])
+              AND novel_id = $2
+              AND voice_id = $3
+              AND scope = 'book'
+            ORDER BY created_at ASC
+            LIMIT 1;
+            """,
+            list(ACTIVE_STATUSES), novel_id, voice_id,
+        )
+    return _row_to_job(row) if row else None
+
+
 async def update_job(job_id: int, **fields) -> None:
     if not fields:
         return

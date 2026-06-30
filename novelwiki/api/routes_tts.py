@@ -124,6 +124,14 @@ async def api_generate_book_audio(novel_id: int, payload: BookAudioRequest,
     if not voice:
         raise HTTPException(status_code=400, detail="No voice selected.")
 
+    active = await tts_worker.find_active_book_job(novel_id, voice)
+    if active:
+        progress = active.get("progress") or {}
+        chapters = (active.get("options") or {}).get("chapters") or []
+        return {"status": "queued", "job_id": int(active["id"]),
+                "total": int(progress.get("total") or len(chapters)),
+                "already_cached": 0, "capped": False, "voice_id": voice, "existing": True}
+
     cap = settings.TTS_MAX_BATCH_CHAPTERS
     want = cap if not payload.count or payload.count <= 0 else min(int(payload.count), cap)
     start = payload.start if payload.start is not None else None
@@ -158,11 +166,28 @@ async def api_generate_book_audio(novel_id: int, payload: BookAudioRequest,
                 "message": "Every selected chapter is already narrated in this voice."}
 
     await quota.check_available(user, "tts_chapters", 1)   # gate unverified / zero-remaining
+    options = {"chapters": selected, "dedupe_key": f"book:{novel_id}:{voice}"}
     job_id = await tts_worker.create_job(
-        novel_id, user["id"], "book", voice, options={"chapters": selected},
+        novel_id, user["id"], "book", voice, options=options,
     )
     return {"status": "queued", "job_id": job_id, "total": len(selected),
             "already_cached": already_cached, "capped": capped, "voice_id": voice}
+
+
+@router.get("/novels/{novel_id}/audiobook/status")
+async def api_book_audio_status(novel_id: int, voice_id: str | None = None,
+                                user: dict = Depends(current_user)):
+    """Return the active whole-book narration job for this novel/voice, if any.
+
+    This lets the UI reattach after a reload or tab close/open; the worker itself keeps
+    running from the DB queue either way.
+    """
+    await require_readable(novel_id, user)
+    voice = _voice_or_default(voice_id)
+    if not voice:
+        return {"active": False, "voice_id": voice}
+    job = await tts_worker.find_active_book_job(novel_id, voice)
+    return {"active": bool(job), "voice_id": voice, "job": _job_view(job) if job else None}
 
 
 @router.get("/novels/{novel_id}/audio/chapters")
