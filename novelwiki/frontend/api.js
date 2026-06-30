@@ -164,8 +164,8 @@
       return getJSON(`${N(id)}/chapter/${number}/audio/status?voice_id=${encodeURIComponent(voiceId)}`);
     },
     // Bounded, cancellable whole-book batch (skips already-cached chapters; capped server-side).
-    generateBookAudio(id, voiceId, start, count) {
-      return postJSON(`${N(id)}/audiobook`, { voice_id: voiceId, start: start ?? null, count: count ?? null });
+    generateBookAudio(id, voiceId, start, end) {
+      return postJSON(`${N(id)}/audiobook`, { voice_id: voiceId, start: start ?? null, end: end ?? null });
     },
     ttsJob(jobId) { return getJSON(`${API_BASE}/tts/jobs/${jobId}`); },
     cancelTtsJob(jobId) { return postJSON(`${API_BASE}/tts/jobs/${jobId}/cancel`, {}); },

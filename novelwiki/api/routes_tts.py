@@ -36,6 +36,7 @@ class ChapterAudioRequest(BaseModel):
 class BookAudioRequest(BaseModel):
     voice_id: str | None = None
     start: float | None = None      # first chapter to narrate (default: from the beginning)
+    end: float | None = None        # last chapter to narrate (default: to the end of book)
     count: int | None = None        # how many missing chapters (clamped to TTS_MAX_BATCH_CHAPTERS)
 
 
@@ -114,6 +115,7 @@ async def api_generate_book_audio(novel_id: int, payload: BookAudioRequest,
     cap = settings.TTS_MAX_BATCH_CHAPTERS
     want = cap if not payload.count or payload.count <= 0 else min(int(payload.count), cap)
     start = payload.start if payload.start is not None else None
+    end = payload.end if payload.end is not None else None
 
     pool = await get_db_pool()
     async with pool.acquire() as conn:
@@ -127,9 +129,10 @@ async def api_generate_book_audio(novel_id: int, payload: BookAudioRequest,
             WHERE c.novel_id = $1
               AND (c.kind IS NULL OR c.kind = 'chapter')
               AND ($2::numeric IS NULL OR c.number >= $2)
+              AND ($4::numeric IS NULL OR c.number <= $4)
             ORDER BY c.number ASC;
             """,
-            novel_id, start, voice,
+            novel_id, start, voice, end,
         )
     if not rows:
         raise HTTPException(status_code=404, detail="This novel has no chapters to narrate.")

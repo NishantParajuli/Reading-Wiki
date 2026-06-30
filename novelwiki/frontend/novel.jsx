@@ -563,15 +563,21 @@ function TagSuggestionsInbox({ novelId, reloadNovel }) {
 /* Whole-book narration (available to any reader). Picks a narrator + how many chapters, queues
    a bounded, cancellable batch through the durable TTS worker, and shows live progress. A long
    book is narrated in successive capped batches; cached chapters are skipped automatically. */
-function NarrateBookControl({ novelId, user, onChange }) {
+function NarrateBookControl({ novelId, novel, user, onChange }) {
   const [open, setOpen] = useState(false);
   const [voices, setVoices] = useState(null);   // null=loading | [] offline
   const [voice, setVoice] = useState(null);
-  const [count, setCount] = useState("");        // blank = as many as allowed
+  const minCh = novel?.min_chapter != null ? String(novel.min_chapter) : "";
+  const [startCh, setStartCh] = useState(minCh);
+  const [endCh, setEndCh] = useState("");
   const [job, setJob] = useState(null);
   const [msg, setMsg] = useState(null);
   const pollRef = useRef(null);
   const h = React.createElement;
+
+  useEffect(() => {
+    setStartCh(minCh);
+  }, [minCh]);
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => () => stopPoll(), []);
@@ -600,7 +606,12 @@ function NarrateBookControl({ novelId, user, onChange }) {
     if (!voice) return;
     setMsg(null); setJob(null);
     try {
-      const r = await window.API.generateBookAudio(novelId, voice, null, count.trim() ? parseInt(count) : null);
+      const r = await window.API.generateBookAudio(
+        novelId,
+        voice,
+        startCh.trim() ? parseFloat(startCh) : null,
+        endCh.trim() ? parseFloat(endCh) : null
+      );
       if (r.status === "ready") { setMsg(r.message || "Every chapter is already narrated in this voice."); return; }
       setMsg(r.capped
         ? `Queued ${r.total} chapters (max per batch — run again for more).`
@@ -633,9 +644,12 @@ function NarrateBookControl({ novelId, user, onChange }) {
           h("span", null, "Narrator"),
           h("select", { value: voice || "", onChange: e => setVoice(e.target.value) },
             voices.map(v => h("option", { key: v.id, value: v.id }, v.name + (v.accent ? ` · ${v.accent}` : ""))))),
-        h("label", { className: "field", style: { flex: "0 0 92px" } },
-          h("span", null, "Chapters"),
-          h("input", { value: count, onChange: e => setCount(e.target.value), placeholder: "max", inputMode: "numeric" }))),
+        h("label", { className: "field", style: { flex: "0 0 80px" } },
+          h("span", null, "From Ch."),
+          h("input", { value: startCh, onChange: e => setStartCh(e.target.value), placeholder: minCh || "1", inputMode: "numeric" })),
+        h("label", { className: "field", style: { flex: "0 0 80px" } },
+          h("span", null, "To Ch."),
+          h("input", { value: endCh, onChange: e => setEndCh(e.target.value), placeholder: "end", inputMode: "numeric" }))),
       h("div", { className: "row", style: { gap: 8, marginTop: 10 } },
         running
           ? h("button", { className: "btn btn-ghost is-danger", onClick: cancel }, h(Icon, { name: "x", size: 14 }), "Cancel")
@@ -773,7 +787,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
             novel.max_chapter != null && React.createElement("span", { className: "chip mono" }, `ch. ${novel.min_chapter}–${novel.max_chapter}`),
             novel.codex_enabled && React.createElement("button", { className: "btn btn-ghost", onClick: () => nav("browse") },
               React.createElement(Icon, { name: "compass", size: 16 }), "Open codex"),
-            hasChapters && React.createElement(NarrateBookControl, { novelId, user, onChange: loadAudioSet }),
+            hasChapters && React.createElement(NarrateBookControl, { novelId, novel, user, onChange: loadAudioSet }),
             canEdit && React.createElement(VisibilityControl, {
               novel, reloadNovel, isAdmin: !!(user && user.role === "admin"),
             }),
