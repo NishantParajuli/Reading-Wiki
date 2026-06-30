@@ -21,6 +21,7 @@ skipped chapter costs nothing, and exhausting quota mid-batch stops the job grac
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -35,6 +36,7 @@ from novelwiki.tts.chapter_text import resolve_chapter_text
 logger = logging.getLogger(__name__)
 
 TRIGGER_STATUSES = ("queued",)
+ACTIVE_STATUSES = ("queued", "generating")
 _JSON_FIELDS = {"progress", "options"}
 
 _worker_task: asyncio.Task | None = None
@@ -71,25 +73,109 @@ def _numstr(number) -> str:
         return str(number)
 
 
+def chapter_target_key(novel_id: int, number, voice_id: str, version: int, user_id: int | None) -> str:
+    owner = f"u{user_id}" if user_id is not None else "base"
+    return f"{int(novel_id)}:{_numstr(number)}:{voice_id}:v{int(version)}:{owner}"
+
+
+def chapter_dedupe_key(novel_id: int, number, voice_id: str, version: int,
+                       user_id: int | None, force: bool = False) -> str:
+    suffix = "force" if force else "normal"
+    return f"chapter:{chapter_target_key(novel_id, number, voice_id, version, user_id)}:{suffix}"
+
+
+def chapter_job_options(number, content_version: int, target_user_id: int | None,
+                        force: bool = False, **extra) -> dict:
+    """Canonical options for a one-chapter job.
+
+    Target fields let routes rediscover an active job after reload. Callers add a
+    dedupe key when they want rapid clicks/concurrent users to share one job.
+    """
+    opts = {
+        "chapters": [float(number)],
+        "force": bool(force),
+        "target_kind": "chapter_audio",
+        "target_chapter": _numstr(number),
+        "target_content_version": int(content_version),
+        "target_user_id": target_user_id,
+    }
+    opts.update(extra)
+    return opts
+
+
 # ── Job CRUD ─────────────────────────────────────────────────────────────────
 
 async def create_job(novel_id: int, user_id: int | None, scope: str, voice_id: str,
                      options: dict | None = None) -> int:
+    opts = dict(options or {})
+    dedupe_key = str(opts.get("dedupe_key") or "").strip()
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        return int(await conn.fetchval(
-            """
-            INSERT INTO tts_jobs (novel_id, user_id, scope, voice_id, options, status, stage)
-            VALUES ($1, $2, $3, $4, $5, 'queued', 'queued') RETURNING id;
-            """,
-            novel_id, user_id, scope, voice_id, json.dumps(options or {}),
-        ))
+        async with conn.transaction():
+            if dedupe_key:
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2));",
+                    "tts_job_dedupe", dedupe_key,
+                )
+                existing = await conn.fetchval(
+                    """
+                    SELECT id FROM tts_jobs
+                    WHERE status = ANY($1::text[])
+                      AND options->>'dedupe_key' = $2
+                    ORDER BY created_at ASC
+                    LIMIT 1;
+                    """,
+                    list(ACTIVE_STATUSES), dedupe_key,
+                )
+                if existing is not None:
+                    return int(existing)
+            return int(await conn.fetchval(
+                """
+                INSERT INTO tts_jobs (novel_id, user_id, scope, voice_id, options, status, stage)
+                VALUES ($1, $2, $3, $4, $5, 'queued', 'queued') RETURNING id;
+                """,
+                novel_id, user_id, scope, voice_id, json.dumps(opts),
+            ))
 
 
 async def get_job(job_id: int) -> dict | None:
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM tts_jobs WHERE id = $1;", job_id)
+    return _row_to_job(row) if row else None
+
+
+async def find_active_chapter_job(novel_id: int, number, voice_id: str, version: int,
+                                  user_id: int | None, include_force: bool = True) -> dict | None:
+    """Return an in-flight one-chapter job for this exact audio cache target, if any."""
+    chapter = _numstr(number)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        args = [list(ACTIVE_STATUSES), novel_id, voice_id, chapter, str(int(version))]
+        user_cond = "options->>'target_user_id' IS NULL"
+        if user_id is not None:
+            args.append(str(int(user_id)))
+            user_cond = f"options->>'target_user_id' = ${len(args)}"
+        force_cond = ""
+        if not include_force:
+            force_cond = "AND COALESCE((options->>'force')::boolean, false) = false"
+        row = await conn.fetchrow(
+            f"""
+            SELECT * FROM tts_jobs
+            WHERE status = ANY($1::text[])
+              AND novel_id = $2
+              AND voice_id = $3
+              AND scope = 'chapter'
+              AND options->>'target_kind' = 'chapter_audio'
+              AND options->>'target_chapter' = $4
+              AND options->>'target_content_version' = $5
+              AND {user_cond}
+              {force_cond}
+            ORDER BY created_at ASC
+            LIMIT 1;
+            """,
+            *args,
+        )
     return _row_to_job(row) if row else None
 
 
@@ -222,6 +308,21 @@ async def _upsert_audio(novel_id, number, user_id, voice_id, language, version, 
 
 # ── Generation ───────────────────────────────────────────────────────────────
 
+@asynccontextmanager
+async def _target_lock(key: str):
+    """Cross-process lock for one chapter-audio target."""
+    pool = await get_db_pool()
+    conn = await pool.acquire()
+    try:
+        await conn.execute("SELECT pg_advisory_lock(hashtext($1), hashtext($2));", "tts_audio", key)
+        yield
+    finally:
+        try:
+            await conn.execute("SELECT pg_advisory_unlock(hashtext($1), hashtext($2));", "tts_audio", key)
+        finally:
+            await pool.release(conn)
+
+
 async def _generate_chapter(job: dict, user: dict, number) -> str:
     """Generate (or skip) one chapter. Returns one of:
         'cached'        already had audio (free)
@@ -247,34 +348,35 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
     version = info["content_version"]
     uid = user["id"] if info["is_overlay"] else None
 
-    if not force and await find_audio(novel_id, number, voice_id, version, uid):
-        return "cached"
+    async with _target_lock(chapter_target_key(novel_id, number, voice_id, version, uid)):
+        if not force and await find_audio(novel_id, number, voice_id, version, uid):
+            return "cached"
 
-    # Charge quota right before the (expensive) generation, mirroring how the importer reserves
-    # close to the work. A cache hit above never reaches here, so reuse stays free.
-    if not await quota.try_reserve(user, "tts_chapters", 1):
-        return "quota"
+        # Charge quota right before the (expensive) generation, mirroring how the importer reserves
+        # close to the work. A cache hit above never reaches here, so reuse stays free.
+        if not await quota.try_reserve(user, "tts_chapters", 1):
+            return "quota"
 
-    paras = textprep.to_paragraphs(
-        info["text"], title=info["title"], number=number, intro=settings.TTS_TITLE_INTRO,
-    )
-    language = lang_override or info["language"]
-    opus, duration = await tts_client.narrate(
-        paras, voice_id, language=language,
-        speed=settings.TTS_SPEED, num_step=settings.TTS_NUM_STEP,
-        silence_ms=settings.TTS_PARA_SILENCE_MS, opus_bitrate=settings.TTS_OPUS_BITRATE,
-    )
-    rel = audio_rel(novel_id, number, voice_id, version, uid)
-    dest = audio_abs(rel)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic publish: write a temp file then os.replace, so a force-regenerate can't corrupt
-    # the audio for someone currently streaming the old version (their open fd keeps the old
-    # inode), and a crash mid-write never leaves a half-written file behind the DB row.
-    tmp = dest.with_suffix(dest.suffix + ".tmp")
-    tmp.write_bytes(opus)
-    os.replace(tmp, dest)
-    await _upsert_audio(novel_id, number, uid, voice_id, language, version, rel, duration, len(opus))
-    return "generated"
+        paras = textprep.to_paragraphs(
+            info["text"], title=info["title"], number=number, intro=settings.TTS_TITLE_INTRO,
+        )
+        language = lang_override or info["language"]
+        opus, duration = await tts_client.narrate(
+            paras, voice_id, language=language,
+            speed=settings.TTS_SPEED, num_step=settings.TTS_NUM_STEP,
+            silence_ms=settings.TTS_PARA_SILENCE_MS, opus_bitrate=settings.TTS_OPUS_BITRATE,
+        )
+        rel = audio_rel(novel_id, number, voice_id, version, uid)
+        dest = audio_abs(rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic publish: write a temp file then os.replace, so a force-regenerate can't corrupt
+        # the audio for someone currently streaming the old version (their open fd keeps the old
+        # inode), and a crash mid-write never leaves a half-written file behind the DB row.
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        tmp.write_bytes(opus)
+        os.replace(tmp, dest)
+        await _upsert_audio(novel_id, number, uid, voice_id, language, version, rel, duration, len(opus))
+        return "generated"
 
 
 async def _run(job: dict, user: dict) -> None:
@@ -285,8 +387,14 @@ async def _run(job: dict, user: dict) -> None:
         await update_job(job_id, status="done", stage="nothing to narrate", progress={"done": 0, "total": 0})
         return
 
+    if await _is_canceled(job_id):
+        return
+
     if not await tts_client.sidecar_available():
         await fail_job(job_id, "TTS sidecar is unavailable. Start it with: docker compose up -d tts")
+        return
+
+    if await _is_canceled(job_id):
         return
 
     await update_job(job_id, status="generating", stage="narrating", error=None,
@@ -340,7 +448,18 @@ async def _claim_next() -> dict | None:
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM tts_jobs WHERE status = ANY($1::text[]) ORDER BY updated_at ASC LIMIT 1;",
+            """
+            UPDATE tts_jobs j
+            SET status = 'generating', stage = 'claimed', updated_at = now()
+            WHERE j.id = (
+                SELECT id FROM tts_jobs
+                WHERE status = ANY($1::text[])
+                ORDER BY updated_at ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            RETURNING j.*;
+            """,
             list(TRIGGER_STATUSES),
         )
     return _row_to_job(row) if row else None

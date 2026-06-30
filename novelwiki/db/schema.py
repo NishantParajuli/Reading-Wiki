@@ -586,6 +586,8 @@ DDL_QUERIES = [
     "CREATE INDEX IF NOT EXISTS tts_jobs_status_idx ON tts_jobs (status);",
     "CREATE INDEX IF NOT EXISTS tts_jobs_user_idx ON tts_jobs (user_id);",
     "CREATE INDEX IF NOT EXISTS tts_jobs_novel_idx ON tts_jobs (novel_id);",
+    "CREATE INDEX IF NOT EXISTS tts_jobs_active_dedupe_idx ON tts_jobs "
+    "((options->>'dedupe_key')) WHERE options ? 'dedupe_key' AND status IN ('queued','generating');",
 
     # ── 22. Chapter audio (narration cache / manifest) ─────────────────────
     # One row per generated narration. Shared base audio has user_id IS NULL and is reused by

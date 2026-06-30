@@ -85,18 +85,30 @@ async def api_generate_chapter_audio(novel_id: int, number: float, payload: Chap
     if info["reason"] != "ok":
         raise HTTPException(status_code=409, detail="This chapter has no readable text to narrate.")
 
+    uid = user["id"] if info["is_overlay"] else None
     if not payload.force:
-        uid = user["id"] if info["is_overlay"] else None
         cached = await tts_worker.find_audio(novel_id, number, voice, info["content_version"], uid)
         if cached:
             return {"status": "ready", "cached": True,
                     "duration": cached.get("duration_seconds"), "voice_id": voice}
 
+    active = await tts_worker.find_active_chapter_job(
+        novel_id, number, voice, info["content_version"], uid, include_force=True,
+    )
+    if active:
+        return {"status": "queued", "cached": False, "job_id": int(active["id"]), "voice_id": voice}
+
     # Preflight only (zero-remaining / unverified → 429). The actual unit is charged in the worker.
     await quota.check_available(user, "tts_chapters", 1)
+    options = tts_worker.chapter_job_options(
+        number, info["content_version"], uid, force=bool(payload.force),
+    )
+    options["dedupe_key"] = tts_worker.chapter_dedupe_key(
+        novel_id, number, voice, info["content_version"], uid, force=bool(payload.force),
+    )
     job_id = await tts_worker.create_job(
         novel_id, user["id"], "chapter", voice,
-        options={"chapters": [float(number)], "force": bool(payload.force)},
+        options=options,
     )
     return {"status": "queued", "cached": False, "job_id": job_id, "voice_id": voice}
 
@@ -179,7 +191,17 @@ async def api_tts_job(job_id: int, user: dict = Depends(current_user)):
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     if job.get("user_id") not in (None, user["id"]) and not is_admin(user):
-        raise HTTPException(status_code=404, detail="Job not found.")
+        opts = job.get("options") or {}
+        shared_progress = (
+            (opts.get("target_kind") == "chapter_audio" and opts.get("target_user_id") is None)
+            or job.get("scope") == "book"
+        )
+        if not shared_progress:
+            raise HTTPException(status_code=404, detail="Job not found.")
+        try:
+            await require_readable(int(job["novel_id"]), user)
+        except HTTPException:
+            raise HTTPException(status_code=404, detail="Job not found.")
     return _job_view(job)
 
 
@@ -201,9 +223,24 @@ async def api_chapter_audio_status(novel_id: int, number: float, voice_id: str |
     player's generate-vs-play state and the TOC speaker icons)."""
     await require_readable(novel_id, user)
     voice = _voice_or_default(voice_id)
-    row = await tts_worker.lookup_for_reader(novel_id, number, voice, user) if voice else None
-    return {"cached": bool(row), "voice_id": voice,
-            "duration": row.get("duration_seconds") if row else None}
+    if not voice:
+        return {"cached": False, "voice_id": voice}
+
+    info = await resolve_chapter_text(novel_id, number, user)
+    if info["reason"] != "ok":
+        return {"cached": False, "voice_id": voice, "reason": info["reason"]}
+
+    uid = user["id"] if info["is_overlay"] else None
+    row = await tts_worker.find_audio(novel_id, number, voice, info["content_version"], uid)
+    if row:
+        return {"cached": True, "voice_id": voice, "duration": row.get("duration_seconds")}
+
+    active = await tts_worker.find_active_chapter_job(
+        novel_id, number, voice, info["content_version"], uid, include_force=True,
+    )
+    return {"cached": False, "voice_id": voice,
+            "job_id": int(active["id"]) if active else None,
+            "job_status": active["status"] if active else None}
 
 
 @router.get("/novels/{novel_id}/chapter/{number}/audio.opus")

@@ -190,6 +190,11 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
       if (r.cached) {
         setSrc(window.API.chapterAudioUrl(novelId, number, voice));
         setState("ready");
+      } else if (r.job_id) {
+        watchJob(r.job_id, false);
+      } else if (r.reason === "untranslated") {
+        setState("untranslated");
+        setMsg("Translate this chapter before narrating it.");
       } else {
         setState("idle");
       }
@@ -216,6 +221,44 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
   function pickVoice(v) { setVoice(v); persist({ voice: v }); }
   function pickSpeed(s) { setSpeed(s); if (audioRef.current) audioRef.current.playbackRate = s; persist({ speed: s }); }
 
+  async function loadReadyAudio(force) {
+    const r = await window.API.chapterAudioStatus(novelId, number, voice);
+    if (r.cached) {
+      setSrc(window.API.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
+      setState("ready");
+      return true;
+    }
+    if (r.reason === "untranslated") {
+      setState("untranslated");
+      setMsg("Translate this chapter before narrating it.");
+      return false;
+    }
+    setState("idle");
+    return false;
+  }
+
+  function watchJob(jobId, force) {
+    stopPoll();
+    setState("generating");
+    pollRef.current = setInterval(async () => {
+      try {
+        const j = await window.API.ttsJob(jobId);
+        if (j.status === "done") {
+          stopPoll();
+          const ok = await loadReadyAudio(force);
+          if (!ok) {
+            setState("error");
+            setMsg("Narration finished, but no playable audio was produced.");
+          }
+        } else if (j.status === "failed") {
+          stopPoll(); setState("error"); setMsg(j.error || "Narration failed.");
+        } else if (j.status === "canceled") {
+          stopPoll(); setState("idle");
+        }
+      } catch (e) { stopPoll(); setState("error"); setMsg(e.message || "Narration failed."); }
+    }, 1500);
+  }
+
   async function generate(force) {
     if (!voice) return;
     setState("generating"); setMsg(null); stopPoll();
@@ -226,21 +269,7 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
         setState("ready");
         return;
       }
-      const jobId = r.job_id;
-      pollRef.current = setInterval(async () => {
-        try {
-          const j = await window.API.ttsJob(jobId);
-          if (j.status === "done") {
-            stopPoll();
-            setSrc(window.API.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
-            setState("ready");
-          } else if (j.status === "failed") {
-            stopPoll(); setState("error"); setMsg(j.error || "Narration failed.");
-          } else if (j.status === "canceled") {
-            stopPoll(); setState("idle");
-          }
-        } catch (e) { stopPoll(); setState("error"); setMsg(e.message || "Narration failed."); }
-      }, 1500);
+      if (r.job_id) watchJob(r.job_id, force);
     } catch (e) {
       if (e.status === 409) { setState("untranslated"); setMsg("Translate this chapter before narrating it."); }
       else if (e.status === 429) { setState("error"); setMsg(e.message || "Monthly narration quota reached."); }
