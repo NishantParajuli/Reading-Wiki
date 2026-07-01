@@ -350,6 +350,7 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
         'untranslated'  raw chapter with no translation yet → skipped
         'empty'|'missing' nothing to narrate → skipped
     """
+    job_id = int(job["id"])
     novel_id = int(job["novel_id"])
     voice_id = job["voice_id"]
     opts = job.get("options") or {}
@@ -369,6 +370,7 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
 
     async with _target_lock(chapter_target_key(novel_id, number, voice_id, version, uid)):
         if not force and await find_audio(novel_id, number, voice_id, version, uid):
+            logger.info(f"TTS job {job_id}: chapter {_numstr(number)} already cached; skipping generation.")
             return "cached"
 
         # Charge quota right before the (expensive) generation, mirroring how the importer reserves
@@ -380,11 +382,32 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
             info["text"], title=info["title"], number=number, intro=settings.TTS_TITLE_INTRO,
         )
         language = lang_override or info["language"]
-        opus, duration = await tts_client.narrate(
-            paras, voice_id, language=language,
-            speed=settings.TTS_SPEED, num_step=settings.TTS_NUM_STEP,
-            silence_ms=settings.TTS_PARA_SILENCE_MS, opus_bitrate=settings.TTS_OPUS_BITRATE,
+        logger.info(
+            f"TTS job {job_id}: narrating chapter {_numstr(number)} "
+            f"({len(paras)} paragraphs, voice={voice_id})."
         )
+        heartbeat_stop = asyncio.Event()
+
+        async def heartbeat():
+            while not heartbeat_stop.is_set():
+                try:
+                    await asyncio.wait_for(heartbeat_stop.wait(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    logger.info(f"TTS job {job_id}: still narrating chapter {_numstr(number)}...")
+
+        heartbeat_task = asyncio.create_task(heartbeat())
+        try:
+            opus, duration = await tts_client.narrate(
+                paras, voice_id, language=language,
+                speed=settings.TTS_SPEED, num_step=settings.TTS_NUM_STEP,
+                silence_ms=settings.TTS_PARA_SILENCE_MS, opus_bitrate=settings.TTS_OPUS_BITRATE,
+            )
+        finally:
+            heartbeat_stop.set()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                raise
         rel = audio_rel(novel_id, number, voice_id, version, uid)
         dest = audio_abs(rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -395,6 +418,10 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
         tmp.write_bytes(opus)
         os.replace(tmp, dest)
         await _upsert_audio(novel_id, number, uid, voice_id, language, version, rel, duration, len(opus))
+        logger.info(
+            f"TTS job {job_id}: published chapter {_numstr(number)} "
+            f"({int(duration)}s, {len(opus)} bytes)."
+        )
         return "generated"
 
 
@@ -418,6 +445,7 @@ async def _run(job: dict, user: dict) -> None:
 
     await update_job(job_id, status="generating", stage="narrating", error=None,
                      progress={"done": 0, "total": total})
+    logger.info(f"TTS job {job_id} started: {total} chapter(s), voice={job['voice_id']}.")
 
     done = skipped = 0
     async with _TTS_LOCK:   # hold the GPU for this whole job
@@ -431,6 +459,7 @@ async def _run(job: dict, user: dict) -> None:
 
             await update_job(job_id, progress={"done": done, "skipped": skipped, "total": total,
                                                "current_chapter": _numstr(number)})
+            logger.info(f"TTS job {job_id}: processing chapter {_numstr(number)} ({done + skipped + 1}/{total}).")
             result = await _generate_chapter(job, user, number)
 
             if result == "quota":

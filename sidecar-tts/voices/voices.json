@@ -12,16 +12,6 @@
       "note": "documentary-style narrator (Attenborough-style parody clip, user-provided)"
     },
     {
-      "id": "nova",
-      "name": "Nova",
-      "language": "en",
-      "gender": "female",
-      "accent": "US",
-      "file": "nova.wav",
-      "ref_text": "Huh, why don't we torch all the trash into kindling? It'll be nice and warm.",
-      "note": "bright female game-character voice (user-provided)"
-    },
-    {
       "id": "max",
       "name": "Max",
       "language": "en",
