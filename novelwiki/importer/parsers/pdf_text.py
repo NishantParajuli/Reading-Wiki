@@ -118,7 +118,11 @@ def _finalize_blocks(raw_blocks: list[dict], job_id: int, meta: dict) -> list[Bl
             loc["edge"] = b["edge"]
         if b["kind"] == IMAGE:
             mime = _sniff_mime(b["bytes"])
-            sha, ext = storage.stage_asset(job_id, b["bytes"], mime)
+            try:
+                sha, ext = storage.stage_asset(job_id, b["bytes"], mime)
+            except ValueError as e:
+                logger.warning("Skipping unsupported PDF image asset (%s): %s", mime, e)
+                continue
             assets = meta.setdefault("assets", {})
             if sha not in assets:
                 w, h = _image_size(b["bytes"])

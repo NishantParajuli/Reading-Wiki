@@ -207,7 +207,7 @@ def test_epub_parse_then_render_chapter(fixture_epub):
 
         def resolver(s):
             am = doc.meta["assets"].get(s)
-            return {"url": f"/assets/9/{s}.{am['ext']}", "width": am["width"], "height": am["height"]} if am else None
+            return {"url": f"/api/assets/novels/9/{s}.{am['ext']}", "width": am["width"], "height": am["height"]} if am else None
 
         raw_html, flat_text = render_segment(seg_blocks, resolver)
         assert "Lin woke" in flat_text
@@ -216,7 +216,7 @@ def test_epub_parse_then_render_chapter(fixture_epub):
         assert "<figure>" in raw_html and "<img" in raw_html
         assert "scene-break" in raw_html
         # Sanitizer must keep our asset URL and drop nothing dangerous (none here).
-        assert "/assets/9/" in raw_html
+        assert "/api/assets/novels/9/" in raw_html
     finally:
         storage.cleanup_job(job_id)
 
@@ -281,7 +281,7 @@ async def test_import_commit_end_to_end(tmp_path, db_ready):
 
             novel = await conn.fetchrow("SELECT cover_url, title FROM novels WHERE id=$1;", novel_id)
             assert novel["title"] == "The Test Tides"
-            assert novel["cover_url"] and novel["cover_url"].startswith(f"/assets/{novel_id}/")
+            assert novel["cover_url"] and novel["cover_url"].startswith(f"/api/assets/novels/{novel_id}/")
 
         # Reader payload carries sanitized rich HTML for the import source.
         payload = await api_get_chapter(novel_id, 1.0, BackgroundTasks())

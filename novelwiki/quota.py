@@ -33,7 +33,7 @@ def spend_allowed(user: dict) -> bool:
 
 def require_spend_allowed(user: dict) -> None:
     if not spend_allowed(user):
-        raise HTTPException(status_code=403, detail="Verify your email to use translation, OCR, codex, or import features.")
+        raise HTTPException(status_code=403, detail="Verify your email to use scrape, translation, OCR, codex, or import features.")
 
 
 async def get_usage(user_id: int) -> dict:

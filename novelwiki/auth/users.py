@@ -17,7 +17,7 @@ def _prefs(raw) -> dict:
 
 
 def avatar_url(user: dict) -> str | None:
-    """The /assets URL for a user's avatar (avatar_path is ASSET_DIR-relative), or None."""
+    """The public /assets/_users URL for a user's avatar, or None."""
     p = user.get("avatar_path")
     return ("/assets/" + p) if p else None
 

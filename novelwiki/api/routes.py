@@ -1,7 +1,10 @@
 import logging
 import json
 import os
+import re
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Request, Depends
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
@@ -11,6 +14,7 @@ from novelwiki.auth.users import self_user, public_user, valid_username, normali
 from novelwiki import quota
 from novelwiki.scraper.runner import scrape_source, scrape_novel, set_source_offset
 from novelwiki.scraper.adapters import list_adapters
+from novelwiki.scraper.safe_fetch import SafeFetchError, validate_source_start_url
 from novelwiki.ingest.chunk import chunk_all_chapters
 from novelwiki.ingest.embed import embed_missing_chunks
 from novelwiki.ingest.extract import extract_all_chapters
@@ -32,6 +36,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_OLD_NOVEL_ASSET_RE = re.compile(r"^/assets/(?P<novel_id>\d+)/(?P<filename>[^/?#]+)$")
+_RICH_ASSET_RE = re.compile(r"(?P<quote>['\"])/assets/(?P<novel_id>\d+)/(?P<filename>[^'\"?#]+)")
+_ASSET_FILENAME_RE = re.compile(r"^(?P<sha>[a-fA-F0-9]{64})\.(?P<ext>[A-Za-z0-9]+)$")
 
 # Shelves a novel can sit on. The shelf is *per-user reading status* (lives in
 # library_entries) — one reader's "reading" is another's "completed".
@@ -76,6 +84,38 @@ def _translation_type(has_raw, has_eng) -> str | None:
     if has_eng:
         return "translated"
     return None
+
+
+def _rewrite_asset_url(url: str | None, novel_id: int | None = None) -> str | None:
+    if not url:
+        return url
+    match = _OLD_NOVEL_ASSET_RE.match(url)
+    if not match:
+        return url
+    matched_novel_id = int(match.group("novel_id"))
+    if novel_id is not None and matched_novel_id != int(novel_id):
+        return url
+    return f"/api/assets/novels/{matched_novel_id}/{match.group('filename')}"
+
+
+def _rewrite_rich_asset_urls(html: str | None, novel_id: int) -> str | None:
+    if not html:
+        return html
+
+    def repl(match: re.Match) -> str:
+        matched_novel_id = int(match.group("novel_id"))
+        if matched_novel_id != int(novel_id):
+            return match.group(0)
+        return f"{match.group('quote')}/api/assets/novels/{matched_novel_id}/{match.group('filename')}"
+
+    return _RICH_ASSET_RE.sub(repl, html)
+
+
+async def _validated_scraper_start_url(start_url: str) -> str:
+    try:
+        return await validate_source_start_url(start_url)
+    except SafeFetchError as e:
+        raise HTTPException(status_code=422, detail=f"Unsafe source URL: {e}")
 
 
 # ── API Models ────────────────────────────────────────────────────────────
@@ -239,7 +279,7 @@ async def api_list_novels(user: dict = Depends(current_user)):
             "id": int(r["id"]),
             "title": r["title"],
             "author": r["author"],
-            "cover_url": r["cover_url"],
+            "cover_url": _rewrite_asset_url(r["cover_url"], int(r["id"])),
             "description": r["description"],
             "codex_enabled": r["codex_enabled"],
             "visibility": r["visibility"],
@@ -261,6 +301,9 @@ async def api_list_novels(user: dict = Depends(current_user)):
 @router.post("/novels")
 async def api_create_novel(payload: NovelCreate, user: dict = Depends(current_user)):
     """Create a novel (owned by the caller, private by default) and optionally its first source."""
+    source_start_url = None
+    if payload.source:
+        source_start_url = await _validated_scraper_start_url(payload.source.start_url)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -287,7 +330,7 @@ async def api_create_novel(payload: NovelCreate, user: dict = Depends(current_us
                     INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw, chapter_offset, label)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
                     """,
-                    novel_id, s.adapter, s.start_url, json.dumps(s.config or {}),
+                    novel_id, s.adapter, source_start_url, json.dumps(s.config or {}),
                     s.language, s.is_raw, s.chapter_offset, s.label,
                 )
     return {"id": int(novel_id), "source_id": int(source_id) if source_id else None}
@@ -326,7 +369,7 @@ async def api_get_novel(novel_id: int, user: dict = Depends(current_user)):
         "title": novel["title"],
         "author": novel["author"],
         "description": novel["description"],
-        "cover_url": novel["cover_url"],
+        "cover_url": _rewrite_asset_url(novel["cover_url"], novel_id),
         "original_language": novel["original_language"],
         "codex_enabled": novel["codex_enabled"],
         "visibility": novel["visibility"],
@@ -494,7 +537,7 @@ async def api_discover(user: dict = Depends(current_user), q: str | None = None)
             user["id"], q,
         )
     return [
-        {"id": int(r["id"]), "title": r["title"], "author": r["author"], "cover_url": r["cover_url"],
+        {"id": int(r["id"]), "title": r["title"], "author": r["author"], "cover_url": _rewrite_asset_url(r["cover_url"], int(r["id"])),
          "description": r["description"], "visibility": r["visibility"], "owner_username": r["owner_username"],
          "chapter_count": int(r["chapter_count"] or 0)}
         for r in rows
@@ -575,7 +618,7 @@ async def api_update_me(payload: ProfileUpdate, user: dict = Depends(current_use
 @router.post("/me/avatar")
 async def api_upload_avatar(file: UploadFile = File(...), user: dict = Depends(current_user)):
     """Upload (replace) the account avatar. Stored under ASSET_DIR/_users/<id>/ and served
-    by the /assets mount; the DB keeps the relative path."""
+    by the narrowed public /assets/_users mount; the DB keeps the relative path."""
     from novelwiki.importer import storage as import_storage
     ext = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
     if (file.content_type or "").split("/")[0] != "image" and ext not in ("jpg", "jpeg", "png", "webp", "gif"):
@@ -654,7 +697,7 @@ async def api_user_profile(username: str, user: dict = Depends(current_user)):
         )
 
     def _novel_brief(r):
-        out = {"id": int(r["id"]), "title": r["title"], "cover_url": r["cover_url"], "visibility": r["visibility"]}
+        out = {"id": int(r["id"]), "title": r["title"], "cover_url": _rewrite_asset_url(r["cover_url"], int(r["id"])), "visibility": r["visibility"]}
         if "last_chapter" in r and r["last_chapter"] is not None:
             out["last_chapter"] = float(r["last_chapter"])
             out["max_chapter"] = float(r["max_chapter"]) if r["max_chapter"] is not None else None
@@ -680,6 +723,7 @@ async def api_user_profile(username: str, user: dict = Depends(current_user)):
 @router.post("/novels/{novel_id}/sources")
 async def api_add_source(novel_id: int, payload: SourceCreate, user: dict = Depends(current_user)):
     await require_editable(novel_id, user)
+    start_url = await _validated_scraper_start_url(payload.start_url)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         source_id = await conn.fetchval(
@@ -687,7 +731,7 @@ async def api_add_source(novel_id: int, payload: SourceCreate, user: dict = Depe
             INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw, chapter_offset, label)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
             """,
-            novel_id, payload.adapter, payload.start_url, json.dumps(payload.config or {}),
+            novel_id, payload.adapter, start_url, json.dumps(payload.config or {}),
             payload.language, payload.is_raw, payload.chapter_offset, payload.label,
         )
     return {"id": int(source_id)}
@@ -702,6 +746,8 @@ async def api_update_source(novel_id: int, source_id: int, payload: SourceUpdate
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         return {"status": "noop"}
+    if "start_url" in fields and fields["start_url"] is not None:
+        fields["start_url"] = await _validated_scraper_start_url(fields["start_url"])
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         owner = await conn.fetchval(
@@ -840,6 +886,7 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
     # — surfacing it would override the translation, so we only send rich HTML for non-raw
     # import sources whose content matches it.
     rich_html = row["raw_html"] if (row["adapter"] in ("epub", "pdf") and not row["source_is_raw"]) else None
+    rich_html = _rewrite_rich_asset_urls(rich_html, novel_id)
 
     # Per-user translation overlay (Phase 5): if this reader has saved/contributed an override
     # for this chapter, the reader shows *their* text; the base is sent alongside so the
@@ -1358,8 +1405,23 @@ async def api_scrape(novel_id: int, payload: ScrapeTrigger, bg_tasks: Background
     """Kicks off scraping in the background. Targets one source if source_id is given,
     else every source of the novel."""
     await require_editable(novel_id, user)
+    quota.require_spend_allowed(user)
+    pool = await get_db_pool()
     if payload.source_id is not None:
-        bg_tasks.add_task(scrape_source, payload.source_id, force=payload.force, max_chapters=payload.max_chapters)
+        async with pool.acquire() as conn:
+            source = await conn.fetchrow(
+                "SELECT id FROM sources WHERE id = $1 AND novel_id = $2;",
+                payload.source_id, novel_id,
+            )
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found.")
+        bg_tasks.add_task(
+            scrape_source,
+            payload.source_id,
+            force=payload.force,
+            max_chapters=payload.max_chapters,
+            expected_novel_id=novel_id,
+        )
     else:
         bg_tasks.add_task(scrape_novel, novel_id, force=payload.force, max_chapters=payload.max_chapters)
     return {"status": "success", "message": "Scrape job scheduled in background."}
@@ -1808,6 +1870,84 @@ async def _require_own_job(job_id: int, user: dict) -> dict:
     if not job or not _job_owned(job, user):
         raise HTTPException(status_code=404, detail="Import job not found.")
     return job
+
+
+def _asset_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "private, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; object-src 'none'; script-src 'none'; sandbox",
+    }
+
+
+def _safe_asset_filename(filename: str) -> tuple[str, str, str]:
+    from novelwiki.importer import storage as import_storage
+    if os.path.basename(filename) != filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    match = _ASSET_FILENAME_RE.fullmatch(filename or "")
+    if not match:
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    sha = match.group("sha").lower()
+    ext = match.group("ext").lower()
+    if ext == "jpeg":
+        ext = "jpg"
+    if ext not in import_storage.ALLOWED_ASSET_EXTS:
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    return sha, ext, f"{sha}.{ext}"
+
+
+def _safe_child_path(root: Path, child: Path) -> Path:
+    root = root.resolve()
+    child = child.resolve()
+    if child != root and root not in child.parents:
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    return child
+
+
+def _asset_file_response(path: Path, mime: str | None) -> FileResponse:
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    from novelwiki.importer import storage as import_storage
+    return FileResponse(
+        path,
+        media_type=mime or import_storage.mime_from_ext(path.suffix),
+        headers=_asset_headers(),
+    )
+
+
+@router.get("/assets/novels/{novel_id}/{filename}")
+async def api_novel_asset(novel_id: int, filename: str, user: dict = Depends(current_user)):
+    """Serve a committed imported image only if the caller can read the novel."""
+    from novelwiki.importer import storage as import_storage
+    await require_readable(novel_id, user)
+    sha, _ext, safe_name = _safe_asset_filename(filename)
+    rel = import_storage.asset_rel(novel_id, sha, safe_name.rsplit(".", 1)[1])
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        asset = await conn.fetchrow(
+            "SELECT path, mime FROM assets WHERE novel_id = $1 AND sha256 = $2 AND path = $3;",
+            novel_id, sha, rel,
+        )
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    root = import_storage.asset_file_path(novel_id, "__root__").parent
+    path = _safe_child_path(root, import_storage.asset_file_path(novel_id, safe_name))
+    return _asset_file_response(path, asset["mime"])
+
+
+@router.get("/assets/import-jobs/{job_id}/{filename}")
+async def api_import_job_asset(job_id: int, filename: str, user: dict = Depends(current_user)):
+    """Serve a staged import preview image only to the job owner or an admin."""
+    from novelwiki.importer import storage as import_storage
+    job = await _require_own_job(job_id, user)
+    sha, _ext, safe_name = _safe_asset_filename(filename)
+    meta = job.get("detected_meta") or {}
+    cover_sha = (meta.get("cover_sha") or "").lower()
+    if cover_sha and cover_sha != sha:
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    root = import_storage.staged_asset_file_path(job_id, "__root__").parent
+    path = _safe_child_path(root, import_storage.staged_asset_file_path(job_id, safe_name))
+    return _asset_file_response(path, import_storage.mime_from_ext(safe_name.rsplit(".", 1)[1]))
 
 
 @router.post("/import/upload")

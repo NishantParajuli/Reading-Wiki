@@ -174,10 +174,12 @@ for the full list and defaults):
 | `RERANK_MODEL` | Reranker model |
 | `SESSION_SECRET` | Signs/peppers session tokens — **set a long random value in prod** |
 | `ALLOWED_ORIGINS` / `PUBLIC_BASE_URL` / `COOKIE_SECURE` | CORS origins, link/redirect base URL, cookie scope |
+| `AUTH_*_LIMIT` / `AUTH_*_WINDOW_SECONDS` | Login, registration, and password-reset abuse throttles |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_USERNAME` | First admin, bootstrapped on first run |
 | `SMTP_*` | Transactional email (leave `SMTP_HOST` blank to log links instead of sending — handy in dev) |
 | `GOOGLE_*` / `DISCORD_*` | OAuth client credentials (leave blank to hide the button) |
 | `GEMINI_API_KEY` / `OCR_*` | Scanned-PDF OCR (Gemini vision + PaddleOCR sidecar) |
+| `SCRAPER_TIMEOUT_SECONDS` / `SCRAPER_MAX_RESPONSE_MB` / `SCRAPER_REQUIRE_SAME_HOST` | Scraper network guardrails: timeout, response cap, and same-source host binding |
 | `TTS_*` / `TTS_SIDECAR_URL` | Audiobook narration (OmniVoice sidecar) |
 | `DEFAULT_QUOTA_*` | Monthly per-user spend caps (translation / OCR / codex / TTS) |
 
@@ -284,6 +286,13 @@ Each source picks an adapter by key. Built-in adapters live in
 Add a new site by subclassing `BaseAdapter` (or `_PagedHtmlAdapter`) and registering it in the
 `ADAPTERS` dict — it then appears automatically in the Add-Source dropdown via `list_adapters()`.
 
+Scraper fetches are routed through `novelwiki/scraper/safe_fetch.py`: only HTTP(S) URLs are allowed,
+DNS results and redirects must resolve to public addresses, response bodies are capped, and crawls are
+bound to the source host unless an adapter declares an explicit `allowed_hosts` exception. The default
+`SCRAPER_REQUIRE_SAME_HOST=true` also blocks cross-host redirects, including CDN/API hops; adapter
+authors should add known secondary hosts on the adapter class, e.g. `allowed_hosts = ["api.example.com"]`,
+instead of disabling same-host checks globally.
+
 ---
 
 ## 📥 File import pipeline
@@ -324,7 +333,8 @@ docker compose up -d tts        # start the TTS sidecar on a GPU host
 Everything is **novel-scoped and user-scoped** (single shared Postgres DB, no schema-per-novel).
 Schema is defined in [novelwiki/db/schema.py](novelwiki/db/schema.py):
 
-- **Accounts:** `users`, `oauth_accounts`, `sessions`, `email_tokens`, `quota_usage`, `provider_budget`
+- **Accounts:** `users`, `oauth_accounts`, `sessions`, `email_tokens`, `auth_rate_limits`,
+  `quota_usage`, `provider_budget`
 - **Library:** `novels` (with `owner_id` / `visibility` / `contribution_policy` / `series`),
   `library_entries` (per-user shelf + tags), `sources`, `reading_progress` (per-user), `bookmarks`
 - **Reading:** `chapters` (PK `(novel_id, number)`; `content` = readable text, `original_text` =
@@ -337,6 +347,12 @@ Schema is defined in [novelwiki/db/schema.py](novelwiki/db/schema.py):
 - **Codex:** `chunks` (+`embedding`), `entities`, `entity_descriptions`, `entity_aliases`,
   `identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state`, `wiki_cache`,
   `query_cache`
+
+Imported covers/illustrations/page scans are stored on disk but served through authenticated
+`/api/assets/novels/...` and `/api/assets/import-jobs/...` routes. Only user avatars remain on the
+narrow public `/assets/_users/...` mount. SVG imports are rejected, and the app sets baseline
+`nosniff`, frame, referrer, and CSP headers; the CSP still allows `unpkg.com`, inline scripts, and
+eval while the frontend uses in-browser Babel.
 
 ---
 

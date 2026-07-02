@@ -4,16 +4,17 @@ Heavy artifacts live on disk, pointers in the DB. Layout under the configured di
 
     IMPORT_DIR/<job_id>/original.<ext>     the uploaded blob (kept so we can re-segment)
     IMPORT_DIR/<job_id>/blocks.json        the serialized IR (Document) the job produced
-    ASSET_DIR/_jobs/<job_id>/<sha>.<ext>   staged images, servable for preview thumbnails
+    ASSET_DIR/_jobs/<job_id>/<sha>.<ext>   staged images, served by authenticated routes
     ASSET_DIR/<novel_id>/<sha>.<ext>       committed images, referenced by the reader
 
 Images are content-addressed by sha256 so the same illustration shared across chapters is
-stored once. Staged assets sit *under* ASSET_DIR (which is mounted at /assets) so the plan
-editor can show thumbnails before commit; ``commit_asset`` promotes them to the novel dir.
+stored once. Staged assets sit *under* ASSET_DIR and are served through access-controlled
+API routes; ``commit_asset`` promotes them to the novel dir.
 """
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import shutil
 from pathlib import Path
@@ -26,12 +27,13 @@ logger = logging.getLogger(__name__)
 # Minimal mime ↔ extension maps for the image types EPUB/PDF actually carry.
 _MIME_EXT = {
     "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/gif": "gif",
-    "image/webp": "webp", "image/svg+xml": "svg", "image/bmp": "bmp", "image/tiff": "tiff",
+    "image/webp": "webp", "image/bmp": "bmp", "image/tiff": "tiff",
 }
 _EXT_MIME = {
     "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif",
-    "webp": "image/webp", "svg": "image/svg+xml", "bmp": "image/bmp", "tiff": "image/tiff",
+    "webp": "image/webp", "bmp": "image/bmp", "tiff": "image/tiff",
 }
+ALLOWED_ASSET_EXTS = frozenset(_EXT_MIME.keys())
 
 
 def ext_from_mime(mime: str | None) -> str:
@@ -145,6 +147,7 @@ def _staged_dir(job_id: int) -> Path:
 def stage_asset(job_id: int, data: bytes, mime: str | None) -> tuple[str, str]:
     """Write an extracted image to the job's staging dir, content-addressed. Returns
     (sha, ext). Idempotent: re-staging identical bytes is a no-op (dedup by sha)."""
+    _validate_raster_asset(data, mime)
     sha = sha256_bytes(data)
     ext = ext_from_mime(mime)
     dest = _staged_dir(job_id) / f"{sha}.{ext}"
@@ -154,11 +157,15 @@ def stage_asset(job_id: int, data: bytes, mime: str | None) -> tuple[str, str]:
 
 
 def staged_asset_url(job_id: int, sha: str, ext: str) -> str:
-    return f"/assets/_jobs/{job_id}/{sha}.{ext}"
+    return f"/api/assets/import-jobs/{job_id}/{sha}.{ext}"
 
 
 def staged_asset_path(job_id: int, sha: str, ext: str) -> Path:
     return _staged_dir(job_id) / f"{sha}.{ext}"
+
+
+def staged_asset_file_path(job_id: int, filename: str) -> Path:
+    return _staged_dir(job_id) / filename
 
 
 # ── Committed assets ────────────────────────────────────────────────────────
@@ -169,7 +176,11 @@ def asset_rel(novel_id: int, sha: str, ext: str) -> str:
 
 
 def asset_url(novel_id: int, sha: str, ext: str) -> str:
-    return f"/assets/{asset_rel(novel_id, sha, ext)}"
+    return f"/api/assets/novels/{novel_id}/{sha}.{ext}"
+
+
+def asset_file_path(novel_id: int, filename: str) -> Path:
+    return _asset_root() / str(novel_id) / filename
 
 
 async def commit_asset(
@@ -199,7 +210,8 @@ async def commit_asset(
 
 
 # ── User avatars (multi-user, Phase 3) ───────────────────────────────────────
-# Avatars live under ASSET_DIR/_users/<id>/ so the existing /assets mount serves them.
+# Avatars live under ASSET_DIR/_users/<id>/ and are intentionally public via a
+# narrowed /assets/_users mount.
 # Content-addressed (truncated sha) so re-uploading the same image is a no-op and the
 # URL changes when the image does (cache-busting). The DB stores the ASSET_DIR-relative
 # path in users.avatar_path; the URL is "/assets/" + that path.
@@ -228,6 +240,21 @@ def save_user_avatar(user_id: int, data: bytes, ext: str) -> str:
     name = f"{sha256_bytes(data)[:16]}.{ext}"
     (_user_dir(user_id) / name).write_bytes(data)
     return user_avatar_rel(user_id, name)
+
+
+def _validate_raster_asset(data: bytes, mime: str | None) -> None:
+    normalized = (mime or "").lower().split(";", 1)[0].strip()
+    if normalized == "image/svg+xml":
+        raise ValueError("SVG assets are not supported.")
+    ext = ext_from_mime(normalized)
+    if ext not in ALLOWED_ASSET_EXTS:
+        raise ValueError(f"Unsupported image MIME type: {mime or 'unknown'}.")
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as im:
+            im.verify()
+    except Exception as exc:
+        raise ValueError("Image asset could not be decoded safely.") from exc
 
 
 # ── Cleanup ─────────────────────────────────────────────────────────────────

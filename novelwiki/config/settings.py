@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     SCRAPER_ADAPTER: str = "fenrirealm"
     SCRAPER_BASE_URL: str = "https://fenrirealm.com"
     SCRAPER_DELAY: float = 1.0
+    SCRAPER_TIMEOUT_SECONDS: float = 30.0
+    SCRAPER_MAX_RESPONSE_MB: int = 8
+    SCRAPER_REQUIRE_SAME_HOST: bool = True
+    # Comma-separated hostnames adapters may fetch in addition to the source host.
+    # Prefer adapter-local allowlists for known APIs; use this only for deployment overrides.
+    SCRAPER_ALLOWED_HOST_OVERRIDES: str = ""
 
     # ── File import (EPUB/PDF ingestion) ──
     # Heavy artifacts live on disk; the DB holds pointers + the editable plan.
@@ -124,7 +130,19 @@ class Settings(BaseSettings):
     # value in prod (a changed secret invalidates all sessions).
     SESSION_SECRET: str = "dev-insecure-change-me"
     SESSION_COOKIE: str = "tg_session"
+    CSRF_COOKIE: str = "tg_csrf"
     SESSION_TTL_DAYS: int = 30
+    AUTH_LOGIN_IP_LIMIT: int = 10
+    AUTH_LOGIN_ACCOUNT_LIMIT: int = 5
+    AUTH_LOGIN_WINDOW_SECONDS: int = 600
+    AUTH_REGISTER_IP_LIMIT: int = 5
+    AUTH_REGISTER_WINDOW_SECONDS: int = 3600
+    AUTH_RESET_REQUEST_IP_LIMIT: int = 5
+    AUTH_RESET_REQUEST_EMAIL_LIMIT: int = 3
+    AUTH_RESET_REQUEST_WINDOW_SECONDS: int = 3600
+    AUTH_RESET_SUBMIT_IP_LIMIT: int = 10
+    AUTH_RESET_SUBMIT_TOKEN_LIMIT: int = 5
+    AUTH_RESET_SUBMIT_WINDOW_SECONDS: int = 3600
     # Browsers reject `Access-Control-Allow-Origin: *` together with credentialed
     # requests, so list explicit origins. The SPA is served same-origin in prod; these
     # cover the tunnel domain + local dev. Comma-separated in the env var.

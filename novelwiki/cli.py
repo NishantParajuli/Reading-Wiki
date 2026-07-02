@@ -4,6 +4,7 @@ import json
 import logging
 from novelwiki.db.connection import get_db_pool, close_db_pool
 from novelwiki.scraper.runner import scrape_novel, scrape_source
+from novelwiki.scraper.safe_fetch import SafeFetchError, validate_source_start_url
 from novelwiki.ingest.chunk import chunk_all_chapters
 from novelwiki.ingest.embed import embed_missing_chunks
 from novelwiki.ingest.extract import extract_all_chapters
@@ -32,6 +33,11 @@ def add_novel(
 ):
     """Creates a novel in the library plus its first source, and prints the new ids."""
     async def run():
+        try:
+            safe_start_url = await validate_source_start_url(start_url)
+        except SafeFetchError as e:
+            typer.secho(f"Unsafe source URL: {e}", fg=typer.colors.RED)
+            raise typer.Exit(1)
         pool = await get_db_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
@@ -47,7 +53,7 @@ def add_novel(
                     INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw, chapter_offset)
                     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id;
                     """,
-                    novel_id, adapter, start_url, json.dumps({}), language, is_raw, chapter_offset,
+                    novel_id, adapter, safe_start_url, json.dumps({}), language, is_raw, chapter_offset,
                 )
         typer.echo(typer.style(f"✔ Created novel id={novel_id}, source id={source_id}.", fg=typer.colors.GREEN, bold=True))
         typer.echo(f"  Next: novelwiki scrape {novel_id} --max 5")
@@ -66,7 +72,7 @@ def scrape(
     async def run():
         if source_id is not None:
             typer.echo(f"Scraping source {source_id}...")
-            count = await scrape_source(source_id, force=force, max_chapters=max_chapters)
+            count = await scrape_source(source_id, force=force, max_chapters=max_chapters, expected_novel_id=novel_id)
         else:
             typer.echo(f"Scraping all sources of novel {novel_id}...")
             count = await scrape_novel(novel_id, force=force, max_chapters=max_chapters)

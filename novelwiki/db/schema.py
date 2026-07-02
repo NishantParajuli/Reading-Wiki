@@ -85,6 +85,18 @@ DDL_QUERIES = [
     """,
     "CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions (user_id);",
 
+    # Durable fixed-window counters for auth abuse controls. Bucket keys include
+    # only scoped hashes for account/email/token values, not raw identifiers.
+    """
+    CREATE TABLE IF NOT EXISTS auth_rate_limits (
+      bucket_key TEXT PRIMARY KEY,
+      count      INT NOT NULL,
+      reset_at   TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS auth_rate_limits_reset_idx ON auth_rate_limits (reset_at);",
+
     # One-time email tokens for verification + password reset (hashed at rest).
     """
     CREATE TABLE IF NOT EXISTS email_tokens (

@@ -221,16 +221,22 @@ def _emit_images(el, epub: _Epub, base_dir: str, blocks: list[Block], meta: dict
             logger.warning(f"EPUB image not found in zip: {zip_path}")
             continue
         sha = _register_asset(data, meta, job_id, kind="illustration")
+        if not sha:
+            continue
         blocks.append(Block(kind=IMAGE, asset_sha=sha, loc={"spine_idx": spine_idx}))
         alt = (img.get("alt") or "").strip()
         if alt:
             blocks.append(Block(kind=CAPTION, text=alt, loc={"spine_idx": spine_idx, "html": _escape(alt)}))
 
 
-def _register_asset(data: bytes, meta: dict, job_id: int, kind: str) -> str:
+def _register_asset(data: bytes, meta: dict, job_id: int, kind: str) -> str | None:
     """Stage image bytes (dedup by sha) and record them in meta['assets']. Returns sha."""
     mime = _sniff_mime(data)
-    sha, ext = storage.stage_asset(job_id, data, mime)
+    try:
+        sha, ext = storage.stage_asset(job_id, data, mime)
+    except ValueError as e:
+        logger.warning("Skipping unsupported EPUB image asset (%s): %s", mime, e)
+        return None
     assets = meta.setdefault("assets", {})
     if sha not in assets:
         w, h = _image_size(data)
@@ -249,7 +255,7 @@ def _sniff_mime(data: bytes) -> str:
         return "image/webp"
     if data[:5] == b"<?xml" or data[:4] == b"<svg":
         return "image/svg+xml"
-    return "image/jpeg"
+    return "application/octet-stream"
 
 
 def _image_size(data: bytes) -> tuple[int | None, int | None]:
@@ -373,7 +379,9 @@ def parse_epub(path: str, job_id: int) -> Document:
     cid = epub.cover_id()
     if cid:
         try:
-            meta["cover_sha"] = _register_asset(epub.read_item_by_id(cid), meta, job_id, kind="cover")
+            cover_sha = _register_asset(epub.read_item_by_id(cid), meta, job_id, kind="cover")
+            if cover_sha:
+                meta["cover_sha"] = cover_sha
         except Exception as e:
             logger.warning(f"Could not extract cover image: {e}")
 

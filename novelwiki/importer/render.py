@@ -2,7 +2,7 @@
 
 ``render_segment`` returns ``(raw_html, flat_text)``:
   * ``raw_html`` — sanitized rich HTML for the reader (``<p>/<h2>/<blockquote>/<hr>/
-    <figure><img>``). Images resolve to ``/assets/<novel_id>/<sha>.<ext>`` URLs.
+    <figure><img>``). Images resolve to authenticated ``/api/assets/...`` URLs.
   * ``flat_text`` — paragraphs joined by blank lines, exactly what ``chunk_chapter_text``
     expects; it drives word count, codex chunking and translation.
 

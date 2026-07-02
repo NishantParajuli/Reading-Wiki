@@ -5,6 +5,7 @@ from curl_cffi.requests import AsyncSession
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool, close_db_pool
 from novelwiki.scraper.adapters import get_adapter, ScrapeContext, PremiumReached, HEADERS
+from novelwiki.scraper.safe_fetch import SafeFetchError, host_from_url, parse_allowed_hosts
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -89,7 +90,12 @@ async def _resume_url(pool, source_id: int) -> str | None:
         )
 
 
-async def scrape_source(source_id: int, force: bool = False, max_chapters: int | None = None) -> int:
+async def scrape_source(
+    source_id: int,
+    force: bool = False,
+    max_chapters: int | None = None,
+    expected_novel_id: int | None = None,
+) -> int:
     """Scrapes one source into its novel's global chapter sequence using the source's
     chosen adapter. Source-local chapter numbers are shifted by `chapter_offset` so a
     continuation source lines up after the previous one. Stops cleanly at premium.
@@ -110,6 +116,13 @@ async def scrape_source(source_id: int, force: bool = False, max_chapters: int |
         return 0
 
     source = dict(source)
+    if expected_novel_id is not None and int(source["novel_id"]) != int(expected_novel_id):
+        logger.warning(
+            "Refusing to scrape source %s for expected novel %s; source belongs to novel %s.",
+            source_id, expected_novel_id, source["novel_id"],
+        )
+        return 0
+
     cfg = source.get("config")
     if isinstance(cfg, str):
         try:
@@ -120,6 +133,14 @@ async def scrape_source(source_id: int, force: bool = False, max_chapters: int |
     offset = float(source["chapter_offset"] or 0)
 
     adapter = get_adapter(source["adapter"])
+    try:
+        source_host = host_from_url(source["start_url"])
+    except SafeFetchError as e:
+        logger.error("Source %s has an unsafe start URL: %s", source_id, e)
+        return 0
+    allowed_hosts = parse_allowed_hosts(settings.SCRAPER_ALLOWED_HOST_OVERRIDES)
+    allowed_hosts.update(parse_allowed_hosts(getattr(adapter, "allowed_hosts", [])))
+    allowed_hosts.update(parse_allowed_hosts(source["config"].get("allowed_hosts")))
 
     start_url = source["start_url"]
     if not force:
@@ -138,6 +159,9 @@ async def scrape_source(source_id: int, force: bool = False, max_chapters: int |
             config=source["config"],
             max_chapters=max_chapters,
             stop_on_premium=True,
+            source_host=source_host,
+            allowed_hosts=allowed_hosts,
+            require_same_host=settings.SCRAPER_REQUIRE_SAME_HOST,
         )
         try:
             async for ch in adapter.crawl(ctx):
@@ -243,7 +267,12 @@ async def scrape_novel(novel_id: int, force: bool = False, max_chapters: int | N
         sources = await conn.fetch("SELECT id FROM sources WHERE novel_id = $1 ORDER BY id ASC;", novel_id)
     total = 0
     for s in sources:
-        total += await scrape_source(int(s["id"]), force=force, max_chapters=max_chapters)
+        total += await scrape_source(
+            int(s["id"]),
+            force=force,
+            max_chapters=max_chapters,
+            expected_novel_id=novel_id,
+        )
     return total
 
 

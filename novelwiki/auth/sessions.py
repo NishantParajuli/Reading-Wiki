@@ -7,6 +7,20 @@ from novelwiki.config.settings import settings
 from novelwiki.auth.tokens import new_token, hash_token
 
 
+def set_csrf_cookie(response: Response, token: str | None = None) -> str:
+    token = token or new_token()
+    response.set_cookie(
+        settings.CSRF_COOKIE,
+        token,
+        max_age=settings.SESSION_TTL_DAYS * 86400,
+        httponly=False,
+        secure=settings.COOKIE_SECURE,
+        samesite="lax",
+        path="/",
+    )
+    return token
+
+
 async def create_session(conn, user_id: int, user_agent: str | None = None) -> str:
     """Create a session row and return the raw token (only its hash is stored)."""
     token = new_token()
@@ -36,7 +50,9 @@ def set_session_cookie(response: Response, token: str) -> None:
         samesite="lax",
         path="/",
     )
+    set_csrf_cookie(response)
 
 
 def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(settings.SESSION_COOKIE, path="/")
+    response.delete_cookie(settings.CSRF_COOKIE, path="/")

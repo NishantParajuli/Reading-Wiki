@@ -39,15 +39,17 @@ function OAuthButtons({ providers }) {
 
 function AuthScreen({ onAuthed }) {
   const initial = readHash();
-  const [mode, setMode] = useState(initial.path === "reset" ? "reset" : "login");
+  const [mode, setMode] = useState(initial.path === "reset" ? "reset" : initial.path === "verify" ? "verify" : "login");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
-  const [resetToken] = useState(initial.params.get("token") || "");
+  const [resetToken] = useState(initial.path === "reset" ? initial.params.get("token") || "" : "");
+  const [verifyToken] = useState(initial.path === "verify" ? initial.params.get("token") || "" : "");
   const [providers, setProviders] = useState([]);
   const [error, setError] = useState(initial.params.get("error") === "oauth" ? "Sign-in with that provider failed." : "");
   const [info, setInfo] = useState(
+    initial.path === "verify" ? "Confirm your email to finish verification." :
     initial.path === "verified" ? "Email verified — you can sign in." :
     initial.path === "verify-failed" ? "That verification link is invalid or expired." : ""
   );
@@ -76,6 +78,16 @@ function AuthScreen({ onAuthed }) {
         setInfo("Password updated — please sign in.");
         setMode("login");
         window.location.hash = "";
+      } else if (mode === "verify") {
+        await window.API.auth.verify(verifyToken);
+        window.location.hash = "";
+        try {
+          const user = await window.API.auth.me();
+          onAuthed(user);
+        } catch (e) {
+          setInfo("Email verified — you can sign in.");
+          setMode("login");
+        }
       }
     } catch (err) {
       setError(err.message || "Something went wrong.");
@@ -88,9 +100,11 @@ function AuthScreen({ onAuthed }) {
   const isRegister = mode === "register";
   const isForgot = mode === "forgot";
   const isReset = mode === "reset";
+  const isVerify = mode === "verify";
 
   const title = isReset ? "Set a new password"
     : isForgot ? "Reset your password"
+    : isVerify ? "Verify your email"
     : isRegister ? "Create your account" : "Welcome back";
 
   const fields = [];
@@ -109,6 +123,7 @@ function AuthScreen({ onAuthed }) {
 
   const submitLabel = isReset ? "Update password"
     : isForgot ? "Send reset link"
+    : isVerify ? "Verify email"
     : isRegister ? "Create account" : "Sign in";
 
   return h("div", { className: "auth-wrap" },
@@ -121,7 +136,7 @@ function AuthScreen({ onAuthed }) {
       info && h("div", { className: "auth-info" }, info),
       error && h("div", { className: "auth-error" }, error),
       fields,
-      h("button", { className: "auth-submit", type: "submit", disabled: busy },
+      h("button", { className: "auth-submit", type: "submit", disabled: busy || (isVerify && !verifyToken) },
         busy ? "…" : submitLabel),
       (isLogin || isRegister) && h(OAuthButtons, { providers }),
       h("div", { className: "auth-links" },

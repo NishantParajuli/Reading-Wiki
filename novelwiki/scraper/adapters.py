@@ -1,12 +1,22 @@
 import re
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import AsyncIterator
+from urllib.parse import urljoin
 import lxml.html
 from curl_cffi.requests import AsyncSession
 from selectolax.parser import HTMLParser
 from novelwiki.config.settings import settings
+from novelwiki.scraper.safe_fetch import (
+    FetchHTTPError,
+    SafeFetchError,
+    describe_url,
+    safe_fetch_bytes,
+    safe_fetch_json,
+    safe_fetch_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +32,7 @@ _PREMIUM_MARKERS = ("premium", "unlock", "locked", "coins", "subscribe", "member
 def _absolutize(href: str, current_url: str) -> str:
     if not href or href == "#":
         return ""
-    if href.startswith("http"):
-        return href
-    if href.startswith("/"):
-        match = re.match(r"(https?://[^/]+)", current_url)
-        domain = match.group(1) if match else settings.SCRAPER_BASE_URL.rstrip("/")
-        return f"{domain}{href}"
-    return href
+    return urljoin(current_url, href)
 
 
 def parse_chapter_number(url: str, title: str) -> float | None:
@@ -110,14 +114,50 @@ class ScrapeContext:
     config: dict = field(default_factory=dict)   # per-source adapter config (e.g. selectors)
     max_chapters: int | None = None
     stop_on_premium: bool = True
+    source_host: str | None = None
+    allowed_hosts: set[str] = field(default_factory=set)
+    require_same_host: bool = True
 
-    async def fetch_text(self, url: str) -> str | None:
+    def _fetch_kwargs(self, headers: dict | None = None) -> dict:
+        return {
+            "source_host": self.source_host,
+            "allowed_hosts": self.allowed_hosts,
+            "require_same_host": self.require_same_host,
+            "headers": headers,
+        }
+
+    async def fetch_text(self, url: str, headers: dict | None = None, encoding: str | None = None) -> str | None:
         try:
-            resp = await self.session.get(url, impersonate="chrome", timeout=30.0)
-            resp.raise_for_status()
-            return resp.text
+            return await safe_fetch_text(self.session, url, encoding=encoding, **self._fetch_kwargs(headers))
+        except SafeFetchError as e:
+            logger.error("Scraper fetch rejected for %s: %s", describe_url(url), e)
+            return None
         except Exception as e:
-            logger.error(f"HTTP request error fetching {url}: {e}")
+            logger.error("HTTP request error fetching %s: %s", describe_url(url), e)
+            return None
+
+    async def fetch_json(self, url: str, headers: dict | None = None) -> dict | list | None:
+        try:
+            return await safe_fetch_json(self.session, url, **self._fetch_kwargs(headers))
+        except (SafeFetchError, ValueError) as e:
+            logger.error("Scraper JSON fetch rejected for %s: %s", describe_url(url), e)
+            return None
+        except Exception as e:
+            logger.error("HTTP request error fetching JSON from %s: %s", describe_url(url), e)
+            return None
+
+    async def fetch_bytes(self, url: str, headers: dict | None = None, raise_errors: bool = False) -> bytes | None:
+        try:
+            return await safe_fetch_bytes(self.session, url, **self._fetch_kwargs(headers))
+        except SafeFetchError as e:
+            if raise_errors:
+                raise
+            logger.error("Scraper byte fetch rejected for %s: %s", describe_url(url), e)
+            return None
+        except Exception as e:
+            if raise_errors:
+                raise
+            logger.error("HTTP request error fetching bytes from %s: %s", describe_url(url), e)
             return None
 
 
@@ -129,6 +169,7 @@ class BaseAdapter:
     label: str = "Base"
     requires: list[str] = ["start_url"]   # what the Add-Source form must collect
     default_language: str = "en"
+    allowed_hosts: list[str] = []
 
     async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
         raise NotImplementedError()
@@ -332,6 +373,7 @@ class BotiTranslationAdapter(BaseAdapter):
     label = "Boti Translation (botitranslation.com)"
     requires = ["start_url"]
     default_language = "en"
+    allowed_hosts = ["api.mystorywave.com"]
 
     async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
         current_url = ctx.start_url
@@ -353,19 +395,13 @@ class BotiTranslationAdapter(BaseAdapter):
                 "lang": "en_US",
             }
 
-            try:
-                resp = await ctx.session.get(api_url, headers=headers, impersonate="chrome", timeout=30.0)
-                if resp.status_code != 200:
-                    logger.error(f"BotiTranslation: API request failed with status {resp.status_code} for chapter {chapter_id}")
-                    return
-
-                resp_json = resp.json()
-                ch_data = resp_json.get("data")
-                if not ch_data:
-                    logger.error(f"BotiTranslation: No data field in API response for chapter {chapter_id}")
-                    return
-            except Exception as e:
-                logger.error(f"BotiTranslation: HTTP or JSON error fetching chapter {chapter_id}: {e}")
+            resp_json = await ctx.fetch_json(api_url, headers=headers)
+            if not isinstance(resp_json, dict):
+                logger.error(f"BotiTranslation: API response was not an object for chapter {chapter_id}")
+                return
+            ch_data = resp_json.get("data")
+            if not ch_data:
+                logger.error(f"BotiTranslation: No data field in API response for chapter {chapter_id}")
                 return
 
             title = ch_data.get("title") or "Untitled Chapter"
@@ -393,7 +429,7 @@ class BotiTranslationAdapter(BaseAdapter):
                 title=title,
                 content=content,
                 url=current_url,
-                raw_html=resp.text,
+                raw_html=json.dumps(resp_json, ensure_ascii=False),
             )
             count += 1
 
@@ -427,21 +463,33 @@ class SixtyNineShubaAdapter(_PagedHtmlAdapter):
             backoff = 5.0
             for attempt in range(retries):
                 try:
-                    resp = await ctx.session.get(http_url, headers=headers, impersonate="chrome", timeout=30.0)
-                    if resp.status_code == 429:
-                        logger.warning(f"69shuba: Rate limited (429) fetching {http_url}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
+                    body = await ctx.fetch_bytes(http_url, headers=headers, raise_errors=True)
+                    if body is None:
+                        return None
+                    return body.decode("gbk", errors="ignore")
+                except FetchHTTPError as e:
+                    if e.status_code == 429 and attempt < retries - 1:
+                        logger.warning(f"69shuba: Rate limited (429) fetching {describe_url(http_url)}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
                         await asyncio.sleep(backoff)
                         backoff *= 2
                         continue
-                    resp.raise_for_status()
-                    return resp.content.decode("gbk", errors="ignore")
+                    if attempt < retries - 1:
+                        logger.warning(f"69shuba: HTTP {e.status_code} fetching {describe_url(http_url)}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
+                        await asyncio.sleep(backoff)
+                        backoff *= 2
+                        continue
+                    logger.error(f"69shuba: HTTP request error fetching {describe_url(http_url)} after {retries} attempts: {e}")
+                    return None
+                except SafeFetchError as e:
+                    logger.error(f"69shuba: Rejected unsafe fetch for {describe_url(http_url)}: {e}")
+                    return None
                 except Exception as e:
                     if attempt < retries - 1:
-                        logger.warning(f"69shuba: Error fetching {http_url}: {e}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
+                        logger.warning(f"69shuba: Error fetching {describe_url(http_url)}: {e}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
                         await asyncio.sleep(backoff)
                         backoff *= 2
                         continue
-                    logger.error(f"69shuba: HTTP request error fetching {http_url} after {retries} attempts: {e}")
+                    logger.error(f"69shuba: HTTP request error fetching {describe_url(http_url)} after {retries} attempts: {e}")
                     return None
             return None
 

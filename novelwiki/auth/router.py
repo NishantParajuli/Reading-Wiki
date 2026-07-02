@@ -2,7 +2,8 @@
 
   POST /register | /login | /logout         email+password
   GET  /me                                  current user (401 if anonymous)
-  GET  /verify?token=...                     email verification (redirects to SPA)
+  GET  /verify?token=...                     email verification preview (redirects to SPA)
+  POST /verify                              consumes verification token after user action
   POST /request-reset | /reset               password reset
   GET  /oauth/{provider}/start | /callback   Google/Discord
 """
@@ -18,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
-from novelwiki.auth import oauth
+from novelwiki.auth import oauth, rate_limit
 from novelwiki.auth.deps import current_user
 from novelwiki.auth.email import send_verification_email, send_reset_email
 from novelwiki.auth.passwords import hash_password, verify_password
@@ -76,6 +77,10 @@ class ResetPayload(BaseModel):
     password: str = Field(min_length=8, max_length=200)
 
 
+class VerifyPayload(BaseModel):
+    token: str
+
+
 class ChangePasswordPayload(BaseModel):
     current_password: str | None = None          # required only if a password is already set
     new_password: str = Field(min_length=8, max_length=200)
@@ -100,6 +105,75 @@ def _reset_link(token: str) -> str:
     return f"{settings.PUBLIC_BASE_URL}/#/reset?token={token}"
 
 
+def _limit(limit: int, window_seconds: int) -> rate_limit.RateLimit:
+    return rate_limit.RateLimit(limit=limit, window_seconds=window_seconds)
+
+
+def _login_ip_limit() -> rate_limit.RateLimit:
+    return _limit(settings.AUTH_LOGIN_IP_LIMIT, settings.AUTH_LOGIN_WINDOW_SECONDS)
+
+
+def _login_account_limit() -> rate_limit.RateLimit:
+    return _limit(settings.AUTH_LOGIN_ACCOUNT_LIMIT, settings.AUTH_LOGIN_WINDOW_SECONDS)
+
+
+def _register_ip_limit() -> rate_limit.RateLimit:
+    return _limit(settings.AUTH_REGISTER_IP_LIMIT, settings.AUTH_REGISTER_WINDOW_SECONDS)
+
+
+def _reset_request_ip_limit() -> rate_limit.RateLimit:
+    return _limit(settings.AUTH_RESET_REQUEST_IP_LIMIT, settings.AUTH_RESET_REQUEST_WINDOW_SECONDS)
+
+
+def _reset_request_email_limit() -> rate_limit.RateLimit:
+    return _limit(settings.AUTH_RESET_REQUEST_EMAIL_LIMIT, settings.AUTH_RESET_REQUEST_WINDOW_SECONDS)
+
+
+def _reset_submit_ip_limit() -> rate_limit.RateLimit:
+    return _limit(settings.AUTH_RESET_SUBMIT_IP_LIMIT, settings.AUTH_RESET_SUBMIT_WINDOW_SECONDS)
+
+
+def _reset_submit_token_limit() -> rate_limit.RateLimit:
+    return _limit(settings.AUTH_RESET_SUBMIT_TOKEN_LIMIT, settings.AUTH_RESET_SUBMIT_WINDOW_SECONDS)
+
+
+def _rate_limited(exc: rate_limit.RateLimitExceeded) -> None:
+    raise HTTPException(
+        status_code=429,
+        detail="Too many attempts. Try again later.",
+        headers={"Retry-After": str(exc.retry_after)},
+    )
+
+
+def _log_auth_event(event: str, request: Request, scope: str) -> None:
+    logger.warning("auth.%s ip=%s scope=%s", event, rate_limit.client_ip(request), scope)
+
+
+async def _ensure_or_429(conn, key: str, limit: rate_limit.RateLimit, request: Request, scope: str) -> None:
+    try:
+        await rate_limit.ensure_allowed(conn, key, limit)
+    except rate_limit.RateLimitExceeded as exc:
+        _log_auth_event("throttle", request, scope)
+        _rate_limited(exc)
+
+
+async def _consume_or_429(conn, key: str, limit: rate_limit.RateLimit, request: Request, scope: str) -> None:
+    try:
+        await rate_limit.consume(conn, key, limit)
+    except rate_limit.RateLimitExceeded as exc:
+        _log_auth_event("throttle", request, scope)
+        _rate_limited(exc)
+
+
+async def _consume_silent(conn, key: str, limit: rate_limit.RateLimit, request: Request, scope: str) -> bool:
+    try:
+        await rate_limit.consume(conn, key, limit)
+        return True
+    except rate_limit.RateLimitExceeded:
+        _log_auth_event("throttle", request, scope)
+        return False
+
+
 # ── email + password ──────────────────────────────────────────────────────
 
 @router.post("/register")
@@ -108,9 +182,11 @@ async def register(payload: RegisterPayload, request: Request, response: Respons
     username = normalize_username(payload.username)
     if not valid_username(username):
         raise HTTPException(status_code=422, detail="Username must be 3–24 chars: a–z, 0–9, underscore.")
-    pw_hash = hash_password(payload.password)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
+        ip_key = rate_limit.bucket_key("auth:register:ip", rate_limit.client_ip(request))
+        await _consume_or_429(conn, ip_key, _register_ip_limit(), request, "register:ip")
+        pw_hash = hash_password(payload.password)
         try:
             row = await conn.fetchrow(
                 """
@@ -132,16 +208,27 @@ async def register(payload: RegisterPayload, request: Request, response: Respons
 @router.post("/login")
 async def login(payload: LoginPayload, request: Request, response: Response):
     ident = payload.identifier.strip()
+    ident_key = ident.lower()
     pool = await get_db_pool()
     async with pool.acquire() as conn:
+        ip_key = rate_limit.bucket_key("auth:login:ip", rate_limit.client_ip(request))
+        account_key = rate_limit.bucket_key("auth:login:account", ident_key)
+        await _ensure_or_429(conn, ip_key, _login_ip_limit(), request, "login:ip")
+        await _ensure_or_429(conn, account_key, _login_account_limit(), request, "login:account")
         row = await conn.fetchrow(
             "SELECT * FROM users WHERE email = $1 OR username = $2;",
-            ident.lower(), ident,
+            ident_key, ident_key,
         )
-        if row is None or not verify_password(row["password_hash"], payload.password):
+        if row is None or not row["password_hash"] or not verify_password(row["password_hash"], payload.password):
+            await _consume_or_429(conn, ip_key, _login_ip_limit(), request, "login:ip")
+            await _consume_or_429(conn, account_key, _login_account_limit(), request, "login:account")
+            _log_auth_event("failure", request, "login")
             raise HTTPException(status_code=401, detail="Invalid credentials.")
         if row["status"] != "active":
+            _log_auth_event("failure", request, "login:status")
             raise HTTPException(status_code=403, detail="This account is suspended.")
+        await rate_limit.clear(conn, ip_key)
+        await rate_limit.clear(conn, account_key)
         session = await create_session(conn, row["id"], request.headers.get("user-agent"))
     set_session_cookie(response, session)
     return self_user(dict(row))
@@ -198,39 +285,49 @@ async def verify_email(token: str):
     th = hash_token(token)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
+        valid = await conn.fetchval(
             """
-            UPDATE email_tokens SET used_at = now()
-            WHERE token_hash = $1 AND kind = 'verify' AND used_at IS NULL AND expires_at > now()
-            RETURNING user_id;
+            SELECT 1
+            FROM email_tokens
+            WHERE token_hash = $1 AND kind = 'verify' AND used_at IS NULL AND expires_at > now();
             """,
             th,
         )
-        if row is not None:
-            await conn.execute("UPDATE users SET email_verified = TRUE WHERE id = $1;", row["user_id"])
-    # Always land back on the SPA; it reads the flag from /me.
-    dest = "/#/verified" if row is not None else "/#/verify-failed"
+    dest = f"/#/verify?token={token}" if valid else "/#/verify-failed"
     return RedirectResponse(url=dest, status_code=303)
 
 
 @router.post("/request-reset")
-async def request_reset(payload: ResetRequestPayload):
+async def request_reset(payload: ResetRequestPayload, request: Request):
+    email = payload.email.lower()
+    should_issue = True
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT id FROM users WHERE email = $1;", payload.email.lower())
+        ip_key = rate_limit.bucket_key("auth:reset-request:ip", rate_limit.client_ip(request))
+        email_key = rate_limit.bucket_key("auth:reset-request:email", email)
+        should_issue = await _consume_silent(conn, ip_key, _reset_request_ip_limit(), request, "reset-request:ip")
+        should_issue = (
+            await _consume_silent(conn, email_key, _reset_request_email_limit(), request, "reset-request:email")
+        ) and should_issue
+        row = await conn.fetchrow("SELECT id FROM users WHERE email = $1;", email) if should_issue else None
+        token = None
         if row is not None:
             token = await _issue_email_token(conn, row["id"], "reset", RESET_TTL)
-            await send_reset_email(payload.email.lower(), _reset_link(token))
+    if token is not None:
+        await send_reset_email(email, _reset_link(token))
     # Don't reveal whether the email exists.
     return {"status": "ok"}
 
 
 @router.post("/reset")
-async def reset_password(payload: ResetPayload, response: Response):
+async def reset_password(payload: ResetPayload, request: Request, response: Response):
     th = hash_token(payload.token)
-    pw_hash = hash_password(payload.password)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
+        ip_key = rate_limit.bucket_key("auth:reset-submit:ip", rate_limit.client_ip(request))
+        token_key = rate_limit.bucket_key("auth:reset-submit:token", th)
+        await _consume_or_429(conn, ip_key, _reset_submit_ip_limit(), request, "reset-submit:ip")
+        await _consume_or_429(conn, token_key, _reset_submit_token_limit(), request, "reset-submit:token")
         row = await conn.fetchrow(
             """
             UPDATE email_tokens SET used_at = now()
@@ -240,10 +337,31 @@ async def reset_password(payload: ResetPayload, response: Response):
             th,
         )
         if row is None:
+            _log_auth_event("failure", request, "reset-submit")
             raise HTTPException(status_code=400, detail="This reset link is invalid or expired.")
+        pw_hash = hash_password(payload.password)
         await conn.execute("UPDATE users SET password_hash = $1 WHERE id = $2;", pw_hash, row["user_id"])
         await revoke_user_sessions(conn, row["user_id"])   # force re-login everywhere
     clear_session_cookie(response)
+    return {"status": "ok"}
+
+
+@router.post("/verify")
+async def verify_email_confirm(payload: VerifyPayload):
+    th = hash_token(payload.token)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE email_tokens SET used_at = now()
+            WHERE token_hash = $1 AND kind = 'verify' AND used_at IS NULL AND expires_at > now()
+            RETURNING user_id;
+            """,
+            th,
+        )
+        if row is None:
+            raise HTTPException(status_code=400, detail="This verification link is invalid or expired.")
+        await conn.execute("UPDATE users SET email_verified = TRUE WHERE id = $1;", row["user_id"])
     return {"status": "ok"}
 
 

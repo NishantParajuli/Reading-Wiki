@@ -273,6 +273,7 @@ function App({ user, onLogout, onUserUpdate }) {
    A mid-session 401 (expired cookie) routes back to the login screen via window.__onUnauthorized. */
 function Root() {
   const [state, setState] = useState({ loading: true, user: null });
+  const [hashRoute, setHashRoute] = useState(() => readHash());
 
   useEffect(() => {
     let cancel = false;
@@ -283,12 +284,19 @@ function Root() {
     return () => { cancel = true; window.__onUnauthorized = null; };
   }, []);
 
+  useEffect(() => {
+    const onHash = () => setHashRoute(readHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
   if (state.loading) {
     return React.createElement("div", { className: "auth-wrap" },
       React.createElement("div", { className: "muted" }, "Loading…"));
   }
-  if (!state.user) {
+  if (!state.user || hashRoute.path === "verify") {
     return React.createElement(AuthScreen, {
+      key: window.location.hash || "auth",
       onAuthed: (u) => { window.location.hash = ""; setState({ loading: false, user: u }); },
     });
   }

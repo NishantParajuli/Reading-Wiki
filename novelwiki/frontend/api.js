@@ -8,11 +8,33 @@
    ============================================================ */
 (function () {
   const API_BASE = "/api";
+  const CSRF_COOKIE = "tg_csrf";
+  const CSRF_HEADER = "X-Tideglass-CSRF";
+  const REQUEST_HEADER = "X-Tideglass-Request";
+  const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+
+  function readCookie(name) {
+    const parts = (document.cookie || "").split(";").map((p) => p.trim());
+    const prefix = `${name}=`;
+    for (const part of parts) {
+      if (part.startsWith(prefix)) return decodeURIComponent(part.slice(prefix.length));
+    }
+    return "";
+  }
+
+  function mutationHeaders(headers) {
+    const h = headers || {};
+    h[REQUEST_HEADER] = "1";
+    const csrf = readCookie(CSRF_COOKIE);
+    if (csrf) h[CSRF_HEADER] = csrf;
+    return h;
+  }
 
   async function req(method, url, body) {
     // credentials: "include" sends the session cookie (same-origin in prod; needed
     // for the cookie-based auth to work at all).
     const opts = { method, credentials: "include", headers: { Accept: "application/json" } };
+    if (!SAFE_METHODS.has(method.toUpperCase())) mutationHeaders(opts.headers);
     if (body !== undefined) {
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body || {});
@@ -70,6 +92,7 @@
       logout() { return postJSON(`${API_BASE}/auth/logout`, {}); },
       requestReset(email) { return postJSON(`${API_BASE}/auth/request-reset`, { email }); },
       reset(token, password) { return postJSON(`${API_BASE}/auth/reset`, { token, password }); },
+      verify(token) { return postJSON(`${API_BASE}/auth/verify`, { token }); },
       providers() { return getJSON(`${API_BASE}/auth/providers`); },
       oauthStart(provider) { window.location.href = `${API_BASE}/auth/oauth/${provider}/start`; },
       links() { return getJSON(`${API_BASE}/auth/links`); },
@@ -84,7 +107,12 @@
     async uploadAvatar(file) {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`${API_BASE}/me/avatar`, { method: "POST", credentials: "include", body: fd });
+      const res = await fetch(`${API_BASE}/me/avatar`, {
+        method: "POST",
+        credentials: "include",
+        headers: mutationHeaders(),
+        body: fd,
+      });
       if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`;
         try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
@@ -216,7 +244,12 @@
     async uploadImport(file) {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`${API_BASE}/import/upload`, { method: "POST", credentials: "include", body: fd });
+      const res = await fetch(`${API_BASE}/import/upload`, {
+        method: "POST",
+        credentials: "include",
+        headers: mutationHeaders(),
+        body: fd,
+      });
       if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`;
         try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
@@ -249,7 +282,7 @@
         const res = await fetch(`${API_BASE}/import/upload/${jid}/chunk`, {
           method: "PUT",
           credentials: "include",
-          headers: { "Upload-Offset": String(offset), "Content-Type": "application/octet-stream" },
+          headers: mutationHeaders({ "Upload-Offset": String(offset), "Content-Type": "application/octet-stream" }),
           body: file.slice(offset, end),
         });
         if (!res.ok) throw new Error(`Chunk upload failed at ${offset}`);
