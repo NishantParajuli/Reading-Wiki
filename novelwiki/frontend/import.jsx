@@ -6,12 +6,13 @@
    ============================================================ */
 const IMPORT_KINDS = ["chapter", "frontmatter", "interlude", "backmatter"];
 // Statuses where the job is still being worked on server-side → keep polling.
-const IMPORT_BUSY = ["receiving", "uploaded", "parsing", "segmenting", "committing",
+const IMPORT_BUSY = ["receiving", "uploaded", "parsing", "segmenting", "committing", "commit_running",
   "ocr_pending", "ocr_running", "ocr_paused"];
 const IMPORT_STATUS_LABEL = {
   receiving: "Receiving…", uploaded: "Queued…", parsing: "Parsing…", segmenting: "Segmenting…",
   awaiting_ocr_confirm: "Scanned — needs OCR", ocr_pending: "OCR queued…", ocr_running: "Reading pages…",
-  ocr_paused: "OCR paused (budget)", awaiting_review: "Ready to review", committing: "Committing…",
+  ocr_paused: "OCR paused (budget)", awaiting_review: "Ready to review",
+  committing: "Committing…", commit_running: "Committing…",
   committed: "Committed", failed: "Failed", canceled: "Canceled",
 };
 

@@ -507,6 +507,10 @@ DDL_QUERIES = [
     );
     """,
     "ALTER TABLE import_jobs ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;",
+    # Multi-worker claim lease: the worker that atomically claims a job stamps its opaque token
+    # + a heartbeat time; a lease left unrenewed past the timeout is reclaimed (see importer/jobs.py).
+    "ALTER TABLE import_jobs ADD COLUMN IF NOT EXISTS claim_token TEXT;",
+    "ALTER TABLE import_jobs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;",
     "CREATE INDEX IF NOT EXISTS import_jobs_status_idx ON import_jobs (status);",
     "CREATE INDEX IF NOT EXISTS import_jobs_user_idx ON import_jobs (user_id);",
 

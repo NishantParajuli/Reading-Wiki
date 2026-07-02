@@ -301,7 +301,13 @@ Uploaded EPUB/PDF files flow through a durable, resumable job (state in `import_
 on disk) so an import survives a deploy/restart and a multi-day OCR run survives the Gemini
 free-tier quota. The pipeline:
 
-1. **Upload** (single-shot or chunked for big files) or drop into the watched `IMPORT_INCOMING_DIR`.
+1. **Upload** (single-shot up to `MAX_UPLOAD_MB`, or a resumable chunked upload up to
+   `MAX_CHUNKED_UPLOAD_MB` for big files) or drop into the watched `IMPORT_INCOMING_DIR`. Chunked
+   uploads are bounded up front (declared size capped at init) and append-only — each chunk must
+   land contiguously at the resume cursor and stay within the declared total, so a client can't
+   punch gaps, forge a sparse file, or exhaust disk; completion is verified and hashed by
+   streaming (never loaded whole into memory). Abandoned `receiving` sessions are GC'd after
+   `IMPORT_UPLOAD_SESSION_TTL_HOURS`.
 2. **Parse** to a normalized block-stream IR — EPUB XHTML, digital-PDF spans, or OCR blocks.
    Scanned PDFs are OCR'd by the PaddleOCR sidecar with **Gemini-vision escalation** for
    low-confidence pages (and a cost-confirm gate before any paid OCR).
@@ -311,6 +317,14 @@ free-tier quota. The pipeline:
 5. **Commit** included segments into `chapters` through the same path the scraper uses — so codex,
    translation, and narration work on imported books with zero extra wiring. CJK-detected scans are
    flagged as a raw source and flow into translation.
+
+The worker claims jobs atomically (`UPDATE … FOR UPDATE SKIP LOCKED`, each trigger status moving to
+a distinct in-progress marker) and stamps a **leased claim** (`claim_token` + `claimed_at`), which it
+renews on a heartbeat while it works — so the same job is never double-processed, safe to run more
+than one worker. Recovery is purely lease-expiry based (`IMPORT_LEASE_TIMEOUT_SECONDS` /
+`IMPORT_WORKER_HEARTBEAT_SECONDS`): an in-progress job is requeued only once its lease goes unrenewed,
+i.e. its owning worker is provably gone. There is deliberately no "requeue everything on boot" step —
+that would reclaim work a sibling worker is actively processing.
 
 ---
 

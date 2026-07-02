@@ -2067,8 +2067,17 @@ async def api_import_upload_init(payload: ImportInit, user: dict = Depends(curre
     fmt = _IMPORT_FORMATS.get(ext)
     if not fmt:
         raise HTTPException(status_code=400, detail="Only .epub and .pdf files are supported.")
+    # A declared total is mandatory: it bounds disk use up front (before any bytes land) and
+    # is what the completion check compares against.
+    size = int(payload.size or 0)
+    if size <= 0:
+        raise HTTPException(status_code=422, detail="A positive declared file size is required.")
+    max_bytes = settings.MAX_CHUNKED_UPLOAD_MB * 1024 * 1024
+    if size > max_bytes:
+        raise HTTPException(status_code=413,
+                            detail=f"File exceeds the {settings.MAX_CHUNKED_UPLOAD_MB} MB upload cap.")
     job_id = await import_jobs.create_job(
-        fmt, original_path="", options={"upload": {"size": int(payload.size or 0), "ext": ext.lstrip('.')}},
+        fmt, original_path="", options={"upload": {"size": size, "ext": ext.lstrip('.')}},
         status="receiving", user_id=user["id"])
     path = import_storage.init_upload(job_id, ext)
     await import_jobs.update_job(job_id, original_path=str(path))
@@ -2088,21 +2097,53 @@ async def api_import_upload_status(job_id: int, user: dict = Depends(current_use
 
 @router.put("/import/upload/{job_id}/chunk")
 async def api_import_upload_chunk(job_id: int, request: Request, user: dict = Depends(current_user)):
-    """Append one chunk at the byte offset given in the `Upload-Offset` header."""
+    """Append one chunk at the byte offset given in the `Upload-Offset` header.
+
+    The chunk must start exactly at the current resume cursor (contiguous, append-only), fit
+    the per-chunk cap, and not push the running total past the declared size — so a client
+    can't punch gaps, forge a sparse file, or blow past the size committed to at init. A stale
+    offset gets a 409 carrying the real cursor so the client can resync; a chunk that re-sends
+    already-received bytes is an idempotent no-op only when those bytes actually match what's
+    stored. Every accepted chunk bumps the session's `updated_at` so an upload still in progress
+    isn't read as abandoned by the cleanup sweep."""
     from novelwiki.importer import storage as import_storage
+    from novelwiki.importer import jobs as import_jobs
     job = await _require_own_job(job_id, user)
     if job["status"] != "receiving":
         raise HTTPException(status_code=409, detail="Upload session is not open.")
     up = (job.get("options") or {}).get("upload") or {}
     ext = up.get("ext", job["format"])
+    declared = int(up.get("size") or 0)
     try:
         offset = int(request.headers.get("Upload-Offset", "0"))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid Upload-Offset header.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="Upload-Offset must be non-negative.")
     data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty chunk.")
     if len(data) > settings.UPLOAD_CHUNK_MAX_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Chunk too large.")
+
+    current = import_storage.upload_offset(job_id, ext)
+    # Idempotent retry: these bytes already landed in full. Accept as a no-op ONLY if they match
+    # what's stored — a resend of different bytes for a received range is a conflict, not a no-op.
+    if offset + len(data) <= current:
+        if not import_storage.chunk_matches(job_id, ext, offset, data):
+            raise HTTPException(status_code=409, detail="Chunk conflicts with already-received bytes.",
+                                headers={"Upload-Offset": str(current)})
+        await import_jobs.touch_job(job_id)
+        return {"offset": current}
+    # Anything else that doesn't start exactly at the cursor would gap or partially overlap.
+    if offset != current:
+        raise HTTPException(status_code=409, detail="Stale upload offset; resume from the current cursor.",
+                            headers={"Upload-Offset": str(current)})
+    if declared and offset + len(data) > declared:
+        raise HTTPException(status_code=413, detail="Chunk would exceed the declared upload size.")
+
     new_offset = import_storage.write_chunk(job_id, ext, offset, data)
+    await import_jobs.touch_job(job_id)
     return {"offset": new_offset}
 
 
@@ -2116,11 +2157,18 @@ async def api_import_upload_complete(job_id: int, user: dict = Depends(current_u
         return {"id": job_id, "status": job["status"]}    # already finalized (idempotent)
     up = (job.get("options") or {}).get("upload") or {}
     ext = up.get("ext", job["format"])
-    sha, size = import_storage.finalize_upload(job_id, ext)
     declared = int(up.get("size") or 0)
-    if declared and size != declared:
+    if declared <= 0:
+        raise HTTPException(status_code=400, detail="Upload has no declared size; re-initialize the upload.")
+    # Cheap stat-based completeness check before the (streaming) hash, so an incomplete or
+    # over-long blob is rejected without reading the whole file. The job stays 'receiving'
+    # (the client can send the rest and retry complete); it only flips to 'uploaded' once the
+    # bytes are all present and hashed.
+    size = import_storage.upload_offset(job_id, ext)
+    if size != declared:
         raise HTTPException(status_code=400,
                             detail=f"Upload incomplete: have {size} bytes, expected {declared}.")
+    sha, _size = import_storage.finalize_upload(job_id, ext)
     await import_jobs.update_job(job_id, file_sha256=sha, status="uploaded", stage=None)
     duplicate_of = await import_jobs.imports_with_hash(sha, exclude_job_id=job_id)
     return {"id": job_id, "status": "uploaded", "format": job["format"], "duplicate_of": duplicate_of}

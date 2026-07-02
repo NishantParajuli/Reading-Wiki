@@ -86,8 +86,15 @@ class Settings(BaseSettings):
     IMPORT_INCOMING_DIR: str = "./data/imports/incoming"   # host watched-folder drop (big files)
     ASSET_DIR: str = "./data/assets"
     MAX_UPLOAD_MB: int = 50                                 # single-shot multipart cap
+    MAX_CHUNKED_UPLOAD_MB: int = 1024                       # total cap for a resumable (chunked) upload
     UPLOAD_CHUNK_MAX_MB: int = 16                           # max size of one resumable-upload chunk
     UPLOAD_CHUNKED_THRESHOLD_MB: int = 40                   # client switches to chunked upload above this
+    IMPORT_UPLOAD_SESSION_TTL_HOURS: int = 24              # abandoned 'receiving' sessions are GC'd after this
+    # Multi-worker claim lease: a worker stamps + periodically renews `claimed_at` on the job it
+    # holds; a claim whose lease goes unrenewed for the timeout is considered orphaned (its worker
+    # crashed/was killed) and is reclaimable. Timeout must comfortably exceed the heartbeat.
+    IMPORT_WORKER_HEARTBEAT_SECONDS: int = 30
+    IMPORT_LEASE_TIMEOUT_SECONDS: int = 120
     IMPORT_AUTO_BUILD_CODEX: bool = False                   # build codex over the imported range on commit
 
     # Text segmentation/cleanup LLM (routed through OpenRouter alongside the codex models).

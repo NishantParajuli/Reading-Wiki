@@ -6,20 +6,30 @@ single DB-polled worker (started from the app lifespan) advances jobs across res
 
 State machine (S1 path; OCR states land in S3)::
 
-    uploaded ──parse──▶ parsing ──▶ awaiting_review ──commit──▶ committing ──▶ committed
-       ▲                                                                          │
-       └────────── (restart requeues an interrupted `parsing`) ───────────────────
+    uploaded ──claim──▶ parsing ──▶ awaiting_review ──commit──▶ committing ──claim──▶ commit_running ──▶ committed
+       ▲                                                                                  │
+       └────────── (restart / stale-lease requeues an interrupted in-progress job) ───────┘
     any ──▶ failed | canceled
 
-The worker only ever processes ONE job at a time (a single sequential asyncio loop), so
-there is no in-process race; ``parsing`` is an in-progress marker requeued on restart,
-while ``committing`` is left as-is and simply re-run (commit is idempotent).
+Claiming is atomic AND leased: ``_claim_next`` moves a trigger status to its distinct
+in-progress marker (uploaded→parsing, ocr_pending→ocr_running, committing→commit_running) in
+one ``UPDATE … FOR UPDATE SKIP LOCKED`` and stamps the claiming worker's opaque token +
+``claimed_at``. The markers are NOT trigger states, so a claimed job leaves the queue the
+instant it's claimed (this is what makes a committing job safe against a concurrent
+double-commit). While it works, the worker renews ``claimed_at`` on a heartbeat; recovery
+(``_recover_stale_leases``) requeues an in-progress job ONLY once its lease has gone unrenewed
+past the timeout — i.e. the owning worker is provably gone. There is deliberately no
+unconditional "requeue everything on boot" step: that would yank jobs a sibling worker is
+actively processing, which is exactly the multi-worker double-claim we must avoid.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import time
+import uuid
+from datetime import timedelta
 
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
@@ -27,11 +37,28 @@ from novelwiki.importer import storage
 
 logger = logging.getLogger(__name__)
 
-# Statuses the worker actively advances (trigger states). `parsing`/`ocr_running`/
-# `committing` are in-progress markers (the first two are requeued on restart); `ocr_paused`
-# is a budget hold that `_reactivate_paused` flips back to `ocr_pending` when quota returns.
+# Statuses the worker actively advances (trigger states). Each is claimed atomically into a
+# distinct in-progress marker: `parsing`/`ocr_running`/`commit_running`. `ocr_paused` is a
+# budget hold that `_reactivate_paused` flips back to `ocr_pending` when quota returns.
 TRIGGER_STATUSES = ("uploaded", "ocr_pending", "committing")
+# In-progress markers → the trigger status a lease-expired job resumes to. (`segmenting` is
+# a legacy marker kept for defence; today it only ever appears as a *stage*, not a status.)
+_MARKER_RESUME = (
+    (("parsing", "segmenting"), "uploaded"),
+    (("ocr_running",), "ocr_pending"),
+    (("commit_running",), "committing"),
+)
 _CJK = ("zh", "ja", "ko")
+
+# Opaque per-process identity stamped on claimed jobs. Freshly minted each process start, so a
+# restarted worker never mistakes a previous incarnation's live-looking claim for its own.
+_WORKER_ID = uuid.uuid4().hex
+
+# How often the worker runs its (cheap) maintenance sweeps: lease recovery + abandoned-upload
+# GC. Kept above the poll interval but well under the lease timeout so an orphaned job is
+# reclaimed promptly after its lease expires.
+_MAINTENANCE_INTERVAL_SECONDS = 60.0
+_last_maintenance = 0.0
 
 _JSON_FIELDS = {"detected_meta", "plan", "stats", "cost_estimate", "progress", "options"}
 
@@ -145,6 +172,14 @@ async def update_job(job_id: int, **fields) -> None:
 async def fail_job(job_id: int, error: str) -> None:
     logger.error(f"Import job {job_id} failed: {error}")
     await update_job(job_id, status="failed", error=str(error)[:4000])
+
+
+async def touch_job(job_id: int) -> None:
+    """Bump ``updated_at`` alone — marks a `receiving` upload session as still alive so its chunks
+    still arriving don't let the abandoned-session sweep read it as dead."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE import_jobs SET updated_at = now() WHERE id = $1;", job_id)
 
 
 # ── Stage handlers ───────────────────────────────────────────────────────────
@@ -361,12 +396,13 @@ async def _do_ocr(job: dict) -> None:
 
 
 async def _do_commit(job: dict) -> None:
-    """committing → write chapters/assets via the scraper persist path → committed.
+    """commit_running → write chapters/assets via the scraper persist path → committed.
 
     ``commit_job`` records completion (novel_id + status='committed') INSIDE its own
     transaction, so this stage is crash-safe: if a restart interrupts a commit, the work
-    either fully rolled back (re-run starts clean) or fully landed as 'committed' (no longer
-    a trigger state, so never re-run) — a duplicate novel can't slip through the gap."""
+    either fully rolled back (requeued `committing` re-runs clean) or fully landed as
+    'committed' (a terminal state, never re-run) — a duplicate novel can't slip through the
+    gap. The atomic claim also guarantees only one worker is ever in this stage for a job."""
     job_id = int(job["id"])
     await update_job(job_id, stage="committing")
     from novelwiki.importer import commit
@@ -396,23 +432,70 @@ def _public_meta(meta: dict, job_id: int) -> dict:
 
 # ── Worker loop ──────────────────────────────────────────────────────────────
 
-async def _requeue_interrupted() -> None:
-    """A deploy/restart can kill the worker mid-stage. `parsing`/`segmenting` reset to
-    `uploaded` (re-parse cleanly); `ocr_running` resets to `ocr_pending` (resumes from the
-    on-disk page checkpoints). `committing` jobs are left to be re-run (commit is idempotent)."""
+async def _recover_stale_leases() -> None:
+    """Requeue in-progress jobs whose lease has expired — i.e. the owning worker stopped renewing
+    ``claimed_at`` (crashed, was killed mid-deploy, lost the DB). This is the ONLY recovery path,
+    and it is multi-worker safe: a *live* worker heartbeats its claim, so a job it is actively
+    processing never looks reclaimable and is never yanked out from under it. Each expired marker
+    goes back to its trigger status with the claim cleared (a NULL lease = orphaned marker, also
+    reclaimable). Resuming is clean: re-parse from scratch, OCR from on-disk page checkpoints,
+    re-run the idempotent + crash-safe commit."""
+    lease = timedelta(seconds=settings.IMPORT_LEASE_TIMEOUT_SECONDS)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        n1 = await conn.execute(
-            "UPDATE import_jobs SET status = 'uploaded', stage = 'requeued after restart' "
-            "WHERE status IN ('parsing', 'segmenting');"
+        for markers, trigger in _MARKER_RESUME:
+            n = await conn.execute(
+                "UPDATE import_jobs SET status = $2, stage = 'requeued (lease expired)', "
+                "claim_token = NULL, claimed_at = NULL "
+                "WHERE status = ANY($1::text[]) "
+                "  AND (claimed_at IS NULL OR claimed_at < now() - $3::interval);",
+                list(markers), trigger, lease,
+            )
+            if n and not n.endswith(" 0"):
+                logger.info(f"Recovered orphaned import leases → {trigger}: {n}.")
+
+
+async def _cleanup_stale_uploads() -> None:
+    """GC abandoned resumable-upload sessions: a job stuck in `receiving` past the TTL had its
+    client walk away mid-upload, so its partial blob is dead weight (a disk-fill lever if left
+    unbounded). The DELETE re-checks the stale predicate so a session that received a fresh chunk
+    between the scan and the delete (its ``updated_at`` bumped, see ``touch_job``) is left alone."""
+    ttl = timedelta(hours=settings.IMPORT_UPLOAD_SESSION_TTL_HOURS)
+    pool = await get_db_pool()
+    removed = 0
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id FROM import_jobs WHERE status = 'receiving' AND updated_at < now() - $1::interval;",
+            ttl,
         )
-        n2 = await conn.execute(
-            "UPDATE import_jobs SET status = 'ocr_pending', stage = 'resuming OCR after restart' "
-            "WHERE status = 'ocr_running';"
-        )
-    for n in (n1, n2):
-        if n and not n.endswith(" 0"):
-            logger.info(f"Requeued interrupted import jobs: {n}.")
+        for r in rows:
+            jid = int(r["id"])
+            res = await conn.execute(
+                "DELETE FROM import_jobs "
+                "WHERE id = $1 AND status = 'receiving' AND updated_at < now() - $2::interval;",
+                jid, ttl,
+            )
+            if res.endswith(" 0"):
+                continue    # a chunk landed since the scan — still active, keep it
+            try:
+                storage.cleanup_job(jid)
+            except Exception as e:
+                logger.warning(f"Cleanup of abandoned upload {jid} left files behind: {e}")
+            removed += 1
+    if removed:
+        logger.info(f"Cleaned up {removed} abandoned upload session(s).")
+
+
+async def _run_maintenance(force: bool = False) -> None:
+    """Throttled housekeeping (lease recovery + abandoned-upload GC), safe to call every tick —
+    it only does real work every `_MAINTENANCE_INTERVAL_SECONDS` (or when `force`)."""
+    global _last_maintenance
+    now = time.monotonic()
+    if not force and (now - _last_maintenance) < _MAINTENANCE_INTERVAL_SECONDS:
+        return
+    _last_maintenance = now
+    await _recover_stale_leases()
+    await _cleanup_stale_uploads()
 
 
 async def _reactivate_paused() -> None:
@@ -422,7 +505,8 @@ async def _reactivate_paused() -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            UPDATE import_jobs SET status='ocr_pending', stage='resuming OCR (budget available)'
+            UPDATE import_jobs SET status='ocr_pending', stage='resuming OCR (budget available)',
+                   claim_token=NULL, claimed_at=NULL
             WHERE status='ocr_paused'
               AND COALESCE((SELECT used FROM provider_budget WHERE provider='gemini' AND day=CURRENT_DATE), 0) < $1;
             """,
@@ -431,46 +515,113 @@ async def _reactivate_paused() -> None:
 
 
 async def _claim_next() -> dict | None:
+    """Atomically claim the oldest pending job, moving it from its trigger status to the matching
+    in-progress marker in a single locked statement (mirrors the TTS worker) and stamping this
+    worker's lease (`claim_token` + `claimed_at`). Because the marker is not a trigger status, the
+    job leaves the queue the instant it's claimed, so two workers can never process the same job.
+    The returned row already carries the new in-progress status, which `_process` dispatches on."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            f"SELECT * FROM import_jobs WHERE status = ANY($1::text[]) "
-            f"ORDER BY updated_at ASC LIMIT 1;",
-            list(TRIGGER_STATUSES),
+            """
+            UPDATE import_jobs j
+            SET status = CASE j.status
+                    WHEN 'uploaded'    THEN 'parsing'
+                    WHEN 'ocr_pending' THEN 'ocr_running'
+                    WHEN 'committing'  THEN 'commit_running'
+                    ELSE j.status
+                END,
+                stage = 'claimed',
+                claim_token = $2,
+                claimed_at = now(),
+                updated_at = now()
+            WHERE j.id = (
+                SELECT id FROM import_jobs
+                WHERE status = ANY($1::text[])
+                ORDER BY updated_at ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            RETURNING j.*;
+            """,
+            list(TRIGGER_STATUSES), _WORKER_ID,
         )
     return _row_to_job(row) if row else None
 
 
+async def _renew_lease(job_id: int, token: str | None) -> None:
+    """Bump `claimed_at` on a job we still hold, guarded by `claim_token` so we never steal back a
+    lease that recovery already handed to another worker."""
+    if not token:
+        return
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE import_jobs SET claimed_at = now() WHERE id = $1 AND claim_token = $2;",
+            job_id, token,
+        )
+
+
+async def _heartbeat(job_id: int, token: str | None, stop: asyncio.Event) -> None:
+    """Renew the lease every `IMPORT_WORKER_HEARTBEAT_SECONDS` for as long as `_process` runs, so a
+    long stage (OCR especially) keeps its claim alive and the recovery sweep leaves it be. Runs
+    concurrently with the stage; DB hiccups are swallowed (a missed beat just shortens the lease)."""
+    interval = max(5, settings.IMPORT_WORKER_HEARTBEAT_SECONDS)
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+            return                          # stop signalled → stage finished
+        except asyncio.TimeoutError:
+            pass
+        try:
+            await _renew_lease(job_id, token)
+        except Exception as e:
+            logger.debug(f"Import job {job_id} lease heartbeat skipped: {e}")
+
+
 async def _process(job: dict) -> None:
     job_id = int(job["id"])
+    status = job["status"]              # already the in-progress marker set by the atomic claim
+    token = job.get("claim_token")
+    stop_hb = asyncio.Event()
+    heartbeat = asyncio.create_task(_heartbeat(job_id, token, stop_hb))
     try:
-        if job["status"] == "uploaded":
+        if status == "parsing":
             if not await _job_owner_can_spend(job):
                 await fail_job(job_id, "Verify your email before importing files.")
                 return
             await _do_parse(job)
-        elif job["status"] == "ocr_pending":
+        elif status == "ocr_running":
             if not await _job_owner_can_spend(job):
                 await fail_job(job_id, "Verify your email before running OCR.")
                 return
             await _do_ocr(job)
-        elif job["status"] == "committing":
+        elif status == "commit_running":
             await _do_commit(job)
     except Exception as e:
-        logger.exception(f"Import job {job_id} crashed during '{job['status']}'.")
+        logger.exception(f"Import job {job_id} crashed during '{status}'.")
         await fail_job(job_id, f"{type(e).__name__}: {e}")
+    finally:
+        stop_hb.set()
+        try:
+            await heartbeat
+        except Exception:
+            pass
 
 
 async def worker_loop(poll_interval: float = 2.0) -> None:
     storage.ensure_dirs()
+    # No unconditional "requeue everything" on boot — that would reclaim jobs a sibling worker is
+    # actively processing. Recovery is purely lease-expiry based (multi-worker safe).
     try:
-        await _requeue_interrupted()
+        await _run_maintenance(force=True)  # reclaim lease-expired jobs + GC abandoned uploads
     except Exception as e:
-        logger.warning(f"Import worker: could not requeue interrupted jobs: {e}")
+        logger.warning(f"Import worker: startup maintenance failed: {e}")
     logger.info("Import worker started.")
     while not _stop.is_set():
         try:
             await _reactivate_paused()      # unpause budget-held OCR jobs when quota returns
+            await _run_maintenance()        # throttled: stale-lease recovery + abandoned-upload GC
             job = await _claim_next()
             if job is None:
                 try:

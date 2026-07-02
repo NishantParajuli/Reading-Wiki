@@ -102,20 +102,45 @@ def upload_offset(job_id: int, ext: str) -> int:
 
 
 def write_chunk(job_id: int, ext: str, offset: int, data: bytes) -> int:
-    """Write a chunk at ``offset`` and return the new received size. Idempotent on retried
-    chunks (a client may resend the last chunk); seeking past the end zero-fills any gap,
-    but the client is expected to send contiguous offsets."""
+    """Write a chunk at ``offset`` and return the new received size.
+
+    Append-only by contract: writing past the current EOF would seek-zero-fill a gap and
+    produce a sparse file (a DoS lever — a tiny request can pre-allocate a huge apparent
+    size). We refuse ``offset > current size`` here; overlap of already-written bytes
+    (``offset <= current``) is allowed so a resumed/retried chunk is idempotent. The caller
+    (route) still validates the offset against the resume cursor and the declared total."""
     p = original_path(job_id, ext)
-    with open(p, "r+b") as f:
+    current = p.stat().st_size if p.exists() else 0
+    if offset > current:
+        raise ValueError(f"Non-contiguous chunk: offset {offset} is past the current size {current}.")
+    with open(p, "r+b" if p.exists() else "wb") as f:
         f.seek(offset)
         f.write(data)
     return p.stat().st_size
 
 
-def finalize_upload(job_id: int, ext: str) -> tuple[str, int]:
-    """Hash the fully-assembled blob and return (sha256, size)."""
+def chunk_matches(job_id: int, ext: str, offset: int, data: bytes) -> bool:
+    """True iff the bytes already stored at ``offset`` equal ``data``. Lets the route accept an
+    idempotent retry (a re-sent chunk fully inside already-received bytes) ONLY when it really
+    matches — so a buggy/misaligned client resend surfaces as a conflict instead of being
+    silently masked. Reads at most one chunk's worth (bounded by the per-chunk cap)."""
     p = original_path(job_id, ext)
-    return sha256_bytes(p.read_bytes()), p.stat().st_size
+    with open(p, "rb") as f:
+        f.seek(offset)
+        return f.read(len(data)) == data
+
+
+def finalize_upload(job_id: int, ext: str) -> tuple[str, int]:
+    """Hash the fully-assembled blob and return (sha256, size), streaming the file so a large
+    upload is never loaded into memory at once."""
+    p = original_path(job_id, ext)
+    h = hashlib.sha256()
+    size = 0
+    with open(p, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+            size += len(block)
+    return h.hexdigest(), size
 
 
 def blocks_path(job_id: int) -> Path:
