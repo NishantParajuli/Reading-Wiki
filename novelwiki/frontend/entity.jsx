@@ -93,7 +93,8 @@ function EntityPage({ novelId, id, ceiling, meta, nav, setView }) {
     };
   });
 
-  const moreToCome = meta && (meta.max == null || ceiling < meta.max);
+  const bookMax = meta && (meta.bookMax == null ? meta.max : meta.bookMax);
+  const moreToCome = meta && (bookMax == null || ceiling < bookMax);
 
   return React.createElement("div", { className: "page" },
     React.createElement(BackBtn, { setView }),

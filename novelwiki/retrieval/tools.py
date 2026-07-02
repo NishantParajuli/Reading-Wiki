@@ -68,16 +68,20 @@ async def get_connected_personas(novel_id: int, entity_id: int, chapter_ceiling:
     rows = await conn.fetch(
         """
         WITH RECURSIVE connected(entity_id) AS (
-            SELECT $1::BIGINT AS entity_id
+            SELECT e.id AS entity_id
+            FROM entities e
+            WHERE e.id = $1 AND e.novel_id = $3 AND e.first_seen_chapter <= $2
             UNION
-            SELECT
+            SELECT other.id AS entity_id
+            FROM identity_links l
+            JOIN connected c ON (l.entity_a = c.entity_id OR l.entity_b = c.entity_id)
+            JOIN entities other ON other.id =
                 CASE
                     WHEN l.entity_a = c.entity_id THEN l.entity_b
                     ELSE l.entity_a
-                END AS entity_id
-            FROM identity_links l
-            JOIN connected c ON (l.entity_a = c.entity_id OR l.entity_b = c.entity_id)
+                END
             WHERE l.revealed_at_chapter <= $2 AND l.novel_id = $3
+              AND other.novel_id = $3 AND other.first_seen_chapter <= $2
         )
         SELECT entity_id FROM connected;
         """,
@@ -225,9 +229,13 @@ async def get_relationships(
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         linked_ids = await get_connected_personas(novel_id, entity_id, chapter_ceiling, conn)
+        if not linked_ids:
+            return []
 
         if other_id:
             other_linked_ids = await get_connected_personas(novel_id, other_id, chapter_ceiling, conn)
+            if not other_linked_ids:
+                return []
             rows = await conn.fetch(
                 """
                 SELECT r.id, r.source_id, r.target_id, r.chapter, r.relation_type, r.directed, r.content, r.data,
@@ -239,6 +247,8 @@ async def get_relationships(
                 WHERE ((r.source_id = ANY($1) AND r.target_id = ANY($2)) OR
                        (r.source_id = ANY($2) AND r.target_id = ANY($1)))
                   AND r.chapter <= $3 AND r.novel_id = $4
+                  AND e1.novel_id = $4 AND e2.novel_id = $4
+                  AND e1.first_seen_chapter <= $3 AND e2.first_seen_chapter <= $3
                 ORDER BY r.chapter ASC;
                 """,
                 linked_ids, other_linked_ids, chapter_ceiling, novel_id
@@ -253,6 +263,8 @@ async def get_relationships(
                 JOIN entities e1 ON r.source_id = e1.id
                 JOIN entities e2 ON r.target_id = e2.id
                 WHERE (r.source_id = ANY($1) OR r.target_id = ANY($1)) AND r.chapter <= $2 AND r.novel_id = $3
+                  AND e1.novel_id = $3 AND e2.novel_id = $3
+                  AND e1.first_seen_chapter <= $2 AND e2.first_seen_chapter <= $2
                 ORDER BY r.chapter ASC;
                 """,
                 linked_ids, chapter_ceiling, novel_id

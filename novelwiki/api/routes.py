@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
 from novelwiki.auth.deps import current_user, require_admin
-from novelwiki.auth.access import require_readable, require_editable, can_edit
+from novelwiki.auth.access import require_readable, require_editable, can_edit, require_effective_ceiling
 from novelwiki.auth.users import self_user, public_user, valid_username, normalize_username
 from novelwiki import quota
 from novelwiki.scraper.runner import scrape_source, scrape_novel, set_source_offset
@@ -190,6 +190,10 @@ class AskResponse(BaseModel):
     answer: str
     citations: list[Citation]
     evidence_ids: dict
+    requested_ceiling: float | None = None
+    allowed_ceiling: float | None = None
+    effective_ceiling: float | None = None
+    ceiling_clamped: bool = False
 
 
 # ── Adapters ──────────────────────────────────────────────────────────────
@@ -799,6 +803,21 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
                 "WHERE user_id = $1 AND novel_id = $2 AND chapter = $3;",
                 active_user["id"], novel_id, number,
             )
+            await conn.execute(
+                """
+                INSERT INTO reading_progress (user_id, novel_id, last_chapter, max_chapter_read, scroll_pct, updated_at)
+                VALUES ($1, $2, $3, $3, 0, now())
+                ON CONFLICT (user_id, novel_id) DO UPDATE SET
+                    last_chapter = COALESCE(reading_progress.last_chapter, EXCLUDED.last_chapter),
+                    max_chapter_read = GREATEST(
+                        COALESCE(reading_progress.max_chapter_read, EXCLUDED.max_chapter_read),
+                        EXCLUDED.max_chapter_read
+                    ),
+                    scroll_pct = COALESCE(reading_progress.scroll_pct, EXCLUDED.scroll_pct),
+                    updated_at = now();
+                """,
+                active_user["id"], novel_id, number,
+            )
 
     content = row["content"]
     status = row["translation_status"]
@@ -1269,13 +1288,18 @@ async def api_set_progress(novel_id: int, payload: ProgressUpdate, user: dict = 
     await require_readable(novel_id, user)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM chapters WHERE novel_id = $1 AND number = $2;",
+            novel_id, payload.last_chapter,
+        )
+        if not exists:
+            raise HTTPException(status_code=404, detail="Chapter not found.")
         await conn.execute(
             """
             INSERT INTO reading_progress (user_id, novel_id, last_chapter, max_chapter_read, scroll_pct, updated_at)
-            VALUES ($1, $2, $3, $3, $4, now())
+            VALUES ($1, $2, $3, NULL, $4, now())
             ON CONFLICT (user_id, novel_id) DO UPDATE SET
                 last_chapter = EXCLUDED.last_chapter,
-                max_chapter_read = GREATEST(COALESCE(reading_progress.max_chapter_read, 0), EXCLUDED.last_chapter),
                 scroll_pct = EXCLUDED.scroll_pct,
                 updated_at = now();
             """,
@@ -1436,39 +1460,48 @@ async def api_delete_glossary(novel_id: int, term_id: int, user: dict = Depends(
 @router.get("/novels/{novel_id}/meta")
 async def api_meta_chapters(novel_id: int, user: dict = Depends(current_user)):
     """Chapter span + display title/blurb so the codex ceiling control can be bounded."""
-    await require_readable(novel_id, user)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        novel = await conn.fetchrow("SELECT title, description FROM novels WHERE id = $1;", novel_id)
-        row = await conn.fetchrow(
-            "SELECT COUNT(*) AS count, MIN(number) AS min_chapter, MAX(number) AS max_chapter FROM chapters WHERE novel_id = $1;",
-            novel_id,
-        )
-    if not novel:
-        raise HTTPException(status_code=404, detail="Novel not found.")
+    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=None)
+    novel = ceiling_info.novel
     return {
         "novel_title": novel["title"],
         "novel_blurb": novel["description"] or "",
-        "count": int(row["count"]),
-        "min_chapter": float(row["min_chapter"]) if row["min_chapter"] is not None else None,
-        "max_chapter": float(row["max_chapter"]) if row["max_chapter"] is not None else None,
+        "count": ceiling_info.chapter_count,
+        "min_chapter": ceiling_info.min_chapter,
+        "max_chapter": ceiling_info.max_chapter,
+        "allowed_ceiling": ceiling_info.allowed_ceiling,
+        "effective_ceiling": ceiling_info.effective_ceiling,
     }
 
 
 @router.get("/novels/{novel_id}/stats")
 async def api_meta_stats(novel_id: int, ceiling: float, user: dict = Depends(current_user)):
     """Spoiler-safe aggregate stats for the codex home surface (all bounded by ceiling)."""
-    await require_readable(novel_id, user)
+    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
+    ceiling = ceiling_info.effective_ceiling
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         entities_revealed = await conn.fetchval(
             "SELECT COUNT(*) FROM entities WHERE first_seen_chapter <= $1 AND novel_id = $2;", ceiling, novel_id
         )
         facts_known = await conn.fetchval(
-            "SELECT COUNT(*) FROM entity_facts WHERE chapter <= $1 AND novel_id = $2;", ceiling, novel_id
+            """
+            SELECT COUNT(*)
+            FROM entity_facts f
+            JOIN entities e ON e.id = f.entity_id AND e.novel_id = f.novel_id
+            WHERE f.chapter <= $1 AND f.novel_id = $2 AND e.first_seen_chapter <= $1;
+            """,
+            ceiling, novel_id,
         )
         relationships_known = await conn.fetchval(
-            "SELECT COUNT(*) FROM relationships WHERE chapter <= $1 AND novel_id = $2;", ceiling, novel_id
+            """
+            SELECT COUNT(*)
+            FROM relationships r
+            JOIN entities e1 ON e1.id = r.source_id AND e1.novel_id = r.novel_id
+            JOIN entities e2 ON e2.id = r.target_id AND e2.novel_id = r.novel_id
+            WHERE r.chapter <= $1 AND r.novel_id = $2
+              AND e1.first_seen_chapter <= $1 AND e2.first_seen_chapter <= $1;
+            """,
+            ceiling, novel_id,
         )
         max_chapter = await conn.fetchval("SELECT MAX(number) FROM chapters WHERE novel_id = $1;", novel_id)
         title_row = await conn.fetchrow(
@@ -1481,6 +1514,10 @@ async def api_meta_stats(novel_id: int, ceiling: float, user: dict = Depends(cur
         pct = round(min(100.0, (float(ceiling) / max_f) * 100))
     return {
         "ceiling": float(ceiling),
+        "requested_ceiling": ceiling_info.requested_ceiling,
+        "allowed_ceiling": ceiling_info.allowed_ceiling,
+        "effective_ceiling": ceiling_info.effective_ceiling,
+        "ceiling_clamped": ceiling_info.clamped,
         "entities_revealed": int(entities_revealed or 0),
         "facts_known": int(facts_known or 0),
         "relationships_known": int(relationships_known or 0),
@@ -1501,9 +1538,14 @@ async def api_list_entities(
     q: str | None = None,
     user: dict = Depends(current_user),
 ):
-    await require_readable(novel_id, user)
+    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
     try:
-        return await list_entities(novel_id, chapter_ceiling=ceiling, entity_type=type, name_query=q)
+        return await list_entities(
+            novel_id,
+            chapter_ceiling=ceiling_info.effective_ceiling,
+            entity_type=type,
+            name_query=q,
+        )
     except Exception as e:
         logger.error(f"Error listing entities: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1511,9 +1553,9 @@ async def api_list_entities(
 
 @router.get("/novels/{novel_id}/entity/resolve")
 async def api_resolve_entity(novel_id: int, name: str, ceiling: float, user: dict = Depends(current_user)):
-    await require_readable(novel_id, user)
+    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
     try:
-        return await resolve_entity(novel_id, name=name, chapter_ceiling=ceiling)
+        return await resolve_entity(novel_id, name=name, chapter_ceiling=ceiling_info.effective_ceiling)
     except Exception as e:
         logger.error(f"Error resolving entity: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1527,7 +1569,8 @@ async def api_get_entity_profile(
     user: dict = Depends(current_user),
 ):
     """Structured profile at the ceiling, using the wiki_cache fast path."""
-    await require_readable(novel_id, user)
+    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
+    ceiling = ceiling_info.effective_ceiling
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
@@ -1598,9 +1641,14 @@ async def api_get_relationships(
     other_id: int | None = None,
     user: dict = Depends(current_user),
 ):
-    await require_readable(novel_id, user)
+    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
     try:
-        return await get_relationships(novel_id, entity_id=entity_id, chapter_ceiling=ceiling, other_id=other_id)
+        return await get_relationships(
+            novel_id,
+            entity_id=entity_id,
+            chapter_ceiling=ceiling_info.effective_ceiling,
+            other_id=other_id,
+        )
     except Exception as e:
         logger.error(f"Error fetching relationships: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1608,9 +1656,13 @@ async def api_get_relationships(
 
 @router.get("/novels/{novel_id}/entity/{entity_id}/timeline")
 async def api_get_timeline(novel_id: int, entity_id: int, ceiling: float, user: dict = Depends(current_user)):
-    await require_readable(novel_id, user)
+    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
     try:
-        return await get_timeline(novel_id, entity_id=entity_id, chapter_ceiling=ceiling)
+        return await get_timeline(
+            novel_id,
+            entity_id=entity_id,
+            chapter_ceiling=ceiling_info.effective_ceiling,
+        )
     except Exception as e:
         logger.error(f"Error fetching timeline: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1618,9 +1670,13 @@ async def api_get_timeline(novel_id: int, entity_id: int, ceiling: float, user: 
 
 @router.get("/novels/{novel_id}/entity/{entity_id}/identities")
 async def api_get_identities(novel_id: int, entity_id: int, ceiling: float, user: dict = Depends(current_user)):
-    await require_readable(novel_id, user)
+    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
     try:
-        return await get_identity_links(novel_id, entity_id=entity_id, chapter_ceiling=ceiling)
+        return await get_identity_links(
+            novel_id,
+            entity_id=entity_id,
+            chapter_ceiling=ceiling_info.effective_ceiling,
+        )
     except Exception as e:
         logger.error(f"Error fetching identity links: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1631,14 +1687,18 @@ async def api_get_identities(novel_id: int, entity_id: int, ceiling: float, user
 @router.post("/novels/{novel_id}/ask", response_model=AskResponse)
 async def ask_question(novel_id: int, req: AskRequest, user: dict = Depends(current_user)):
     """Agentic spoiler-safe Q&A scoped to one novel."""
-    await require_readable(novel_id, user)
+    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=req.ceiling)
     try:
         await get_bm25_manager(novel_id).ensure_loaded()
-        result = await answer_question(novel_id, req.question, req.ceiling)
+        result = await answer_question(novel_id, req.question, ceiling_info.effective_ceiling)
         return AskResponse(
             answer=result["answer"],
             citations=[Citation(**c) for c in result["citations"]],
             evidence_ids=result["evidence_ids"],
+            requested_ceiling=ceiling_info.requested_ceiling,
+            allowed_ceiling=ceiling_info.allowed_ceiling,
+            effective_ceiling=ceiling_info.effective_ceiling,
+            ceiling_clamped=ceiling_info.clamped,
         )
     except Exception as e:
         logger.error(f"Agentic Q&A error: {e}")

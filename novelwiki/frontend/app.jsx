@@ -39,6 +39,8 @@ function AccentSwatches({ value, onChange }) {
 function CeilingBar({ ceiling, setCeiling, meta, stats }) {
   const min = (meta && meta.min) || 1;
   const max = (meta && meta.max) || min;
+  const bookMax = (meta && meta.bookMax) || max;
+  const lockedAhead = bookMax > max;
   const title = stats && stats.ceiling_title;
   const revealed = stats == null ? "—" : stats.entities_revealed;
   return React.createElement("div", { className: "ceiling" },
@@ -59,7 +61,12 @@ function CeilingBar({ ceiling, setCeiling, meta, stats }) {
       React.createElement("span", { className: "chapnum" }, `${ceiling}/${max}`)
     ),
     React.createElement("div", { className: "ceiling-stat" },
-      React.createElement("b", null, revealed), " entities revealed"
+      lockedAhead
+        ? React.createElement(React.Fragment, null,
+            React.createElement(Icon, { name: "lock", size: 12, className: "lk" }),
+            " read further to unlock"
+          )
+        : React.createElement(React.Fragment, null, React.createElement("b", null, revealed), " entities revealed")
     )
   );
 }
@@ -106,7 +113,13 @@ function App({ user, onLogout, onUserUpdate }) {
   useEffect(() => {
     if (novelId == null) { setStats(null); return; }
     let cancel = false;
-    window.API.stats(novelId, debCeiling).then(s => { if (!cancel) setStats(s); }).catch(() => { if (!cancel) setStats(null); });
+    window.API.stats(novelId, debCeiling).then(s => {
+      if (cancel) return;
+      setStats(s);
+      if (s && s.ceiling_clamped && s.effective_ceiling != null) {
+        setCeiling(Number(s.effective_ceiling));
+      }
+    }).catch(() => { if (!cancel) setStats(null); });
     return () => { cancel = true; };
   }, [novelId, debCeiling]);
 
@@ -161,10 +174,15 @@ function App({ user, onLogout, onUserUpdate }) {
     setCeiling(c => Math.max(c, number));
   };
 
+  const minChapter = novel ? (novel.min_chapter || 1) : 1;
+  const maxChapter = novel ? (novel.max_chapter || minChapter) : minChapter;
+  const allowedCeiling = novel
+    ? Math.min(maxChapter, Math.max(minChapter, (novel.progress && novel.progress.max_chapter_read) || minChapter))
+    : minChapter;
   const codexMeta = novel ? {
     title: novel.title, blurb: novel.description || "",
-    min: novel.min_chapter || 1, max: novel.max_chapter || (novel.min_chapter || 1),
-    totalChapters: novel.max_chapter || 1, count: novel.chapter_count,
+    min: minChapter, max: allowedCeiling, bookMax: maxChapter,
+    totalChapters: maxChapter, count: novel.chapter_count,
   } : null;
 
   const inNovel = novelId != null;

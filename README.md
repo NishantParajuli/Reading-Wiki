@@ -20,9 +20,9 @@ The codex upholds a single, hard rule:
 > appear in a codex entry, a stat, or a Q&A answer.
 
 That boundary is enforced at the **database and retrieval layers** (`WHERE chapter <= ceiling`
-on every read) — never by trusting the LLM to hold back. Each reader's ceiling is driven by
-their own `max_chapter_read`, so the same shared novel reveals different amounts to different
-people.
+on every read) — never by trusting the LLM to hold back. The server computes each reader's
+effective ceiling from trusted, server-observed chapter reads (`max_chapter_read`); browser
+progress updates can move the resume position, but cannot unlock future codex data.
 
 ---
 

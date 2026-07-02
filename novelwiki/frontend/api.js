@@ -2,9 +2,9 @@
    api.js — backend client for the multi-novel reading platform.
 
    Everything is scoped to a novel id. The reader reads chapter `content`; the
-   codex reads are additionally bounded by the chapter ceiling, and the server
-   applies `WHERE chapter <= ceiling AND novel_id = ...` in SQL — so no future
-   data and no other novel's data ever reaches the browser.
+   codex reads are additionally bounded by the server-computed effective ceiling
+   for this reader. The browser may request a lower ceiling, but the backend
+   clamps it to trusted read progress before any retrieval or synthesis happens.
    ============================================================ */
 (function () {
   const API_BASE = "/api";

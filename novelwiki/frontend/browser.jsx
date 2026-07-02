@@ -98,8 +98,9 @@ function Browser({ novelId, ceiling, meta, nav }) {
     return () => { cancel = true; };
   }, [debCeiling, debQ, filter]);
 
+  const bookMax = meta && (meta.bookMax == null ? meta.max : meta.bookMax);
   const showTeaser = !q.trim() && filter === "all" &&
-    (meta && (meta.max == null || ceiling < meta.max));
+    (meta && (bookMax == null || ceiling < bookMax));
 
   return React.createElement("div", { className: "page" },
     React.createElement("p", { className: "section-eyebrow" }, "The Codex"),
@@ -141,7 +142,7 @@ function Browser({ novelId, ceiling, meta, nav }) {
         [0, 1, 2].map(i => React.createElement(TeaserCard, { key: "teaser" + i, k: "teaser" + i }))
       ),
       React.createElement("p", { className: "muted", style: { fontSize: 12.5, marginTop: 12 } },
-        "Hidden by the spoiler boundary — these reveal themselves as you raise the chapter ceiling."
+        "Hidden by the spoiler boundary — these reveal themselves as you read further."
       )
     )
   );

@@ -1,9 +1,19 @@
 import asyncpg
 import logging
+from urllib.parse import urlparse
+
 from novelwiki.config.settings import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _database_name(url: str) -> str:
+    return urlparse(url).path.lstrip("/") or "novelwiki"
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
 
 DDL_QUERIES = [
     # Extensions
@@ -658,25 +668,27 @@ ALL_TABLES = [
 
 
 async def init_database():
-    # 1. Connect to superuser DB to ensure database exists
+    db_name = _database_name(settings.DATABASE_URL)
+
+    # 1. Connect to superuser DB to ensure the configured database exists.
     try:
         conn = await asyncpg.connect(settings.DB_SUPERUSER_URL)
         exists = await conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1);",
-            "novelwiki"
+            db_name,
         )
         if not exists:
-            logger.info("Database 'novelwiki' does not exist. Creating...")
-            await conn.execute("CREATE DATABASE novelwiki;")
-            logger.info("Database 'novelwiki' created successfully.")
+            logger.info("Database %r does not exist. Creating...", db_name)
+            await conn.execute(f"CREATE DATABASE {_quote_ident(db_name)};")
+            logger.info("Database %r created successfully.", db_name)
         await conn.close()
     except Exception as e:
         logger.warning(f"Could not check/create database using superuser URL: {e}")
 
-    # 2. Connect to the 'novelwiki' database and apply schema
+    # 2. Connect to the configured database and apply schema.
     try:
         conn = await asyncpg.connect(settings.DATABASE_URL)
-        logger.info("Applying migrations and DDL queries to 'novelwiki'...")
+        logger.info("Applying migrations and DDL queries to %r...", db_name)
 
         # Build the active query list (only apply HNSW index if EMBED_DIM <= 2000)
         active_queries = list(DDL_QUERIES)
