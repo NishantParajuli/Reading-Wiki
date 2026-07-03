@@ -17,10 +17,11 @@ async def hybrid_search(novel_id: int, query: str, chapter_ceiling: float, k: in
     """
     logger.info(f"Hybrid search (novel {novel_id}): '{query}' at ceiling {chapter_ceiling}")
 
-    # 1. Sparse BM25 Search (per-novel index; pre-filters <= ceiling internally)
+    # 1. Sparse BM25 Search (per-novel index; pre-filters <= ceiling internally).
+    # asearch() offloads the blocking tokenize/retrieve off the event loop.
     manager = get_bm25_manager(novel_id)
     await manager.ensure_loaded()
-    sparse_hits = manager.search(query, chapter_ceiling, k=k)
+    sparse_hits = await manager.asearch(query, chapter_ceiling, k=k)
 
     # 2. Dense Vector Search (pre-filters <= ceiling internally)
     dense_hits = await dense_search(novel_id, query, chapter_ceiling, k=k)

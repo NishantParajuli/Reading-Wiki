@@ -11,16 +11,14 @@ from novelwiki.db.connection import get_db_pool
 from novelwiki.auth.deps import current_user, require_admin
 from novelwiki.auth.access import require_readable, require_editable, can_edit, require_effective_ceiling
 from novelwiki.auth.users import self_user, public_user, valid_username, normalize_username
-from novelwiki import quota
-from novelwiki.scraper.runner import scrape_source, scrape_novel, set_source_offset
+from novelwiki import quota, ai_limits
+from novelwiki.jobs import service as jobs_service
+from novelwiki.scraper.runner import set_source_offset
 from novelwiki.scraper.adapters import list_adapters
 from novelwiki.scraper.safe_fetch import SafeFetchError, validate_source_start_url
-from novelwiki.ingest.chunk import chunk_all_chapters
-from novelwiki.ingest.embed import embed_missing_chunks
-from novelwiki.ingest.extract import extract_all_chapters
 from novelwiki.ingest.link import merge_entities
 from novelwiki.translate.translate import (
-    translate_chapter, prefetch_translations, translate_range, seed_glossary_from_entities,
+    translate_chapter, prefetch_translations, seed_glossary_from_entities,
     translate_raw_text,
 )
 from novelwiki.retrieval.bm25 import get_bm25_manager
@@ -28,7 +26,9 @@ from novelwiki.retrieval.tools import (
     resolve_entity, get_entity_profile, get_relationships, get_timeline,
     list_entities, get_identity_links
 )
-from novelwiki.agent.orchestrator import answer_question
+from novelwiki.agent.orchestrator import (
+    answer_question, compute_query_hash, get_cached_answer, build_citations,
+)
 from novelwiki.agent.llm_client import call_chat_completion
 from novelwiki.agent.prompts import WIKI_PROFILE_SYNTHESIS_SYSTEM, WIKI_PROFILE_SYNTHESIS_USER
 
@@ -1401,9 +1401,10 @@ async def api_delete_bookmark(novel_id: int, bookmark_id: int, user: dict = Depe
 # ── Scraping ──────────────────────────────────────────────────────────────
 
 @router.post("/novels/{novel_id}/scrape")
-async def api_scrape(novel_id: int, payload: ScrapeTrigger, bg_tasks: BackgroundTasks, user: dict = Depends(current_user)):
-    """Kicks off scraping in the background. Targets one source if source_id is given,
-    else every source of the novel."""
+async def api_scrape(novel_id: int, payload: ScrapeTrigger, user: dict = Depends(current_user)):
+    """Schedules a durable scrape job (survives restarts). Targets one source if source_id is
+    given, else every source of the novel. Repeated clicks for the same target dedupe onto the
+    already-active job rather than piling up duplicate work."""
     await require_editable(novel_id, user)
     quota.require_spend_allowed(user)
     pool = await get_db_pool()
@@ -1415,28 +1416,33 @@ async def api_scrape(novel_id: int, payload: ScrapeTrigger, bg_tasks: Background
             )
         if not source:
             raise HTTPException(status_code=404, detail="Source not found.")
-        bg_tasks.add_task(
-            scrape_source,
-            payload.source_id,
-            force=payload.force,
-            max_chapters=payload.max_chapters,
-            expected_novel_id=novel_id,
+        idem = (
+            f"scrape:novel{novel_id}:source{payload.source_id}:"
+            f"force{int(payload.force)}:max{payload.max_chapters}"
         )
     else:
-        bg_tasks.add_task(scrape_novel, novel_id, force=payload.force, max_chapters=payload.max_chapters)
-    return {"status": "success", "message": "Scrape job scheduled in background."}
+        idem = f"scrape:novel{novel_id}:all:force{int(payload.force)}:max{payload.max_chapters}"
+    job_id, created = await jobs_service.create_job(
+        "scrape", novel_id=novel_id, user_id=user["id"],
+        options={"source_id": payload.source_id, "force": payload.force, "max_chapters": payload.max_chapters},
+        idempotency_key=idem,
+    )
+    msg = "Scrape job scheduled." if created else "A scrape for this target is already running."
+    return {"status": "success", "message": msg, "job_id": job_id, "deduped": not created}
 
 
 # ── Translation + glossary ────────────────────────────────────────────────
 
 @router.post("/novels/{novel_id}/translate")
-async def api_translate(novel_id: int, payload: TranslateTrigger, bg_tasks: BackgroundTasks, user: dict = Depends(current_user)):
-    """Translate raw chapters in a range in the background (manual batch; reading
-    itself uses on-demand + prefetch). Optionally seed the glossary from the codex first."""
+async def api_translate(novel_id: int, payload: TranslateTrigger, user: dict = Depends(current_user)):
+    """Schedule a durable translation batch over a chapter range (manual batch; reading itself
+    uses on-demand + prefetch). The worker computes the pending chapters at execution time,
+    meters each against the caller's monthly quota as it translates, and stops gracefully on
+    quota exhaustion. Optionally seeds the glossary from the codex first."""
     # Spend on the shared base is owner/admin only (per-user self-translation is Phase 5).
     await require_editable(novel_id, user)
-    # Meter against the caller's monthly quota: count the chapters this run will actually
-    # translate (pending raws in range, or all raws in range when force=True).
+    # Preflight the caller's quota (non-reserving) against the chapters this run would translate,
+    # so an over-quota request fails fast with a 429 instead of scheduling a doomed job.
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         pending = await conn.fetchval(
@@ -1451,12 +1457,19 @@ async def api_translate(novel_id: int, payload: TranslateTrigger, bg_tasks: Back
         )
     await quota.check_available(user, "translated_chapters", int(pending or 0))
 
-    async def _job():
-        if payload.seed_from_codex:
-            await seed_glossary_from_entities(novel_id)
-        await translate_range(novel_id, payload.from_chapter, payload.to_chapter, payload.force, meter_user=user)
-    bg_tasks.add_task(_job)
-    return {"status": "success", "message": "Translation job scheduled in background.", "chapters": int(pending or 0)}
+    idem = (
+        f"translate:novel{novel_id}:{payload.from_chapter}:{payload.to_chapter}:"
+        f"{int(payload.force)}:seed{int(payload.seed_from_codex)}"
+    )
+    job_id, created = await jobs_service.create_job(
+        "translate", novel_id=novel_id, user_id=user["id"],
+        options={"from_chapter": payload.from_chapter, "to_chapter": payload.to_chapter,
+                 "force": payload.force, "seed_from_codex": payload.seed_from_codex},
+        idempotency_key=idem,
+    )
+    msg = "Translation job scheduled." if created else "A translation for this range is already running."
+    return {"status": "success", "message": msg, "job_id": job_id,
+            "deduped": not created, "chapters": int(pending or 0)}
 
 
 @router.post("/novels/{novel_id}/glossary/seed")
@@ -1649,42 +1662,50 @@ async def api_get_entity_profile(
             profile["rendered_md"] = cached_row["rendered_md"]
             return profile
 
-        canonical_name = profile["canonical_name"]
-        aliases = ", ".join(profile["aliases"]) if profile["aliases"] else "None"
-        facts_str = "\n".join([
-            f"- [Fact {f['id']}, Ch {f['chapter']}] ({f['fact_type']}): {f['content']}"
-            for f in profile["facts"]
-        ]) if profile["facts"] else "No facts recorded."
+        # Cache miss → synthesizing this profile calls a Pro model, so it goes through the
+        # same read-side AI cost controls as /ask: a verified-email spend gate plus per-user
+        # hourly-rate and concurrency limits. A cache hit above never reaches this.
+        if settings.ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED:
+            quota.require_spend_allowed(user)
+        async with ai_limits.concurrency_slot(user, "profile"):
+            await ai_limits.consume_ask_rate(user, "profile")
 
-        rels = await get_relationships(novel_id, entity_id, ceiling)
-        rels_str = "\n".join([
-            f"- [Rel {r['id']}, Ch {r['chapter']}] {r['source_name']} ({r['relation_type']}) {r['target_name']}: {r['content'] or ''}"
-            for r in rels
-        ]) if rels else "No relationships recorded."
+            canonical_name = profile["canonical_name"]
+            aliases = ", ".join(profile["aliases"]) if profile["aliases"] else "None"
+            facts_str = "\n".join([
+                f"- [Fact {f['id']}, Ch {f['chapter']}] ({f['fact_type']}): {f['content']}"
+                for f in profile["facts"]
+            ]) if profile["facts"] else "No facts recorded."
 
-        messages = [
-            {"role": "system", "content": WIKI_PROFILE_SYNTHESIS_SYSTEM.format(chapter_ceiling=ceiling)},
-            {
-                "role": "user",
-                "content": WIKI_PROFILE_SYNTHESIS_USER.format(
-                    canonical_name=canonical_name, type=profile["type"], chapter_ceiling=ceiling,
-                    aliases=aliases, facts=facts_str, relationships=rels_str,
+            rels = await get_relationships(novel_id, entity_id, ceiling)
+            rels_str = "\n".join([
+                f"- [Rel {r['id']}, Ch {r['chapter']}] {r['source_name']} ({r['relation_type']}) {r['target_name']}: {r['content'] or ''}"
+                for r in rels
+            ]) if rels else "No relationships recorded."
+
+            messages = [
+                {"role": "system", "content": WIKI_PROFILE_SYNTHESIS_SYSTEM.format(chapter_ceiling=ceiling)},
+                {
+                    "role": "user",
+                    "content": WIKI_PROFILE_SYNTHESIS_USER.format(
+                        canonical_name=canonical_name, type=profile["type"], chapter_ceiling=ceiling,
+                        aliases=aliases, facts=facts_str, relationships=rels_str,
+                    )
+                }
+            ]
+            rendered_md = await call_chat_completion(model=settings.MODEL_PRO, messages=messages, temperature=0.0)
+
+            evidence_ids = {"fact_ids": [f["id"] for f in profile["facts"]], "rel_ids": [r["id"] for r in rels]}
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO wiki_cache (novel_id, entity_id, chapter_ceiling, rendered_md, model, evidence_ids)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (novel_id, entity_id, chapter_ceiling) DO UPDATE
+                    SET rendered_md = EXCLUDED.rendered_md, model = EXCLUDED.model, evidence_ids = EXCLUDED.evidence_ids;
+                    """,
+                    novel_id, entity_id, ceiling, rendered_md, settings.MODEL_PRO, json.dumps(evidence_ids),
                 )
-            }
-        ]
-        rendered_md = await call_chat_completion(model=settings.MODEL_PRO, messages=messages, temperature=0.0)
-
-        evidence_ids = {"fact_ids": [f["id"] for f in profile["facts"]], "rel_ids": [r["id"] for r in rels]}
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO wiki_cache (novel_id, entity_id, chapter_ceiling, rendered_md, model, evidence_ids)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (novel_id, entity_id, chapter_ceiling) DO UPDATE
-                SET rendered_md = EXCLUDED.rendered_md, model = EXCLUDED.model, evidence_ids = EXCLUDED.evidence_ids;
-                """,
-                novel_id, entity_id, ceiling, rendered_md, settings.MODEL_PRO, json.dumps(evidence_ids),
-            )
 
         profile["rendered_md"] = rendered_md
         return profile
@@ -1748,11 +1769,28 @@ async def api_get_identities(novel_id: int, entity_id: int, ceiling: float, user
 
 @router.post("/novels/{novel_id}/ask", response_model=AskResponse)
 async def ask_question(novel_id: int, req: AskRequest, user: dict = Depends(current_user)):
-    """Agentic spoiler-safe Q&A scoped to one novel."""
+    """Agentic spoiler-safe Q&A scoped to one novel.
+
+    A cached answer (same normalized question + effective ceiling) is served cheaply and
+    bypasses every cost gate. An uncached question fans out to embeddings, rerank, and
+    several model calls, so it must clear the read-side AI cost controls first: a length
+    cap (checked before any provider call), a verified-email spend gate, a per-user hourly
+    cap on uncached asks, and a small concurrency ceiling."""
+    # 1. Length cap — reject before touching the ceiling/DB/providers.
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="Question can't be empty.")
+    if len(question) > settings.ASK_MAX_QUERY_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Question is too long (max {settings.ASK_MAX_QUERY_CHARS} characters).",
+        )
+
+    # 2. Effective (server-trusted) ceiling — never above what this reader has actually read.
     ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=req.ceiling)
-    try:
-        await get_bm25_manager(novel_id).ensure_loaded()
-        result = await answer_question(novel_id, req.question, ceiling_info.effective_ceiling)
+    ceiling = ceiling_info.effective_ceiling
+
+    def _resp(result: dict) -> AskResponse:
         return AskResponse(
             answer=result["answer"],
             citations=[Citation(**c) for c in result["citations"]],
@@ -1762,29 +1800,111 @@ async def ask_question(novel_id: int, req: AskRequest, user: dict = Depends(curr
             effective_ceiling=ceiling_info.effective_ceiling,
             ceiling_clamped=ceiling_info.clamped,
         )
+
+    # 3. Cache fast path — free, no spend/rate/concurrency charge.
+    query_hash = compute_query_hash(question)
+    cached = await get_cached_answer(novel_id, query_hash, ceiling)
+    if cached:
+        citations = await build_citations(novel_id, cached["answer_md"], ceiling)
+        return _resp({"answer": cached["answer_md"], "citations": citations, "evidence_ids": cached["evidence_ids"]})
+
+    # 4. Cache miss → real provider work. Gate it.
+    if settings.ASK_REQUIRE_VERIFIED:
+        quota.require_spend_allowed(user)   # 403 unless verified/admin
+    try:
+        async with ai_limits.concurrency_slot(user, "ask"):        # 429 if too many in flight
+            await ai_limits.consume_ask_rate(user, "ask")          # 429 if over the hourly cap
+            await get_bm25_manager(novel_id).ensure_loaded()
+            result = await answer_question(novel_id, question, ceiling)
+        return _resp(result)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Agentic Q&A error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def _build_codex(novel_id: int, force: bool, from_chapter: float | None, to_chapter: float | None):
-    """Full codex pipeline for one novel: chunk -> embed -> extract -> rebuild BM25."""
-    await chunk_all_chapters(novel_id, force=force, from_chapter=from_chapter, to_chapter=to_chapter)
-    await embed_missing_chunks(novel_id, from_chapter=from_chapter, to_chapter=to_chapter)
-    await extract_all_chapters(novel_id, force=force, from_chapter=from_chapter, to_chapter=to_chapter)
-    await get_bm25_manager(novel_id).rebuild()
+        raise HTTPException(status_code=502, detail="The AI service failed to answer. Please try again.")
 
 
 @router.post("/novels/{novel_id}/codex/build")
-async def api_codex_build(novel_id: int, payload: CodexBuild, bg_tasks: BackgroundTasks, user: dict = Depends(current_user)):
-    """Builds (or rebuilds) the spoiler-safe codex for a novel in the background."""
+async def api_codex_build(novel_id: int, payload: CodexBuild, user: dict = Depends(current_user)):
+    """Schedule a durable codex build (chunk → embed → extract → rebuild BM25) that survives
+    restarts. Repeated clicks for the same range dedupe onto the active job so the expensive
+    build runs once, and the reserved codex-build quota is refunded if the job ultimately fails
+    or is cancelled (the durable worker finalizes it)."""
     await require_editable(novel_id, user)
+    idem = f"codex:novel{novel_id}:{payload.from_chapter}:{payload.to_chapter}:{int(payload.force)}"
+
+    # A build already running for this exact target? Return it without charging again.
+    existing = await jobs_service.find_active("codex_build", idem)
+    if existing is not None:
+        return {"status": "success", "message": "A codex build for this range is already running.",
+                "job_id": int(existing["id"]), "deduped": True}
+
+    # Reserve the codex-build credit up front (429 if over quota), recording the reservation on the
+    # job so the worker can refund it on failure/cancel.
     await quota.check_and_reserve(user, "codex_builds", 1)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute("UPDATE novels SET codex_enabled = TRUE WHERE id = $1;", novel_id)
-    bg_tasks.add_task(_build_codex, novel_id, payload.force, payload.from_chapter, payload.to_chapter)
-    return {"status": "success", "message": "Codex build scheduled in background."}
+    job_id, created = await jobs_service.create_job(
+        "codex_build", novel_id=novel_id, user_id=user["id"],
+        options={"force": payload.force, "from_chapter": payload.from_chapter, "to_chapter": payload.to_chapter},
+        idempotency_key=idem, quota_kind="codex_builds", quota_reserved=1,
+    )
+    if not created:
+        # Lost a race to a concurrent identical request — give the credit we just reserved back.
+        await quota.refund(user["id"], "codex_builds", 1)
+    msg = "Codex build scheduled." if created else "A codex build for this range is already running."
+    return {"status": "success", "message": msg, "job_id": job_id, "deduped": not created}
+
+
+# ── Job center (durable scrape/codex/translation jobs) ────────────────────
+# A single operational surface over the generic `jobs` table. A normal user sees only the jobs
+# they scheduled; an admin sees everything and can filter by kind/status/user/novel. Access to a
+# specific job (view/cancel) is owner-or-admin; anyone else gets a 404 so a job's existence isn't
+# leaked. (Import + TTS jobs keep their own specialized endpoints.)
+
+def _job_is_owner_or_admin(job: dict, user: dict) -> bool:
+    if user.get("role") == "admin":
+        return True
+    return job.get("user_id") is not None and int(job["user_id"]) == int(user["id"])
+
+
+async def _require_own_generic_job(job_id: int, user: dict) -> dict:
+    job = await jobs_service.get_job(job_id)
+    if not job or not _job_is_owner_or_admin(job, user):
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job
+
+
+@router.get("/jobs")
+async def api_list_jobs(kind: str | None = None, status: str | None = None,
+                        novel_id: int | None = None, user_id: int | None = None,
+                        active: bool = False, limit: int = 100, user: dict = Depends(current_user)):
+    """List background jobs. Non-admins are scoped to their own jobs; admins may pass `user_id`
+    (and other filters) to inspect any user's jobs."""
+    is_admin = user.get("role") == "admin"
+    scope_user = None if is_admin else user["id"]
+    if is_admin and user_id is not None:
+        scope_user = user_id
+    jobs = await jobs_service.list_jobs(
+        user_id=scope_user, kind=kind, status=status, novel_id=novel_id, active_only=active, limit=limit,
+    )
+    return {"jobs": [jobs_service.job_view(j) for j in jobs]}
+
+
+@router.get("/jobs/{job_id}")
+async def api_get_job(job_id: int, user: dict = Depends(current_user)):
+    job = await _require_own_generic_job(job_id, user)
+    return jobs_service.job_view(job)
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def api_cancel_job(job_id: int, user: dict = Depends(current_user)):
+    """Request cancellation. A queued job never starts; a running job stops at its next
+    cancellation checkpoint, keeping whatever it already finished. Reserved quota is refunded."""
+    await _require_own_generic_job(job_id, user)
+    changed = await jobs_service.cancel_job(job_id)
+    return {"status": "success", "canceled": changed}
 
 
 @router.post("/novels/{novel_id}/merge-entities")

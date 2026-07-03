@@ -27,10 +27,24 @@ def _base() -> str:
     return settings.TTS_SIDECAR_URL.rstrip("/")
 
 
+def _auth_headers() -> dict[str, str]:
+    """Shared service token the sidecar requires on /synthesize + /narrate (empty → no header)."""
+    tok = settings.tts_sidecar_token
+    return {"X-Tideglass-Sidecar-Token": tok} if tok else {}
+
+
+def _raise_if_unauthorized(status_code: int) -> None:
+    if status_code in (401, 403):
+        raise RuntimeError(
+            f"TTS sidecar rejected the service token (HTTP {status_code}); ensure "
+            "TTS_SIDECAR_TOKEN/SIDECAR_AUTH_TOKEN matches the sidecar's configured token."
+        )
+
+
 async def sidecar_available() -> bool:
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
-            r = await client.get(f"{_base()}/health")
+            r = await client.get(f"{_base()}/health", headers=_auth_headers())
             return r.status_code == 200
     except Exception:
         return False
@@ -41,7 +55,7 @@ async def list_voices() -> list[dict]:
     sidecar is unreachable so callers can render a clear 'TTS offline' state."""
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
-            r = await client.get(f"{_base()}/voices")
+            r = await client.get(f"{_base()}/voices", headers=_auth_headers())
             r.raise_for_status()
             data = r.json()
             return data if isinstance(data, list) else []
@@ -65,7 +79,8 @@ async def synthesize(
     if num_step:
         payload["num_step"] = num_step
     async with httpx.AsyncClient(timeout=600.0) as client:
-        r = await client.post(f"{_base()}/synthesize", json=payload)
+        r = await client.post(f"{_base()}/synthesize", json=payload, headers=_auth_headers())
+        _raise_if_unauthorized(r.status_code)
         r.raise_for_status()
         duration = float(r.headers.get("X-Duration-Seconds", "0") or 0.0)
         return r.content, duration
@@ -91,7 +106,8 @@ async def narrate(
     if opus_bitrate:
         payload["opus_bitrate"] = opus_bitrate
     async with httpx.AsyncClient(timeout=1800.0) as client:
-        r = await client.post(f"{_base()}/narrate", json=payload)
+        r = await client.post(f"{_base()}/narrate", json=payload, headers=_auth_headers())
+        _raise_if_unauthorized(r.status_code)
         r.raise_for_status()
         duration = float(r.headers.get("X-Duration-Seconds", "0") or 0.0)
         return r.content, duration

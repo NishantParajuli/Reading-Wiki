@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from curl_cffi.requests import AsyncSession
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool, close_db_pool
@@ -95,6 +96,7 @@ async def scrape_source(
     force: bool = False,
     max_chapters: int | None = None,
     expected_novel_id: int | None = None,
+    cancel_check: Callable[[], Awaitable[None]] | None = None,
 ) -> int:
     """Scrapes one source into its novel's global chapter sequence using the source's
     chosen adapter. Source-local chapter numbers are shifted by `chapter_offset` so a
@@ -164,7 +166,11 @@ async def scrape_source(
             require_same_host=settings.SCRAPER_REQUIRE_SAME_HOST,
         )
         try:
+            if cancel_check is not None:
+                await cancel_check()
             async for ch in adapter.crawl(ctx):
+                if cancel_check is not None:
+                    await cancel_check()
                 fallback_local += 1
                 local_number = ch.number if ch.number is not None else float(fallback_local)
                 global_number = local_number + offset
@@ -174,6 +180,8 @@ async def scrape_source(
                 if wrote:
                     scraped_count += 1
 
+                if cancel_check is not None:
+                    await cancel_check()
                 await asyncio.sleep(settings.SCRAPER_DELAY)
         except PremiumReached as p:
             logger.info(f"Stopped at premium boundary (local chapter {p.number}). Scraped {scraped_count} this run.")
@@ -259,7 +267,12 @@ async def set_source_offset(conn, source_id: int, new_offset: float) -> int:
     return renumbered
 
 
-async def scrape_novel(novel_id: int, force: bool = False, max_chapters: int | None = None) -> int:
+async def scrape_novel(
+    novel_id: int,
+    force: bool = False,
+    max_chapters: int | None = None,
+    cancel_check: Callable[[], Awaitable[None]] | None = None,
+) -> int:
     """Scrapes every source of a novel in id order (e.g. the eng source then a raw
     continuation), accumulating into the novel's continuous chapter sequence."""
     pool = await get_db_pool()
@@ -267,11 +280,14 @@ async def scrape_novel(novel_id: int, force: bool = False, max_chapters: int | N
         sources = await conn.fetch("SELECT id FROM sources WHERE novel_id = $1 ORDER BY id ASC;", novel_id)
     total = 0
     for s in sources:
+        if cancel_check is not None:
+            await cancel_check()
         total += await scrape_source(
             int(s["id"]),
             force=force,
             max_chapters=max_chapters,
             expected_novel_id=novel_id,
+            cancel_check=cancel_check,
         )
     return total
 

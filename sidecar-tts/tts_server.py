@@ -4,12 +4,12 @@ Like the OCR sidecar, this is intentionally NOT part of the main web image (whic
 GPU-free). It loads OmniVoice once, caches a *voice-clone prompt* per curated narrator clip,
 and exposes a tiny HTTP surface the web app's ``tts_client`` talks to::
 
-    GET  /health                 → {"status": "ok", "model_loaded": bool, "voices": [...]}
-    GET  /voices                 → [{"id","name","language","gender","accent","ready"}]
-    POST /synthesize             → 24 kHz mono PCM WAV bytes (+ X-Duration-Seconds header)
+    GET  /health                 → {"status": "ok", "model_loaded": bool, "voices": [...]}  (open)
+    GET  /voices                 → [{"id","name","language","gender","accent","ready"}]      (open)
+    POST /synthesize             → 24 kHz mono PCM WAV bytes (+ X-Duration-Seconds header)   (token)
         {"text": str, "voice_id": str, "language": str|null, "speed": float|null,
          "num_step": int|null}
-    POST /narrate                → Ogg/Opus bytes for a whole chapter (+ X-Duration-Seconds)
+    POST /narrate                → Ogg/Opus bytes for a whole chapter (+ X-Duration-Seconds) (token)
         {"paragraphs": [str], "voice_id": str, "language": str|null, "speed": float|null,
          "num_step": int|null, "silence_ms": int|null, "opus_bitrate": str|null}
         Each paragraph is synthesized with the SAME cached clone prompt (stable voice) and
@@ -22,12 +22,15 @@ narrator (see k2-fsa/OmniVoice issue #44). We pre-transcribe each clip (``ref_te
 voices.json) and load with ``load_asr=False`` so no Whisper is needed at runtime — important
 on a 6 GB card.
 
-Run it on the GPU host (default :8078). With the web container on ``network_mode: host`` the
-web app reaches it at http://localhost:8078 for free. Inference is serialized on one lock so
-a single GPU is never oversubscribed.
+Run it on the GPU host (default :8078). It should NOT be publicly reachable: deploy it on a
+private Docker bridge (the web app reaches it at http://tts:8078) or bound to loopback, and set
+SIDECAR_AUTH_TOKEN so /synthesize and /narrate reject anyone without the shared token. Inference
+is serialized on one lock so a single GPU is never oversubscribed; request size is capped
+(TTS_MAX_TEXT_CHARS / TTS_MAX_PARAGRAPHS / TTS_MAX_TOTAL_CHARS).
 """
 from __future__ import annotations
 
+import hmac
 import io
 import json
 import logging
@@ -36,7 +39,7 @@ import threading
 import wave
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
@@ -47,6 +50,31 @@ app = FastAPI(title="NovelWiki TTS sidecar")
 MODEL_NAME = os.environ.get("TTS_MODEL", "k2-fsa/OmniVoice")
 DEVICE = os.environ.get("TTS_DEVICE", "cuda:0")
 DEFAULT_NUM_STEP = int(os.environ.get("TTS_NUM_STEP", "32"))
+
+# Shared service token. When set, the expensive endpoints (/synthesize, /narrate) require
+# `X-Tideglass-Sidecar-Token` (or a bearer Authorization header) matching it. /health and
+# /voices stay open (cheap; safe on a private bind). Empty = open. Per-service token wins.
+_AUTH_TOKEN = os.environ.get("TTS_SIDECAR_TOKEN") or os.environ.get("SIDECAR_AUTH_TOKEN") or ""
+
+# Defense-in-depth request caps (env-tunable). A long 8k-word chapter is ~50k chars over ~100
+# paragraphs, so these leave ample head-room while blocking abusive payloads.
+_MAX_TEXT_CHARS = int(os.environ.get("TTS_MAX_TEXT_CHARS", "20000"))       # one /synthesize passage
+_MAX_PARAGRAPHS = int(os.environ.get("TTS_MAX_PARAGRAPHS", "2000"))        # /narrate paragraph count
+_MAX_TOTAL_CHARS = int(os.environ.get("TTS_MAX_TOTAL_CHARS", "400000"))    # /narrate total chars
+
+
+def require_token(
+    x_tideglass_sidecar_token: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> None:
+    """Gate the expensive endpoints on the shared token (no-op when none is configured)."""
+    if not _AUTH_TOKEN:
+        return
+    presented = x_tideglass_sidecar_token
+    if not presented and authorization and authorization.lower().startswith("bearer "):
+        presented = authorization[7:].strip()
+    if not presented or not hmac.compare_digest(presented, _AUTH_TOKEN):
+        raise HTTPException(status_code=401, detail="Missing or invalid sidecar auth token.")
 
 _VOICES_DIR = Path(__file__).parent / "voices"
 _VOICES_JSON = _VOICES_DIR / "voices.json"
@@ -224,11 +252,13 @@ def voices():
 
 
 @app.post("/synthesize")
-def synthesize(req: SynthRequest):
+def synthesize(req: SynthRequest, _: None = Depends(require_token)):
     """One passage → WAV. Handy for testing a voice / measuring RTF; the worker uses /narrate."""
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Empty text.")
+    if len(text) > _MAX_TEXT_CHARS:
+        raise HTTPException(status_code=413, detail=f"Text exceeds {_MAX_TEXT_CHARS}-char cap.")
     voice = _resolve_voice(req.voice_id)
     with _lock:  # one GPU → one inference at a time
         try:
@@ -245,13 +275,18 @@ def synthesize(req: SynthRequest):
 
 
 @app.post("/narrate")
-def narrate(req: NarrateRequest):
+def narrate(req: NarrateRequest, _: None = Depends(require_token)):
     """A whole chapter: synthesize each paragraph with the SAME cached clone prompt (stable
     narrator), concatenate with a short silence between them, encode Opus. Returns Ogg/Opus."""
     import numpy as np
     paras = [p.strip() for p in (req.paragraphs or []) if p and p.strip()]
     if not paras:
         raise HTTPException(status_code=400, detail="No paragraphs to narrate.")
+    if len(paras) > _MAX_PARAGRAPHS:
+        raise HTTPException(status_code=413, detail=f"Too many paragraphs: {len(paras)} > {_MAX_PARAGRAPHS}.")
+    total_chars = sum(len(p) for p in paras)
+    if total_chars > _MAX_TOTAL_CHARS:
+        raise HTTPException(status_code=413, detail=f"Text exceeds {_MAX_TOTAL_CHARS}-char cap.")
     voice = _resolve_voice(req.voice_id)
     silence_ms = max(0, int(req.silence_ms if req.silence_ms is not None else 350))
     bitrate = req.opus_bitrate or "48k"
@@ -278,4 +313,8 @@ def narrate(req: NarrateRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8078)
+    # Loopback by default (safe under host networking); compose overrides UVICORN_HOST=0.0.0.0 so
+    # the web app can reach it over the private bridge without publishing the port to the host.
+    host = os.environ.get("UVICORN_HOST", "127.0.0.1")
+    port = int(os.environ.get("UVICORN_PORT", "8078"))
+    uvicorn.run(app, host=host, port=port)

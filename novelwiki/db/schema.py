@@ -97,6 +97,21 @@ DDL_QUERIES = [
     """,
     "CREATE INDEX IF NOT EXISTS auth_rate_limits_reset_idx ON auth_rate_limits (reset_at);",
 
+    # Short-lived concurrency slots for read-side AI (denial-of-wallet control). One row per
+    # in-flight uncached AI request (/ask, entity-profile synthesis); rows are self-expiring
+    # (expires_at) so a crashed request can't hold a slot forever. See novelwiki/ai_limits.py.
+    """
+    CREATE TABLE IF NOT EXISTS ai_request_locks (
+      id         BIGSERIAL PRIMARY KEY,
+      user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind       TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS ai_request_locks_user_idx ON ai_request_locks (user_id, kind);",
+    "CREATE INDEX IF NOT EXISTS ai_request_locks_expires_idx ON ai_request_locks (expires_at);",
+
     # One-time email tokens for verification + password reset (hashed at rest).
     """
     CREATE TABLE IF NOT EXISTS email_tokens (
@@ -644,10 +659,71 @@ DDL_QUERIES = [
     "CREATE UNIQUE INDEX IF NOT EXISTS chapter_audio_user_uq ON chapter_audio "
     "(novel_id, chapter, voice_id, content_version, user_id) WHERE user_id IS NOT NULL;",
     "CREATE INDEX IF NOT EXISTS chapter_audio_lookup_idx ON chapter_audio (novel_id, chapter, voice_id);",
+
+    # ── 23. Generic durable jobs (scrape / codex build / translation) ──────
+    # Unifies the fire-and-forget background work that used to run in FastAPI BackgroundTasks
+    # (and would be lost on a deploy/restart after quota was already reserved). One row per
+    # scheduled unit of work; a single DB-polled worker (novelwiki/jobs/worker.py) claims,
+    # heartbeats, retries, and finalizes them, mirroring import_jobs/tts_jobs. `idempotency_key`
+    # dedupes repeated clicks onto one active job; `quota_reserved`/`quota_consumed`/`quota_finalized`
+    # make refund-on-failure explicit. Status: queued → running → done (+ failed, canceled).
+    """
+    CREATE TABLE IF NOT EXISTS jobs (
+      id               BIGSERIAL PRIMARY KEY,
+      kind             TEXT NOT NULL,                                    -- scrape|codex_build|translate
+      novel_id         BIGINT REFERENCES novels(id) ON DELETE CASCADE,
+      user_id          BIGINT REFERENCES users(id) ON DELETE SET NULL,  -- requester (quota owner)
+      status           TEXT NOT NULL DEFAULT 'queued',                  -- queued|running|done|failed|canceled
+      stage            TEXT,                                            -- human-readable current step
+      progress         JSONB DEFAULT '{}',                              -- {done,total,...}
+      options          JSONB DEFAULT '{}',                              -- kind-specific args
+      idempotency_key  TEXT,                                            -- dedupe repeated requests onto one active job
+      quota_kind       TEXT,                                            -- quota bucket reserved up front (if any)
+      quota_reserved   INT DEFAULT 0,
+      quota_consumed   INT DEFAULT 0,                                   -- how much of the reservation was actually used
+      quota_finalized  BOOLEAN DEFAULT FALSE,                           -- guards double refund
+      error            TEXT,
+      attempts         INT DEFAULT 0,
+      max_attempts     INT DEFAULT 3,
+      claim_token      TEXT,                                            -- opaque lease owner (see jobs/worker.py)
+      claimed_at       TIMESTAMPTZ,
+      created_at       TIMESTAMPTZ DEFAULT now(),
+      updated_at       TIMESTAMPTZ DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status);",
+    "CREATE INDEX IF NOT EXISTS jobs_kind_idx ON jobs (kind);",
+    "CREATE INDEX IF NOT EXISTS jobs_novel_idx ON jobs (novel_id);",
+    "CREATE INDEX IF NOT EXISTS jobs_user_idx ON jobs (user_id);",
+    "CREATE INDEX IF NOT EXISTS jobs_created_idx ON jobs (created_at DESC);",
+    # Partial index backing active-job dedupe lookups by idempotency key.
+    "CREATE INDEX IF NOT EXISTS jobs_active_idem_idx ON jobs ((idempotency_key)) "
+    "WHERE idempotency_key IS NOT NULL AND status IN ('queued','running');",
+
+    # ── 24. Audit events ───────────────────────────────────────────────────
+    # Durable, append-only operational log: job lifecycle, quota reservations/refunds, and (room
+    # for) auth/visibility/admin actions. `request_id` ties an event back to the HTTP request that
+    # triggered it (see the X-Request-ID middleware in novelwiki/api/app.py).
+    """
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id          BIGSERIAL PRIMARY KEY,
+      event       TEXT NOT NULL,                                        -- job.created|job.done|quota.refund|...
+      user_id     BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      novel_id    BIGINT REFERENCES novels(id) ON DELETE SET NULL,
+      request_id  TEXT,
+      data        JSONB DEFAULT '{}',
+      created_at  TIMESTAMPTZ DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS audit_events_event_idx ON audit_events (event, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS audit_events_user_idx ON audit_events (user_id, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS audit_events_novel_idx ON audit_events (novel_id, created_at DESC);",
 ]
 
 # Tables in dependency order (children first) — used by reset_db to drop cleanly.
 ALL_TABLES = [
+    "audit_events",
+    "jobs",
     "tag_suggestions",
     "contributions",
     "chapter_overlays",
@@ -675,6 +751,7 @@ ALL_TABLES = [
     "sources",
     "novels",
     "quota_usage",
+    "ai_request_locks",
     "email_tokens",
     "sessions",
     "oauth_accounts",

@@ -181,6 +181,7 @@ for the full list and defaults):
 | `GEMINI_API_KEY` / `OCR_*` | Scanned-PDF OCR (Gemini vision + PaddleOCR sidecar) |
 | `SCRAPER_TIMEOUT_SECONDS` / `SCRAPER_MAX_RESPONSE_MB` / `SCRAPER_REQUIRE_SAME_HOST` | Scraper network guardrails: timeout, response cap, and same-source host binding |
 | `TTS_*` / `TTS_SIDECAR_URL` | Audiobook narration (OmniVoice sidecar) |
+| `SIDECAR_AUTH_TOKEN` | Shared token the web app sends to the OCR/TTS sidecars; each enforces it (set a long random value in prod) |
 | `DEFAULT_QUOTA_*` | Monthly per-user spend caps (translation / OCR / codex / TTS) |
 
 > **Schema is auto-created.** On server startup (and CLI use) the app connects with
@@ -342,6 +343,32 @@ docker compose up -d tts        # start the TTS sidecar on a GPU host
 
 ---
 
+## ⚙️ Background jobs & observability
+
+Scraping, codex builds, and translation batches run as **durable jobs** (state in the generic
+`jobs` table), not fire-and-forget `BackgroundTasks` — so the work survives a deploy/restart even
+after quota was reserved, and a repeated click dedupes onto the already-active job instead of
+double-charging. A third DB-polled worker ([novelwiki/jobs/worker.py](novelwiki/jobs/worker.py))
+claims them with the same leased-claim model as the import worker (`FOR UPDATE SKIP LOCKED` +
+`claim_token`/`claimed_at` heartbeat, lease-expiry recovery via `JOB_LEASE_TIMEOUT_SECONDS` /
+`JOB_WORKER_HEARTBEAT_SECONDS`), retries a crashed attempt up to `JOB_MAX_ATTEMPTS`, and cancels
+cooperatively (a running job stops before its next expensive stage, keeping what it finished).
+
+**Quota is explicit and refundable.** A job records what it reserved (`quota_reserved`) and used
+(`quota_consumed`); the worker finalizes exactly once at a terminal state — a successful codex build
+keeps its credit, while a failed or cancelled one refunds it (`quota.refund`, clamped so usage never
+goes negative). Translation meters per chapter as it actually translates, so a cancelled batch keeps
+the chapters it finished charged and never over-charges for ones it didn't reach.
+
+**Job center + audit.** Owners/admins see active and recent jobs (status, stage, live progress) and
+can cancel one in flight — in the novel page UI, or via `GET /api/jobs`, `GET /api/jobs/{id}`,
+`POST /api/jobs/{id}/cancel` (non-admins are scoped to their own jobs; admins can filter by
+kind/status/user/novel). Every response carries an `X-Request-ID` (accepted from a trusted proxy or
+minted), and job lifecycle + quota refunds are written to a durable `audit_events` log stamped with
+that request id, so a single user action is traceable across the request and the jobs it spawned.
+
+---
+
 ## 🗄 Data model
 
 Everything is **novel-scoped and user-scoped** (single shared Postgres DB, no schema-per-novel).
@@ -361,6 +388,8 @@ Schema is defined in [novelwiki/db/schema.py](novelwiki/db/schema.py):
 - **Codex:** `chunks` (+`embedding`), `entities`, `entity_descriptions`, `entity_aliases`,
   `identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state`, `wiki_cache`,
   `query_cache`
+- **Ops:** `jobs` (durable scrape/codex/translation jobs with quota reserve/refund state),
+  `audit_events` (job lifecycle + quota refunds, stamped with the request id)
 
 Imported covers/illustrations/page scans are stored on disk but served through authenticated
 `/api/assets/novels/...` and `/api/assets/import-jobs/...` routes. Only user avatars remain on the
@@ -398,10 +427,26 @@ docker compose up -d ocr              # + OCR sidecar (GPU; scanned PDFs)
 docker compose up -d tts              # + TTS sidecar (GPU; audiobooks)
 ```
 
-`docker-compose.yml` uses `network_mode: host` so the web container reaches a PostgreSQL on the
-host's `localhost` plus the sidecars (`:8077` OCR, `:8078` TTS), and reads configuration from `.env`.
-The two GPU sidecars are **optional and independent** — the web app runs fine without them (digital
-imports and reading work; scanned-PDF OCR and audiobook jobs simply require their sidecar). On a
-single small GPU, run only the sidecar you're actively using. In production the app typically sits
-behind a Cloudflare tunnel (set `ALLOWED_ORIGINS` / `PUBLIC_BASE_URL` to your domain and keep
-`COOKIE_SECURE=true`).
+`docker-compose.yml` puts every service on a **private bridge network** (`novelwiki_net`). The web
+container reaches the sidecars by service DNS (`http://ocr:8077`, `http://tts:8078`); the sidecar
+ports are **never published to the host**, so the expensive `/ocr`, `/synthesize`, and `/narrate`
+endpoints can't be reached from outside — and on top of that they require a **shared service token**
+(`SIDECAR_AUTH_TOKEN`) that the web app sends and each sidecar enforces. The web port is published
+**loopback-only** (`127.0.0.1:8001`) so the Cloudflare tunnel on the host fronts it while public
+interfaces can't. The two GPU sidecars are **optional and independent** — the web app runs fine
+without them (digital imports and reading work; scanned-PDF OCR and audiobook jobs simply require
+their sidecar). On a single small GPU, run only the sidecar you're actively using. In production the
+app sits behind a Cloudflare tunnel (set `ALLOWED_ORIGINS` / `PUBLIC_BASE_URL` to your domain and
+keep `COOKIE_SECURE=true`).
+
+> **Host PostgreSQL:** off host networking, `localhost` inside a container is the container itself.
+> The `web` service maps `host.docker.internal` to the host gateway, so point `DATABASE_URL` /
+> `DB_SUPERUSER_URL` at `host.docker.internal:5432` (e.g.
+> `postgresql://user:pass@host.docker.internal:5432/novelwiki`).
+>
+> **Service token:** set a long random `SIDECAR_AUTH_TOKEN` in `.env` before starting the sidecars.
+> Leaving it blank keeps the endpoints open — only acceptable for a fully private/loopback deploy.
+>
+> **Fallback if host networking is unavoidable:** keep `SIDECAR_AUTH_TOKEN` set, leave the sidecars
+> bound to loopback (`UVICORN_HOST=127.0.0.1`, the image default), and add firewall rules dropping
+> `8077`/`8078` (and public `8001`) on public interfaces.

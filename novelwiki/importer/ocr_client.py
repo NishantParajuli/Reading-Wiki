@@ -28,10 +28,16 @@ def _data_url(image: bytes, mime: str = "image/png") -> str:
     return f"data:{mime};base64,{base64.b64encode(image).decode('ascii')}"
 
 
+def _auth_headers() -> dict[str, str]:
+    """Shared service token the sidecar requires when configured (empty → send no header)."""
+    tok = settings.ocr_sidecar_token
+    return {"X-Tideglass-Sidecar-Token": tok} if tok else {}
+
+
 async def sidecar_available() -> bool:
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
-            r = await client.get(f"{settings.OCR_SIDECAR_URL.rstrip('/')}/health")
+            r = await client.get(f"{settings.OCR_SIDECAR_URL.rstrip('/')}/health", headers=_auth_headers())
             return r.status_code == 200
     except Exception:
         return False
@@ -43,7 +49,12 @@ async def sidecar_ocr(images: list[bytes], lang: str = "en") -> list[dict]:
     payload = {"images": [base64.b64encode(im).decode("ascii") for im in images], "lang": lang}
     url = f"{settings.OCR_SIDECAR_URL.rstrip('/')}/ocr"
     async with httpx.AsyncClient(timeout=180.0) as client:
-        r = await client.post(url, json=payload)
+        r = await client.post(url, json=payload, headers=_auth_headers())
+        if r.status_code in (401, 403):
+            raise RuntimeError(
+                f"OCR sidecar rejected the service token (HTTP {r.status_code}); ensure "
+                "OCR_SIDECAR_TOKEN/SIDECAR_AUTH_TOKEN matches the sidecar's configured token."
+            )
         r.raise_for_status()
         data = r.json()
     return data.get("pages", [])

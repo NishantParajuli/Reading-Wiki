@@ -136,6 +136,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
     existing translation unless force=True. If meter_user is given, quota is reserved
     only after the chapter is confirmed still untranslated under the per-chapter lock.
     Returns {status, content, new_terms}."""
+    charged_user_id = None
     async with _lock_for(novel_id, number):
         pool = await get_db_pool()
         async with pool.acquire() as conn:
@@ -157,6 +158,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
                 from novelwiki import quota
                 if not await quota.try_reserve(meter_user, "translated_chapters", 1):
                     return {"status": "quota_exceeded", "content": ch["content"]}
+                charged_user_id = int(meter_user["id"])
             language = ch["language"] or "the source language"
             confirmed_g, established_g = _format_glossary(await _load_glossary(novel_id, conn))
             await conn.execute(
@@ -185,6 +187,14 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
                     "UPDATE chapters SET translation_status = 'failed' WHERE novel_id = $1 AND number = $2;",
                     novel_id, number,
                 )
+            if charged_user_id is not None:
+                from novelwiki import quota
+                refunded = await quota.refund(charged_user_id, "translated_chapters", 1)
+                if refunded:
+                    logger.info(
+                        "Refunded translated_chapters quota for failed translation "
+                        f"(user {charged_user_id}, novel {novel_id} ch {number})."
+                    )
             return {"status": "failed", "content": None}
 
         word_count = len(translation.split())

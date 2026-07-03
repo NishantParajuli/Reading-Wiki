@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 from curl_cffi.requests import AsyncSession
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
 import novelwiki.db.connection as db_connection
 from novelwiki.api import routes
@@ -302,13 +302,10 @@ async def test_real_curl_session_follows_validated_redirect(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scrape_route_rejects_source_from_another_novel(scraper_db):
-    bg = BackgroundTasks()
-
     with pytest.raises(HTTPException) as exc:
         await routes.api_scrape(
             scraper_db["novel_a"],
             routes.ScrapeTrigger(source_id=scraper_db["source_b"]),
-            bg,
             user=scraper_db["owner_a"],
         )
 
@@ -316,19 +313,22 @@ async def test_scrape_route_rejects_source_from_another_novel(scraper_db):
 
 
 @pytest.mark.asyncio
-async def test_scrape_route_schedules_owned_source_with_expected_novel(scraper_db):
-    bg = BackgroundTasks()
+async def test_scrape_route_schedules_owned_source_durable_job(scraper_db):
+    # Scraping is now a durable job; the worker passes the job's novel_id as expected_novel_id
+    # into scrape_source (the ownership guard verified by the worker test below).
+    from novelwiki.jobs import service as jobs_service
 
     result = await routes.api_scrape(
         scraper_db["novel_a"],
         routes.ScrapeTrigger(source_id=scraper_db["source_a"]),
-        bg,
         user=scraper_db["owner_a"],
     )
 
-    assert result["status"] == "success"
-    assert len(bg.tasks) == 1
-    assert bg.tasks[0].kwargs["expected_novel_id"] == scraper_db["novel_a"]
+    assert result["status"] == "success" and result["deduped"] is False
+    job = await jobs_service.get_job(result["job_id"])
+    assert job["kind"] == "scrape" and job["status"] == "queued"
+    assert job["novel_id"] == scraper_db["novel_a"]
+    assert job["options"]["source_id"] == scraper_db["source_a"]
 
 
 @pytest.mark.asyncio

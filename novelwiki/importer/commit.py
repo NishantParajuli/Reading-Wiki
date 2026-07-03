@@ -12,7 +12,6 @@ take an offset and abort with a clear error on any collision with existing chapt
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
@@ -360,7 +359,7 @@ async def commit_job(job: dict) -> dict:
 
     if codex_enabled or settings.IMPORT_AUTO_BUILD_CODEX:
         if await _reserve_auto_codex(job.get("user_id")):
-            _schedule_codex(novel_id, lo, hi)
+            await _schedule_codex(novel_id, lo, hi, job.get("user_id"))
         else:
             logger.info(f"Skipped automatic codex build for imported novel {novel_id}: owner is not quota-eligible.")
 
@@ -463,7 +462,7 @@ async def commit_series(job_ids: list[int]) -> dict:
 
     if codex_enabled or settings.IMPORT_AUTO_BUILD_CODEX:
         if await _reserve_auto_codex(owner_id):
-            _schedule_codex(novel_id, lo_all, hi_all)
+            await _schedule_codex(novel_id, lo_all, hi_all, owner_id)
         else:
             logger.info(f"Skipped automatic codex build for imported series {novel_id}: owner is not quota-eligible.")
 
@@ -488,23 +487,18 @@ async def _reserve_auto_codex(user_id: int | None) -> bool:
     return await quota.try_reserve(dict(row), "codex_builds", 1)
 
 
-def _schedule_codex(novel_id: int, frm: float, to: float) -> None:
-    """Kick the codex pipeline over the imported range in the background (numbering is
-    already final, so a later offset change won't be blocked)."""
-    async def _run():
-        try:
-            from novelwiki.ingest.chunk import chunk_all_chapters
-            from novelwiki.ingest.embed import embed_missing_chunks
-            from novelwiki.ingest.extract import extract_all_chapters
-            from novelwiki.retrieval.bm25 import get_bm25_manager
-            await chunk_all_chapters(novel_id, force=False, from_chapter=frm, to_chapter=to)
-            await embed_missing_chunks(novel_id, from_chapter=frm, to_chapter=to)
-            await extract_all_chapters(novel_id, force=False, from_chapter=frm, to_chapter=to)
-            await get_bm25_manager(novel_id).rebuild()
-            logger.info(f"Codex built over imported chapters {frm}–{to} of novel {novel_id}.")
-        except Exception as e:
-            logger.warning(f"Background codex build for novel {novel_id} failed: {e}")
+async def _schedule_codex(novel_id: int, frm: float, to: float, user_id: int | None) -> None:
+    """Enqueue a DURABLE codex build over the imported range (numbering is already final, so a
+    later offset change won't be blocked). Replaces the old fire-and-forget task: the codex-build
+    quota reserved by ``_reserve_auto_codex`` is now recorded on the job and refunded by the worker
+    if the build fails, and the work survives a restart instead of being silently lost."""
+    from novelwiki.jobs import service as jobs_service
     try:
-        asyncio.get_running_loop().create_task(_run())
-    except RuntimeError:
-        pass  # no loop (e.g. CLI) — caller can build the codex explicitly
+        await jobs_service.create_job(
+            "codex_build", novel_id=novel_id, user_id=user_id,
+            options={"force": False, "from_chapter": frm, "to_chapter": to},
+            quota_kind="codex_builds", quota_reserved=(1 if user_id is not None else 0),
+        )
+        logger.info(f"Scheduled durable codex build over imported chapters {frm}–{to} of novel {novel_id}.")
+    except Exception as e:
+        logger.warning(f"Could not schedule codex build for novel {novel_id}: {e}")

@@ -22,5 +22,8 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 COPY tts_server.py .
 COPY voices ./voices
 
+# Bind to loopback by default (safe under host networking); compose sets UVICORN_HOST=0.0.0.0 so
+# the web app reaches it over the private bridge without the port ever being published to the host.
+ENV UVICORN_HOST=127.0.0.1 UVICORN_PORT=8078
 EXPOSE 8078
-CMD ["python3", "-m", "uvicorn", "tts_server:app", "--host", "0.0.0.0", "--port", "8078"]
+CMD ["python3", "-m", "uvicorn", "tts_server:app"]

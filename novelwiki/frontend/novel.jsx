@@ -560,6 +560,84 @@ function TagSuggestionsInbox({ novelId, reloadNovel }) {
   );
 }
 
+/* Operational surface over the durable scrape/codex/translation jobs for this novel. Shows the
+   active + recent jobs (status, stage, live progress) and lets the owner cancel one in flight.
+   Polls while anything is active; hidden entirely when there's no job history. */
+const JOB_KIND_LABEL = { scrape: "Scrape", codex_build: "Codex build", translate: "Translation" };
+const JOB_STATUS_CHIP = { queued: "chip", running: "chip job-run", done: "chip job-ok",
+                          failed: "chip job-err", canceled: "chip" };
+
+function jobProgressText(job) {
+  const p = job.progress || {};
+  if (job.kind === "translate" && p.total != null) {
+    let s = `${p.done || 0}/${p.total} translated`;
+    if (p.failed) s += `, ${p.failed} failed`;
+    if (p.stopped_reason === "quota") s += " — stopped (quota)";
+    return s;
+  }
+  if (job.kind === "codex_build" && p.steps != null) return `step ${p.step || 0}/${p.steps}${p.stage ? ` — ${p.stage}` : ""}`;
+  if (job.kind === "scrape" && p.scraped != null) return `${p.scraped} chapters scraped`;
+  return job.stage || "";
+}
+
+function JobCenter({ novelId }) {
+  const h = React.createElement;
+  const [jobs, setJobs] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const timerRef = React.useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await window.API.jobs({ novel_id: novelId, limit: 25 });
+      setJobs(r.jobs || []);
+      return r.jobs || [];
+    } catch (e) { setJobs([]); return []; }
+  }, [novelId]);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      const list = await load();
+      if (!alive) return;
+      const active = list.some(j => j.status === "queued" || j.status === "running");
+      timerRef.current = setTimeout(tick, active ? 3000 : 15000);
+    };
+    tick();
+    return () => { alive = false; if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [load]);
+
+  if (jobs == null || jobs.length === 0) return null;
+
+  const cancel = async (job) => {
+    setBusyId(job.id);
+    try { await window.API.cancelJob(job.id); await load(); }
+    catch (e) { alert(e.message || "Cancel failed."); }
+    finally { setBusyId(null); }
+  };
+
+  return h(React.Fragment, null,
+    h("p", { className: "section-eyebrow", style: { marginTop: 28 } }, "Background jobs"),
+    h("div", { className: "card", style: { padding: 12 } },
+      jobs.map(job => {
+        const active = job.status === "queued" || job.status === "running";
+        return h("div", { key: job.id, className: "toc-row", style: { cursor: "default", alignItems: "center" } },
+          h("span", { className: "chip", style: { minWidth: 92 } }, JOB_KIND_LABEL[job.kind] || job.kind),
+          h("span", { className: JOB_STATUS_CHIP[job.status] || "chip" }, job.status),
+          h("span", { className: "toc-title", style: { flex: 1 } }, jobProgressText(job)),
+          job.attempts > 1 && job.status !== "done"
+            ? h("span", { className: "muted", style: { fontSize: 12 } }, `attempt ${job.attempts}/${job.max_attempts}`) : null,
+          job.error && (job.status === "failed")
+            ? h("span", { className: "muted", style: { fontSize: 12, color: "var(--danger, #c0392b)" }, title: job.error },
+                (job.error || "").slice(0, 60)) : null,
+          active
+            ? h("button", { className: "icon-btn", title: "Cancel job", disabled: busyId === job.id, onClick: () => cancel(job) },
+                h(Icon, { name: "x", size: 15 })) : null
+        );
+      })
+    )
+  );
+}
+
 /* Whole-book narration (available to any reader). Picks a narrator + how many chapters, queues
    a bounded, cancellable batch through the durable TTS worker, and shows live progress. A long
    book is narrated in successive capped batches; cached chapters are skipped automatically. */
@@ -883,6 +961,9 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
         )
       )
     ),
+
+    // durable background jobs (scrape / codex / translation) for this novel
+    canEdit && React.createElement(JobCenter, { novelId }),
 
     // translation glossary (raw novels)
     canEdit && (hasRaw || glossary.length > 0) && React.createElement(GlossaryEditor, { novelId, glossary, reload: loadGlossary }),

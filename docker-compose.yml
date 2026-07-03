@@ -4,11 +4,26 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: novelwiki-web
-    # Uses host networking so the container can reach the host's PostgreSQL (localhost),
-    # the OCR sidecar (localhost:8077), and expose its web port directly without double-nat.
-    network_mode: "host"
     env_file:
       - .env
+    environment:
+      # Reach the sidecars over the private bridge (service DNS), NOT host localhost. These
+      # override whatever OCR_SIDECAR_URL/TTS_SIDECAR_URL are in .env.
+      OCR_SIDECAR_URL: http://ocr:8077
+      TTS_SIDECAR_URL: http://tts:8078
+      # Shared token the web app presents to the sidecars (sourced from .env / the shell).
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+    extra_hosts:
+      # We are OFF host networking, so `localhost` inside the container is the container itself.
+      # Reach the host's PostgreSQL via the gateway: set DATABASE_URL / DB_SUPERUSER_URL host to
+      # `host.docker.internal` in .env (e.g. postgresql://user:pass@host.docker.internal:5432/novelwiki).
+      - "host.docker.internal:host-gateway"
+    ports:
+      # Loopback-only: the Cloudflare tunnel (running on the host) reaches it; public interfaces
+      # cannot. Front the tunnel/proxy here; do not bind 0.0.0.0 in production.
+      - "127.0.0.1:8001:8001"
+    networks:
+      - tideglass
     volumes:
       # Persists the BM25 index, import scratch, extracted assets, and cached scrapings
       - wiki_data:/app/data
@@ -22,7 +37,15 @@ services:
       context: ./sidecar
       dockerfile: Dockerfile
     container_name: novelwiki-ocr
-    network_mode: "host"            # serves on localhost:8077, which the web app reaches
+    environment:
+      # Require the shared/per-service token on /ocr (the web app sends the same value).
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      OCR_SIDECAR_TOKEN: ${OCR_SIDECAR_TOKEN:-}
+      # Bind to all interfaces INSIDE the container. The port is deliberately NOT published to the
+      # host, so this is only reachable by the web service on the private bridge — never publicly.
+      UVICORN_HOST: 0.0.0.0
+    networks:
+      - tideglass
     restart: unless-stopped
     profiles: ["ocr"]               # only starts when explicitly requested / GPU is present
     deploy:
@@ -44,7 +67,15 @@ services:
       context: ./sidecar-tts
       dockerfile: Dockerfile
     container_name: novelwiki-tts
-    network_mode: "host"            # serves on localhost:8078, which the web app reaches
+    environment:
+      # Require the shared/per-service token on /synthesize + /narrate (the web app sends the same value).
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      TTS_SIDECAR_TOKEN: ${TTS_SIDECAR_TOKEN:-}
+      # Bind to all interfaces INSIDE the container; the port is NOT published to the host, so the
+      # sidecar is only reachable by the web service on the private bridge — never publicly.
+      UVICORN_HOST: 0.0.0.0
+    networks:
+      - tideglass
     restart: unless-stopped
     profiles: ["tts"]               # only starts when explicitly requested / GPU is present
     volumes:
@@ -61,6 +92,13 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+# Private bridge: the web app talks to `ocr`/`tts` by service name; sidecar ports are never
+# published to the host, so Cloudflare Access / the tunnel can't be bypassed by hitting the host.
+networks:
+  tideglass:
+    name: novelwiki_net
+    driver: bridge
 
 volumes:
   wiki_data:

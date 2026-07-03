@@ -239,6 +239,20 @@
     codexBuild(id, body) { return postJSON(`${N(id)}/codex/build`, body || {}); },
     mergeEntities(id, body) { return postJSON(`${N(id)}/merge-entities`, body); },
 
+    // ── Job center (durable scrape/codex/translation jobs) ──
+    // Non-admins only ever see their own jobs; pass filters (kind/status/novel_id/active) as opts.
+    jobs(opts = {}) {
+      const params = new URLSearchParams();
+      for (const k of ["kind", "status", "novel_id", "user_id", "limit"]) {
+        if (opts[k] != null && opts[k] !== "") params.set(k, opts[k]);
+      }
+      if (opts.active) params.set("active", "1");
+      const qs = params.toString();
+      return getJSON(`${API_BASE}/jobs${qs ? `?${qs}` : ""}`);
+    },
+    job(jobId) { return getJSON(`${API_BASE}/jobs/${jobId}`); },
+    cancelJob(jobId) { return postJSON(`${API_BASE}/jobs/${jobId}/cancel`, {}); },
+
     // ── File import (EPUB/PDF ingestion) ──
     // uploadImport posts multipart (FormData), not JSON, so it bypasses the req() helper.
     async uploadImport(file) {

@@ -133,6 +133,37 @@ async def try_reserve(user: dict, kind: str, n: int = 1) -> bool:
     return True
 
 
+async def refund(user_id: int, kind: str, n: int = 1) -> int:
+    """Return up to `n` reserved units for the current month to a user, clamping so recorded
+    usage never drops below zero. Returns how many were actually refunded.
+
+    Used by durable-job finalizers when reserved API budget wasn't consumed (a build that
+    crashed, hit a provider failure, or was cancelled before doing the expensive work). Takes a
+    `user_id` (not a user dict) because the finalizer runs from the worker off a stored job row,
+    and refunds admins too (their usage is tracked for analytics, so it must be corrected as well)."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown quota kind: {kind}")
+    if user_id is None or n <= 0:
+        return 0
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            used = await conn.fetchval(
+                f"SELECT {kind} FROM quota_usage WHERE user_id = $1 AND period = $2 FOR UPDATE;",
+                user_id, _period(),
+            )
+            if used is None:
+                return 0
+            give = min(int(n), int(used))
+            if give <= 0:
+                return 0
+            await conn.execute(
+                f"UPDATE quota_usage SET {kind} = {kind} - $3 WHERE user_id = $1 AND period = $2;",
+                user_id, _period(), give,
+            )
+    return give
+
+
 async def check_and_reserve(user: dict, kind: str, n: int = 1) -> None:
     """try_reserve, but raise the right HTTP error instead of returning False."""
     require_spend_allowed(user)

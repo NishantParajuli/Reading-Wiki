@@ -48,6 +48,28 @@ class Settings(BaseSettings):
     RERANK_TOP_N: int = 8
     MAX_ITERATIONS: int = 5
     BM25_INDEX_PATH: str = "./data/bm25_index"
+    # Run BM25's synchronous tokenize/index/search off the event loop (asyncio.to_thread)
+    # so a heavy lexical search can't stall unrelated requests. Leave True in prod.
+    BM25_THREAD_OFFLOAD: bool = True
+
+    # ── Read-side AI cost controls (denial-of-wallet guards for /ask + profile synth) ──
+    # Uncached AI reads (agentic Q&A, entity-profile synthesis) fan out to embeddings,
+    # rerank, and multiple model calls, so they are gated the same way costly writes are:
+    # a verified email, a fixed per-hour cap on how many UNCACHED requests a user may
+    # trigger, and a small concurrency ceiling. Cache hits are free and skip every gate.
+    ASK_MAX_QUERY_CHARS: int = 1000              # reject longer questions (422) before any provider call
+    ASK_MAX_UNIQUE_PER_USER_HOUR: int = 30        # fixed-window cap on uncached AI reads per user per hour
+    ASK_MAX_CONCURRENT_PER_USER: int = 2          # max simultaneous in-flight uncached AI reads per user
+    ASK_CONCURRENCY_TTL_SECONDS: int = 180        # concurrency-slot lease TTL (auto-reclaimed if a request dies)
+    ASK_REQUIRE_VERIFIED: bool = True             # uncached /ask needs a verified email
+    ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED: bool = True  # uncached profile synthesis needs a verified email
+    # Hard caps on what a model-planned tool call may request, so the LLM can't be steered
+    # into a huge fan-out. Applied in the agent's execute_tool dispatcher.
+    ASK_TOOL_MAX_K: int = 100                     # clamp hybrid_search k
+    ASK_TOOL_MAX_TOP_N: int = 20                  # clamp rerank top_n
+    ASK_TOOL_MAX_RERANK_HITS: int = 100           # clamp rerank candidate documents sent to provider
+    ASK_TOOL_MAX_QUERY_CHARS: int = 2000          # reject longer model-supplied tool queries
+    ASK_MAX_TOOL_CALLS_PER_ITER: int = 4          # tool calls processed per planner iteration
 
     # ── Extraction accuracy knobs ──
     # The running "story-so-far" summary is rebuilt each chapter from this many
@@ -97,6 +119,13 @@ class Settings(BaseSettings):
     IMPORT_LEASE_TIMEOUT_SECONDS: int = 120
     IMPORT_AUTO_BUILD_CODEX: bool = False                   # build codex over the imported range on commit
 
+    # ── Generic durable jobs (scrape/codex/translation) ──
+    # Same claim-lease model as the import worker: a worker heartbeats the job it holds; a lease
+    # unrenewed past the timeout is reclaimed. A crashed/failed job is retried up to JOB_MAX_ATTEMPTS.
+    JOB_WORKER_HEARTBEAT_SECONDS: int = 30
+    JOB_LEASE_TIMEOUT_SECONDS: int = 180
+    JOB_MAX_ATTEMPTS: int = 3
+
     # Text segmentation/cleanup LLM (routed through OpenRouter alongside the codex models).
     SEGMENT_MODEL: str = "deepseek/deepseek-v4-pro"
 
@@ -130,6 +159,26 @@ class Settings(BaseSettings):
     TTS_MAX_BATCH_CHAPTERS: int = 100         # hard cap of chapters per "narrate book" job
     TTS_OPUS_BITRATE: str = "48k"             # ffmpeg libopus bitrate for stored audio
     TTS_TITLE_INTRO: bool = True              # prepend "Chapter N. <title>." spoken intro
+
+    # ── Sidecar service auth (OCR + TTS) ───────────────────────────────────
+    # The OCR/TTS sidecars run the expensive GPU endpoints (/ocr, /synthesize, /narrate). When a
+    # token is configured the web app sends it as `X-Tideglass-Sidecar-Token` and each sidecar
+    # REQUIRES it — so even if a sidecar port is reachable, only the web app can drive it. Leave
+    # blank ONLY for a fully private/loopback deploy; set a long random value whenever a sidecar
+    # is reachable off-box. A per-service token (OCR_/TTS_) overrides the shared one when set.
+    SIDECAR_AUTH_TOKEN: str = ""
+    OCR_SIDECAR_TOKEN: str = ""
+    TTS_SIDECAR_TOKEN: str = ""
+
+    @property
+    def ocr_sidecar_token(self) -> str:
+        """Effective token the web app presents to the OCR sidecar ("" = send no header)."""
+        return self.OCR_SIDECAR_TOKEN or self.SIDECAR_AUTH_TOKEN
+
+    @property
+    def tts_sidecar_token(self) -> str:
+        """Effective token the web app presents to the TTS sidecar ("" = send no header)."""
+        return self.TTS_SIDECAR_TOKEN or self.SIDECAR_AUTH_TOKEN
 
     # ── Multi-user / auth ──────────────────────────────────────────────────
     # Server-side opaque sessions backed by a DB table; the browser only holds an

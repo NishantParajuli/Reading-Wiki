@@ -66,6 +66,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not start the TTS worker (continuing): {e}")
 
+    # The generic jobs worker is a third durable, DB-polled task: it advances scrape / codex-build
+    # / translation jobs that used to run in fire-and-forget BackgroundTasks (and would be lost on
+    # a deploy after quota was reserved). It reserves/refunds quota explicitly and retries failures.
+    try:
+        from novelwiki.jobs.worker import start_worker as start_jobs_worker
+        start_jobs_worker()
+    except Exception as e:
+        logger.warning(f"Could not start the jobs worker (continuing): {e}")
+
     yield
 
     # ── Shutdown Phase ──
@@ -80,6 +89,12 @@ async def lifespan(app: FastAPI):
         await stop_tts_worker()
     except Exception as e:
         logger.warning(f"Error stopping TTS worker: {e}")
+
+    try:
+        from novelwiki.jobs.worker import stop_worker as stop_jobs_worker
+        await stop_jobs_worker()
+    except Exception as e:
+        logger.warning(f"Error stopping jobs worker: {e}")
 
     logger.info("Closing database connection pool...")
     await close_db_pool()
@@ -166,11 +181,25 @@ def _maybe_seed_csrf_cookie(request, response) -> None:
         set_csrf_cookie(response)
 
 
+_REQUEST_ID_HEADER = "X-Request-ID"
+
+
 @app.middleware("http")
 async def security_headers(request, call_next):
-    response = _csrf_rejection(request)
-    if response is None:
-        response = await call_next(request)
+    # Correlation id: accept a caller-supplied X-Request-ID (trusted proxy) or mint one, stash it
+    # in a contextvar for the duration of the request so logs + audit rows can reference it, and
+    # echo it back on the response for client-side/debug correlation.
+    from novelwiki import audit
+    incoming = request.headers.get(_REQUEST_ID_HEADER, "").strip()
+    request_id = incoming[:64] if incoming else audit.new_request_id()
+    token = audit.set_request_id(request_id)
+    try:
+        response = _csrf_rejection(request)
+        if response is None:
+            response = await call_next(request)
+    finally:
+        audit.reset_request_id(token)
+    response.headers[_REQUEST_ID_HEADER] = request_id
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "same-origin")
     response.headers.setdefault("X-Frame-Options", "DENY")
