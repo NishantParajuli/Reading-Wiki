@@ -592,7 +592,13 @@ async def api_discover(user: dict = Depends(current_user), q: str | None = None,
     # Reusable per-novel derivation subqueries (kept out of the GROUP BY, evaluated per row).
     has_raw_sq = "EXISTS (SELECT 1 FROM sources s WHERE s.novel_id = n.id AND s.is_raw)"
     has_eng_sq = "EXISTS (SELECT 1 FROM sources s WHERE s.novel_id = n.id AND NOT s.is_raw)"
-    has_audio_sq = "EXISTS (SELECT 1 FROM chapter_audio a WHERE a.novel_id = n.id AND a.user_id IS NULL)"
+    has_audio_sq = (
+        "EXISTS (SELECT 1 FROM chapter_audio a "
+        "JOIN chapters c ON c.novel_id = a.novel_id "
+        "AND c.number = a.chapter AND c.content_version = a.content_version "
+        "WHERE a.novel_id = n.id AND a.user_id IS NULL "
+        "AND (c.kind IS NULL OR c.kind = 'chapter'))"
+    )
     freshness_sq = "(SELECT MAX(s.last_scraped_at) FROM sources s WHERE s.novel_id = n.id)"
 
     conds = [

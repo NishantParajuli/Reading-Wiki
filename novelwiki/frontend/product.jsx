@@ -219,8 +219,13 @@ function JobsPage({ openNovel, openLibrary }) {
   );
 }
 
+function voiceLabel(id, catalog) {
+  const v = catalog && catalog.get(id);
+  return (v && (v.name || v.id)) || id;
+}
+
 /* ── Novel health panel (operator surface, inside NovelDetail) ─────────── */
-function NovelHealthPanel({ novelId, voiceId }) {
+function NovelHealthPanel({ novelId, voiceId, ttsVoices }) {
   const [hp, setHp] = useState(null);   // null = loading, false = error
   useEffect(() => {
     let cancel = false;
@@ -235,6 +240,20 @@ function NovelHealthPanel({ novelId, voiceId }) {
     h("div", { className: "health-item" },
       h("div", { className: "health-num" + (tone ? " " + tone : "") }, value),
       h("div", { className: "health-label" }, label));
+  const catalog = new Map((ttsVoices || []).map(v => [v.id, v]));
+  const prose = hp && hp.audio ? (hp.audio.prose_chapters || 0) : 0;
+  const voiceRows = [];
+  if (hp && hp.audio) {
+    const byVoice = new Map();
+    (ttsVoices || []).filter(v => v.ready !== false).forEach(v => {
+      byVoice.set(v.id, { voice_id: v.id, have: 0, missing: prose, catalog: v });
+    });
+    (hp.audio.voices || []).forEach(v => {
+      byVoice.set(v.voice_id, { ...byVoice.get(v.voice_id), ...v });
+    });
+    byVoice.forEach(v => voiceRows.push(v));
+    voiceRows.sort((a, b) => voiceLabel(a.voice_id, catalog).localeCompare(voiceLabel(b.voice_id, catalog)));
+  }
 
   return h(React.Fragment, null,
     h("p", { className: "section-eyebrow", style: { marginTop: 28 } }, "Health"),
@@ -246,11 +265,25 @@ function NovelHealthPanel({ novelId, voiceId }) {
                  hp.codex.missing ? "warn" : (hp.codex.stale ? "warn" : "ok")),
             item("Untranslated raw", hp.untranslated_raw_chapters, hp.untranslated_raw_chapters > 0 ? "warn" : "ok"),
             hp.audio && hp.audio.missing != null
-              ? item(`Missing audio (${hp.audio.voice_id || "voice"})`, hp.audio.missing, hp.audio.missing > 0 ? "warn" : "ok")
+              ? item("Missing audio (any voice)", hp.audio.missing, hp.audio.missing > 0 ? "warn" : "ok")
               : item("Audio", "—"),
             item("Chapters", hp.total_chapters)
           ),
-          h("div", { className: "health-notes muted" },
+          voiceRows.length > 0 && h("div", { className: "health-voices" },
+            voiceRows.map(v => {
+              const have = v.have || 0;
+              const pct = prose ? Math.round((have / prose) * 100) : 0;
+              const meta = [v.catalog && v.catalog.language, v.catalog && v.catalog.gender, v.catalog && v.catalog.accent].filter(Boolean).join(" · ");
+              return h("div", { key: v.voice_id, className: "health-voice-row" },
+                h("div", { className: "health-voice-head" },
+                  h("span", null, voiceLabel(v.voice_id, catalog)),
+                  h("span", { className: "mono muted" }, `${have}/${prose}`)),
+                h("div", { className: "health-voice-bar" }, h("div", { style: { width: pct + "%" } })),
+                meta && h("div", { className: "health-voice-meta muted" }, meta)
+              );
+            })
+          ),
+	          h("div", { className: "health-notes muted" },
             hp.codex.missing ? h("div", null, "• Codex is enabled but empty — build it from the pipeline.") : null,
             (!hp.codex.missing && hp.codex.stale) ? h("div", null,
               `• Codex covers up to ch. ${hp.codex.coverage_chapter} of ${hp.book_max_chapter} — rebuild to catch up.`) : null,

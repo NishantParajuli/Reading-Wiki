@@ -235,6 +235,10 @@
     novelAudioChapters(id, voiceId) {
       return getJSON(`${N(id)}/audio/chapters?voice_id=${encodeURIComponent(voiceId)}`);
     },
+    // Current shared audio coverage across all voices.
+    audioCoverage(id) {
+      return getJSON(`${N(id)}/audio/coverage`);
+    },
     // The <audio src> URL for a chapter's narration (access-controlled, range-capable).
     chapterAudioUrl(id, number, voiceId) {
       return `${N(id)}/chapter/${number}/audio.opus?voice_id=${encodeURIComponent(voiceId)}`;

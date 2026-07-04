@@ -16,6 +16,7 @@ import novelwiki.db.connection as db_connection
 from novelwiki import ai_limits
 from novelwiki.api import routes
 from novelwiki.api import routes_product as prod
+from novelwiki.api import routes_tts as tts_routes
 from novelwiki.db.connection import close_db_pool, get_db_pool
 from novelwiki.db.schema import init_database
 
@@ -124,17 +125,23 @@ async def test_home_continue_listening_needs_audio(db):
     pool, reader, other = db["pool"], db["reader"], db["other"]
     quiet = await _mk_novel(pool, owner_id=other["id"], title="Quiet")
     loud = await _mk_novel(pool, owner_id=other["id"], title="Loud")
-    for nid in (quiet, loud):
+    stale = await _mk_novel(pool, owner_id=other["id"], title="StaleAudio")
+    for nid in (quiet, loud, stale):
         await _add_library(pool, reader["id"], nid)
         await _set_progress(pool, reader["id"], nid, 1, 1)
     async with pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO chapter_audio (novel_id, chapter, voice_id, audio_path, user_id) "
             "VALUES ($1, 1, 'v1', 'x.opus', NULL);", loud)
+        await conn.execute("UPDATE chapters SET content_version = 2 WHERE novel_id = $1 AND number = 1;", stale)
+        await conn.execute(
+            "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+            "VALUES ($1, 1, 'v1', 1, 'stale.opus', NULL);", stale)
 
     home = await prod.api_home(user=reader)
     listening = {n["id"] for n in home["continue_listening"]}
     assert loud in listening and quiet not in listening
+    assert stale not in listening, "stale audio must not make a novel listenable"
 
 
 # ── Discover filters ──────────────────────────────────────────────────────────
@@ -178,6 +185,27 @@ async def test_discover_filters(db):
     # Provenance-ish fields are present.
     row = next(n for n in base if n["id"] == en_codex)
     assert row["has_codex"] is True and row["translation_type"] == "translated"
+
+
+@pytest.mark.asyncio
+async def test_discover_has_audio_requires_current_shared_audio(db):
+    pool, reader, other = db["pool"], db["reader"], db["other"]
+    current = await _mk_novel(pool, owner_id=other["id"], title="CurrentAudio")
+    stale = await _mk_novel(pool, owner_id=other["id"], title="OldAudio")
+    quiet = await _mk_novel(pool, owner_id=other["id"], title="NoAudio")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+            "VALUES ($1, 1, 'max', 1, 'cur.opus', NULL);", current)
+        await conn.execute("UPDATE chapters SET content_version = 2 WHERE novel_id = $1 AND number = 1;", stale)
+        await conn.execute(
+            "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+            "VALUES ($1, 1, 'narrator', 1, 'old.opus', NULL);", stale)
+
+    audio = await routes.api_discover(user=reader, has_audio=True)
+    ids = {n["id"] for n in audio}
+    assert current in ids
+    assert stale not in ids and quiet not in ids
 
 
 # ── Recap clamps to trusted ceiling ───────────────────────────────────────────
@@ -284,6 +312,52 @@ async def test_cost_estimate_audiobook_missing_count(db):
     assert est["estimated_units"] == 3 and est["quota_kind"] == "tts_chapters"
 
 
+@pytest.mark.asyncio
+async def test_audio_coverage_and_selected_voice_chapters(db):
+    pool, reader, other = db["pool"], db["reader"], db["other"]
+    nid = await _mk_novel(pool, owner_id=reader["id"], visibility="private", title="Coverage", chapters=2)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+            "VALUES ($1, 1, 'v1', 1, 'v1-1.opus', NULL);", nid)
+        await conn.execute(
+            "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+            "VALUES ($1, 2, 'v2', 1, 'v2-2.opus', NULL);", nid)
+        await conn.execute("UPDATE chapters SET content_version = 2 WHERE novel_id = $1 AND number = 2;", nid)
+        await conn.execute(
+            "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+            "VALUES ($1, 2, 'v1', 1, 'stale.opus', NULL);", nid)
+
+    coverage = await tts_routes.api_novel_audio_coverage(nid, user=reader)
+    assert coverage["prose_chapters"] == 2
+    assert coverage["chapters_with_any_audio"] == 1
+    assert coverage["missing_any"] == 1
+    assert coverage["chapters"] == [{"chapter": 1.0, "voices": ["v1"]}]
+
+    selected = await tts_routes.api_novel_audio_chapters(nid, voice_id="v1", user=reader)
+    assert selected["chapters"] == [1.0]
+
+
+@pytest.mark.asyncio
+async def test_chapter_audio_status_reports_available_other_voices(db):
+    pool, reader, other = db["pool"], db["reader"], db["other"]
+    nid = await _mk_novel(pool, owner_id=reader["id"], visibility="private", title="Status", chapters=1)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+            "VALUES ($1, 1, 'v2', 1, 'v2.opus', NULL);", nid)
+
+    missing_selected = await tts_routes.api_chapter_audio_status(nid, 1, voice_id="v1", user=reader)
+    assert missing_selected["cached"] is False
+    assert missing_selected["any_cached"] is True
+    assert missing_selected["available_voices"] == ["v2"]
+
+    cached_selected = await tts_routes.api_chapter_audio_status(nid, 1, voice_id="v2", user=reader)
+    assert cached_selected["cached"] is True
+    assert cached_selected["any_cached"] is True
+    assert cached_selected["available_voices"] == ["v2"]
+
+
 # ── Health panel counts ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -310,7 +384,51 @@ async def test_health_counts(db):
     assert h["codex"]["stale"] is True and h["codex"]["missing"] is False
     assert h["codex"]["coverage_chapter"] == 2.0
     assert h["audio"]["prose_chapters"] == 4 and h["audio"]["have"] == 1 and h["audio"]["missing"] == 3
+    assert h["audio"]["voices"][0]["voice_id"] == "v1"
     assert h["is_editor"] is True
+
+
+@pytest.mark.asyncio
+async def test_health_audio_is_voice_agnostic_for_non_default_voice(db):
+    pool, reader, other = db["pool"], db["reader"], db["other"]
+    nid = await _mk_novel(pool, owner_id=reader["id"], visibility="private", title="NonDefault", chapters=3)
+    async with pool.acquire() as conn:
+        for ch in (1, 2, 3):
+            await conn.execute(
+                "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+                "VALUES ($1, $2, 'max', 1, $3, NULL);", nid, ch, f"max-{ch}.opus")
+
+    h = await prod.api_novel_health(nid, user=reader)
+    assert h["audio"]["voice_id"] is None
+    assert h["audio"]["have"] == 3
+    assert h["audio"]["missing"] == 0
+    assert h["audio"]["voices"] == [{
+        "voice_id": "max",
+        "have": 3,
+        "missing": 0,
+        "chapters": [1.0, 2.0, 3.0],
+        "duration_seconds": 0,
+        "file_bytes": 0,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_health_audio_split_across_voices_has_no_big_picture_gap(db):
+    pool, reader, other = db["pool"], db["reader"], db["other"]
+    nid = await _mk_novel(pool, owner_id=reader["id"], visibility="private", title="Split", chapters=2)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+            "VALUES ($1, 1, 'narrator', 1, 'n1.opus', NULL);", nid)
+        await conn.execute(
+            "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
+            "VALUES ($1, 2, 'max', 1, 'm2.opus', NULL);", nid)
+
+    h = await prod.api_novel_health(nid, user=reader)
+    assert h["audio"]["missing"] == 0
+    voices = {v["voice_id"]: v for v in h["audio"]["voices"]}
+    assert voices["narrator"]["have"] == 1 and voices["narrator"]["missing"] == 1
+    assert voices["max"]["have"] == 1 and voices["max"]["missing"] == 1
 
 
 @pytest.mark.asyncio

@@ -36,6 +36,7 @@ from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
 from novelwiki.jobs import service as jobs_service
 from novelwiki.retrieval.bm25 import get_bm25_manager
+from novelwiki.tts.coverage import shared_audio_coverage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -243,8 +244,15 @@ async def api_home(user: dict = Depends(current_user)):
             SELECT n.id, n.title, n.cover_url, n.visibility, n.owner_id,
                    p.last_chapter, p.max_chapter_read, p.scroll_pct, p.updated_at,
                    (SELECT MAX(number) FROM chapters c WHERE c.novel_id = n.id) AS max_chapter,
-                   (SELECT COUNT(DISTINCT a.chapter) FROM chapter_audio a
-                     WHERE a.novel_id = n.id AND a.user_id IS NULL) AS audio_chapters
+                   (SELECT COUNT(DISTINCT a.chapter)
+                      FROM chapter_audio a
+                      JOIN chapters c
+                        ON c.novel_id = a.novel_id
+                       AND c.number = a.chapter
+                       AND c.content_version = a.content_version
+                     WHERE a.novel_id = n.id
+                       AND a.user_id IS NULL
+                       AND (c.kind IS NULL OR c.kind = 'chapter')) AS audio_chapters
             FROM reading_progress p
             JOIN novels n ON n.id = p.novel_id
             WHERE p.user_id = $1
@@ -349,7 +357,7 @@ async def api_novel_health(novel_id: int, voice_id: str | None = None,
     Readable by anyone who can read the novel; error detail is editor-only."""
     novel = await require_readable(novel_id, user)
     editor = can_edit(novel, user)
-    voice = (voice_id or settings.TTS_DEFAULT_VOICE or "").strip()
+    voice = (voice_id or "").strip()
 
     pool = await get_db_pool()
     async with pool.acquire() as conn:
@@ -367,19 +375,6 @@ async def api_novel_health(novel_id: int, voice_id: str | None = None,
               AND (content IS NULL OR translation_status <> 'done');
             """,
             novel_id) or 0)
-        prose_chapters = int(await conn.fetchval(
-            "SELECT COUNT(*) FROM chapters WHERE novel_id = $1 AND (kind IS NULL OR kind = 'chapter');",
-            novel_id) or 0)
-        audio_have = 0
-        if voice:
-            audio_have = int(await conn.fetchval(
-                """
-                SELECT COUNT(DISTINCT a.chapter)
-                FROM chapter_audio a JOIN chapters c ON c.novel_id = a.novel_id AND c.number = a.chapter
-                WHERE a.novel_id = $1 AND a.voice_id = $2 AND a.user_id IS NULL
-                  AND (c.kind IS NULL OR c.kind = 'chapter');
-                """,
-                novel_id, voice) or 0)
         source_last_scraped = await conn.fetchval(
             "SELECT MAX(last_scraped_at) FROM sources WHERE novel_id = $1;", novel_id)
 
@@ -425,7 +420,7 @@ async def api_novel_health(novel_id: int, voice_id: str | None = None,
     codex_missing = codex_enabled and entities_count == 0
     codex_stale = bool(codex_enabled and codex_max_f is not None and book_max_f is not None
                        and codex_max_f < book_max_f)
-    missing_audio = max(0, prose_chapters - audio_have) if voice else None
+    audio = await shared_audio_coverage(novel_id, [voice] if voice else None)
 
     return {
         "total_chapters": total_chapters,
@@ -440,9 +435,12 @@ async def api_novel_health(novel_id: int, voice_id: str | None = None,
         "untranslated_raw_chapters": untranslated,
         "audio": {
             "voice_id": voice or None,
-            "prose_chapters": prose_chapters,
-            "have": audio_have if voice else None,
-            "missing": missing_audio,
+            "prose_chapters": audio["prose_chapters"],
+            "have": audio["chapters_with_any_audio"],
+            "chapters_with_any_audio": audio["chapters_with_any_audio"],
+            "missing": audio["missing_any"],
+            "missing_any": audio["missing_any"],
+            "voices": audio["voices"],
         },
         "source_last_scraped": source_last_scraped.isoformat() if source_last_scraped else None,
         "recent_errors": recent_errors,

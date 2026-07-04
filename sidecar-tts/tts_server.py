@@ -135,6 +135,8 @@ def _load_voices() -> list[dict]:
             "language": v.get("language", "en"),
             "gender": v.get("gender"),
             "accent": v.get("accent"),
+            "description": v.get("description") or v.get("note"),
+            "note": v.get("note"),
             "file": v.get("file"),
             "ref_text": v.get("ref_text", ""),
             "ready": bool(v.get("file")) and clip.exists(),
@@ -143,8 +145,8 @@ def _load_voices() -> list[dict]:
 
 
 def _public_voices() -> list[dict]:
-    return [{k: v[k] for k in ("id", "name", "language", "gender", "accent", "ready")}
-            for v in _load_voices()]
+    keys = ("id", "name", "language", "gender", "accent", "description", "note", "ready")
+    return [{k: v.get(k) for k in keys if v.get(k) is not None} for v in _load_voices()]
 
 
 def _ensure_model():

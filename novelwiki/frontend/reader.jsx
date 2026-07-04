@@ -150,19 +150,21 @@ function readTtsPrefs(user) {
   return { voice: p.voice || null, speed: Number(p.speed) || 1, autoplay: p.autoplay !== false };
 }
 
-function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
+function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader, onAudioChange }) {
   const [voices, setVoices] = useState(null);          // null=loading | [] none/offline
   const [voice, setVoice] = useState(() => readTtsPrefs(user).voice);
+  const [defaultVoice, setDefaultVoice] = useState(null);
   const [speed, setSpeed] = useState(() => readTtsPrefs(user).speed);
   const [src, setSrc] = useState(null);                // audio URL once ready
   const [state, setState] = useState("idle");          // idle|checking|generating|ready|error|untranslated
   const [msg, setMsg] = useState(null);
+  const [availableVoices, setAvailableVoices] = useState([]);
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);                   // current playback time (s)
   const [dur, setDur] = useState(0);                   // total duration (s)
   const audioRef = useRef(null);
   const pollRef = useRef(null);
-  const posKey = `nw-tts:${novelId}:${number}`;
+  const posKey = `nw-tts:${novelId}:${number}:${voice || "none"}`;
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
 
@@ -173,7 +175,10 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
       if (cancel) return;
       const list = (r.voices || []).filter(v => v.ready);
       setVoices(list);
-      setVoice(v => v || readTtsPrefs(user).voice || r.default || (list[0] && list[0].id) || null);
+      setDefaultVoice(r.default || null);
+      const pref = readTtsPrefs(user).voice;
+      const ids = new Set(list.map(v => v.id));
+      setVoice(v => ids.has(v) ? v : ((pref && ids.has(pref)) ? pref : ((r.default && ids.has(r.default)) ? r.default : ((list[0] && list[0].id) || null))));
     }).catch(() => { if (!cancel) setVoices([]); });
     return () => { cancel = true; };
   }, []);
@@ -181,12 +186,16 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
   // On chapter/voice change: drop any loaded audio and check whether this chapter is already
   // cached for the chosen voice (→ ready to play, possibly auto-played from the previous one).
   useEffect(() => {
-    stopPoll(); setSrc(null); setMsg(null);
+    stopPoll();
+    if (audioRef.current) audioRef.current.pause();
+    setSrc(null); setMsg(null); setAvailableVoices([]);
+    setCur(0); setDur(0); setPlaying(false);
     if (!voice) { setState("idle"); return; }
     let cancel = false;
     setState("checking");
     window.API.chapterAudioStatus(novelId, number, voice).then(r => {
       if (cancel) return;
+      setAvailableVoices(r.available_voices || []);
       if (r.cached) {
         setSrc(window.API.chapterAudioUrl(novelId, number, voice));
         setState("ready");
@@ -223,9 +232,11 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
 
   async function loadReadyAudio(force) {
     const r = await window.API.chapterAudioStatus(novelId, number, voice);
+    setAvailableVoices(r.available_voices || []);
     if (r.cached) {
       setSrc(window.API.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
       setState("ready");
+      onAudioChange && onAudioChange();
       return true;
     }
     if (r.reason === "untranslated") {
@@ -267,6 +278,7 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
       if (r.status === "ready") {
         setSrc(window.API.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
         setState("ready");
+        onAudioChange && onAudioChange();
         return;
       }
       if (r.job_id) watchJob(r.job_id, force);
@@ -301,13 +313,22 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
   if (voices == null) return null;
   if (voices.length === 0) return null;
 
+  const voiceMap = new Map((voices || []).map(v => [v.id, v]));
+  const prefVoice = readTtsPrefs(user).voice;
+  const voiceOptionText = (v) => {
+    const bits = [v.name || v.id, v.id, ttsVoiceMeta(v)].filter(Boolean);
+    if (prefVoice === v.id) bits.push("preferred");
+    else if (defaultVoice === v.id) bits.push("default");
+    return bits.join(" · ");
+  };
+  const availableOtherVoices = (availableVoices || []).filter(v => v && v !== voice);
   const voiceSel = h("div", { className: "ab-select" },
     h(Icon, { name: "headphones", size: 14, className: "ab-select-ic" }),
     h("select", {
       className: "ab-voice", value: voice || "", onChange: e => pickVoice(e.target.value),
       title: "Narrator voice", onClick: e => e.stopPropagation(),
     }, voices.map(v => h("option", { key: v.id, value: v.id },
-      v.name + (v.accent ? ` · ${v.accent}` : "")))),
+      voiceOptionText(v)))),
     h(Icon, { name: "chevronDown", size: 13, className: "ab-select-caret" }));
 
   const pct = dur > 0 ? (cur / dur) * 100 : 0;
@@ -358,6 +379,13 @@ function AudioBar({ novelId, number, ch, user, onUserUpdate, openReader }) {
       voiceSel,
       h("button", { className: "btn btn-ghost ab-gen", onClick: () => generate(false) },
         h(Icon, { name: "play", size: 14 }), "Narrate chapter"),
+      availableOtherVoices.length > 0 && h("span", { className: "ab-alt" },
+        "Available in ",
+        availableOtherVoices.map((vid, i) => h(React.Fragment, { key: vid },
+          i > 0 ? ", " : null,
+          h("button", { className: "ab-alt-btn", onClick: () => pickVoice(vid) },
+            ttsVoiceLabel(vid, voiceMap))
+        ))),
       msg && h("span", { className: "ab-msg" }, msg));
   }
 
@@ -371,6 +399,8 @@ function Reader({ novelId, number, openReader, backToNovel, onRead, user, onUser
   const [prefs, setPrefs] = useState(() => loadReaderPrefs(user));
   const [showSettings, setShowSettings] = useState(false);
   const [toc, setToc] = useState(null);
+  const [audioCoverage, setAudioCoverage] = useState(null);
+  const [ttsVoices, setTtsVoices] = useState([]);
   const [showToc, setShowToc] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
   const [chrome, setChrome] = useState(true);   // toolbar + floating nav visibility (tap to toggle)
@@ -491,6 +521,8 @@ function Reader({ novelId, number, openReader, backToNovel, onRead, user, onUser
 
   function openTocDrawer() {
     if (toc == null) window.API.chapters(novelId).then(setToc).catch(() => setToc([]));
+    if (audioCoverage == null) window.API.audioCoverage(novelId).then(setAudioCoverage).catch(() => setAudioCoverage(null));
+    if (!ttsVoices.length) window.API.ttsVoices().then(r => setTtsVoices(r.voices || [])).catch(() => setTtsVoices([]));
     setShowToc(true);
   }
 
@@ -554,6 +586,7 @@ function Reader({ novelId, number, openReader, backToNovel, onRead, user, onUser
     // audiobook player (hidden when the TTS sidecar is offline / no ready voices)
     status === "ok" && ch && (ch.content || ch.rich_html) && React.createElement(AudioBar, {
       novelId, number, ch, user, onUserUpdate, openReader,
+      onAudioChange: () => window.API.audioCoverage(novelId).then(setAudioCoverage).catch(() => {}),
     }),
 
     // body
@@ -612,10 +645,12 @@ function Reader({ novelId, number, openReader, backToNovel, onRead, user, onUser
         toc == null
           ? React.createElement(Loading, { label: "Loading…" })
           : React.createElement("div", { className: "drawer-toc" },
-              React.createElement(VolumeTOC, {
-                toc, currentNumber: Number(number),
-                onOpen: (n) => { setShowToc(false); openReader(n); },
-              }))
+	              React.createElement(VolumeTOC, {
+	                toc, currentNumber: Number(number),
+	                onOpen: (n) => { setShowToc(false); openReader(n); },
+	                audioCoverage, voices: ttsVoices,
+	                preferredVoice: user && user.prefs && user.prefs.tts && user.prefs.tts.voice,
+	              }))
       )
     )
   );

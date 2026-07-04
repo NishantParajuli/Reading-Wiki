@@ -6,6 +6,17 @@
 // Non-chapter sections from file imports get a short tag instead of a number.
 const TOC_KIND_LABEL = { frontmatter: "front", interlude: "interlude", backmatter: "extra" };
 
+function ttsVoiceLabel(id, voiceMap) {
+  const v = voiceMap && voiceMap.get(id);
+  if (!v) return id;
+  const name = v.name || id;
+  return v.id && v.id !== name ? `${name} (${v.id})` : name;
+}
+
+function ttsVoiceMeta(v) {
+  return [v && v.language, v && v.gender, v && v.accent].filter(Boolean).join(" · ");
+}
+
 // Group the flat chapter list into ordered TOC nodes: consecutive chapters that share a
 // `part_label` (e.g. "Volume 1: Clown") fold into one collapsible volume; chapters with no
 // label stay as top-level rows. This is what lets a 1,400-chapter / 8-volume import (LOTM,
@@ -27,11 +38,18 @@ function groupToc(toc) {
 }
 
 // One chapter / section row, shared by the grouped TOC and the reader drawer.
-// `audioSet` (optional) is a Set of chapter numbers that already have narration, so the row
-// can show a small headphones marker.
-function TocRow({ ch, currentNumber, onOpen, audioSet }) {
+// `audioCoverage` carries all current shared voices for each chapter, so the row can show a
+// voice-agnostic headphones marker while the tooltip preserves selected/preferred-voice detail.
+function TocRow({ ch, currentNumber, onOpen, audioByChapter, voiceMap, preferredVoice }) {
   const isSection = ch.kind && ch.kind !== "chapter";
-  const narrated = audioSet && audioSet.has(ch.number);
+  const voices = (audioByChapter && audioByChapter.get(Number(ch.number))) || [];
+  const narrated = voices.length > 0;
+  const preferredAvailable = preferredVoice && voices.includes(preferredVoice);
+  const audioTitle = narrated
+    ? preferredAvailable
+      ? `Narrated in preferred voice: ${ttsVoiceLabel(preferredVoice, voiceMap)}`
+      : `Narrated in: ${voices.map(v => ttsVoiceLabel(v, voiceMap)).join(", ")}`
+    : null;
   return React.createElement("button", {
     className: "toc-row" + (currentNumber === ch.number ? " current" : "") + (isSection ? " toc-section" : ""),
     onClick: () => onOpen(ch.number),
@@ -41,15 +59,23 @@ function TocRow({ ch, currentNumber, onOpen, audioSet }) {
     isSection ? React.createElement("span", { className: "chip toc-kind", title: "Non-chapter section" }, TOC_KIND_LABEL[ch.kind] || ch.kind) : null,
     (!ch.has_content && ch.translation_status === "pending")
       ? React.createElement("span", { className: "chip", title: "Raw — translates on open" }, "raw") : null,
-    narrated ? React.createElement(Icon, { name: "headphones", size: 14, className: "muted toc-audio", title: "Narrated" }) : null,
+    narrated ? React.createElement(Icon, { name: "headphones", size: 14, className: "muted toc-audio", title: audioTitle }) : null,
     React.createElement(Icon, { name: "arrowRight", size: 15, className: "muted" })
   );
 }
 
 // Collapsible, volume-grouped table of contents. Every volume starts collapsed (the
 // compressed overview) except the one holding the chapter you last read.
-function VolumeTOC({ toc, currentNumber, onOpen, audioSet }) {
+function VolumeTOC({ toc, currentNumber, onOpen, audioCoverage, voices, preferredVoice }) {
   const nodes = useMemo(() => groupToc(toc), [toc]);
+  const audioByChapter = useMemo(() => {
+    const m = new Map();
+    ((audioCoverage && audioCoverage.chapters) || []).forEach(row => {
+      m.set(Number(row.chapter), row.voices || []);
+    });
+    return m;
+  }, [audioCoverage]);
+  const voiceMap = useMemo(() => new Map((voices || []).map(v => [v.id, v])), [voices]);
   const currentVol = useMemo(() => {
     if (currentNumber == null) return null;
     const hit = toc.find(c => c.number === currentNumber);
@@ -63,7 +89,7 @@ function VolumeTOC({ toc, currentNumber, onOpen, audioSet }) {
   return React.createElement(React.Fragment, null,
     nodes.map((node, i) => {
       if (node.type === "loose") {
-        return React.createElement(TocRow, { key: "l" + node.chapter.number, ch: node.chapter, currentNumber, onOpen, audioSet });
+        return React.createElement(TocRow, { key: "l" + node.chapter.number, ch: node.chapter, currentNumber, onOpen, audioByChapter, voiceMap, preferredVoice });
       }
       const isOpen = !!open[node.label];
       const chapterCount = node.chapters.filter(c => !c.kind || c.kind === "chapter").length;
@@ -79,7 +105,7 @@ function VolumeTOC({ toc, currentNumber, onOpen, audioSet }) {
           React.createElement("span", { className: "toc-vol-count mono" }, chapterCount)
         ),
         isOpen ? React.createElement("div", { className: "toc-vol-body" },
-          node.chapters.map(ch => React.createElement(TocRow, { key: ch.number, ch, currentNumber, onOpen, audioSet }))
+          node.chapters.map(ch => React.createElement(TocRow, { key: ch.number, ch, currentNumber, onOpen, audioByChapter, voiceMap, preferredVoice }))
         ) : null
       );
     })
@@ -685,10 +711,11 @@ function JobCenter({ novelId }) {
 /* Whole-book narration (available to any reader). Picks a narrator + how many chapters, queues
    a bounded, cancellable batch through the durable TTS worker, and shows live progress. A long
    book is narrated in successive capped batches; cached chapters are skipped automatically. */
-function NarrateBookControl({ novelId, novel, user, onChange }) {
+function NarrateBookControl({ novelId, novel, user, audioCoverage, onChange }) {
   const [open, setOpen] = useState(false);
   const [voices, setVoices] = useState(null);   // null=loading | [] offline
   const [voice, setVoice] = useState(null);
+  const [defaultVoice, setDefaultVoice] = useState(null);
   const minCh = novel?.min_chapter != null ? String(novel.min_chapter) : "";
   const [startCh, setStartCh] = useState(minCh);
   const [endCh, setEndCh] = useState("");
@@ -710,8 +737,10 @@ function NarrateBookControl({ novelId, novel, user, onChange }) {
     window.API.ttsVoices().then(r => {
       const list = (r.voices || []).filter(v => v.ready);
       setVoices(list);
+      setDefaultVoice(r.default || null);
       const pref = user && user.prefs && user.prefs.tts && user.prefs.tts.voice;
-      setVoice(pref || r.default || (list[0] && list[0].id) || null);
+      const ids = new Set(list.map(v => v.id));
+      setVoice((pref && ids.has(pref)) ? pref : ((r.default && ids.has(r.default)) ? r.default : ((list[0] && list[0].id) || null)));
     }).catch(() => setVoices([]));
   }, []);
 
@@ -797,6 +826,19 @@ function NarrateBookControl({ novelId, novel, user, onChange }) {
   const prog = (job && job.progress) || {};
   const pct = prog.total ? Math.round((100 * (prog.done || 0)) / prog.total) : 0;
   const stopped = prog.stopped_reason;
+  const prefVoice = user && user.prefs && user.prefs.tts && user.prefs.tts.voice;
+  const selectedVoice = (voices || []).find(v => v.id === voice);
+  const coverageByVoice = new Map(((audioCoverage && audioCoverage.voices) || []).map(v => [v.voice_id, v]));
+  const selectedCoverage = coverageByVoice.get(voice) || { have: 0, missing: audioCoverage ? audioCoverage.prose_chapters : 0 };
+  const voiceOptionText = (v) => {
+    const meta = ttsVoiceMeta(v);
+    const cov = coverageByVoice.get(v.id);
+    const bits = [v.name || v.id, v.id, meta].filter(Boolean);
+    if (cov && audioCoverage) bits.push(`${cov.have}/${audioCoverage.prose_chapters} narrated`);
+    if (prefVoice === v.id) bits.push("preferred");
+    else if (defaultVoice === v.id) bits.push("default");
+    return bits.join(" · ");
+  };
 
   return h("div", { className: "narrate-ctl", style: { position: "relative" } },
     h("button", { className: "btn btn-ghost", onClick: () => setOpen(o => !o) },
@@ -806,13 +848,22 @@ function NarrateBookControl({ novelId, novel, user, onChange }) {
         h("label", { className: "field", style: { flex: 1, minWidth: 130 } },
           h("span", null, "Narrator"),
           h("select", { value: voice || "", onChange: e => setVoice(e.target.value) },
-            voices.map(v => h("option", { key: v.id, value: v.id }, v.name + (v.accent ? ` · ${v.accent}` : ""))))),
+            voices.map(v => h("option", { key: v.id, value: v.id }, voiceOptionText(v))))),
         h("label", { className: "field", style: { flex: "0 0 80px" } },
           h("span", null, "From Ch."),
           h("input", { value: startCh, onChange: e => setStartCh(e.target.value), placeholder: minCh || "1", inputMode: "numeric" })),
         h("label", { className: "field", style: { flex: "0 0 80px" } },
           h("span", null, "To Ch."),
           h("input", { value: endCh, onChange: e => setEndCh(e.target.value), placeholder: "end", inputMode: "numeric" }))),
+      selectedVoice && h("div", { className: "voice-detail" },
+        h("span", { className: "voice-name" }, selectedVoice.name || selectedVoice.id),
+        h("span", { className: "mono" }, selectedVoice.id),
+        ttsVoiceMeta(selectedVoice) && h("span", null, ttsVoiceMeta(selectedVoice)),
+        prefVoice === selectedVoice.id ? h("span", { className: "chip voice-chip" }, "preferred") : null,
+        defaultVoice === selectedVoice.id ? h("span", { className: "chip voice-chip" }, "default") : null,
+        audioCoverage && h("span", null, `${selectedCoverage.have}/${audioCoverage.prose_chapters} chapters narrated`),
+        (selectedVoice.description || selectedVoice.note) && h("span", { className: "voice-note" }, selectedVoice.description || selectedVoice.note)
+      ),
       !running && est && h("div", { className: "muted", style: { fontSize: 12.5, marginTop: 10 } },
         est.estimated_units === 0
           ? "Every chapter in this range is already narrated in this voice."
@@ -861,26 +912,19 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
   const [msg, setMsg] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [audioSet, setAudioSet] = useState(null);   // Set of narrated chapter numbers (TOC icons)
+  const [audioCoverage, setAudioCoverage] = useState(null);   // Current shared narration coverage across all voices
+  const [ttsVoices, setTtsVoices] = useState([]);
   const [pendingCost, setPendingCost] = useState(null);   // {action, params, title, actionLabel, run}
 
   const loadToc = useCallback(() => {
     if (novelId == null) return;
     window.API.chapters(novelId).then(setToc).catch(() => setToc([]));
   }, [novelId]);
-  // Which chapters already have narration (in the reader's preferred voice) — drives the TOC
-  // headphones markers and refreshes when a narration batch finishes.
-  const loadAudioSet = useCallback(() => {
+  // Which chapters already have any current shared narration, plus the voices that cover them.
+  // Drives voice-agnostic TOC headphones and refreshes when a narration batch finishes.
+  const loadAudioCoverage = useCallback(() => {
     if (novelId == null) return;
-    const pref = user && user.prefs && user.prefs.tts && user.prefs.tts.voice;
-    Promise.resolve(pref ? { default: pref } : window.API.ttsVoices().catch(() => null))
-      .then(r => {
-        const voice = pref || (r && r.default);
-        if (!voice) { setAudioSet(null); return; }
-        return window.API.novelAudioChapters(novelId, voice)
-          .then(res => setAudioSet(new Set((res.chapters || []).map(Number))))
-          .catch(() => setAudioSet(null));
-      });
+    window.API.audioCoverage(novelId).then(setAudioCoverage).catch(() => setAudioCoverage(null));
   }, [novelId, user && user.id]);
   const loadBookmarks = useCallback(() => {
     if (novelId == null) return;
@@ -891,8 +935,11 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
     window.API.glossary(novelId).then(setGlossary).catch(() => setGlossary([]));
   }, [novelId]);
 
-  useEffect(() => { loadToc(); loadBookmarks(); loadGlossary(); loadAudioSet(); }, [loadToc, loadBookmarks, loadGlossary, loadAudioSet]);
+  useEffect(() => { loadToc(); loadBookmarks(); loadGlossary(); loadAudioCoverage(); }, [loadToc, loadBookmarks, loadGlossary, loadAudioCoverage]);
   useEffect(() => { window.API.adapters().then(setAdapters).catch(() => setAdapters([])); }, []);
+  useEffect(() => {
+    window.API.ttsVoices().then(r => setTtsVoices(r.voices || [])).catch(() => setTtsVoices([]));
+  }, []);
 
   if (!novel) return React.createElement("div", { className: "page" }, React.createElement(Loading, { label: "Loading novel…" }));
 
@@ -978,7 +1025,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
             novel.max_chapter != null && React.createElement("span", { className: "chip mono" }, `ch. ${novel.min_chapter}–${novel.max_chapter}`),
             novel.codex_enabled && React.createElement("button", { className: "btn btn-ghost", onClick: () => nav("browse") },
               React.createElement(Icon, { name: "compass", size: 16 }), "Open codex"),
-            hasChapters && React.createElement(NarrateBookControl, { novelId, novel, user, onChange: loadAudioSet }),
+            hasChapters && React.createElement(NarrateBookControl, { novelId, novel, user, audioCoverage, onChange: loadAudioCoverage }),
             canEdit && React.createElement(VisibilityControl, {
               novel, reloadNovel, isAdmin: !!(user && user.role === "admin"),
             }),
@@ -1060,7 +1107,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
     canEdit && React.createElement(JobCenter, { novelId }),
 
     // pipeline health panel (owner/admin operational surface)
-    canEdit && React.createElement(NovelHealthPanel, { novelId }),
+    canEdit && React.createElement(NovelHealthPanel, { novelId, ttsVoices }),
 
     // translation glossary (raw novels)
     canEdit && (hasRaw || glossary.length > 0) && React.createElement(GlossaryEditor, { novelId, glossary, reload: loadGlossary }),
@@ -1096,7 +1143,11 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
       : toc.length === 0
         ? React.createElement(EmptyState, { icon: "book", title: "No chapters yet", body: "Use Scrape above to fetch chapters from the source." })
         : React.createElement("div", { className: "card toc" },
-            React.createElement(VolumeTOC, { toc, currentNumber: progress.last_chapter, onOpen: openReader, audioSet })),
+            React.createElement(VolumeTOC, {
+              toc, currentNumber: progress.last_chapter, onOpen: openReader,
+              audioCoverage, voices: ttsVoices,
+              preferredVoice: user && user.prefs && user.prefs.tts && user.prefs.tts.voice,
+            })),
 
     confirmDelete && React.createElement(ConfirmDialog, {
       title: `Delete “${novel.title}”?`,

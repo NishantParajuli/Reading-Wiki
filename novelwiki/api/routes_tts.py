@@ -22,6 +22,7 @@ from novelwiki.auth.access import require_readable, is_admin
 from novelwiki import quota
 from novelwiki.tts import tts_client
 from novelwiki.tts import worker as tts_worker
+from novelwiki.tts.coverage import shared_audio_coverage
 from novelwiki.tts.chapter_text import resolve_chapter_text
 
 logger = logging.getLogger(__name__)
@@ -203,11 +204,29 @@ async def api_novel_audio_chapters(novel_id: int, voice_id: str | None = None,
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT DISTINCT chapter FROM chapter_audio "
-            "WHERE novel_id = $1 AND voice_id = $2 AND user_id IS NULL ORDER BY chapter;",
+            """
+            SELECT DISTINCT a.chapter
+            FROM chapter_audio a
+            JOIN chapters c
+              ON c.novel_id = a.novel_id
+             AND c.number = a.chapter
+             AND c.content_version = a.content_version
+            WHERE a.novel_id = $1
+              AND a.voice_id = $2
+              AND a.user_id IS NULL
+              AND (c.kind IS NULL OR c.kind = 'chapter')
+            ORDER BY a.chapter;
+            """,
             novel_id, voice,
         )
     return {"voice_id": voice, "chapters": [float(r["chapter"]) for r in rows]}
+
+
+@router.get("/novels/{novel_id}/audio/coverage")
+async def api_novel_audio_coverage(novel_id: int, user: dict = Depends(current_user)):
+    """Current shared base-audio coverage across all voices for the novel."""
+    await require_readable(novel_id, user)
+    return await shared_audio_coverage(novel_id)
 
 
 @router.get("/tts/jobs/{job_id}")
@@ -249,21 +268,45 @@ async def api_chapter_audio_status(novel_id: int, number: float, voice_id: str |
     await require_readable(novel_id, user)
     voice = _voice_or_default(voice_id)
     if not voice:
-        return {"cached": False, "voice_id": voice}
+        return {"cached": False, "voice_id": voice, "any_cached": False, "available_voices": []}
 
     info = await resolve_chapter_text(novel_id, number, user)
     if info["reason"] != "ok":
-        return {"cached": False, "voice_id": voice, "reason": info["reason"]}
+        return {"cached": False, "voice_id": voice, "reason": info["reason"],
+                "any_cached": False, "available_voices": []}
 
     uid = user["id"] if info["is_overlay"] else None
     row = await tts_worker.find_audio(novel_id, number, voice, info["content_version"], uid)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        if uid is None:
+            avail_rows = await conn.fetch(
+                """
+                SELECT DISTINCT voice_id FROM chapter_audio
+                WHERE novel_id = $1 AND chapter = $2 AND content_version = $3 AND user_id IS NULL
+                ORDER BY voice_id;
+                """,
+                novel_id, number, info["content_version"],
+            )
+        else:
+            avail_rows = await conn.fetch(
+                """
+                SELECT DISTINCT voice_id FROM chapter_audio
+                WHERE novel_id = $1 AND chapter = $2 AND content_version = $3 AND user_id = $4
+                ORDER BY voice_id;
+                """,
+                novel_id, number, info["content_version"], uid,
+            )
+    available_voices = [r["voice_id"] for r in avail_rows]
     if row:
-        return {"cached": True, "voice_id": voice, "duration": row.get("duration_seconds")}
+        return {"cached": True, "voice_id": voice, "duration": row.get("duration_seconds"),
+                "any_cached": True, "available_voices": available_voices}
 
     active = await tts_worker.find_active_chapter_job(
         novel_id, number, voice, info["content_version"], uid, include_force=True,
     )
     return {"cached": False, "voice_id": voice,
+            "any_cached": bool(available_voices), "available_voices": available_voices,
             "job_id": int(active["id"]) if active else None,
             "job_status": active["status"] if active else None}
 
