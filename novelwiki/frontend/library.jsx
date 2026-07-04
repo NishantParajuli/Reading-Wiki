@@ -204,6 +204,7 @@ function DiscoverCard({ n, openNovel, onAdded }) {
     try { await window.API.addToLibrary(n.id); setAdded(true); onAdded && onAdded(n.id); }
     catch (err) { setAdding(false); }
   }
+  const tt = n.translation_type ? window.TRANSLATION_TYPE_LABELS[n.translation_type] : null;
   return React.createElement("div", {
     className: "novel-card", role: "button", tabIndex: 0,
     onClick: () => openNovel(n.id),
@@ -220,7 +221,11 @@ function DiscoverCard({ n, openNovel, onAdded }) {
       React.createElement("div", { className: "card-tags" },
         React.createElement("span", { className: "chip vis-chip" }, VIS_LABELS[n.visibility]),
         n.owner_username && n.visibility === "public" &&
-          React.createElement("span", { className: "chip", title: "Uploaded by" }, "@" + n.owner_username)
+          React.createElement("span", { className: "chip", title: "Uploaded by" }, "@" + n.owner_username),
+        n.language && React.createElement("span", { className: "chip", title: "Original language" }, n.language),
+        tt && React.createElement("span", { className: "chip tt-chip", title: "Translation" }, tt),
+        n.has_codex && React.createElement("span", { className: "chip prov-chip", title: "Has a spoiler-safe codex" }, "Codex"),
+        n.has_audio && React.createElement("span", { className: "chip prov-chip", title: "Has narration" }, "Audio")
       ),
       React.createElement("div", { className: "novel-card-foot" },
         React.createElement("span", { className: "chip mono" }, `${n.chapter_count} ch.`),
@@ -233,14 +238,27 @@ function DiscoverCard({ n, openNovel, onAdded }) {
   );
 }
 
+const DISCOVER_LANGS = [["", "Any language"], ["en", "English"], ["ja", "Japanese"], ["ko", "Korean"], ["zh", "Chinese"]];
+const DISCOVER_TRANSLATION = [["", "Any translation"], ["translated", "Translated"], ["raws", "Raws"], ["raws+translated", "Raws + Translated"]];
+const DISCOVER_FRESHNESS = [["", "Any freshness"], ["fresh_7d", "Scraped in 7 days"], ["fresh_30d", "Scraped in 30 days"], ["stale_30d", "Stale 30+ days"], ["never_scraped", "Never scraped"]];
+const DISCOVER_SORT = [["recent", "Recently updated"], ["fresh", "Freshest source"], ["title", "Title (A–Z)"]];
+
 function Discover({ openNovel, openLibrary }) {
   const [items, setItems] = useState(null);
   const [q, setQ] = useState("");
-  const load = useCallback((query) => {
+  const [f, setF] = useState({ language: "", translation: "", tag: "", has_codex: false, has_audio: false, freshness: "", sort: "recent" });
+
+  const load = useCallback((query, filters) => {
     setItems(null);
-    window.API.discover(query || "").then(setItems).catch(() => setItems([]));
+    window.API.discover({ q: query || "", ...(filters || {}) }).then(setItems).catch(() => setItems([]));
   }, []);
-  useEffect(() => { load(""); }, [load]);
+  useEffect(() => { load("", f); }, [load]);   // initial
+
+  const apply = (next) => { const nf = { ...f, ...next }; setF(nf); load(q, nf); };
+  const setFilter = (key) => (e) => apply({ [key]: e.target.value });
+  const toggle = (key) => () => apply({ [key]: !f[key] });
+
+  const tagOptions = [["", "Any tag"], ...window.STATUS_TAG_ORDER.map(t => [t, window.STATUS_TAG_LABELS[t] || t])];
 
   return React.createElement("div", { className: "page" },
     React.createElement("div", { className: "lib-head" },
@@ -253,12 +271,28 @@ function Discover({ openNovel, openLibrary }) {
           React.createElement(Icon, { name: "arrowLeft", size: 16 }), "My library")
       )
     ),
-    React.createElement("form", { className: "row", style: { gap: 8, marginBottom: 14 }, onSubmit: e => { e.preventDefault(); load(q); } },
+    React.createElement("form", { className: "row", style: { gap: 8, marginBottom: 12 }, onSubmit: e => { e.preventDefault(); load(q, f); } },
       React.createElement("input", {
         className: "auth-input", style: { maxWidth: 340 }, value: q, placeholder: "Search shared titles…",
         onChange: e => setQ(e.target.value),
       }),
       React.createElement("button", { className: "btn btn-ghost", type: "submit" }, "Search")
+    ),
+    React.createElement("div", { className: "discover-filters" },
+      React.createElement("select", { className: "filter-select", value: f.language, onChange: setFilter("language"), "aria-label": "Language" },
+        DISCOVER_LANGS.map(([v, l]) => React.createElement("option", { key: v, value: v }, l))),
+      React.createElement("select", { className: "filter-select", value: f.translation, onChange: setFilter("translation"), "aria-label": "Translation" },
+        DISCOVER_TRANSLATION.map(([v, l]) => React.createElement("option", { key: v, value: v }, l))),
+      React.createElement("select", { className: "filter-select", value: f.tag, onChange: setFilter("tag"), "aria-label": "Tag" },
+        tagOptions.map(([v, l]) => React.createElement("option", { key: v, value: v }, l))),
+      React.createElement("label", { className: "filter-check" },
+        React.createElement("input", { type: "checkbox", checked: f.has_codex, onChange: toggle("has_codex") }), "Has codex"),
+      React.createElement("label", { className: "filter-check" },
+        React.createElement("input", { type: "checkbox", checked: f.has_audio, onChange: toggle("has_audio") }), "Has audio"),
+      React.createElement("select", { className: "filter-select", value: f.freshness, onChange: setFilter("freshness"), "aria-label": "Source freshness" },
+        DISCOVER_FRESHNESS.map(([v, l]) => React.createElement("option", { key: v, value: v }, l))),
+      React.createElement("select", { className: "filter-select", value: f.sort, onChange: setFilter("sort"), "aria-label": "Sort", style: { marginLeft: "auto" } },
+        DISCOVER_SORT.map(([v, l]) => React.createElement("option", { key: v, value: v }, l)))
     ),
     items == null
       ? React.createElement(Loading, { label: "Loading the shared library…" })

@@ -45,6 +45,24 @@ progress updates can move the resume position, but cannot unlock future codex da
   metered per user per calendar month, with admin-adjustable per-user caps. A verified email is
   required to spend.
 
+### 🏠 Home, jobs & operations
+- **Continue home** — The first screen after login (`GET /api/home`) is operational, not marketing:
+  *continue reading* / *continue listening* (novels with narration available), *active jobs*,
+  *recent imports*, and the *newest shared novels*. It only ever surfaces novels you can actually
+  read (owned, still-shared, or admin).
+- **Unified job center** — One feed (`GET /api/activity`) over the three durable job systems
+  (generic scrape/codex/translate + import + TTS), grouped by kind with stage/progress/error and a
+  cancel button that dispatches to the right endpoint. Scoped to your own jobs (admins see all).
+- **Cost estimates before you spend** — Expensive actions (codex build, batch translation,
+  whole-book narration) show estimated units vs. your remaining monthly quota first
+  (`GET /api/novels/{id}/cost-estimate`) — clear and concrete, never a surprise charge.
+- **Discover filters & provenance** — Browse the shared library by language, translation type,
+  status tag, *has codex*, *has audio*, and source freshness. Every novel/chapter carries
+  **provenance badges** (scraped · imported · OCR'd · translated · edited · owner-approved).
+- **Novel health panel** — Owners get a pipeline-health summary (`GET /api/novels/{id}/health`):
+  codex missing/stale, untranslated raw chapters, missing narration for a voice, source freshness,
+  and recent pipeline errors — without digging through logs.
+
 ### 🕸 Getting stories in
 - **Multi-source scraping** — A novel can be stitched from several sources (e.g. an English site
   that ends at ch. 124 + a raw site that continues at 125). Each source carries a `chapter_offset`
@@ -80,7 +98,10 @@ progress updates can move the resume position, but cannot unlock future codex da
 Chunk → embed → forward-only entity/fact/relationship extraction → hybrid retrieval → agentic
 Q&A, all bounded to your current chapter. Browse entities, read synthesized profiles, follow
 relationships and timelines, see identity-reveal banners only once the reveal chapter is within
-your ceiling, and ask freeform questions with inline, popover-backed citations.
+your ceiling, and ask freeform questions with inline, popover-backed citations. A one-click
+**no-spoiler recap** (`POST /api/novels/{id}/recap`) summarizes the story so far, cited and bounded
+by the *same* server-trusted ceiling as the codex and Ask — the model never sees a chapter you
+haven't read, and recaps are cached per `(novel, ceiling)`.
 
 ---
 
@@ -363,9 +384,12 @@ the chapters it finished charged and never over-charges for ones it didn't reach
 **Job center + audit.** Owners/admins see active and recent jobs (status, stage, live progress) and
 can cancel one in flight — in the novel page UI, or via `GET /api/jobs`, `GET /api/jobs/{id}`,
 `POST /api/jobs/{id}/cancel` (non-admins are scoped to their own jobs; admins can filter by
-kind/status/user/novel). Every response carries an `X-Request-ID` (accepted from a trusted proxy or
-minted), and job lifecycle + quota refunds are written to a durable `audit_events` log stamped with
-that request id, so a single user action is traceable across the request and the jobs it spawned.
+kind/status/user/novel). A **unified job center** (`GET /api/activity`) additionally folds the
+import and TTS job systems into one feed for the *Jobs* page and the Continue home, so a reader sees
+all their background work — scrapes, imports, codex, translation, narration — in one place. Every
+response carries an `X-Request-ID` (accepted from a trusted proxy or minted), and job lifecycle +
+quota refunds are written to a durable `audit_events` log stamped with that request id, so a single
+user action is traceable across the request and the jobs it spawned.
 
 ---
 

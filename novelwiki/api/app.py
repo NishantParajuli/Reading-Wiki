@@ -215,10 +215,13 @@ from novelwiki.auth.router import router as auth_router
 from novelwiki.auth.deps import current_user, require_admin
 from novelwiki.api.admin_routes import router as admin_router
 from novelwiki.api.routes_tts import router as tts_router
+from novelwiki.api.routes_product import router as product_router
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(router, prefix="/api", dependencies=[Depends(current_user)])
 # Audiobook TTS endpoints (same auth model as the main router).
 app.include_router(tts_router, prefix="/api", dependencies=[Depends(current_user)])
+# Batch 9 product surfaces: home/activity/health/cost-estimate/recap (same auth model).
+app.include_router(product_router, prefix="/api", dependencies=[Depends(current_user)])
 # Admin dashboard — every route gated behind an admin session (require_admin → current_user).
 app.include_router(admin_router, prefix="/api/admin", dependencies=[Depends(require_admin)])
 

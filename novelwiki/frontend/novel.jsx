@@ -650,6 +650,8 @@ function NarrateBookControl({ novelId, novel, user, onChange }) {
   const [endCh, setEndCh] = useState("");
   const [job, setJob] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [est, setEst] = useState(null);   // {estimated_units, remaining, limit, unlimited} for the current range/voice
+  const [pendingStart, setPendingStart] = useState(null);
   const pollRef = useRef(null);
   const h = React.createElement;
 
@@ -697,15 +699,35 @@ function NarrateBookControl({ novelId, novel, user, onChange }) {
     return () => { cancel = true; };
   }, [novelId, voice]);
 
-  async function start() {
-    if (!voice) return;
+  // Pre-flight estimate for the narration panel: how many chapters this range would generate
+  // (skipping cached ones) and the reader's remaining monthly quota. Never charges.
+  useEffect(() => {
+    if (!open || !voice) { setEst(null); return; }
+    let cancel = false;
+    window.API.costEstimate(novelId, "audiobook", {
+      voice_id: voice,
+      from_chapter: startCh.trim() ? parseFloat(startCh) : null,
+      to_chapter: endCh.trim() ? parseFloat(endCh) : null,
+    }).then(e => { if (!cancel) setEst(e); }).catch(() => { if (!cancel) setEst(null); });
+    return () => { cancel = true; };
+  }, [open, voice, startCh, endCh, novelId]);
+
+  const narrationParams = () => ({
+    voice_id: voice,
+    from_chapter: startCh.trim() ? parseFloat(startCh) : null,
+    to_chapter: endCh.trim() ? parseFloat(endCh) : null,
+  });
+
+  async function start(params) {
+    const p = params || narrationParams();
+    if (!p.voice_id) return;
     setMsg(null); setJob(null);
     try {
       const r = await window.API.generateBookAudio(
         novelId,
-        voice,
-        startCh.trim() ? parseFloat(startCh) : null,
-        endCh.trim() ? parseFloat(endCh) : null
+        p.voice_id,
+        p.from_chapter,
+        p.to_chapter
       );
       if (r.status === "ready") { setMsg(r.message || "Every chapter is already narrated in this voice."); return; }
       setMsg(r.existing
@@ -747,10 +769,16 @@ function NarrateBookControl({ novelId, novel, user, onChange }) {
         h("label", { className: "field", style: { flex: "0 0 80px" } },
           h("span", null, "To Ch."),
           h("input", { value: endCh, onChange: e => setEndCh(e.target.value), placeholder: "end", inputMode: "numeric" }))),
+      !running && est && h("div", { className: "muted", style: { fontSize: 12.5, marginTop: 10 } },
+        est.estimated_units === 0
+          ? "Every chapter in this range is already narrated in this voice."
+          : `~${est.estimated_units} chapter${est.estimated_units === 1 ? "" : "s"} to narrate` +
+            (est.capped ? " (capped this batch)" : "") +
+            (est.unlimited ? "" : ` · ${est.remaining}/${est.limit} quota left this month`)),
       h("div", { className: "row", style: { gap: 8, marginTop: 10 } },
         running
           ? h("button", { className: "btn btn-ghost is-danger", onClick: cancel }, h(Icon, { name: "x", size: 14 }), "Cancel")
-          : h("button", { className: "btn btn-primary", onClick: start, disabled: !voice },
+          : h("button", { className: "btn btn-primary", onClick: () => setPendingStart(narrationParams()), disabled: !voice },
               h(Icon, { name: "play", size: 14 }), "Start narrating")),
       job && h("div", { style: { marginTop: 12 } },
         h("div", { className: "narrate-progress" }, h("div", { className: "narrate-progress-fill", style: { width: pct + "%" } })),
@@ -764,7 +792,16 @@ function NarrateBookControl({ novelId, novel, user, onChange }) {
       job && job.status === "failed" && job.error && h("div", { className: "acct-err", style: { marginTop: 8 } }, job.error),
       msg && !job && h("div", { className: "muted", style: { fontSize: 12.5, marginTop: 8 } }, msg),
       h("p", { className: "muted", style: { fontSize: 12, marginTop: 10, marginBottom: 0 } },
-        "Generates audio on the server and caches it for everyone. Capped per batch; re-run to continue a long book."))
+        "Generates audio on the server and caches it for everyone. Capped per batch; re-run to continue a long book.")),
+    pendingStart && h(CostConfirm, {
+      novelId,
+      action: "audiobook",
+      params: pendingStart,
+      title: "Narrate book",
+      actionLabel: "Start narration",
+      onCancel: () => setPendingStart(null),
+      onConfirm: async () => { await start(pendingStart); setPendingStart(null); },
+    })
   );
 }
 
@@ -781,6 +818,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [audioSet, setAudioSet] = useState(null);   // Set of narrated chapter numbers (TOC icons)
+  const [pendingCost, setPendingCost] = useState(null);   // {action, params, title, actionLabel, run}
 
   const loadToc = useCallback(() => {
     if (novelId == null) return;
@@ -829,17 +867,28 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
     }
   }
 
-  async function buildCodex() {
+  async function runBuildCodex() {
     setMsg("Codex build started in the background (chunk → embed → extract)…");
     try { await window.API.codexBuild(novelId, {}); reloadNovel(); }
     catch (e) { setMsg("Codex build failed: " + (e.message || "error")); }
   }
 
-  async function doTranslate() {
+  async function runTranslate() {
     setMsg("Translation started in the background (glossary-consistent)…");
     try { await window.API.translate(novelId, {}); }
     catch (e) { setMsg("Translate failed: " + (e.message || "error")); }
   }
+
+  // Expensive actions confirm their estimated cost (units + quota remaining) first.
+  const buildCodex = () => setPendingCost({
+    action: "codex_build", params: {},
+    title: novel.codex_enabled ? "Rebuild codex" : "Build codex",
+    actionLabel: "Start build", run: runBuildCodex,
+  });
+  const doTranslate = () => setPendingCost({
+    action: "translate", params: {},
+    title: "Translate raw chapters", actionLabel: "Start translation", run: runTranslate,
+  });
 
   async function doSeedGlossary() {
     try { const r = await window.API.seedGlossary(novelId); setMsg(`Seeded ${r.seeded} glossary terms from the codex.`); loadGlossary(); }
@@ -875,6 +924,7 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
               React.createElement(Icon, { name: "edit", size: 17 }))
           ),
           novel.author && React.createElement("div", { className: "muted" }, novel.author),
+          novel.provenance && React.createElement(ProvenanceBadges, { provenance: novel.provenance, className: "hero-prov" }),
           novel.description && React.createElement("p", { style: { color: "var(--ink-2)", lineHeight: 1.6, maxWidth: "60ch" } }, novel.description),
           React.createElement("div", { className: "row", style: { gap: 10, marginTop: 14, flexWrap: "wrap" } },
             hasChapters && React.createElement("button", { className: "btn btn-primary", onClick: () => openReader(startAt) },
@@ -965,6 +1015,9 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
     // durable background jobs (scrape / codex / translation) for this novel
     canEdit && React.createElement(JobCenter, { novelId }),
 
+    // pipeline health panel (owner/admin operational surface)
+    canEdit && React.createElement(NovelHealthPanel, { novelId }),
+
     // translation glossary (raw novels)
     canEdit && (hasRaw || glossary.length > 0) && React.createElement(GlossaryEditor, { novelId, glossary, reload: loadGlossary }),
 
@@ -1016,6 +1069,13 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
           React.createElement("li", null, "the codex, bookmarks, glossary and reading progress"),
           React.createElement("li", null, "imported files, covers and illustrations on disk"))
       ),
+    }),
+
+    pendingCost && React.createElement(CostConfirm, {
+      novelId, action: pendingCost.action, params: pendingCost.params,
+      title: pendingCost.title, actionLabel: pendingCost.actionLabel,
+      onCancel: () => setPendingCost(null),
+      onConfirm: async () => { await pendingCost.run(); setPendingCost(null); },
     })
   );
 }

@@ -145,7 +145,22 @@
     updateNovel(id, body) { return req("PATCH", N(id), body); },
     deleteNovel(id) { return delJSON(N(id)); },
     // Discovery, per-user library membership, visibility, and quota usage.
-    discover(q) { return getJSON(`${API_BASE}/discover${q ? `?q=${encodeURIComponent(q)}` : ""}`); },
+    // Accepts a bare query string (back-compat) or a filter object
+    // {q, language, tag, translation, has_codex, has_audio, freshness, sort}.
+    discover(opts) {
+      const o = (typeof opts === "string" || opts == null) ? { q: opts } : opts;
+      const p = new URLSearchParams();
+      if (o.q) p.set("q", o.q);
+      if (o.language) p.set("language", o.language);
+      if (o.tag) p.set("tag", o.tag);
+      if (o.translation) p.set("translation", o.translation);
+      if (o.has_codex) p.set("has_codex", "true");
+      if (o.has_audio) p.set("has_audio", "true");
+      if (o.freshness) p.set("freshness", o.freshness);
+      if (o.sort) p.set("sort", o.sort);
+      const qs = p.toString();
+      return getJSON(`${API_BASE}/discover${qs ? `?${qs}` : ""}`);
+    },
     addToLibrary(id) { return postJSON(`${N(id)}/library`, {}); },
     removeFromLibrary(id) { return delJSON(`${N(id)}/library`); },
     setVisibility(id, visibility) { return req("PATCH", `${N(id)}/visibility`, { visibility }); },
@@ -238,6 +253,36 @@
     ask(id, question, ceiling) { return postJSON(`${N(id)}/ask`, { question, ceiling }); },
     codexBuild(id, body) { return postJSON(`${N(id)}/codex/build`, body || {}); },
     mergeEntities(id, body) { return postJSON(`${N(id)}/merge-entities`, body); },
+
+    // ── Batch 9: product surfaces (home / activity / recap / health / cost estimate) ──
+    home() { return getJSON(`${API_BASE}/home`); },
+    // Unified feed over generic + import + TTS jobs; status is "active" (default) or "all".
+    activity(status, limit) {
+      const p = new URLSearchParams();
+      if (status) p.set("status", status);
+      if (limit) p.set("limit", limit);
+      const qs = p.toString();
+      return getJSON(`${API_BASE}/activity${qs ? `?${qs}` : ""}`);
+    },
+    // Cancel a row from the activity feed, dispatching to the right endpoint by its source.
+    cancelActivity(row) {
+      if (row.source === "tts") return this.cancelTtsJob(row.id);
+      if (row.source === "import") return this.cancelImport(row.id);
+      return this.cancelJob(row.id);
+    },
+    recap(id, ceiling) { return postJSON(`${N(id)}/recap`, ceiling != null ? { ceiling } : {}); },
+    novelHealth(id, voiceId) {
+      return getJSON(`${N(id)}/health${voiceId ? `?voice_id=${encodeURIComponent(voiceId)}` : ""}`);
+    },
+    // Pre-flight estimate for an expensive action (never charges). action ∈ codex_build|translate|audiobook.
+    costEstimate(id, action, params = {}) {
+      const p = new URLSearchParams({ action });
+      if (params.from_chapter != null) p.set("from_chapter", params.from_chapter);
+      if (params.to_chapter != null) p.set("to_chapter", params.to_chapter);
+      if (params.force) p.set("force", "true");
+      if (params.voice_id) p.set("voice_id", params.voice_id);
+      return getJSON(`${N(id)}/cost-estimate?${p.toString()}`);
+    },
 
     // ── Job center (durable scrape/codex/translation jobs) ──
     // Non-admins only ever see their own jobs; pass filters (kind/status/novel_id/active) as opts.

@@ -93,6 +93,8 @@ function Ask({ novelId, ceiling, initial }) {
       )
     ),
 
+    phase === "idle" && React.createElement(RecapPanel, { novelId, ceiling }),
+
     phase === "idle" && React.createElement("div", { className: "suggestions" },
       SUGGESTIONS.map((qText, i) => React.createElement("button", { key: i, className: "suggestion", onClick: () => pick(qText) }, qText))
     ),

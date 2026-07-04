@@ -568,6 +568,7 @@ function Reader({ novelId, number, openReader, backToNovel, onRead, user, onUser
     status === "ok" && ch && React.createElement("div", { className: "reader-col", style: colStyle },
       React.createElement("h1", { className: "reader-title" }, ch.title || `Chapter ${ch.number}`),
       React.createElement("div", { className: "reader-chapnum mono" }, `Chapter ${ch.number}`),
+      ch.provenance && React.createElement(ProvenanceBadges, { provenance: ch.provenance, className: "reader-prov" }),
       (ch.overlay || ch.overlay_conflict) && React.createElement("button", {
         className: "tt-chip" + (ch.overlay_conflict ? " conflict" : ""),
         onClick: e => { e.stopPropagation(); setShowTools(true); },

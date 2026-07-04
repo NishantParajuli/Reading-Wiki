@@ -81,7 +81,7 @@ function App({ user, onLogout, onUserUpdate }) {
   const [theme, setTheme] = useState(() => localStorage.getItem("nw-theme") || "light");
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
-  const [route, setRoute] = useState({ view: "library", params: {} });
+  const [route, setRoute] = useState({ view: "home", params: {} });
   const [novelId, setNovelId] = useState(null);
   const [novel, setNovel] = useState(null);     // novel detail
   const [ceiling, setCeiling] = useState(1);
@@ -141,11 +141,16 @@ function App({ user, onLogout, onUserUpdate }) {
   // Deep-linkable surfaces (profile/account/admin) sync to the URL hash so they can be
   // shared/reloaded; everything else clears the hash and routes via React state only.
   const clearHash = () => { if (window.location.hash) history.replaceState(null, "", window.location.pathname + window.location.search); };
+  const openHome = () => { setNovelId(null); setRoute({ view: "home", params: {} }); clearHash(); };
   const openLibrary = () => { setNovelId(null); setRoute({ view: "library", params: {} }); clearHash(); };
   const openDiscover = () => { setNovelId(null); setRoute({ view: "discover", params: {} }); clearHash(); };
   const openImport = () => { setNovelId(null); setRoute({ view: "import", params: {} }); clearHash(); };
+  const openJobs = () => { setNovelId(null); setRoute({ view: "jobs", params: {} }); clearHash(); };
   const openNovel = (id) => { setNovelId(id); setRoute({ view: "novel", params: {} }); clearHash(); };
   const openReader = (number) => setRoute({ view: "reader", params: { number } });
+  // Open a specific novel *and* jump straight into the reader at a chapter (used by the home
+  // "Continue reading/listening" cards, which target a novel the reader isn't currently inside).
+  const openNovelReader = (id, number) => { setNovelId(id); setRoute({ view: "reader", params: { number } }); clearHash(); };
   const openProfile = (username) => { setNovelId(null); setRoute({ view: "profile", params: { username } }); window.location.hash = "#/u/" + encodeURIComponent(username); };
   const openAccount = () => { setNovelId(null); setRoute({ view: "account", params: {} }); window.location.hash = "#/account"; };
   const openAdmin = () => { setNovelId(null); setRoute({ view: "admin", params: {} }); window.location.hash = "#/admin"; };
@@ -189,7 +194,11 @@ function App({ user, onLogout, onUserUpdate }) {
   const showCeiling = inNovel && ["browse", "entity", "ask"].includes(route.view);
 
   let screen;
-  if (route.view === "import") {
+  if (route.view === "home") {
+    screen = React.createElement(ContinueHome, { user, openNovel, openReader: openNovelReader, openImport, openDiscover, openLibrary, openJobs });
+  } else if (route.view === "jobs") {
+    screen = React.createElement(JobsPage, { openNovel, openLibrary: openHome });
+  } else if (route.view === "import") {
     screen = React.createElement(ImportView, { openNovel, openLibrary, user });
   } else if (route.view === "discover") {
     screen = React.createElement(Discover, { openNovel, openLibrary });
@@ -218,7 +227,7 @@ function App({ user, onLogout, onUserUpdate }) {
   return React.createElement(CiteProvider, null,
     React.createElement("div", { className: "app" + (isReader ? " app-reader" : "") },
       React.createElement("header", { className: "appbar" },
-        React.createElement("a", { className: "brand", onClick: openLibrary, style: { cursor: "pointer" } },
+        React.createElement("a", { className: "brand", onClick: openHome, style: { cursor: "pointer" } },
           React.createElement("div", { className: "brand-mark" }, React.createElement(Icon, { name: "book", size: 20 })),
           React.createElement("div", { className: "brand-name" },
             React.createElement("span", { className: "brand-title" }, "Tideglass"),
@@ -226,8 +235,8 @@ function App({ user, onLogout, onUserUpdate }) {
           )
         ),
         inNovel && React.createElement("nav", { className: "nav" },
-          React.createElement("button", { className: "nav-tab", onClick: openLibrary, title: "Back to library" },
-            React.createElement(Icon, { name: "arrowLeft", size: 16, sw: 2 }), "Library"),
+          React.createElement("button", { className: "nav-tab", onClick: openHome, title: "Back to home" },
+            React.createElement(Icon, { name: "arrowLeft", size: 16, sw: 2 }), "Home"),
           CONTEXT_NAV.map(n => React.createElement("button", {
             key: n.id,
             className: `nav-tab ${route.view === n.id || (n.id === "browse" && route.view === "entity") || (n.id === "novel" && route.view === "reader") ? "active" : ""}`,

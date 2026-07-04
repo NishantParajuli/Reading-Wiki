@@ -1106,3 +1106,70 @@ input[type="range"].slider::-moz-range-thumb {
 .diff-del { background: color-mix(in oklch, var(--danger, #c0392b) 13%, transparent); }
 .diff-del .diff-gutter { color: var(--danger, #c0392b); }
 .diff-ctx { color: var(--ink-2); }
+
+/* ===================== Batch 9: product ops + reader MVP ===================== */
+
+/* Provenance badges (how a novel/chapter's text was produced). */
+.prov-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+.chip.prov-chip { background: var(--sage-soft); color: var(--sage); border-color: transparent; }
+.hero-prov { margin: 10px 0; }
+.reader-prov { justify-content: center; margin: 6px 0 2px; }
+
+/* Extra job/import status chip for "waiting on the user". */
+.chip.job-warn { background: color-mix(in oklab, var(--accent) 22%, transparent); color: var(--accent-ink, var(--accent)); }
+
+/* Cost-confirmation modal. */
+.cost-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px;
+  background: var(--sage-soft); color: var(--sage); flex-shrink: 0; }
+.cost-body { display: flex; flex-direction: column; gap: 8px; }
+.cost-figure { display: flex; align-items: baseline; gap: 2px; }
+.cost-num { font-family: var(--mono); font-size: 26px; color: var(--ink); }
+.cost-quota { font-size: 13px; }
+.cost-warn { display: inline-flex; align-items: center; gap: 6px; font-size: 12.8px;
+  color: var(--danger, #c0392b); background: color-mix(in oklch, var(--danger, #c0392b) 12%, transparent);
+  border-radius: var(--radius-sm); padding: 6px 10px; }
+
+/* Activity feed rows (shared: home + job center). */
+.activity-row .activity-err { font-size: 12px; color: var(--danger, #c0392b); max-width: 30ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Continue-home sections + cards. */
+.home-section { margin-top: 26px; }
+.linkish { background: none; border: none; color: var(--accent-ink, var(--accent)); cursor: pointer;
+  font-size: 13px; font-weight: 600; padding: 0; }
+.linkish:hover { text-decoration: underline; }
+.cont-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.cont-card { display: flex; gap: 12px; padding: 12px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease; }
+.cont-card:hover { border-color: var(--border-2); transform: translateY(-2px); }
+.cont-cover { width: 52px; height: 72px; flex-shrink: 0; border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--surface-2); }
+.cont-cover img { width: 100%; height: 100%; object-fit: cover; }
+.cont-cover .novel-cover-ph { width: 100%; height: 100%; display: grid; place-items: center; color: var(--muted); }
+.cont-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cont-title { font-weight: 600; font-size: 14px; line-height: 1.3; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.cont-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 8px; font-size: 12.5px; }
+.btn.cont-resume { padding: 4px 10px; font-size: 12.5px; margin-left: auto; }
+
+/* Discover filters. */
+.discover-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.filter-select { padding: 7px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: var(--surface); color: var(--ink); font-size: 13px; }
+.filter-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px; cursor: pointer; }
+
+/* Novel health panel. */
+.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+.health-item { text-align: center; padding: 10px; background: var(--surface-2); border-radius: var(--radius-sm); }
+.health-num { font-family: var(--mono); font-size: 22px; color: var(--ink); }
+.health-num.ok { color: var(--sage); }
+.health-num.warn { color: var(--danger, #c0392b); }
+.health-label { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.health-notes { margin-top: 12px; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
+.health-err { color: var(--danger, #c0392b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Recap panel. */
+.recap-card { padding: 18px; margin-bottom: 18px; }
+.recap-body { margin-top: 10px; }

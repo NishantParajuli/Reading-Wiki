@@ -362,8 +362,39 @@ async def api_get_novel(novel_id: int, user: dict = Depends(current_user)):
             "SELECT shelf FROM library_entries WHERE novel_id = $1 AND user_id = $2;",
             novel_id, user["id"],
         )
+        # Provenance signals (see the `provenance` block below). One cheap query each.
+        prov_translated = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM chapters WHERE novel_id = $1 "
+            "AND (is_translated = TRUE OR (original_text IS NOT NULL AND translation_status = 'done')));",
+            novel_id,
+        )
+        prov_edited = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM chapters WHERE novel_id = $1 AND content_version > 1) "
+            "OR EXISTS (SELECT 1 FROM chapter_overlays WHERE novel_id = $1);",
+            novel_id,
+        )
+        prov_ocr = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM import_jobs WHERE novel_id = $1 AND cost_estimate ? 'pages');",
+            novel_id,
+        )
+        prov_approved = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM contributions WHERE novel_id = $1 AND status = 'accepted');",
+            novel_id,
+        )
     has_raw = any(s["is_raw"] for s in sources) if sources else None
     has_eng = any(not s["is_raw"] for s in sources) if sources else None
+    # File-import sources use the epub/pdf adapters; anything else is a web scraper.
+    _imported = any(s["adapter"] in ("epub", "pdf") for s in sources)
+    _scraped = any(s["adapter"] not in ("epub", "pdf") for s in sources)
+    provenance = {
+        "scraped": _scraped,
+        "imported": _imported,
+        "ocr": bool(prov_ocr),
+        "translated": bool(prov_translated),
+        "user_edited": bool(prov_edited),
+        "owner_approved": bool(prov_approved),
+        "adapters": sorted({s["adapter"] for s in sources}),
+    }
     return {
         "id": int(novel["id"]),
         "title": novel["title"],
@@ -382,6 +413,7 @@ async def api_get_novel(novel_id: int, user: dict = Depends(current_user)):
         "shelf": entry["shelf"] if entry else None,
         "status_tags": list(novel["status_tags"] or []),
         "translation_type": _translation_type(has_raw, has_eng),
+        "provenance": provenance,
         "chapter_count": int(span["count"]),
         "min_chapter": float(span["min"]) if span["min"] is not None else None,
         "max_chapter": float(span["max"]) if span["max"] is not None else None,
@@ -513,32 +545,88 @@ async def api_set_visibility(novel_id: int, payload: VisibilityUpdate, user: dic
 
 
 @router.get("/discover")
-async def api_discover(user: dict = Depends(current_user), q: str | None = None):
-    """Browse the shared library — Global + Public novels the caller hasn't added yet."""
+async def api_discover(user: dict = Depends(current_user), q: str | None = None,
+                       language: str | None = None, tag: str | None = None,
+                       translation: str | None = None, has_codex: bool | None = None,
+                       has_audio: bool | None = None, freshness: str | None = None,
+                       sort: str = "recent"):
+    """Browse the shared library — Global + Public novels the caller hasn't added yet — with
+    optional filters. `translation` is the derived translation_type (translated|raws|raws+translated);
+    `tag` matches any of a novel's owner-curated status tags, and `freshness` is fresh_7d |
+    fresh_30d | stale_30d | never_scraped. `sort` is recent | fresh | title."""
+    # Reusable per-novel derivation subqueries (kept out of the GROUP BY, evaluated per row).
+    has_raw_sq = "EXISTS (SELECT 1 FROM sources s WHERE s.novel_id = n.id AND s.is_raw)"
+    has_eng_sq = "EXISTS (SELECT 1 FROM sources s WHERE s.novel_id = n.id AND NOT s.is_raw)"
+    has_audio_sq = "EXISTS (SELECT 1 FROM chapter_audio a WHERE a.novel_id = n.id AND a.user_id IS NULL)"
+    freshness_sq = "(SELECT MAX(s.last_scraped_at) FROM sources s WHERE s.novel_id = n.id)"
+
+    conds = [
+        "n.visibility IN ('global', 'public')",
+        "n.owner_id IS DISTINCT FROM $1",
+        "le.id IS NULL",
+    ]
+    args: list = [user["id"]]
+
+    def _p(v):
+        args.append(v)
+        return f"${len(args)}"
+
+    if q:
+        conds.append(f"n.title ILIKE '%' || {_p(q)} || '%'")
+    if language:
+        conds.append(f"n.original_language = {_p(language)}")
+    if tag:
+        conds.append(f"{_p(tag)} = ANY(n.status_tags)")
+    if translation == "translated":
+        conds.append(f"({has_eng_sq} AND NOT {has_raw_sq})")
+    elif translation == "raws":
+        conds.append(f"({has_raw_sq} AND NOT {has_eng_sq})")
+    elif translation in ("raws+translated", "both"):
+        conds.append(f"({has_raw_sq} AND {has_eng_sq})")
+    if has_codex:
+        conds.append("n.codex_enabled = TRUE")
+    if has_audio:
+        conds.append(has_audio_sq)
+    if freshness == "fresh_7d":
+        conds.append(f"{freshness_sq} >= now() - interval '7 days'")
+    elif freshness == "fresh_30d":
+        conds.append(f"{freshness_sq} >= now() - interval '30 days'")
+    elif freshness == "stale_30d":
+        conds.append(f"{freshness_sq} < now() - interval '30 days'")
+    elif freshness == "never_scraped":
+        conds.append("NOT EXISTS (SELECT 1 FROM sources s WHERE s.novel_id = n.id AND s.last_scraped_at IS NOT NULL)")
+
+    order = {
+        "fresh": f"{freshness_sq} DESC NULLS LAST, n.id DESC",
+        "title": "n.title ASC",
+        "recent": "(n.visibility = 'global') DESC, n.updated_at DESC NULLS LAST, n.id DESC",
+    }.get(sort, "(n.visibility = 'global') DESC, n.updated_at DESC NULLS LAST, n.id DESC")
+
+    sql = f"""
+        SELECT n.id, n.title, n.author, n.cover_url, n.description, n.visibility,
+               n.original_language, n.codex_enabled, n.status_tags,
+               u.username AS owner_username,
+               (SELECT COUNT(*) FROM chapters c WHERE c.novel_id = n.id) AS chapter_count,
+               {has_raw_sq} AS has_raw, {has_eng_sq} AS has_eng, {has_audio_sq} AS has_audio,
+               {freshness_sq} AS last_scraped_at
+        FROM novels n
+        LEFT JOIN users u ON u.id = n.owner_id
+        LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
+        WHERE {' AND '.join(conds)}
+        ORDER BY {order}
+        LIMIT 200;
+    """
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT n.id, n.title, n.author, n.cover_url, n.description, n.visibility,
-                   u.username AS owner_username,
-                   COUNT(c.number) AS chapter_count
-            FROM novels n
-            LEFT JOIN users u ON u.id = n.owner_id
-            LEFT JOIN chapters c ON c.novel_id = n.id
-            LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
-            WHERE n.visibility IN ('global', 'public')
-              AND n.owner_id IS DISTINCT FROM $1
-              AND le.id IS NULL
-              AND ($2::text IS NULL OR n.title ILIKE '%' || $2 || '%')
-            GROUP BY n.id, u.username
-            ORDER BY (n.visibility = 'global') DESC, n.updated_at DESC NULLS LAST, n.id DESC
-            LIMIT 200;
-            """,
-            user["id"], q,
-        )
+        rows = await conn.fetch(sql, *args)
     return [
-        {"id": int(r["id"]), "title": r["title"], "author": r["author"], "cover_url": _rewrite_asset_url(r["cover_url"], int(r["id"])),
+        {"id": int(r["id"]), "title": r["title"], "author": r["author"],
+         "cover_url": _rewrite_asset_url(r["cover_url"], int(r["id"])),
          "description": r["description"], "visibility": r["visibility"], "owner_username": r["owner_username"],
+         "language": r["original_language"], "status_tags": list(r["status_tags"] or []),
+         "translation_type": _translation_type(r["has_raw"], r["has_eng"]),
+         "has_codex": bool(r["codex_enabled"]), "has_audio": bool(r["has_audio"]),
+         "last_scraped_at": r["last_scraped_at"].isoformat() if r["last_scraped_at"] else None,
          "chapter_count": int(r["chapter_count"] or 0)}
         for r in rows
     ]
@@ -921,6 +1009,15 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
         "overlay_base_version": int(overlay["base_version"]) if overlay_active else None,
         "overlay_conflict": overlay_conflict,
         "base_content": base_content if overlay_active else None,
+        # Per-chapter provenance labels for the reader (source technique + how this text was produced).
+        # Keys match the frontend PROVENANCE_LABELS map so the shared badge component renders them.
+        "provenance": {
+            "adapter": row["adapter"],
+            "imported": row["adapter"] in ("epub", "pdf"),
+            "scraped": row["adapter"] is not None and row["adapter"] not in ("epub", "pdf"),
+            "translated": bool(is_translated),
+            "user_edited": base_version > 1 or overlay_active,
+        },
     }
 
 
