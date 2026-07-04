@@ -469,7 +469,8 @@ keep `COOKIE_SECURE=true`).
 > `postgresql://user:pass@host.docker.internal:5432/novelwiki`).
 >
 > **Service token:** set a long random `SIDECAR_AUTH_TOKEN` in `.env` before starting the sidecars.
-> Leaving it blank keeps the endpoints open — only acceptable for a fully private/loopback deploy.
+> If no token is configured, `/ocr`, `/synthesize`, and `/narrate` fail closed. For local-only
+> experiments on a private loopback bind, set `SIDECAR_ALLOW_UNAUTHENTICATED=1` deliberately.
 >
 > **Fallback if host networking is unavoidable:** keep `SIDECAR_AUTH_TOKEN` set, leave the sidecars
 > bound to loopback (`UVICORN_HOST=127.0.0.1`, the image default), and add firewall rules dropping

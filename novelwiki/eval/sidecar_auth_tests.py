@@ -3,7 +3,7 @@
 Covers four guarantees:
 
   1. The expensive sidecar endpoints (OCR /ocr, TTS /synthesize, /narrate) reject callers
-     without the shared service token once a token is configured, and accept a valid one.
+     without the shared service token, fail closed if no token is configured, and accept a valid one.
   2. The sidecars cap request size (image count / decoded bytes, paragraph count / total chars)
      so a reachable port can't be turned into a cheap resource-exhaustion lever.
   3. The web clients attach the token header and surface a clear error on 401/403.
@@ -81,9 +81,17 @@ def test_ocr_accepts_bearer_token(monkeypatch):
     assert r.status_code == 200
 
 
-def test_ocr_open_when_no_token(monkeypatch):
-    """Empty token = open (only ever safe on a private/loopback bind); keeps local dev working."""
+def test_ocr_fails_closed_when_no_token_configured(monkeypatch):
     monkeypatch.setattr(ocr_server, "_AUTH_TOKEN", "")
+    monkeypatch.setattr(ocr_server, "_ALLOW_UNAUTHENTICATED", False)
+    client = TestClient(ocr_server.app)
+    r = client.post("/ocr", json={"images": [_b64_image()], "lang": "en"})
+    assert r.status_code == 503
+
+
+def test_ocr_dev_opt_out_allows_no_token(monkeypatch):
+    monkeypatch.setattr(ocr_server, "_AUTH_TOKEN", "")
+    monkeypatch.setattr(ocr_server, "_ALLOW_UNAUTHENTICATED", True)
     monkeypatch.setattr(ocr_server, "_get_model", lambda lang: object())
     monkeypatch.setattr(ocr_server, "_ocr_image", lambda model, data: {"blocks": [], "mean_confidence": 0.0})
     client = TestClient(ocr_server.app)
@@ -150,6 +158,26 @@ def test_tts_synthesize_accepts_valid_token(monkeypatch):
     r = client.post("/synthesize", json={"text": "hello", "voice_id": "narrator"}, headers={_HDR: TOKEN})
     assert r.status_code == 200
     assert r.headers["content-type"] == "audio/wav"
+
+
+def test_tts_fails_closed_when_no_token_configured(monkeypatch):
+    monkeypatch.setattr(tts_server, "_AUTH_TOKEN", "")
+    monkeypatch.setattr(tts_server, "_ALLOW_UNAUTHENTICATED", False)
+    client = TestClient(tts_server.app)
+    r = client.post("/synthesize", json={"text": "hi", "voice_id": "narrator"})
+    assert r.status_code == 503
+
+
+def test_tts_dev_opt_out_allows_no_token(monkeypatch):
+    monkeypatch.setattr(tts_server, "_AUTH_TOKEN", "")
+    monkeypatch.setattr(tts_server, "_ALLOW_UNAUTHENTICATED", True)
+    monkeypatch.setattr(tts_server, "_resolve_voice",
+                        lambda vid: {"id": vid, "ready": True, "language": "en", "file": "narrator.wav"})
+    monkeypatch.setattr(tts_server, "_generate",
+                        lambda text, voice, language, speed, num_step: np.zeros(2400, dtype=np.int16))
+    client = TestClient(tts_server.app)
+    r = client.post("/synthesize", json={"text": "hello", "voice_id": "narrator"})
+    assert r.status_code == 200
 
 
 def test_tts_voices_is_open(monkeypatch):
@@ -310,7 +338,16 @@ def test_compose_sidecars_share_private_network():
 
 def test_compose_passes_per_service_tokens_to_sidecars():
     services = _compose()["services"]
+    assert services["web"]["environment"]["SIDECAR_AUTH_TOKEN"] == "${SIDECAR_AUTH_TOKEN:-}"
+    assert services["web"]["environment"]["OCR_SIDECAR_TOKEN"] == "${OCR_SIDECAR_TOKEN:-}"
+    assert services["web"]["environment"]["TTS_SIDECAR_TOKEN"] == "${TTS_SIDECAR_TOKEN:-}"
     assert services["ocr"]["environment"]["SIDECAR_AUTH_TOKEN"] == "${SIDECAR_AUTH_TOKEN:-}"
     assert services["ocr"]["environment"]["OCR_SIDECAR_TOKEN"] == "${OCR_SIDECAR_TOKEN:-}"
     assert services["tts"]["environment"]["SIDECAR_AUTH_TOKEN"] == "${SIDECAR_AUTH_TOKEN:-}"
     assert services["tts"]["environment"]["TTS_SIDECAR_TOKEN"] == "${TTS_SIDECAR_TOKEN:-}"
+
+
+def test_compose_dev_unauthenticated_sidecar_mode_is_off_by_default():
+    services = _compose()["services"]
+    assert services["ocr"]["environment"]["SIDECAR_ALLOW_UNAUTHENTICATED"] == "${SIDECAR_ALLOW_UNAUTHENTICATED:-0}"
+    assert services["tts"]["environment"]["SIDECAR_ALLOW_UNAUTHENTICATED"] == "${SIDECAR_ALLOW_UNAUTHENTICATED:-0}"

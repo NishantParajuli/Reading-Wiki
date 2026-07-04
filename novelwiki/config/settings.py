@@ -163,9 +163,9 @@ class Settings(BaseSettings):
     # ── Sidecar service auth (OCR + TTS) ───────────────────────────────────
     # The OCR/TTS sidecars run the expensive GPU endpoints (/ocr, /synthesize, /narrate). When a
     # token is configured the web app sends it as `X-Tideglass-Sidecar-Token` and each sidecar
-    # REQUIRES it — so even if a sidecar port is reachable, only the web app can drive it. Leave
-    # blank ONLY for a fully private/loopback deploy; set a long random value whenever a sidecar
-    # is reachable off-box. A per-service token (OCR_/TTS_) overrides the shared one when set.
+    # REQUIRES it — so even if a sidecar port is reachable, only the web app can drive it. Sidecars
+    # fail closed when no token is configured unless SIDECAR_ALLOW_UNAUTHENTICATED=1 is explicitly
+    # set for local-only development. A per-service token (OCR_/TTS_) overrides the shared one.
     SIDECAR_AUTH_TOKEN: str = ""
     OCR_SIDECAR_TOKEN: str = ""
     TTS_SIDECAR_TOKEN: str = ""

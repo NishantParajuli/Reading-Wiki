@@ -33,14 +33,27 @@ from novelwiki.importer import storage
 
 
 class _FakeRequest:
-    """Minimal stand-in for the chunk route's ``Request`` (only the header + body are read)."""
+    """Minimal stand-in for the chunk route's ``Request`` (only headers + stream are read)."""
 
     def __init__(self, offset: int, body: bytes):
         self.headers = {"Upload-Offset": str(offset)}
         self._body = body
 
-    async def body(self) -> bytes:
-        return self._body
+    async def stream(self):
+        yield self._body
+
+
+class _FakeUpload:
+    def __init__(self, filename: str, chunks: list[bytes]):
+        self.filename = filename
+        self._chunks = list(chunks)
+        self.read_sizes: list[int] = []
+
+    async def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
 
 
 async def _reset_pool():
@@ -116,6 +129,21 @@ async def test_unknown_extension_rejected_before_job(upload_db):
     assert await _job_count() == 0
 
 
+@pytest.mark.asyncio
+async def test_single_shot_upload_streams_and_cleans_up_oversize(upload_db, monkeypatch):
+    user = upload_db["user"]
+    monkeypatch.setattr(settings, "MAX_UPLOAD_MB", 1)
+    upload = _FakeUpload("large.epub", [b"a" * (1024 * 1024), b"b"])
+
+    with pytest.raises(HTTPException) as exc:
+        await routes.api_import_upload(upload, user=user)
+
+    assert exc.value.status_code == 413
+    assert await _job_count() == 0
+    assert upload.read_sizes and all(n > 0 for n in upload.read_sizes)
+    assert "await file.read()" not in inspect.getsource(routes.api_import_upload)
+
+
 # ── chunk: contiguity + bounds ───────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -151,6 +179,7 @@ async def test_empty_chunk_rejected(upload_db):
     with pytest.raises(HTTPException) as exc:
         await routes.api_import_upload_chunk(jid, _FakeRequest(0, b""), user=user)
     assert exc.value.status_code == 400
+    assert "request.body" not in inspect.getsource(routes.api_import_upload_chunk)
 
 
 @pytest.mark.asyncio

@@ -82,6 +82,49 @@ def save_original(job_id: int, data: bytes, ext: str) -> Path:
     return p
 
 
+async def save_upload_file_limited(job_id: int, upload, ext: str, max_bytes: int) -> tuple[Path, str, int]:
+    """Stream an async UploadFile-like object to disk with a hard byte cap.
+
+    The old single-shot upload path called ``await file.read()`` and only checked size
+    afterwards, which bounded disk writes but still let a large request sit in app memory.
+    This helper reads fixed-size chunks, hashes as it writes, and removes the partial file
+    before raising if the cap is crossed.
+    """
+    p = original_path(job_id, ext)
+    h = hashlib.sha256()
+    size = 0
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(p, "wb") as out:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ValueError("upload exceeds configured size cap")
+                h.update(chunk)
+                out.write(chunk)
+    except Exception:
+        p.unlink(missing_ok=True)
+        raise
+    return p, h.hexdigest(), size
+
+
+def save_original_from_path(job_id: int, src: str | Path, ext: str) -> tuple[Path, str, int]:
+    """Copy a local watched-folder import to the job dir without loading it all at once."""
+    p = original_path(job_id, ext)
+    h = hashlib.sha256()
+    size = 0
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(src, "rb") as f, open(p, "wb") as out:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+            size += len(chunk)
+            out.write(chunk)
+    return p, h.hexdigest(), size
+
+
 # ── Resumable chunked upload (tus-style) ────────────────────────────────────
 # Big files over the Cloudflare tunnel can't ride a single multipart POST, so the client
 # uploads them in chunks: init creates an empty blob, each chunk is written at its byte

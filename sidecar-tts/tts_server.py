@@ -24,9 +24,10 @@ on a 6 GB card.
 
 Run it on the GPU host (default :8078). It should NOT be publicly reachable: deploy it on a
 private Docker bridge (the web app reaches it at http://tts:8078) or bound to loopback, and set
-SIDECAR_AUTH_TOKEN so /synthesize and /narrate reject anyone without the shared token. Inference
-is serialized on one lock so a single GPU is never oversubscribed; request size is capped
-(TTS_MAX_TEXT_CHARS / TTS_MAX_PARAGRAPHS / TTS_MAX_TOTAL_CHARS).
+SIDECAR_AUTH_TOKEN so /synthesize and /narrate reject anyone without the shared token. The expensive
+endpoints fail closed if no token is configured unless SIDECAR_ALLOW_UNAUTHENTICATED=1 is set for
+local-only development. Inference is serialized on one lock so a single GPU is never oversubscribed;
+request size is capped (TTS_MAX_TEXT_CHARS / TTS_MAX_PARAGRAPHS / TTS_MAX_TOTAL_CHARS).
 """
 from __future__ import annotations
 
@@ -47,14 +48,20 @@ logger = logging.getLogger("tts_server")
 
 app = FastAPI(title="NovelWiki TTS sidecar")
 
+
+def _env_true(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
 MODEL_NAME = os.environ.get("TTS_MODEL", "k2-fsa/OmniVoice")
 DEVICE = os.environ.get("TTS_DEVICE", "cuda:0")
 DEFAULT_NUM_STEP = int(os.environ.get("TTS_NUM_STEP", "32"))
 
-# Shared service token. When set, the expensive endpoints (/synthesize, /narrate) require
+# Shared service token. The expensive endpoints (/synthesize, /narrate) require
 # `X-Tideglass-Sidecar-Token` (or a bearer Authorization header) matching it. /health and
-# /voices stay open (cheap; safe on a private bind). Empty = open. Per-service token wins.
+# /voices stay open (cheap; safe on a private bind). Empty = fail closed unless an explicit
+# local-dev opt-out is set. Per-service token wins.
 _AUTH_TOKEN = os.environ.get("TTS_SIDECAR_TOKEN") or os.environ.get("SIDECAR_AUTH_TOKEN") or ""
+_ALLOW_UNAUTHENTICATED = _env_true("TTS_SIDECAR_ALLOW_UNAUTHENTICATED") or _env_true("SIDECAR_ALLOW_UNAUTHENTICATED")
 
 # Defense-in-depth request caps (env-tunable). A long 8k-word chapter is ~50k chars over ~100
 # paragraphs, so these leave ample head-room while blocking abusive payloads.
@@ -67,9 +74,11 @@ def require_token(
     x_tideglass_sidecar_token: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
 ) -> None:
-    """Gate the expensive endpoints on the shared token (no-op when none is configured)."""
+    """Gate the expensive endpoints on the shared token."""
     if not _AUTH_TOKEN:
-        return
+        if _ALLOW_UNAUTHENTICATED:
+            return
+        raise HTTPException(status_code=503, detail="Sidecar auth token is not configured.")
     presented = x_tideglass_sidecar_token
     if not presented and authorization and authorization.lower().startswith("bearer "):
         presented = authorization[7:].strip()

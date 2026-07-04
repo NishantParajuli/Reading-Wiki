@@ -11,8 +11,10 @@ services:
       # override whatever OCR_SIDECAR_URL/TTS_SIDECAR_URL are in .env.
       OCR_SIDECAR_URL: http://ocr:8077
       TTS_SIDECAR_URL: http://tts:8078
-      # Shared token the web app presents to the sidecars (sourced from .env / the shell).
+      # Shared/per-service tokens the web app presents to the sidecars (sourced from .env / shell).
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      OCR_SIDECAR_TOKEN: ${OCR_SIDECAR_TOKEN:-}
+      TTS_SIDECAR_TOKEN: ${TTS_SIDECAR_TOKEN:-}
     extra_hosts:
       # We are OFF host networking, so `localhost` inside the container is the container itself.
       # Reach the host's PostgreSQL via the gateway: set DATABASE_URL / DB_SUPERUSER_URL host to
@@ -41,6 +43,8 @@ services:
       # Require the shared/per-service token on /ocr (the web app sends the same value).
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       OCR_SIDECAR_TOKEN: ${OCR_SIDECAR_TOKEN:-}
+      # Expensive endpoints fail closed without a token. Set to 1 only for loopback/private dev.
+      SIDECAR_ALLOW_UNAUTHENTICATED: ${SIDECAR_ALLOW_UNAUTHENTICATED:-0}
       # Bind to all interfaces INSIDE the container. The port is deliberately NOT published to the
       # host, so this is only reachable by the web service on the private bridge — never publicly.
       UVICORN_HOST: 0.0.0.0
@@ -71,6 +75,8 @@ services:
       # Require the shared/per-service token on /synthesize + /narrate (the web app sends the same value).
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       TTS_SIDECAR_TOKEN: ${TTS_SIDECAR_TOKEN:-}
+      # Expensive endpoints fail closed without a token. Set to 1 only for loopback/private dev.
+      SIDECAR_ALLOW_UNAUTHENTICATED: ${SIDECAR_ALLOW_UNAUTHENTICATED:-0}
       # Bind to all interfaces INSIDE the container; the port is NOT published to the host, so the
       # sidecar is only reachable by the web service on the private bridge — never publicly.
       UVICORN_HOST: 0.0.0.0

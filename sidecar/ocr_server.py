@@ -9,9 +9,11 @@ tiny HTTP surface the importer's ``ocr_client`` talks to:
 
 Run it on the GPU host (default :8077). It should NOT be publicly reachable:
 deploy it on a private Docker bridge (the web app reaches it at http://ocr:8077) or bound to
-loopback, and set SIDECAR_AUTH_TOKEN so /ocr rejects anyone without the shared token. One model
-is loaded per language and cached; requests are processed serially so a single 6 GB GPU is never
-oversubscribed. Request size is capped (OCR_MAX_IMAGES / OCR_MAX_IMAGE_BYTES / OCR_MAX_TOTAL_BYTES).
+loopback, and set SIDECAR_AUTH_TOKEN so /ocr rejects anyone without the shared token. The expensive
+endpoint fails closed if no token is configured unless SIDECAR_ALLOW_UNAUTHENTICATED=1 is set for
+local-only development. One model is loaded per language and cached; requests are processed serially
+so a single 6 GB GPU is never oversubscribed. Request size is capped (OCR_MAX_IMAGES /
+OCR_MAX_IMAGE_BYTES / OCR_MAX_TOTAL_BYTES).
 """
 from __future__ import annotations
 
@@ -30,10 +32,15 @@ logger = logging.getLogger("ocr_server")
 
 app = FastAPI(title="NovelWiki OCR sidecar")
 
-# Shared service token. When set, /ocr requires `X-Tideglass-Sidecar-Token` (or a bearer
-# Authorization header) matching it, so a reachable port can't be driven by anyone but the web
-# app. Empty = open (only safe on a truly private/loopback bind). A per-service token wins.
+
+def _env_true(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+# Shared service token. /ocr requires `X-Tideglass-Sidecar-Token` (or a bearer Authorization
+# header) matching it, so a reachable port can't be driven by anyone but the web app. Empty =
+# fail closed unless an explicit local-dev opt-out is set. A per-service token wins.
 _AUTH_TOKEN = os.environ.get("OCR_SIDECAR_TOKEN") or os.environ.get("SIDECAR_AUTH_TOKEN") or ""
+_ALLOW_UNAUTHENTICATED = _env_true("OCR_SIDECAR_ALLOW_UNAUTHENTICATED") or _env_true("SIDECAR_ALLOW_UNAUTHENTICATED")
 
 # Defense-in-depth request caps (env-tunable). The web importer batches SIDECAR_BATCH=4 pages
 # per call, so 16 images leaves head-room; a rendered page is well under the per-image byte cap.
@@ -51,9 +58,11 @@ def require_token(
     x_tideglass_sidecar_token: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
 ) -> None:
-    """Gate the expensive endpoint on the shared token (no-op when none is configured)."""
+    """Gate the expensive endpoint on the shared token."""
     if not _AUTH_TOKEN:
-        return
+        if _ALLOW_UNAUTHENTICATED:
+            return
+        raise HTTPException(status_code=503, detail="Sidecar auth token is not configured.")
     presented = x_tideglass_sidecar_token
     if not presented and authorization and authorization.lower().startswith("bearer "):
         presented = authorization[7:].strip()

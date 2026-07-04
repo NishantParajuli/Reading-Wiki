@@ -118,6 +118,19 @@ async def _validated_scraper_start_url(start_url: str) -> str:
         raise HTTPException(status_code=422, detail=f"Unsafe source URL: {e}")
 
 
+async def _read_upload_file_limited(file, max_bytes: int, too_large_detail: str) -> bytes:
+    """Read an UploadFile-like object in chunks, rejecting as soon as it crosses max_bytes."""
+    data = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        data.extend(chunk)
+        if len(data) > max_bytes:
+            raise HTTPException(status_code=413, detail=too_large_detail)
+    return bytes(data)
+
+
 # ── API Models ────────────────────────────────────────────────────────────
 
 class SourceCreate(BaseModel):
@@ -711,11 +724,9 @@ async def api_upload_avatar(file: UploadFile = File(...), user: dict = Depends(c
     ext = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
     if (file.content_type or "").split("/")[0] != "image" and ext not in ("jpg", "jpeg", "png", "webp", "gif"):
         raise HTTPException(status_code=400, detail="Avatar must be an image (jpg, png, webp, gif).")
-    data = await file.read()
+    data = await _read_upload_file_limited(file, 5 * 1024 * 1024, "Avatar must be under 5 MB.")
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(data) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Avatar must be under 5 MB.")
     rel = import_storage.save_user_avatar(user["id"], data, ext or "png")
     pool = await get_db_pool()
     async with pool.acquire() as conn:
@@ -2052,6 +2063,18 @@ class CommitSeries(BaseModel):
 _IMPORT_FORMATS = {".epub": "epub", ".pdf": "pdf"}
 
 
+async def _read_limited_request_body(request: Request, max_bytes: int) -> bytes:
+    """Read an octet-stream request incrementally, rejecting as soon as it crosses max_bytes."""
+    data = bytearray()
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        data.extend(chunk)
+        if len(data) > max_bytes:
+            raise HTTPException(status_code=413, detail="Chunk too large.")
+    return bytes(data)
+
+
 def _job_view(job: dict) -> dict:
     """Trim a job row to what the UI needs (drops the on-disk original path)."""
     return {
@@ -2180,16 +2203,29 @@ async def api_import_upload(file: UploadFile = File(...), user: dict = Depends(c
     if not fmt:
         raise HTTPException(status_code=400, detail="Only .epub and .pdf files are supported.")
 
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(data) > settings.MAX_UPLOAD_MB * 1024 * 1024:
-        raise HTTPException(status_code=413, detail=f"File exceeds the {settings.MAX_UPLOAD_MB} MB upload cap.")
-
     # Insert as 'receiving' so the worker can't grab it before the blob lands on disk.
     job_id = await import_jobs.create_job(fmt, original_path="", status="receiving", user_id=user["id"])
-    path = import_storage.save_original(job_id, data, ext)
-    sha = import_storage.sha256_bytes(data)
+    try:
+        path, sha, size = await import_storage.save_upload_file_limited(
+            job_id,
+            file,
+            ext,
+            settings.MAX_UPLOAD_MB * 1024 * 1024,
+        )
+        if size <= 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    except ValueError:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM import_jobs WHERE id = $1;", job_id)
+        import_storage.cleanup_job(job_id)
+        raise HTTPException(status_code=413, detail=f"File exceeds the {settings.MAX_UPLOAD_MB} MB upload cap.")
+    except HTTPException:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM import_jobs WHERE id = $1;", job_id)
+        import_storage.cleanup_job(job_id)
+        raise
     await import_jobs.update_job(
         job_id, original_path=str(path), file_sha256=sha, status="uploaded",
     )
@@ -2233,12 +2269,10 @@ async def _enqueue_batch(files, *, auto_commit: bool, group_series: bool, user_i
         ext = os.path.splitext(name)[1].lower()
         fmt = _IMPORT_FORMATS[ext]
         job_id = await import_jobs.create_job(fmt, original_path="", options=options, status="receiving", user_id=user_id)
-        with open(src, "rb") as f:
-            data = f.read()
-        path = import_storage.save_original(job_id, data, ext)
+        path, sha, _size = import_storage.save_original_from_path(job_id, src, ext)
         await import_jobs.update_job(
             job_id, original_path=str(path),
-            file_sha256=import_storage.sha256_bytes(data), status="uploaded",
+            file_sha256=sha, status="uploaded",
         )
         queued.append({"id": job_id, "filename": name})
     return batch_id, queued
@@ -2337,11 +2371,9 @@ async def api_import_upload_chunk(job_id: int, request: Request, user: dict = De
         raise HTTPException(status_code=400, detail="Invalid Upload-Offset header.")
     if offset < 0:
         raise HTTPException(status_code=400, detail="Upload-Offset must be non-negative.")
-    data = await request.body()
+    data = await _read_limited_request_body(request, settings.UPLOAD_CHUNK_MAX_MB * 1024 * 1024)
     if not data:
         raise HTTPException(status_code=400, detail="Empty chunk.")
-    if len(data) > settings.UPLOAD_CHUNK_MAX_MB * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Chunk too large.")
 
     current = import_storage.upload_offset(job_id, ext)
     # Idempotent retry: these bytes already landed in full. Accept as a no-op ONLY if they match
