@@ -600,6 +600,15 @@ input[type="range"].slider::-moz-range-thumb {
 .novel-hero-cover { flex: 0 0 160px; }
 .novel-hero-cover img, .novel-hero-cover .novel-cover-ph { width: 160px; aspect-ratio: 3 / 4; border-radius: var(--radius-sm); object-fit: cover; }
 .novel-hero-body { flex: 1 1 320px; min-width: 0; }
+.cover-edit { display: flex; gap: 12px; align-items: flex-start; }
+.cover-edit-preview {
+  width: 54px; aspect-ratio: 3 / 4; border-radius: 7px; object-fit: cover; flex: 0 0 54px;
+  border: 1px solid var(--border); background: var(--surface-2);
+}
+.cover-edit-empty { display: grid; place-items: center; color: var(--muted); }
+.cover-edit-field { min-width: 0; flex: 1 1 220px; display: flex; flex-direction: column; gap: 8px; }
+.cover-edit-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cover-edit-actions .btn { padding: 8px 12px; font-size: 13px; border-radius: 10px; }
 .novel-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .source-row { display: flex; align-items: center; gap: 10px; padding: 9px 8px; border-bottom: 1px solid var(--border); }
 .source-row:last-of-type { border-bottom: none; }

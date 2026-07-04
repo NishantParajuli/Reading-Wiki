@@ -34,6 +34,14 @@ _EXT_MIME = {
     "webp": "image/webp", "bmp": "image/bmp", "tiff": "image/tiff",
 }
 ALLOWED_ASSET_EXTS = frozenset(_EXT_MIME.keys())
+_PIL_FORMAT_EXT_MIME = {
+    "JPEG": ("jpg", "image/jpeg"),
+    "PNG": ("png", "image/png"),
+    "GIF": ("gif", "image/gif"),
+    "WEBP": ("webp", "image/webp"),
+    "BMP": ("bmp", "image/bmp"),
+    "TIFF": ("tiff", "image/tiff"),
+}
 
 
 def ext_from_mime(mime: str | None) -> str:
@@ -46,6 +54,27 @@ def mime_from_ext(ext: str) -> str:
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def raster_asset_info(data: bytes, mime: str | None = None) -> tuple[str, str, int, int]:
+    """Validate raster image bytes and return (ext, detected_mime, width, height)."""
+    normalized = (mime or "").lower().split(";", 1)[0].strip()
+    if normalized == "image/svg+xml":
+        raise ValueError("SVG assets are not supported.")
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as im:
+            fmt = (im.format or "").upper()
+            width, height = im.size
+            im.verify()
+    except Exception as exc:
+        raise ValueError("Image asset could not be decoded safely.") from exc
+
+    info = _PIL_FORMAT_EXT_MIME.get(fmt)
+    if not info:
+        raise ValueError(f"Unsupported image format: {fmt or 'unknown'}.")
+    ext, detected_mime = info
+    return ext, detected_mime, int(width), int(height)
 
 
 # ── Directory roots ─────────────────────────────────────────────────────────
@@ -215,9 +244,8 @@ def _staged_dir(job_id: int) -> Path:
 def stage_asset(job_id: int, data: bytes, mime: str | None) -> tuple[str, str]:
     """Write an extracted image to the job's staging dir, content-addressed. Returns
     (sha, ext). Idempotent: re-staging identical bytes is a no-op (dedup by sha)."""
-    _validate_raster_asset(data, mime)
+    ext, _detected_mime, _width, _height = raster_asset_info(data, mime)
     sha = sha256_bytes(data)
-    ext = ext_from_mime(mime)
     dest = _staged_dir(job_id) / f"{sha}.{ext}"
     if not dest.exists():
         dest.write_bytes(data)
@@ -249,6 +277,34 @@ def asset_url(novel_id: int, sha: str, ext: str) -> str:
 
 def asset_file_path(novel_id: int, filename: str) -> Path:
     return _asset_root() / str(novel_id) / filename
+
+
+async def save_novel_asset(conn, novel_id: int, data: bytes, mime: str | None, kind: str) -> dict:
+    """Store uploaded image bytes as a committed novel asset and record the DB pointer."""
+    ext, detected_mime, width, height = raster_asset_info(data, mime)
+    sha = sha256_bytes(data)
+    rel = asset_rel(novel_id, sha, ext)
+    dest = _asset_root() / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.exists():
+        dest.write_bytes(data)
+    await conn.execute(
+        """
+        INSERT INTO assets (novel_id, sha256, path, mime, kind, width, height)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (novel_id, sha256) DO NOTHING;
+        """,
+        novel_id, sha, rel, detected_mime, kind, width, height,
+    )
+    return {
+        "sha": sha,
+        "ext": ext,
+        "mime": detected_mime,
+        "width": width,
+        "height": height,
+        "path": rel,
+        "url": asset_url(novel_id, sha, ext),
+    }
 
 
 async def commit_asset(
@@ -311,18 +367,7 @@ def save_user_avatar(user_id: int, data: bytes, ext: str) -> str:
 
 
 def _validate_raster_asset(data: bytes, mime: str | None) -> None:
-    normalized = (mime or "").lower().split(";", 1)[0].strip()
-    if normalized == "image/svg+xml":
-        raise ValueError("SVG assets are not supported.")
-    ext = ext_from_mime(normalized)
-    if ext not in ALLOWED_ASSET_EXTS:
-        raise ValueError(f"Unsupported image MIME type: {mime or 'unknown'}.")
-    try:
-        from PIL import Image
-        with Image.open(io.BytesIO(data)) as im:
-            im.verify()
-    except Exception as exc:
-        raise ValueError("Image asset could not be decoded safely.") from exc
+    raster_asset_info(data, mime)
 
 
 # ── Cleanup ─────────────────────────────────────────────────────────────────

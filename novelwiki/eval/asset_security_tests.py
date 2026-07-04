@@ -21,6 +21,18 @@ def _png(w: int = 2, h: int = 2) -> bytes:
     return buf.getvalue()
 
 
+class _FakeUpload:
+    def __init__(self, filename: str, data: bytes, content_type: str):
+        self.filename = filename
+        self.content_type = content_type
+        self._chunks = [data]
+
+    async def read(self, size: int = -1) -> bytes:
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
+
+
 async def _reset_pool():
     try:
         await close_db_pool()
@@ -200,6 +212,49 @@ async def test_public_committed_asset_available_to_logged_in_reader(asset_db):
 
     response = await routes.api_novel_asset(asset_db["public_novel"], filename, user=asset_db["other"])
     assert response.media_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_owner_can_upload_cover_as_committed_private_asset(asset_db):
+    data = _png(3, 4)
+    upload = _FakeUpload("cover.png", data, "image/png")
+
+    payload = await routes.api_upload_novel_cover(asset_db["private_novel"], upload, user=asset_db["owner"])
+
+    assert payload["cover_url"].startswith(f"/api/assets/novels/{asset_db['private_novel']}/")
+    filename = payload["cover_url"].rsplit("/", 1)[1]
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        novel_cover = await conn.fetchval("SELECT cover_url FROM novels WHERE id = $1;", asset_db["private_novel"])
+        asset = await conn.fetchrow(
+            "SELECT mime, kind, width, height FROM assets WHERE novel_id = $1 AND sha256 = $2;",
+            asset_db["private_novel"], payload["asset"]["sha"],
+        )
+    assert novel_cover is None
+    assert dict(asset) == {"mime": "image/png", "kind": "cover", "width": 3, "height": 4}
+
+    response = await routes.api_novel_asset(asset_db["private_novel"], filename, user=asset_db["owner"])
+    assert response.media_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_cover_upload_requires_edit_access(asset_db):
+    upload = _FakeUpload("cover.png", _png(), "image/png")
+
+    with pytest.raises(HTTPException) as exc:
+        await routes.api_upload_novel_cover(asset_db["public_novel"], upload, user=asset_db["other"])
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_cover_upload_rejects_svg(asset_db):
+    upload = _FakeUpload("cover.svg", b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', "image/svg+xml")
+
+    with pytest.raises(HTTPException) as exc:
+        await routes.api_upload_novel_cover(asset_db["private_novel"], upload, user=asset_db["owner"])
+
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio

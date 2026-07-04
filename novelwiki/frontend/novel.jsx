@@ -201,10 +201,13 @@ function NovelEditForm({ novel, onSaved, onCancel, onRequestDelete }) {
   const [description, setDescription] = useState(novel.description || "");
   const [cover, setCover] = useState(novel.cover_url || "");
   const [busy, setBusy] = useState(false);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [coverMsg, setCoverMsg] = useState(null);
+  const coverFileRef = useRef(null);
 
   async function submit(e) {
     e.preventDefault();
-    if (!title.trim() || busy) return;
+    if (!title.trim() || busy || uploadingCover) return;
     setBusy(true);
     try {
       await window.API.updateNovel(novel.id, {
@@ -213,6 +216,23 @@ function NovelEditForm({ novel, onSaved, onCancel, onRequestDelete }) {
       });
       onSaved();
     } finally { setBusy(false); }
+  }
+
+  async function onPickCover(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setUploadingCover(true);
+    setCoverMsg(null);
+    try {
+      const r = await window.API.uploadNovelCover(novel.id, file);
+      setCover(r.cover_url || "");
+      setCoverMsg({ ok: true, text: "Cover uploaded. Save to keep it." });
+    } catch (err) {
+      setCoverMsg({ ok: false, text: err.message || "Cover upload failed." });
+    } finally {
+      setUploadingCover(false);
+      if (coverFileRef.current) coverFileRef.current.value = "";
+    }
   }
 
   return React.createElement("form", { className: "card add-novel", onSubmit: submit, style: { marginBottom: 26 } },
@@ -224,14 +244,38 @@ function NovelEditForm({ novel, onSaved, onCancel, onRequestDelete }) {
       React.createElement("label", { className: "field", style: { flex: "1 1 180px" } },
         React.createElement("span", null, "Author"),
         React.createElement("input", { value: author, onChange: e => setAuthor(e.target.value) })),
-      React.createElement("label", { className: "field", style: { flex: "1 1 240px" } },
-        React.createElement("span", null, "Cover image URL"),
-        React.createElement("input", { value: cover, onChange: e => setCover(e.target.value), placeholder: "https://…" }))),
+      React.createElement("div", { className: "field", style: { flex: "1 1 280px" } },
+        React.createElement("span", null, "Cover image"),
+        React.createElement("div", { className: "cover-edit" },
+          cover
+            ? React.createElement("img", { className: "cover-edit-preview", src: cover, alt: "" })
+            : React.createElement("div", { className: "cover-edit-preview cover-edit-empty" }, React.createElement(Icon, { name: "book", size: 22 })),
+          React.createElement("div", { className: "cover-edit-field" },
+            React.createElement("input", { value: cover, onChange: e => { setCover(e.target.value); setCoverMsg(null); }, placeholder: "https://…" }),
+            React.createElement("div", { className: "cover-edit-actions" },
+              React.createElement("button", {
+                className: "btn btn-ghost", type: "button", disabled: uploadingCover,
+                onClick: () => coverFileRef.current && coverFileRef.current.click(),
+              }, React.createElement(Icon, { name: "upload", size: 15 }), uploadingCover ? "Uploading…" : "Upload cover"),
+              React.createElement("input", {
+                ref: coverFileRef, type: "file", accept: "image/png,image/jpeg,image/webp,image/gif",
+                style: { display: "none" }, onChange: onPickCover,
+              }),
+              React.createElement("span", { className: "muted", style: { fontSize: 12 } }, "PNG/JPG/WebP/GIF, under 10 MB.")
+            ),
+            coverMsg && React.createElement("p", {
+              style: {
+                color: coverMsg.ok ? "var(--muted)" : "var(--danger, #c0392b)",
+                fontSize: 12.5, margin: 0,
+              },
+            }, coverMsg.text)
+          )
+        ))),
     React.createElement("label", { className: "field" },
       React.createElement("span", null, "Description"),
       React.createElement("textarea", { value: description, onChange: e => setDescription(e.target.value), rows: 3 })),
     React.createElement("div", { className: "row", style: { gap: 10, alignItems: "center" } },
-      React.createElement("button", { className: "btn btn-primary", type: "submit", disabled: busy }, busy ? "Saving…" : "Save"),
+      React.createElement("button", { className: "btn btn-primary", type: "submit", disabled: busy || uploadingCover }, busy ? "Saving…" : "Save"),
       React.createElement("button", { className: "btn btn-ghost", type: "button", onClick: onCancel }, "Cancel"),
       React.createElement("div", { className: "grow" }),
       React.createElement("button", {

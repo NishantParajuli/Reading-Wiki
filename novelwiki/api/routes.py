@@ -507,6 +507,28 @@ async def api_update_novel(novel_id: int, payload: NovelUpdate, user: dict = Dep
     return {"status": "success"}
 
 
+@router.post("/novels/{novel_id}/cover")
+async def api_upload_novel_cover(novel_id: int, file: UploadFile = File(...), user: dict = Depends(current_user)):
+    """Upload a cover image and return an authenticated novel asset URL."""
+    await require_editable(novel_id, user)
+    from novelwiki.importer import storage as import_storage
+
+    ext = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
+    if ext == "svg" or (file.content_type or "").lower().split(";", 1)[0].strip() == "image/svg+xml":
+        raise HTTPException(status_code=400, detail="SVG covers are not supported.")
+    data = await _read_upload_file_limited(file, 10 * 1024 * 1024, "Cover image must be under 10 MB.")
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        try:
+            asset = await import_storage.save_novel_asset(conn, novel_id, data, file.content_type, "cover")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    return {"cover_url": asset["url"], "asset": asset}
+
+
 @router.delete("/novels/{novel_id}")
 async def api_delete_novel(novel_id: int, user: dict = Depends(current_user)):
     await require_editable(novel_id, user)

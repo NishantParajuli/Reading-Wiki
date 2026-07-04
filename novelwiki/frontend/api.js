@@ -143,6 +143,22 @@
     createNovel(body) { return postJSON(`${API_BASE}/novels`, body); },
     novel(id) { return getJSON(N(id)); },
     updateNovel(id, body) { return req("PATCH", N(id), body); },
+    async uploadNovelCover(id, file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`${N(id)}/cover`, {
+        method: "POST",
+        credentials: "include",
+        headers: mutationHeaders(),
+        body: fd,
+      });
+      if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
+        const err = new Error(detail); err.status = res.status; throw err;
+      }
+      return res.json();
+    },
     deleteNovel(id) { return delJSON(N(id)); },
     // Discovery, per-user library membership, visibility, and quota usage.
     // Accepts a bare query string (back-compat) or a filter object
