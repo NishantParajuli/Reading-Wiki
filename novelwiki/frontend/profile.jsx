@@ -47,7 +47,7 @@ function MiniNovel({ n, openNovel }) {
   );
 }
 
-function ActivityRow({ title, items, openNovel }) {
+function ProfileActivityRow({ title, items, openNovel }) {
   if (!items || items.length === 0) return null;
   return (
     <div style={{ marginTop: 22 }}>
@@ -122,9 +122,9 @@ function Profile({ username, currentUser, openNovel, openLibrary, openAccount })
         ? <div style={{ marginTop: 22 }}><EmptyState icon="book" title="No public activity yet" body="Reading activity on shared novels shows up here." /></div>
         : (
           <React.Fragment>
-            <ActivityRow title="Currently reading" items={data.currently_reading} openNovel={openNovel} />
-            <ActivityRow title="Recently finished" items={data.recently_finished} openNovel={openNovel} />
-            <ActivityRow title={data.is_self ? "Published by you" : "Published"} items={data.published} openNovel={openNovel} />
+            <ProfileActivityRow title="Currently reading" items={data.currently_reading} openNovel={openNovel} />
+            <ProfileActivityRow title="Recently finished" items={data.recently_finished} openNovel={openNovel} />
+            <ProfileActivityRow title={data.is_self ? "Published by you" : "Published"} items={data.published} openNovel={openNovel} />
           </React.Fragment>
         )}
     </div>

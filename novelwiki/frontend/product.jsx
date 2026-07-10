@@ -139,7 +139,7 @@ function activityProgress(job) {
   return job.stage || "";
 }
 
-function ActivityRow({ job, onCancel, onOpenNovel, busyId }) {
+function JobActivityRow({ job, onCancel, onOpenNovel, busyId }) {
   const kindLabel = ACT_KIND_LABEL[job.kind] || job.kind;
   const rowKey = `${job.source}:${job.id}`;
   return h("div", { className: "toc-row activity-row", style: { cursor: "default", alignItems: "center" } },
@@ -216,7 +216,7 @@ function JobsPage({ openNovel, openLibrary }) {
         ? h(EmptyState, { icon: "sparkles", title: tab === "active" ? "No active jobs" : "No jobs yet",
                           body: "Background work you start (scrape, import, codex, translation, narration) shows up here." })
         : h("div", { className: "card", style: { padding: 12 } },
-            jobs.map(job => h(ActivityRow, { key: `${job.source}:${job.id}`, job, onCancel: cancel,
+            jobs.map(job => h(JobActivityRow, { key: `${job.source}:${job.id}`, job, onCancel: cancel,
                                              onOpenNovel: openNovel, busyId })))
   );
 }
@@ -411,7 +411,7 @@ function ContinueHome({ user, openNovel, openReader, openImport, openDiscover, o
     jobs.length > 0 && section("Active jobs",
       openJobs && h("button", { className: "linkish", onClick: openJobs }, "View all"),
       h("div", { className: "card", style: { padding: 12 } },
-        jobs.map(job => h(ActivityRow, { key: `${job.source}:${job.id}`, job, onOpenNovel: openNovel })))),
+        jobs.map(job => h(JobActivityRow, { key: `${job.source}:${job.id}`, job, onOpenNovel: openNovel })))),
 
     imports.length > 0 && section("Recent imports",
       openImport && h("button", { className: "linkish", onClick: openImport }, "Open importer"),
@@ -440,7 +440,7 @@ function ContinueHome({ user, openNovel, openReader, openImport, openDiscover, o
 }
 
 Object.assign(window, {
-  ProvenanceBadges, PROVENANCE_LABELS, CostConfirm, JobsPage, ActivityRow,
+  ProvenanceBadges, PROVENANCE_LABELS, CostConfirm, JobsPage, JobActivityRow,
   NovelHealthPanel, RecapPanel, ContinueHome, usePolledActivity,
 });
 })();
