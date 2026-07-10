@@ -1,6 +1,8 @@
 import re
 import logging
 import asyncio
+from collections.abc import Awaitable, Callable
+
 import tiktoken
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool, close_db_pool
@@ -153,8 +155,14 @@ async def chunk_all_chapters(
     force: bool = False,
     from_chapter: float | None = None,
     to_chapter: float | None = None,
+    cancel_check: Callable[[], Awaitable[None]] | None = None,
 ) -> int:
-    """Chunks chapters currently in the database, optionally limited to a range."""
+    """Chunks chapters currently in the database, optionally limited to a range.
+
+    ``cancel_check`` is called between chapters so durable jobs can stop without
+    finishing a whole-book pass. The callback signals cancellation by raising the
+    worker's cancellation exception.
+    """
     pool = await get_db_pool()
     conditions = ["novel_id = $1"]
     args: list = [novel_id]
@@ -171,6 +179,8 @@ async def chunk_all_chapters(
 
     total_chunks = 0
     for row in rows:
+        if cancel_check is not None:
+            await cancel_check()
         num = float(row["number"])
         cnt = await chunk_chapter(novel_id, num, force=force)
         total_chunks += cnt

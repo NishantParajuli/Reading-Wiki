@@ -4,6 +4,8 @@ import asyncio
 import asyncpg
 import hashlib
 import uuid
+from collections.abc import Awaitable, Callable
+
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool, close_db_pool
 from novelwiki.db.queries import clear_caches
@@ -355,10 +357,17 @@ async def commit_extraction_proposal(
     return {"status": "done", "idempotent": False}
 
 
-async def extract_knowledge_for_chapter(novel_id: int, chapter_number: float, force: bool = False):
+async def extract_knowledge_for_chapter(
+    novel_id: int,
+    chapter_number: float,
+    force: bool = False,
+    cancel_check: Callable[[], Awaitable[None]] | None = None,
+):
     """
     Extracts structured knowledge from chapter_number in a forward-only transaction.
     """
+    if cancel_check is not None:
+        await cancel_check()
     pool = await get_db_pool()
 
     async with pool.acquire() as conn:
@@ -419,6 +428,8 @@ async def extract_knowledge_for_chapter(novel_id: int, chapter_number: float, fo
 
         logger.info(f"Calling Flash extraction model for Chapter {chapter_number}...")
         data = await _call_and_parse(messages, f"Chapter {chapter_number} extraction")
+        if cancel_check is not None:
+            await cancel_check()
         if not any(data[k] for k in EXTRACTION_KEYS):
             logger.warning(
                 f"Chapter {chapter_number}: extraction returned no items of any kind — "
@@ -455,6 +466,8 @@ async def extract_knowledge_for_chapter(novel_id: int, chapter_number: float, fo
                     f"Verification pass failed for Chapter {chapter_number}; "
                     f"proceeding with first-pass extraction: {ve}"
                 )
+            if cancel_check is not None:
+                await cancel_check()
 
         # 3. Build the forward summary proposal, then send both provider paths
         # through the same source-checked transactional commit adapter.
@@ -469,12 +482,16 @@ async def extract_knowledge_for_chapter(novel_id: int, chapter_number: float, fo
                 ),
             },
         ]
+        if cancel_check is not None:
+            await cancel_check()
         logger.info(f"Generating updated running summary through Chapter {chapter_number}...")
         new_summary = await call_chat_completion(
             model=settings.MODEL_FLASH,
             messages=summary_messages,
             temperature=0.3,
         )
+        if cancel_check is not None:
+            await cancel_check()
         await commit_extraction_proposal(
             novel_id,
             chapter_number,
@@ -494,6 +511,7 @@ async def extract_all_chapters(
     force: bool = False,
     from_chapter: float | None = None,
     to_chapter: float | None = None,
+    cancel_check: Callable[[], Awaitable[None]] | None = None,
 ):
     """Processes chapters in strict ascending order (Invariant 2), optionally limited
     to a [from_chapter, to_chapter] range so the prompt can be iterated on the first
@@ -513,7 +531,11 @@ async def extract_all_chapters(
         rows = await conn.fetch(f"SELECT number FROM chapters{where} ORDER BY number ASC;", *args)
 
     for row in rows:
-        await extract_knowledge_for_chapter(novel_id, float(row["number"]), force=force)
+        if cancel_check is not None:
+            await cancel_check()
+        await extract_knowledge_for_chapter(
+            novel_id, float(row["number"]), force=force, cancel_check=cancel_check,
+        )
 
 
 if __name__ == "__main__":

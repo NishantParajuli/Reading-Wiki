@@ -155,18 +155,26 @@ async def _handle_codex(job: dict, preflight: PreflightResult) -> dict:
 
     opts = job.get("options") or {}
     job_id, novel_id = int(job["id"]), int(job["novel_id"])
+
+    async def cancel_check() -> None:
+        if await service.is_canceled(job_id):
+            raise AgyCanceled()
+
+    await cancel_check()
     await service.set_progress(job_id, {"step": 1, "steps": 4, "stage": "chunking"}, stage="chunking")
-    await chunk_all_chapters(novel_id, force=bool(opts.get("force")),
-                             from_chapter=opts.get("from_chapter"), to_chapter=opts.get("to_chapter"))
-    if await service.is_canceled(job_id):
-        raise AgyCanceled()
+    await chunk_all_chapters(
+        novel_id, force=bool(opts.get("force")), from_chapter=opts.get("from_chapter"),
+        to_chapter=opts.get("to_chapter"), cancel_check=cancel_check,
+    )
+    await cancel_check()
     await service.set_progress(job_id, {"step": 2, "steps": 4, "stage": "embedding"}, stage="embedding")
-    await embed_missing_chunks(novel_id, from_chapter=opts.get("from_chapter"), to_chapter=opts.get("to_chapter"))
-    if await service.is_canceled(job_id):
-        raise AgyCanceled()
+    await embed_missing_chunks(
+        novel_id, from_chapter=opts.get("from_chapter"), to_chapter=opts.get("to_chapter"),
+        cancel_check=cancel_check,
+    )
+    await cancel_check()
     extracted = await execute_codex_job(job, preflight)
-    if await service.is_canceled(job_id):
-        raise AgyCanceled()
+    await cancel_check()
     await service.set_progress(job_id, {"step": 4, "steps": 4, **extracted}, stage="indexing")
     await get_bm25_manager(novel_id).rebuild()
     return {"step": 4, "steps": 4, **extracted}

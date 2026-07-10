@@ -8,9 +8,12 @@ expensive stage, progress visible through the API, and the X-Request-ID response
 """
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 
 import novelwiki.db.connection as db_connection
 from novelwiki import quota
+from novelwiki.agy import worker as agy_worker
+from novelwiki.agy.errors import AgyCanceled
 from novelwiki.api import routes
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import close_db_pool, get_db_pool
@@ -111,6 +114,29 @@ async def test_codex_build_reserves_and_dedupes(jobs_db):
     assert r2["deduped"] is True and r2["job_id"] == r1["job_id"]
     assert await _count_jobs(jobs_db["pool"], kind="codex_build") == 1
     assert await _usage(jobs_db["pool"], owner["id"], "codex_builds") == 1
+
+
+@pytest.mark.asyncio
+async def test_codex_build_persists_chapter_range(jobs_db):
+    novel_id, owner = jobs_db["novel_id"], jobs_db["owner"]
+    result = await routes.api_codex_build(
+        novel_id, routes.CodexBuild(from_chapter=1.5, to_chapter=2.5), user=owner,
+    )
+    job = await service.get_job(result["job_id"])
+    assert job["options"]["from_chapter"] == 1.5
+    assert job["options"]["to_chapter"] == 2.5
+
+
+@pytest.mark.asyncio
+async def test_codex_build_rejects_reversed_chapter_range_without_charging(jobs_db):
+    novel_id, owner = jobs_db["novel_id"], jobs_db["owner"]
+    with pytest.raises(HTTPException) as exc:
+        await routes.api_codex_build(
+            novel_id, routes.CodexBuild(from_chapter=3, to_chapter=1), user=owner,
+        )
+    assert getattr(exc.value, "status_code", None) == 422
+    assert await _count_jobs(jobs_db["pool"], kind="codex_build") == 0
+    assert await _usage(jobs_db["pool"], owner["id"], "codex_builds") == 0
 
 
 @pytest.mark.asyncio
@@ -267,6 +293,81 @@ async def test_cancel_running_job_refunds_even_if_worker_never_returns(jobs_db):
     assert job["quota_finalized"] is True
     assert job["claim_token"] is None and job["claimed_at"] is None
     assert await _usage(pool, owner["id"], "codex_builds") == 0
+
+
+@pytest.mark.asyncio
+async def test_embedding_cancel_stops_after_inflight_batch(jobs_db, monkeypatch):
+    """A cancel that lands during an embedding request is checked before its
+    response is persisted and before another provider request starts."""
+    from novelwiki.ingest.embed import embed_missing_chunks
+
+    novel_id, pool = jobs_db["novel_id"], jobs_db["pool"]
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            "INSERT INTO chunks (novel_id,chapter,chunk_index,text,token_count) "
+            "VALUES ($1,1,$2,$3,1);",
+            [(novel_id, index, f"chunk {index}") for index in range(32)],
+        )
+
+    provider_calls = 0
+
+    async def _embeddings(texts):
+        nonlocal provider_calls
+        provider_calls += 1
+        return [[0.0] * settings.EMBED_DIM for _ in texts]
+
+    async def _cancel_check():
+        if provider_calls:
+            raise AgyCanceled()
+
+    monkeypatch.setattr("novelwiki.ingest.embed.get_embeddings_batch", _embeddings)
+    with pytest.raises(AgyCanceled):
+        await embed_missing_chunks(novel_id, cancel_check=_cancel_check)
+
+    assert provider_calls == 1
+    async with pool.acquire() as conn:
+        assert await conn.fetchval(
+            "SELECT count(*) FROM chunks WHERE novel_id=$1 AND embedding IS NOT NULL;", novel_id,
+        ) == 0
+
+
+@pytest.mark.asyncio
+async def test_agy_codex_wires_cancel_check_into_embedding(monkeypatch):
+    canceled = False
+    extraction_started = False
+
+    async def _is_canceled(_job_id):
+        return canceled
+
+    async def _set_progress(*_args, **_kwargs):
+        return None
+
+    async def _chunk(*_args, cancel_check=None, **_kwargs):
+        assert cancel_check is not None
+        await cancel_check()
+
+    async def _embed(*_args, cancel_check=None, **_kwargs):
+        nonlocal canceled
+        assert cancel_check is not None
+        canceled = True
+        await cancel_check()
+
+    async def _extract(*_args, **_kwargs):
+        nonlocal extraction_started
+        extraction_started = True
+        return {}
+
+    monkeypatch.setattr(agy_worker.service, "is_canceled", _is_canceled)
+    monkeypatch.setattr(agy_worker.service, "set_progress", _set_progress)
+    monkeypatch.setattr("novelwiki.ingest.chunk.chunk_all_chapters", _chunk)
+    monkeypatch.setattr("novelwiki.ingest.embed.embed_missing_chunks", _embed)
+    monkeypatch.setattr(agy_worker, "execute_codex_job", _extract)
+
+    with pytest.raises(AgyCanceled):
+        await agy_worker._handle_codex(
+            {"id": 99, "novel_id": 1, "options": {}}, preflight=None,
+        )
+    assert extraction_started is False
 
 
 # ── Cooperative cancellation before the next expensive stage ──────────────────

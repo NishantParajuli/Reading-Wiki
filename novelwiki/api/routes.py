@@ -2000,6 +2000,9 @@ async def api_codex_build(novel_id: int, payload: CodexBuild, user: dict = Depen
     build runs once, and the reserved codex-build quota is refunded if the job ultimately fails
     or is cancelled (the durable worker finalizes it)."""
     await require_editable(novel_id, user)
+    if (payload.from_chapter is not None and payload.to_chapter is not None
+            and payload.from_chapter > payload.to_chapter):
+        raise HTTPException(status_code=422, detail="from_chapter must be less than or equal to to_chapter.")
     idem = f"codex:novel{novel_id}:{payload.from_chapter}:{payload.to_chapter}:{int(payload.force)}"
 
     # A build already running for this exact target? Return it without charging again.

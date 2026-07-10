@@ -103,15 +103,22 @@ async def _handle_codex(job: dict) -> dict:
 
     steps = 4
     await service.set_progress(job_id, {"step": 1, "steps": steps, "stage": "chunking"}, stage="chunking")
-    await chunk_all_chapters(novel_id, force=force, from_chapter=frm, to_chapter=to)
+    cancel_check = lambda: _bail_if_canceled(job_id)
+    await chunk_all_chapters(
+        novel_id, force=force, from_chapter=frm, to_chapter=to, cancel_check=cancel_check,
+    )
     await _bail_if_canceled(job_id)
 
     await service.set_progress(job_id, {"step": 2, "steps": steps, "stage": "embedding"}, stage="embedding")
-    await embed_missing_chunks(novel_id, from_chapter=frm, to_chapter=to)
+    await embed_missing_chunks(
+        novel_id, from_chapter=frm, to_chapter=to, cancel_check=cancel_check,
+    )
     await _bail_if_canceled(job_id)
 
     await service.set_progress(job_id, {"step": 3, "steps": steps, "stage": "extracting"}, stage="extracting")
-    await extract_all_chapters(novel_id, force=force, from_chapter=frm, to_chapter=to)
+    await extract_all_chapters(
+        novel_id, force=force, from_chapter=frm, to_chapter=to, cancel_check=cancel_check,
+    )
     await _bail_if_canceled(job_id)
 
     await service.set_progress(job_id, {"step": 4, "steps": steps, "stage": "indexing"}, stage="indexing")

@@ -1,5 +1,7 @@
 import logging
 import asyncio
+from collections.abc import Awaitable, Callable
+
 from novelwiki.agent.llm_client import get_embeddings_batch
 from novelwiki.db.connection import get_db_pool, close_db_pool
 
@@ -10,6 +12,7 @@ async def embed_missing_chunks(
     novel_id: int,
     from_chapter: float | None = None,
     to_chapter: float | None = None,
+    cancel_check: Callable[[], Awaitable[None]] | None = None,
 ) -> int:
     """
     Identifies all chunks where embedding IS NULL (optionally within a chapter range)
@@ -42,6 +45,8 @@ async def embed_missing_chunks(
     embedded_count = 0
 
     for idx in range(0, len(rows), batch_size):
+        if cancel_check is not None:
+            await cancel_check()
         batch = rows[idx : idx + batch_size]
         batch_ids = [r["id"] for r in batch]
         batch_texts = [r["text"] for r in batch]
@@ -49,11 +54,21 @@ async def embed_missing_chunks(
         logger.info(f"Embedding batch of {len(batch)} chunks (IDs: {batch_ids[0]}-{batch_ids[-1]})...")
         try:
             vectors = await get_embeddings_batch(batch_texts)
+        except Exception as e:
+            logger.error(f"Failed to embed batch starting with ID {batch_ids[0]}: {e}")
+            # Skip and proceed to keep progress rolling for other batches
+            continue
 
-            if len(vectors) != len(batch):
-                logger.error(f"Embedding size mismatch! Expected {len(batch)} vectors, got {len(vectors)}")
-                continue
+        # A cancel may arrive while the provider request is in flight. Check again
+        # before persisting the response or starting another paid request.
+        if cancel_check is not None:
+            await cancel_check()
 
+        if len(vectors) != len(batch):
+            logger.error(f"Embedding size mismatch! Expected {len(batch)} vectors, got {len(vectors)}")
+            continue
+
+        try:
             async with pool.acquire() as conn:
                 async with conn.transaction():
                     for chunk_id, vector in zip(batch_ids, vectors):
@@ -67,7 +82,6 @@ async def embed_missing_chunks(
             logger.info(f"Successfully embedded {embedded_count}/{len(rows)} chunks.")
         except Exception as e:
             logger.error(f"Failed to embed batch starting with ID {batch_ids[0]}: {e}")
-            # Skip and proceed to keep progress rolling for other batches
 
     return embedded_count
 

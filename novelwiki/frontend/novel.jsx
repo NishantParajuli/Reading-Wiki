@@ -923,6 +923,8 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
   const canAgyCodex = !!(agyCapability && agyCapability.enabled && (agyCapability.workloads || []).includes("codex_extract"));
   const [translateBackend, setTranslateBackend] = useState("auto");
   const [codexBackend, setCodexBackend] = useState("auto");
+  const [codexFromChapter, setCodexFromChapter] = useState("");
+  const [codexToChapter, setCodexToChapter] = useState("");
 
   useEffect(() => {
     const preferred = agyCapability && agyCapability.default_backend === "agy" ? "agy" : "api";
@@ -973,9 +975,23 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
     }
   }
 
-  async function runBuildCodex() {
+  function codexRangeParams() {
+    const fromText = codexFromChapter.trim();
+    const toText = codexToChapter.trim();
+    const from = fromText ? Number(fromText) : null;
+    const to = toText ? Number(toText) : null;
+    if ((fromText && !Number.isFinite(from)) || (toText && !Number.isFinite(to))) {
+      throw new Error("Codex chapter bounds must be valid numbers.");
+    }
+    if (from != null && to != null && from > to) {
+      throw new Error("The first codex chapter cannot be after the final chapter.");
+    }
+    return { from_chapter: from, to_chapter: to };
+  }
+
+  async function runBuildCodex(params) {
     setMsg("Codex build started in the background (chunk → embed → extract)…");
-    try { const r = await window.API.codexBuild(novelId, { ai_backend: codexBackend });
+    try { const r = await window.API.codexBuild(novelId, { ...params, ai_backend: codexBackend });
       setMsg(`Codex build queued on ${(r.execution_backend || "api").toUpperCase()}${r.model ? ` · ${r.model}` : ""}.`); reloadNovel(); }
     catch (e) { setMsg("Codex build failed: " + (e.message || "error")); }
   }
@@ -988,11 +1004,16 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
   }
 
   // Expensive actions confirm their estimated cost (units + quota remaining) first.
-  const buildCodex = () => setPendingCost({
-    action: "codex_build", params: {},
-    title: novel.codex_enabled ? "Rebuild codex" : "Build codex",
-    actionLabel: "Start build", run: runBuildCodex,
-  });
+  const buildCodex = () => {
+    let params;
+    try { params = codexRangeParams(); }
+    catch (e) { setMsg(e.message); return; }
+    setPendingCost({
+      action: "codex_build", params,
+      title: novel.codex_enabled ? "Extend codex" : "Build codex",
+      actionLabel: "Start build", run: () => runBuildCodex(params),
+    });
+  };
   const doTranslate = () => setPendingCost({
     action: "translate", params: {},
     title: "Translate raw chapters", actionLabel: "Start translation", run: runTranslate,
@@ -1116,15 +1137,24 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
               "Reading already translates on demand; this pre-translates the whole raw source.")
           ),
           React.createElement("div", { style: { marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 } },
-            canAgyCodex && React.createElement("label", { className: "field", style: { maxWidth: 300, marginBottom: 10 } },
-              React.createElement("span", null, "AI backend"),
-              React.createElement("select", { value: codexBackend, onChange: e => setCodexBackend(e.target.value) },
-                React.createElement("option", { value: "agy" }, "Antigravity — local subscription queue"),
-                React.createElement("option", { value: "api" }, "API — provider usage"))),
-            React.createElement("button", { className: "btn btn-ghost", onClick: buildCodex },
-              React.createElement(Icon, { name: "brain", size: 15 }), novel.codex_enabled ? "Rebuild codex" : "Build codex"),
+            React.createElement("div", { className: "row", style: { gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 10 } },
+              canAgyCodex && React.createElement("label", { className: "field", style: { flex: "1 1 250px", maxWidth: 300 } },
+                React.createElement("span", null, "AI backend"),
+                React.createElement("select", { value: codexBackend, onChange: e => setCodexBackend(e.target.value) },
+                  React.createElement("option", { value: "agy" }, "Antigravity — local subscription queue"),
+                  React.createElement("option", { value: "api" }, "API — provider usage"))),
+              React.createElement("label", { className: "field", style: { flex: "0 0 105px" } },
+                React.createElement("span", null, "From chapter"),
+                React.createElement("input", { type: "number", step: "any", value: codexFromChapter,
+                  onChange: e => setCodexFromChapter(e.target.value), placeholder: novel.min_chapter != null ? String(novel.min_chapter) : "first" })),
+              React.createElement("label", { className: "field", style: { flex: "0 0 115px" } },
+                React.createElement("span", null, "Through chapter"),
+                React.createElement("input", { type: "number", step: "any", value: codexToChapter,
+                  onChange: e => setCodexToChapter(e.target.value), placeholder: "latest" })),
+              React.createElement("button", { className: "btn btn-ghost", onClick: buildCodex },
+                React.createElement(Icon, { name: "brain", size: 15 }), novel.codex_enabled ? "Extend codex" : "Build codex")),
             React.createElement("p", { className: "muted", style: { fontSize: 12.5, marginTop: 8, marginBottom: 0 } },
-              "Builds the spoiler-safe knowledge base from scraped chapters. Runs in the background.")
+              "Builds the spoiler-safe knowledge base from scraped chapters. Leave both bounds blank for every available chapter; completed chapters are skipped.")
           )
         )
       )
