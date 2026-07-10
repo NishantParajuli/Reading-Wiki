@@ -29,6 +29,7 @@ from novelwiki import audit, quota
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
 from novelwiki.jobs import service
+from novelwiki.jobs.claims import claim_next
 
 logger = logging.getLogger(__name__)
 
@@ -189,25 +190,7 @@ _HANDLERS = {
 async def _claim_next() -> dict | None:
     """Atomically claim the oldest queued job → ``running``, bump attempts, and stamp this worker's
     lease. The marker is not a trigger status, so the job leaves the queue the instant it's claimed."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            UPDATE jobs j
-            SET status = 'running', stage = 'claimed', attempts = j.attempts + 1,
-                claim_token = $2, claimed_at = now(), updated_at = now()
-            WHERE j.id = (
-                SELECT id FROM jobs
-                WHERE status = ANY($1::text[])
-                ORDER BY updated_at ASC
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-            )
-            RETURNING j.*;
-            """,
-            list(service.TRIGGER_STATUSES), _WORKER_ID,
-        )
-    return service._row_to_job(row) if row else None
+    return await claim_next(execution_backend="api", worker_id=_WORKER_ID)
 
 
 async def _renew_lease(job_id: int, token: str | None) -> None:
@@ -243,12 +226,28 @@ async def _recover_stale_leases() -> None:
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, attempts, max_attempts FROM jobs "
+            "SELECT id, attempts, max_attempts, cancel_requested_at FROM jobs "
             "WHERE status = 'running' AND (claimed_at IS NULL OR claimed_at < now() - $1::interval);",
             lease,
         )
     for r in rows:
         job_id = int(r["id"])
+        if r["cancel_requested_at"] is not None:
+            async with pool.acquire() as conn:
+                changed = await conn.fetchrow(
+                    """
+                    UPDATE jobs SET status='canceled',stage='canceled (worker lost after request)',
+                      claim_token=NULL,claimed_at=NULL,updated_at=now()
+                    WHERE id=$1 AND status='running' AND cancel_requested_at IS NOT NULL
+                      AND (claimed_at IS NULL OR claimed_at < now()-$2::interval)
+                    RETURNING id;
+                    """,
+                    job_id, lease,
+                )
+            if changed:
+                await service.finalize(job_id, success=False)
+                await audit.record("job.canceled", data={"job_id": job_id, "reason": "lease_expired_after_cancel"})
+            continue
         if int(r["attempts"]) >= int(r["max_attempts"]):
             # Terminally fail (guarded on status='running' so a racing live claim wins).
             async with pool.acquire() as conn:
@@ -277,12 +276,26 @@ async def _recover_stale_leases() -> None:
                 logger.info(f"Recovered orphaned job {job_id} → queued (lease expired).")
 
 
+async def _release_due_provider_waits() -> None:
+    """A provider-wait row has no lease; make due rows claimable again."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE jobs SET status='queued', stage='queued after provider wait',
+              not_before=NULL, updated_at=now()
+            WHERE status='waiting_provider' AND not_before IS NOT NULL AND not_before <= now();
+            """
+        )
+
+
 async def _run_maintenance(force: bool = False) -> None:
     global _last_maintenance
     now = time.monotonic()
     if not force and (now - _last_maintenance) < _MAINTENANCE_INTERVAL_SECONDS:
         return
     _last_maintenance = now
+    await _release_due_provider_waits()
     await _recover_stale_leases()
 
 

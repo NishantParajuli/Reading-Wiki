@@ -11,14 +11,18 @@ filters status='active', so they're locked out even before the next request).
 """
 import datetime as dt
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
 from novelwiki.auth.deps import require_admin
 from novelwiki.auth.sessions import revoke_user_sessions
+from novelwiki import audit
+from novelwiki.ai_backend import policy as backend_policy
+from novelwiki.jobs import service as jobs_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,6 +49,15 @@ class AdminUserUpdate(BaseModel):
     quota_tts_chapters: int | None = None
 
 
+class AdminAiBackendPolicy(BaseModel):
+    agy_enabled: bool = False
+    default_backend: Literal["api", "agy"] = "api"
+    agy_workloads: list[str] = Field(default_factory=list)
+    fallback_to_api: bool = settings.AGY_FALLBACK_TO_API_DEFAULT
+    max_concurrent_agy_jobs: int = Field(default=1, ge=1, le=4)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
 @router.get("/users")
 async def admin_list_users(q: str | None = None, admin: dict = Depends(require_admin)):
     """All accounts with this month's usage and effective quota limits."""
@@ -60,9 +73,15 @@ async def admin_list_users(q: str | None = None, admin: dict = Depends(require_a
                    COALESCE(qz.ocr_pages, 0)          AS used_ocr,
                    COALESCE(qz.codex_builds, 0)       AS used_codex,
                    COALESCE(qz.tts_chapters, 0)       AS used_tts,
-                   (SELECT COUNT(*) FROM novels n WHERE n.owner_id = u.id) AS novels_owned
+                   (SELECT COUNT(*) FROM novels n WHERE n.owner_id = u.id) AS novels_owned,
+                   p.agy_enabled, p.default_backend, p.agy_workloads, p.fallback_to_api,
+                   p.max_concurrent_agy_jobs, p.policy_version, p.notes AS agy_notes,
+                   p.updated_at AS agy_updated_at, p.granted_by,
+                   (SELECT COUNT(*) FROM jobs j WHERE j.user_id=u.id AND j.execution_backend='agy'
+                     AND j.status IN ('queued','running','waiting_provider')) AS agy_active_jobs
             FROM users u
             LEFT JOIN quota_usage qz ON qz.user_id = u.id AND qz.period = $1
+            LEFT JOIN user_ai_backend_policies p ON p.user_id=u.id
             WHERE ($2::text IS NULL
                    OR u.email ILIKE '%' || $2 || '%'
                    OR u.username ILIKE '%' || $2 || '%'
@@ -95,6 +114,18 @@ async def admin_list_users(q: str | None = None, admin: dict = Depends(require_a
                 "ocr_pages": _limit(r["quota_ocr_pages"], settings.DEFAULT_QUOTA_OCR_PAGES),
                 "codex_builds": _limit(r["quota_codex_builds"], settings.DEFAULT_QUOTA_CODEX_BUILDS),
                 "tts_chapters": _limit(r["quota_tts_chapters"], settings.DEFAULT_QUOTA_TTS_CHAPTERS),
+            },
+            "ai_backend_policy": {
+                "agy_enabled": bool(r["agy_enabled"]),
+                "default_backend": r["default_backend"] or "api",
+                "agy_workloads": list(r["agy_workloads"] or []),
+                "fallback_to_api": bool(r["fallback_to_api"]),
+                "max_concurrent_agy_jobs": int(r["max_concurrent_agy_jobs"] or 1),
+                "policy_version": int(r["policy_version"]) if r["policy_version"] is not None else None,
+                "notes": r["agy_notes"],
+                "updated_at": r["agy_updated_at"].isoformat() if r["agy_updated_at"] else None,
+                "granted_by": int(r["granted_by"]) if r["granted_by"] is not None else None,
+                "active_jobs": int(r["agy_active_jobs"] or 0),
             },
         }
         for r in rows
@@ -142,7 +173,124 @@ async def admin_update_user(user_id: int, payload: AdminUserUpdate, admin: dict 
         # Suspending/banning takes effect now: kill their sessions.
         if fields.get("status") in ("suspended", "banned"):
             await revoke_user_sessions(conn, user_id)
+    if fields.get("status") in ("suspended", "banned"):
+        await backend_policy.cancel_revoked_jobs(user_id, None)
     return {"status": "success"}
+
+
+def _policy_view(row: dict | None, user_id: int) -> dict:
+    if not row:
+        return {"user_id": user_id, "agy_enabled": False, "default_backend": "api",
+                "agy_workloads": [], "fallback_to_api": False,
+                "max_concurrent_agy_jobs": 1, "policy_version": None, "notes": None,
+                "granted_by": None, "created_at": None, "updated_at": None}
+    return {
+        "user_id": user_id, "agy_enabled": bool(row["agy_enabled"]),
+        "default_backend": row["default_backend"], "agy_workloads": list(row["agy_workloads"] or []),
+        "fallback_to_api": bool(row["fallback_to_api"]),
+        "max_concurrent_agy_jobs": int(row["max_concurrent_agy_jobs"]),
+        "policy_version": int(row["policy_version"]), "notes": row.get("notes"),
+        "granted_by": int(row["granted_by"]) if row.get("granted_by") is not None else None,
+        "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+        "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
+    }
+
+
+@router.get("/users/{user_id}/ai-backend-policy")
+async def admin_get_ai_backend_policy(user_id: int, admin: dict = Depends(require_admin)):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval("SELECT 1 FROM users WHERE id=$1;", user_id)
+    if not exists:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return _policy_view(await backend_policy.get_policy(user_id), user_id)
+
+
+@router.put("/users/{user_id}/ai-backend-policy")
+async def admin_put_ai_backend_policy(user_id: int, payload: AdminAiBackendPolicy,
+                                      admin: dict = Depends(require_admin)):
+    row = await backend_policy.upsert_policy(user_id, payload.model_dump(), int(admin["id"]))
+    return _policy_view(row, user_id)
+
+
+@router.delete("/users/{user_id}/ai-backend-policy")
+async def admin_delete_ai_backend_policy(user_id: int, admin: dict = Depends(require_admin)):
+    changed = await backend_policy.delete_policy(user_id, int(admin["id"]))
+    return {"status": "revoked" if changed else "noop", "user_id": user_id}
+
+
+@router.get("/ai/agy/health")
+async def admin_agy_health(admin: dict = Depends(require_admin)):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        heartbeat = await conn.fetchrow(
+            "SELECT * FROM ai_worker_heartbeats WHERE backend='agy' ORDER BY heartbeat_at DESC LIMIT 1;"
+        )
+        counts = await conn.fetchrow(
+            """
+            SELECT count(*) FILTER (WHERE status='queued') AS queued,
+                   count(*) FILTER (WHERE status='running') AS running,
+                   count(*) FILTER (WHERE status='waiting_provider') AS waiting,
+                   min(created_at) FILTER (WHERE status IN ('queued','waiting_provider')) AS oldest
+            FROM jobs WHERE execution_backend='agy';
+            """
+        )
+        recent = await conn.fetch(
+            """
+            SELECT failure_code,count(*) AS count FROM ai_execution_runs
+            WHERE backend='agy' AND failure_code IS NOT NULL AND created_at > now()-interval '7 days'
+            GROUP BY failure_code ORDER BY count(*) DESC;
+            """
+        )
+        last_success = await conn.fetchval(
+            "SELECT max(finished_at) FROM ai_execution_runs WHERE backend='agy' AND status='completed';"
+        )
+    details = heartbeat["details"] if heartbeat else {}
+    if isinstance(details, str):
+        try: details = __import__("json").loads(details)
+        except Exception: details = {}
+    return {
+        "enabled": settings.AGY_ENABLED,
+        "available": await backend_policy.worker_available(),
+        "worker": ({"id": heartbeat["worker_id"], "status": heartbeat["status"],
+                    "version": heartbeat["version"], "plugin_version": heartbeat["plugin_version"],
+                    "plugin_sha256": heartbeat["plugin_sha256"], "details": details,
+                    "heartbeat_at": heartbeat["heartbeat_at"].isoformat()} if heartbeat else None),
+        "queue": {"queued": int(counts["queued"] or 0), "running": int(counts["running"] or 0),
+                  "waiting_provider": int(counts["waiting"] or 0),
+                  "oldest_at": counts["oldest"].isoformat() if counts["oldest"] else None},
+        "last_success_at": last_success.isoformat() if last_success else None,
+        "recent_failures": [{"code": row["failure_code"], "count": int(row["count"])} for row in recent],
+    }
+
+
+@router.post("/ai/agy/retry-waiting")
+async def admin_retry_waiting_agy(admin: dict = Depends(require_admin)):
+    count = await jobs_service.retry_waiting()
+    await audit.record("agy.run.retry_waiting", user_id=admin["id"], data={"jobs": count})
+    return {"status": "success", "jobs_requeued": count}
+
+
+@router.post("/ai/agy/smoke-test")
+async def admin_agy_smoke_test(admin: dict = Depends(require_admin)):
+    if not settings.AGY_ENABLED:
+        raise HTTPException(status_code=409, detail="Enable AGY before running a consuming smoke test.")
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        recent = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM audit_events WHERE event='agy.smoke.completed' "
+            "AND created_at > now()-interval '10 minutes');"
+        )
+    if recent:
+        raise HTTPException(status_code=429, detail="An AGY smoke test ran in the last 10 minutes.")
+    job_id, created = await jobs_service.create_job(
+        "agy_smoke", novel_id=None, user_id=int(admin["id"]), options={},
+        idempotency_key="agy-admin-smoke", max_attempts=1,
+        backend_requested="agy", execution_backend="agy",
+        backend_model=settings.AGY_MODEL_TRANSLATE,
+    )
+    return {"status": "queued", "job_id": job_id, "deduped": not created,
+            "warning": "This explicit smoke test consumes AGY subscription capacity."}
 
 
 @router.delete("/users/{user_id}")

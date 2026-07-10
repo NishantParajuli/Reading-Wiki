@@ -58,6 +58,33 @@ DDL_QUERIES = [
     """,
     "CREATE INDEX IF NOT EXISTS users_username_idx ON users (username);",
 
+    # Admin-owned AGY entitlement.  Reader prefs are intentionally not part of
+    # this trust boundary: no row means API-only, and only admin routes mutate it.
+    """
+    CREATE TABLE IF NOT EXISTS user_ai_backend_policies (
+      user_id                 BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      agy_enabled             BOOLEAN NOT NULL DEFAULT FALSE,
+      default_backend         TEXT NOT NULL DEFAULT 'api'
+                              CHECK (default_backend IN ('api', 'agy')),
+      agy_workloads           TEXT[] NOT NULL DEFAULT '{}',
+      fallback_to_api         BOOLEAN NOT NULL DEFAULT FALSE,
+      max_concurrent_agy_jobs SMALLINT NOT NULL DEFAULT 1
+                              CHECK (max_concurrent_agy_jobs BETWEEN 1 AND 4),
+      policy_version          BIGINT NOT NULL DEFAULT 1,
+      notes                   TEXT,
+      granted_by              BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (agy_workloads <@ ARRAY[
+        'translate_batch', 'codex_extract', 'segment_import', 'ocr_pages',
+        'ask', 'profile_synthesis'
+      ]::TEXT[]),
+      CHECK (agy_enabled OR default_backend = 'api')
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS user_ai_backend_policies_enabled_idx "
+    "ON user_ai_backend_policies (agy_enabled) WHERE agy_enabled = TRUE;",
+
     # External identity links (Google/Discord). A user may link several providers.
     """
     CREATE TABLE IF NOT EXISTS oauth_accounts (
@@ -258,6 +285,10 @@ DDL_QUERIES = [
     "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS part_label TEXT;",
     # Multi-user: content version anchor for translation overlays (Phase 5).
     "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS content_version INT DEFAULT 1;",
+    # AGY staging/commit identity.  The run id keeps a crashed/retried batch from
+    # resetting or committing a chapter staged by another process.
+    "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS translation_run_id UUID;",
+    "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS translation_source_sha256 TEXT;",
 
     # ── 2. Chunks ──────────────────────────────────────────────────────────
     """
@@ -390,10 +421,16 @@ DDL_QUERIES = [
       novel_id        BIGINT  NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
       chapter         NUMERIC NOT NULL,
       running_summary TEXT,                         -- Story-so-far through this chapter
+      run_id          UUID,
+      model_label     TEXT,
+      source_sha256   TEXT,
       processed_at    TIMESTAMPTZ DEFAULT now(),
       PRIMARY KEY (novel_id, chapter)
     );
     """,
+    "ALTER TABLE extraction_state ADD COLUMN IF NOT EXISTS run_id UUID;",
+    "ALTER TABLE extraction_state ADD COLUMN IF NOT EXISTS model_label TEXT;",
+    "ALTER TABLE extraction_state ADD COLUMN IF NOT EXISTS source_sha256 TEXT;",
 
     # 10. Wiki cache
     """
@@ -670,7 +707,7 @@ DDL_QUERIES = [
     """
     CREATE TABLE IF NOT EXISTS jobs (
       id               BIGSERIAL PRIMARY KEY,
-      kind             TEXT NOT NULL,                                    -- scrape|codex_build|translate
+      kind             TEXT NOT NULL,                                    -- scrape|codex_build|translate|agy_smoke
       novel_id         BIGINT REFERENCES novels(id) ON DELETE CASCADE,
       user_id          BIGINT REFERENCES users(id) ON DELETE SET NULL,  -- requester (quota owner)
       status           TEXT NOT NULL DEFAULT 'queued',                  -- queued|running|done|failed|canceled
@@ -687,18 +724,106 @@ DDL_QUERIES = [
       max_attempts     INT DEFAULT 3,
       claim_token      TEXT,                                            -- opaque lease owner (see jobs/worker.py)
       claimed_at       TIMESTAMPTZ,
+      backend_requested TEXT NOT NULL DEFAULT 'auto'
+                       CHECK (backend_requested IN ('auto','api','agy')),
+      execution_backend TEXT NOT NULL DEFAULT 'api'
+                       CHECK (execution_backend IN ('api','agy')),
+      backend_policy_version BIGINT,
+      backend_fallback_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+      backend_fallback_from TEXT,
+      backend_model    TEXT,
+      not_before       TIMESTAMPTZ,
+      cancel_requested_at TIMESTAMPTZ,
       created_at       TIMESTAMPTZ DEFAULT now(),
       updated_at       TIMESTAMPTZ DEFAULT now()
     );
+    """,
+    # Existing-install backfills (CREATE TABLE IF NOT EXISTS does not add columns).
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS backend_requested TEXT NOT NULL DEFAULT 'auto';",
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS execution_backend TEXT NOT NULL DEFAULT 'api';",
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS backend_policy_version BIGINT;",
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS backend_fallback_allowed BOOLEAN NOT NULL DEFAULT FALSE;",
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS backend_fallback_from TEXT;",
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS backend_model TEXT;",
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS not_before TIMESTAMPTZ;",
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ;",
+    """
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='jobs_backend_requested_check') THEN
+        ALTER TABLE jobs ADD CONSTRAINT jobs_backend_requested_check
+        CHECK (backend_requested IN ('auto','api','agy'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='jobs_execution_backend_check') THEN
+        ALTER TABLE jobs ADD CONSTRAINT jobs_execution_backend_check
+        CHECK (execution_backend IN ('api','agy'));
+      END IF;
+    END $$;
     """,
     "CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status);",
     "CREATE INDEX IF NOT EXISTS jobs_kind_idx ON jobs (kind);",
     "CREATE INDEX IF NOT EXISTS jobs_novel_idx ON jobs (novel_id);",
     "CREATE INDEX IF NOT EXISTS jobs_user_idx ON jobs (user_id);",
     "CREATE INDEX IF NOT EXISTS jobs_created_idx ON jobs (created_at DESC);",
-    # Partial index backing active-job dedupe lookups by idempotency key.
-    "CREATE INDEX IF NOT EXISTS jobs_active_idem_idx ON jobs ((idempotency_key)) "
-    "WHERE idempotency_key IS NOT NULL AND status IN ('queued','running');",
+    "CREATE INDEX IF NOT EXISTS jobs_backend_queue_idx "
+    "ON jobs (execution_backend, status, not_before, updated_at);",
+    # Recreate rather than IF-NOT-EXISTS: the old predicate omitted waiting_provider,
+    # which would silently let duplicate work through while subscription capacity waits.
+    "DROP INDEX IF EXISTS jobs_active_idem_idx;",
+    "CREATE INDEX jobs_active_idem_idx ON jobs ((idempotency_key)) "
+    "WHERE idempotency_key IS NOT NULL AND status IN ('queued','running','waiting_provider');",
+
+    # One row per provider invocation. A job may have several attempts/chapters and
+    # disambiguation may be a child run of a codex extraction run.
+    """
+    CREATE TABLE IF NOT EXISTS ai_execution_runs (
+      id                 UUID PRIMARY KEY,
+      job_id             BIGINT REFERENCES jobs(id) ON DELETE CASCADE,
+      import_job_id      BIGINT REFERENCES import_jobs(id) ON DELETE CASCADE,
+      parent_run_id      UUID REFERENCES ai_execution_runs(id) ON DELETE SET NULL,
+      user_id            BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      novel_id           BIGINT REFERENCES novels(id) ON DELETE SET NULL,
+      workload           TEXT NOT NULL,
+      backend            TEXT NOT NULL CHECK (backend IN ('api','agy')),
+      model              TEXT,
+      runner_version     TEXT,
+      plugin_version     TEXT,
+      plugin_sha256      TEXT,
+      status             TEXT NOT NULL,
+      attempt            INT NOT NULL DEFAULT 1,
+      input_sha256       TEXT,
+      output_sha256      TEXT,
+      workspace_relpath  TEXT,
+      process_group_id   INT,
+      process_started_at TEXT,
+      exit_code          INT,
+      failure_code       TEXT,
+      error_summary      TEXT,
+      metrics            JSONB NOT NULL DEFAULT '{}',
+      started_at         TIMESTAMPTZ,
+      finished_at        TIMESTAMPTZ,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK ((job_id IS NOT NULL)::INT + (import_job_id IS NOT NULL)::INT = 1)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS ai_runs_job_idx ON ai_execution_runs (job_id, created_at);",
+    "CREATE INDEX IF NOT EXISTS ai_runs_status_idx ON ai_execution_runs (backend, status, created_at);",
+
+    # Small non-secret health record written by the dedicated host worker.
+    """
+    CREATE TABLE IF NOT EXISTS ai_worker_heartbeats (
+      worker_id       TEXT PRIMARY KEY,
+      backend         TEXT NOT NULL,
+      status          TEXT NOT NULL,
+      version         TEXT,
+      plugin_version  TEXT,
+      plugin_sha256   TEXT,
+      details         JSONB NOT NULL DEFAULT '{}',
+      heartbeat_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      started_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS ai_worker_heartbeats_backend_idx "
+    "ON ai_worker_heartbeats (backend, heartbeat_at DESC);",
 
     # ── 24. Audit events ───────────────────────────────────────────────────
     # Durable, append-only operational log: job lifecycle, quota reservations/refunds, and (room
@@ -723,6 +848,8 @@ DDL_QUERIES = [
 # Tables in dependency order (children first) — used by reset_db to drop cleanly.
 ALL_TABLES = [
     "audit_events",
+    "ai_worker_heartbeats",
+    "ai_execution_runs",
     "jobs",
     "tag_suggestions",
     "contributions",
@@ -755,6 +882,7 @@ ALL_TABLES = [
     "email_tokens",
     "sessions",
     "oauth_accounts",
+    "user_ai_backend_policies",
     "users",
     "app_migrations",
 ]

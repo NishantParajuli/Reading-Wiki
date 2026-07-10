@@ -1,6 +1,7 @@
 import json
 import logging
 import asyncpg
+from dataclasses import dataclass
 from novelwiki.config.settings import settings
 from novelwiki.db.queries import clear_caches
 from novelwiki.agent.llm_client import call_chat_completion, get_embedding
@@ -8,6 +9,107 @@ from novelwiki.agent.prompts import DISAMBIGUATION_SYSTEM, DISAMBIGUATION_USER
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EntityResolutionProposal:
+    existing_id: int | None
+    candidates: tuple[dict, ...] = ()
+
+    @property
+    def needs_disambiguation(self) -> bool:
+        return self.existing_id is None and bool(self.candidates)
+
+
+async def find_resolution_candidates(
+    novel_id: int,
+    mention: str,
+    entity_type: str,
+    chapter: float,
+    context: str,
+    conn: asyncpg.Connection,
+    description: str | None = None,
+) -> EntityResolutionProposal:
+    """Deterministic exact/fuzzy/semantic stages used before AGY gray-case batching.
+
+    This function never mutates the database and never invokes a generative model.
+    """
+    name = (mention or "").strip()
+    if not name:
+        raise ValueError("Mention name cannot be empty.")
+    row = await conn.fetchrow(
+        """
+        SELECT e.id FROM entities e
+        LEFT JOIN entity_aliases a ON e.id=a.entity_id AND a.revealed_at_chapter <= $2
+        WHERE (lower(e.canonical_name)=lower($1) OR lower(a.alias)=lower($1))
+          AND e.first_seen_chapter <= $2 AND e.novel_id=$3 LIMIT 1;
+        """,
+        name, chapter, novel_id,
+    )
+    if row:
+        return EntityResolutionProposal(int(row["id"]))
+    rows = await conn.fetch(
+        """
+        SELECT e.id, e.canonical_name,
+               GREATEST(similarity(e.canonical_name,$1), COALESCE(MAX(similarity(a.alias,$1)),0)) AS sim
+        FROM entities e
+        LEFT JOIN entity_aliases a ON e.id=a.entity_id AND a.revealed_at_chapter <= $2
+        WHERE e.first_seen_chapter <= $2 AND e.novel_id=$4
+        GROUP BY e.id, e.canonical_name
+        HAVING GREATEST(similarity(e.canonical_name,$1), COALESCE(MAX(similarity(a.alias,$1)),0)) > $3
+        ORDER BY sim DESC LIMIT 5;
+        """,
+        name, chapter, settings.FUZZY_MATCH_THRESHOLD, novel_id,
+    )
+    candidates = tuple({"id": int(r["id"]), "canonical_name": r["canonical_name"],
+                        "sim": float(r["sim"])} for r in rows)
+    if len(candidates) == 1 and candidates[0]["sim"] >= settings.FUZZY_AUTO_ACCEPT:
+        return EntityResolutionProposal(candidates[0]["id"])
+
+    desc = (description or "").strip()
+    embedding = await get_embedding(f"{name}: {desc}" if desc else name)
+    if embedding:
+        vector = "[" + ",".join(map(str, embedding)) + "]"
+        row = await conn.fetchrow(
+            """
+            SELECT id, 1-(name_embedding <=> $1::vector) AS sim FROM entities
+            WHERE first_seen_chapter <= $2 AND novel_id=$3 AND name_embedding IS NOT NULL
+            ORDER BY name_embedding <=> $1::vector LIMIT 1;
+            """,
+            vector, chapter, novel_id,
+        )
+        if row and row["sim"] is not None and float(row["sim"]) > settings.SEMANTIC_MATCH_THRESHOLD:
+            return EntityResolutionProposal(int(row["id"]))
+    return EntityResolutionProposal(None, candidates)
+
+
+async def create_entity(
+    novel_id: int,
+    mention: str,
+    entity_type: str,
+    chapter: float,
+    conn: asyncpg.Connection,
+    description: str | None = None,
+) -> int:
+    name = mention.strip()
+    desc = (description or "").strip() or None
+    embedding = await get_embedding(f"{name}: {desc}" if desc else name)
+    vector = "[" + ",".join(map(str, embedding)) + "]" if embedding else None
+    entity_id = await conn.fetchval(
+        """
+        INSERT INTO entities (novel_id,canonical_name,type,description,name_embedding,first_seen_chapter)
+        VALUES ($1,$2,$3,$4,$5::vector,$6) RETURNING id;
+        """,
+        novel_id, name, entity_type or "concept", desc, vector, chapter,
+    )
+    await conn.execute(
+        """
+        INSERT INTO entity_aliases (novel_id,entity_id,alias,revealed_at_chapter)
+        VALUES ($1,$2,$3,0.0) ON CONFLICT DO NOTHING;
+        """,
+        novel_id, entity_id, name,
+    )
+    return int(entity_id)
 
 async def resolve_entity(
     novel_id: int,

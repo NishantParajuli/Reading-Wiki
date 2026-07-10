@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NovelWiki disambiguation decisions",
+  "type": "object",
+  "required": ["schema_version", "decisions"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "decisions": {"type": "array", "items": {"type": "object", "required": ["case_ref", "decision", "confidence", "evidence"]}}
+  },
+  "additionalProperties": false
+}

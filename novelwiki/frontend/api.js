@@ -135,6 +135,12 @@
         return getJSON(`${API_BASE}/admin/novels${qs ? `?${qs}` : ""}`);
       },
       globalNovels() { return getJSON(`${API_BASE}/admin/global-novels`); },
+      aiPolicy(id) { return getJSON(`${API_BASE}/admin/users/${id}/ai-backend-policy`); },
+      saveAiPolicy(id, body) { return req("PUT", `${API_BASE}/admin/users/${id}/ai-backend-policy`, body); },
+      revokeAiPolicy(id) { return delJSON(`${API_BASE}/admin/users/${id}/ai-backend-policy`); },
+      agyHealth() { return getJSON(`${API_BASE}/admin/ai/agy/health`); },
+      agySmoke() { return postJSON(`${API_BASE}/admin/ai/agy/smoke-test`, {}); },
+      retryWaitingAgy() { return postJSON(`${API_BASE}/admin/ai/agy/retry-waiting`, {}); },
     },
 
     // ── Library / novels ──

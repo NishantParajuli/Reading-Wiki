@@ -1,0 +1,25 @@
+{
+  "novelwiki-tool-gate": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .agents/plugins/novelwiki-ai/hooks/tool_gate.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "novelwiki-stop-validator": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 .agents/plugins/novelwiki-ai/hooks/validate_stop.py",
+        "timeout": 10
+      }
+    ]
+  }
+}

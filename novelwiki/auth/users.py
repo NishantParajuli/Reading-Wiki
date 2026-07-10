@@ -53,6 +53,15 @@ def self_user(user: dict) -> dict:
     }
 
 
+async def self_user_with_capabilities(user: dict) -> dict:
+    """Owner projection plus server-owned backend entitlement and worker health."""
+    from novelwiki.ai_backend.policy import capability_for_user
+
+    result = self_user(user)
+    result["ai_backends"] = await capability_for_user(int(user["id"]))
+    return result
+
+
 def public_user(user: dict) -> dict:
     """Projection visible to other users on a profile page (no email/role/quota)."""
     return {

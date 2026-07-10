@@ -111,13 +111,13 @@ function CostConfirm({ novelId, action, params, title, actionLabel = "Confirm", 
 /* ── Activity feed rendering (shared by home + job center) ──────────────── */
 const ACT_KIND_LABEL = {
   scrape: "Scrape", codex_build: "Codex build", translate: "Translation",
-  import: "Import", tts: "Narration",
+  agy_smoke: "AGY smoke", import: "Import", tts: "Narration",
 };
 const ACT_STATUS_CHIP = {
   queued: "chip", running: "chip job-run", generating: "chip job-run",
   parsing: "chip job-run", committing: "chip job-run", receiving: "chip job-run",
   ocr_pending: "chip job-run", done: "chip job-ok", committed: "chip job-ok",
-  failed: "chip job-err", canceled: "chip",
+  waiting_provider: "chip job-warn", failed: "chip job-err", canceled: "chip",
   awaiting_review: "chip job-warn", awaiting_ocr_confirm: "chip job-warn", ocr_paused: "chip job-warn",
 };
 
@@ -144,6 +144,8 @@ function ActivityRow({ job, onCancel, onOpenNovel, busyId }) {
   const rowKey = `${job.source}:${job.id}`;
   return h("div", { className: "toc-row activity-row", style: { cursor: "default", alignItems: "center" } },
     h("span", { className: "chip", style: { minWidth: 92 } }, kindLabel),
+    job.execution_backend && h("span", { className: job.execution_backend === "agy" ? "chip job-run" : "chip" },
+      job.backend_fallback_from ? `${job.backend_fallback_from.toUpperCase()}→${job.execution_backend.toUpperCase()}` : job.execution_backend.toUpperCase()),
     h("span", { className: ACT_STATUS_CHIP[job.status] || "chip" }, job.status),
     h("span", { className: "toc-title", style: { flex: 1 } },
       activityProgress(job) || (job.filename ? job.filename : "")),

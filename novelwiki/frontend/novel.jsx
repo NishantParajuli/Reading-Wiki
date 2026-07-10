@@ -633,9 +633,9 @@ function TagSuggestionsInbox({ novelId, reloadNovel }) {
 /* Operational surface over the durable scrape/codex/translation jobs for this novel. Shows the
    active + recent jobs (status, stage, live progress) and lets the owner cancel one in flight.
    Polls while anything is active; hidden entirely when there's no job history. */
-const JOB_KIND_LABEL = { scrape: "Scrape", codex_build: "Codex build", translate: "Translation" };
+const JOB_KIND_LABEL = { scrape: "Scrape", codex_build: "Codex build", translate: "Translation", agy_smoke: "AGY smoke" };
 const JOB_STATUS_CHIP = { queued: "chip", running: "chip job-run", done: "chip job-ok",
-                          failed: "chip job-err", canceled: "chip" };
+                          waiting_provider: "chip job-warn", failed: "chip job-err", canceled: "chip" };
 
 function jobProgressText(job) {
   const p = job.progress || {};
@@ -669,7 +669,7 @@ function JobCenter({ novelId }) {
     const tick = async () => {
       const list = await load();
       if (!alive) return;
-      const active = list.some(j => j.status === "queued" || j.status === "running");
+      const active = list.some(j => j.status === "queued" || j.status === "running" || j.status === "waiting_provider");
       timerRef.current = setTimeout(tick, active ? 3000 : 15000);
     };
     tick();
@@ -689,11 +689,14 @@ function JobCenter({ novelId }) {
     h("p", { className: "section-eyebrow", style: { marginTop: 28 } }, "Background jobs"),
     h("div", { className: "card", style: { padding: 12 } },
       jobs.map(job => {
-        const active = job.status === "queued" || job.status === "running";
+        const active = job.status === "queued" || job.status === "running" || job.status === "waiting_provider";
         return h("div", { key: job.id, className: "toc-row", style: { cursor: "default", alignItems: "center" } },
           h("span", { className: "chip", style: { minWidth: 92 } }, JOB_KIND_LABEL[job.kind] || job.kind),
+          h("span", { className: job.execution_backend === "agy" ? "chip job-run" : "chip" },
+            job.backend_fallback_from ? `${job.backend_fallback_from.toUpperCase()}→${(job.execution_backend || "api").toUpperCase()}` : (job.execution_backend || "api").toUpperCase()),
           h("span", { className: JOB_STATUS_CHIP[job.status] || "chip" }, job.status),
           h("span", { className: "toc-title", style: { flex: 1 } }, jobProgressText(job)),
+          job.backend_model ? h("span", { className: "muted", style: { fontSize: 11 }, title: `Plugin ${job.plugin_version || "—"}` }, job.backend_model) : null,
           job.attempts > 1 && job.status !== "done"
             ? h("span", { className: "muted", style: { fontSize: 12 } }, `attempt ${job.attempts}/${job.max_attempts}`) : null,
           job.error && (job.status === "failed")
@@ -915,6 +918,18 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
   const [audioCoverage, setAudioCoverage] = useState(null);   // Current shared narration coverage across all voices
   const [ttsVoices, setTtsVoices] = useState([]);
   const [pendingCost, setPendingCost] = useState(null);   // {action, params, title, actionLabel, run}
+  const agyCapability = user && user.ai_backends && user.ai_backends.agy;
+  const canAgyTranslate = !!(agyCapability && agyCapability.enabled && (agyCapability.workloads || []).includes("translate_batch"));
+  const canAgyCodex = !!(agyCapability && agyCapability.enabled && (agyCapability.workloads || []).includes("codex_extract"));
+  const [translateBackend, setTranslateBackend] = useState("auto");
+  const [codexBackend, setCodexBackend] = useState("auto");
+
+  useEffect(() => {
+    const preferred = agyCapability && agyCapability.default_backend === "agy" ? "agy" : "api";
+    setTranslateBackend(canAgyTranslate ? preferred : "auto");
+    setCodexBackend(canAgyCodex ? preferred : "auto");
+  }, [user && user.id, agyCapability && agyCapability.default_backend,
+      canAgyTranslate, canAgyCodex]);
 
   const loadToc = useCallback(() => {
     if (novelId == null) return;
@@ -960,13 +975,15 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
 
   async function runBuildCodex() {
     setMsg("Codex build started in the background (chunk → embed → extract)…");
-    try { await window.API.codexBuild(novelId, {}); reloadNovel(); }
+    try { const r = await window.API.codexBuild(novelId, { ai_backend: codexBackend });
+      setMsg(`Codex build queued on ${(r.execution_backend || "api").toUpperCase()}${r.model ? ` · ${r.model}` : ""}.`); reloadNovel(); }
     catch (e) { setMsg("Codex build failed: " + (e.message || "error")); }
   }
 
   async function runTranslate() {
     setMsg("Translation started in the background (glossary-consistent)…");
-    try { await window.API.translate(novelId, {}); }
+    try { const r = await window.API.translate(novelId, { ai_backend: translateBackend });
+      setMsg(`Translation queued on ${(r.execution_backend || "api").toUpperCase()}${r.model ? ` · ${r.model}` : ""}.`); }
     catch (e) { setMsg("Translate failed: " + (e.message || "error")); }
   }
 
@@ -1085,6 +1102,11 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
               React.createElement(Icon, { name: "refresh", size: 15 }), "Refresh TOC")
           ),
           hasRaw && React.createElement("div", { style: { marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 } },
+            canAgyTranslate && React.createElement("label", { className: "field", style: { maxWidth: 300, marginBottom: 10 } },
+              React.createElement("span", null, "AI backend"),
+              React.createElement("select", { value: translateBackend, onChange: e => setTranslateBackend(e.target.value) },
+                React.createElement("option", { value: "agy" }, "Antigravity — local subscription queue"),
+                React.createElement("option", { value: "api" }, "API — provider usage"))),
             React.createElement("div", { className: "row", style: { gap: 10, flexWrap: "wrap" } },
               React.createElement("button", { className: "btn btn-ghost", onClick: doTranslate },
                 React.createElement(Icon, { name: "refresh", size: 15 }), "Translate raw chapters"),
@@ -1094,6 +1116,11 @@ function NovelDetail({ novelId, novel, reloadNovel, openReader, nav, openLibrary
               "Reading already translates on demand; this pre-translates the whole raw source.")
           ),
           React.createElement("div", { style: { marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 } },
+            canAgyCodex && React.createElement("label", { className: "field", style: { maxWidth: 300, marginBottom: 10 } },
+              React.createElement("span", null, "AI backend"),
+              React.createElement("select", { value: codexBackend, onChange: e => setCodexBackend(e.target.value) },
+                React.createElement("option", { value: "agy" }, "Antigravity — local subscription queue"),
+                React.createElement("option", { value: "api" }, "API — provider usage"))),
             React.createElement("button", { className: "btn btn-ghost", onClick: buildCodex },
               React.createElement(Icon, { name: "brain", size: 15 }), novel.codex_enabled ? "Rebuild codex" : "Build codex"),
             React.createElement("p", { className: "muted", style: { fontSize: 12.5, marginTop: 8, marginBottom: 0 } },

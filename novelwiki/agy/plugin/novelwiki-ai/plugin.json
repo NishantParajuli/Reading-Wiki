@@ -1,0 +1,5 @@
+{
+  "name": "novelwiki-ai",
+  "description": "Strict file-contract translation and spoiler-safe codex extraction for isolated NovelWiki jobs.",
+  "disabled": false
+}

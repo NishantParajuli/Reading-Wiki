@@ -29,7 +29,7 @@ from novelwiki.auth.sessions import (
 )
 from novelwiki.auth.tokens import new_token, hash_token, sign, unsign, stamped
 from novelwiki.auth.users import (
-    self_user, valid_username, normalize_username, unique_username,
+    self_user_with_capabilities, valid_username, normalize_username, unique_username,
 )
 
 logger = logging.getLogger(__name__)
@@ -202,7 +202,7 @@ async def register(payload: RegisterPayload, request: Request, response: Respons
         session = await create_session(conn, row["id"], request.headers.get("user-agent"))
     await send_verification_email(email, _verify_link(token))
     set_session_cookie(response, session)
-    return self_user(dict(row))
+    return await self_user_with_capabilities(dict(row))
 
 
 @router.post("/login")
@@ -231,7 +231,7 @@ async def login(payload: LoginPayload, request: Request, response: Response):
         await rate_limit.clear(conn, account_key)
         session = await create_session(conn, row["id"], request.headers.get("user-agent"))
     set_session_cookie(response, session)
-    return self_user(dict(row))
+    return await self_user_with_capabilities(dict(row))
 
 
 @router.post("/logout")
@@ -247,7 +247,7 @@ async def logout(request: Request, response: Response):
 
 @router.get("/me")
 async def me(user: dict = Depends(current_user)):
-    return self_user(user)
+    return await self_user_with_capabilities(user)
 
 
 @router.get("/links")

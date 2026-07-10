@@ -11,6 +11,7 @@ const ADMIN_TABS = [
   { id: "usage", label: "Usage & cost", icon: "database" },
   { id: "moderation", label: "Moderation", icon: "shield" },
   { id: "jobs", label: "Global jobs", icon: "spider" },
+  { id: "agy", label: "Antigravity", icon: "sparkles" },
 ];
 
 function blankToNull(v) {
@@ -31,6 +32,15 @@ function UserRow({ u, me, onChanged }) {
     tts_chapters: u.quota_overrides.tts_chapters ?? "",
   });
   const [confirmDel, setConfirmDel] = useState(false);
+  const initialPolicy = u.ai_backend_policy || {};
+  const [ai, setAi] = useState({
+    agy_enabled: !!initialPolicy.agy_enabled,
+    default_backend: initialPolicy.default_backend || "api",
+    agy_workloads: initialPolicy.agy_workloads || [],
+    fallback_to_api: !!initialPolicy.fallback_to_api,
+    max_concurrent_agy_jobs: initialPolicy.max_concurrent_agy_jobs || 1,
+    notes: initialPolicy.notes || "",
+  });
   const isSelf = me && u.id === me.id;
 
   const patch = async (body) => {
@@ -49,6 +59,20 @@ function UserRow({ u, me, onChanged }) {
     try { await window.API.admin.deleteUser(u.id); setConfirmDel(false); onChanged(); }
     catch (e) { alert(e.message || "Delete failed."); setBusy(false); }
   };
+  const saveAi = async () => {
+    setBusy(true);
+    try { await window.API.admin.saveAiPolicy(u.id, ai); onChanged(); }
+    catch (e) { alert(e.message || "AI backend update failed."); setBusy(false); }
+  };
+  const revokeAi = async () => {
+    setBusy(true);
+    try { await window.API.admin.revokeAiPolicy(u.id); onChanged(); }
+    catch (e) { alert(e.message || "AI backend revoke failed."); setBusy(false); }
+  };
+  const toggleWorkload = key => setAi(s => ({ ...s,
+    agy_workloads: s.agy_workloads.includes(key)
+      ? s.agy_workloads.filter(x => x !== key) : [...s.agy_workloads, key]
+  }));
 
   const statusClass = u.status === "active" ? "ok" : u.status === "suspended" ? "warn" : "err";
 
@@ -58,7 +82,7 @@ function UserRow({ u, me, onChanged }) {
         <div className="admin-user-id">
           <div className="usermenu-avatar sm">{(u.display_name || u.username || "?").charAt(0).toUpperCase()}</div>
           <div className="grow" style={{ minWidth: 0 }}>
-            <div className="admin-user-name">{u.display_name || u.username} {u.role === "admin" && <span className="chip">admin</span>}</div>
+            <div className="admin-user-name">{u.display_name || u.username} {u.role === "admin" && <span className="chip">admin</span>} {initialPolicy.agy_enabled && <span className="chip job-run">AGY</span>}</div>
             <div className="muted admin-user-email">@{u.username} · {u.email}{u.email_verified ? "" : " · unverified"}</div>
           </div>
         </div>
@@ -90,6 +114,33 @@ function UserRow({ u, me, onChanged }) {
             </label>
           ))}
           <button className="btn btn-primary sm" disabled={busy} onClick={saveQuotas}>Save limits</button>
+          <div style={{ flexBasis: "100%", borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 12 }}>
+            <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+              <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={ai.agy_enabled}
+                onChange={e => setAi(s => ({ ...s, agy_enabled: e.target.checked,
+                  default_backend: e.target.checked ? s.default_backend : "api" }))} /> AGY access</label>
+              <label className="field"><span>Default backend</span><select value={ai.default_backend}
+                disabled={!ai.agy_enabled} onChange={e => setAi(s => ({ ...s, default_backend: e.target.value }))}>
+                <option value="api">API</option><option value="agy">Antigravity</option>
+              </select></label>
+              <label className="field"><span>Concurrent jobs</span><input type="number" min="1" max="4"
+                value={ai.max_concurrent_agy_jobs} onChange={e => setAi(s => ({ ...s, max_concurrent_agy_jobs: Number(e.target.value) }))} /></label>
+              <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={ai.fallback_to_api}
+                onChange={e => setAi(s => ({ ...s, fallback_to_api: e.target.checked }))} /> Allow paid API fallback</label>
+            </div>
+            <div className="row" style={{ gap: 12, marginTop: 8, flexWrap: "wrap" }}>
+              {[['translate_batch','Batch translation'],['codex_extract','Codex extraction']].map(([key,label]) =>
+                <label key={key} className="row" style={{ gap: 6 }}><input type="checkbox" disabled={!ai.agy_enabled}
+                  checked={ai.agy_workloads.includes(key)} onChange={() => toggleWorkload(key)} /> {label}</label>)}
+            </div>
+            <label className="field" style={{ marginTop: 8 }}><span>Admin notes</span><input value={ai.notes}
+              onChange={e => setAi(s => ({ ...s, notes: e.target.value }))} placeholder="owner pilot" /></label>
+            <div className="row" style={{ gap: 8, marginTop: 8 }}>
+              <button className="btn btn-primary sm" disabled={busy} onClick={saveAi}>Save AI access</button>
+              {initialPolicy.policy_version && <button className="btn btn-ghost sm" disabled={busy} onClick={revokeAi}>Revoke AGY</button>}
+              <span className="muted" style={{ fontSize: 12 }}>{initialPolicy.active_jobs || 0} active · policy v{initialPolicy.policy_version || "—"}</span>
+            </div>
+          </div>
         </div>
       )}
       {confirmDel && (
@@ -298,6 +349,37 @@ function GlobalJobsTab({ openNovel }) {
   );
 }
 
+function AgyHealthTab() {
+  const [health, setHealth] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => window.API.admin.agyHealth().then(setHealth).catch(() => setHealth(false)), []);
+  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, [load]);
+  if (health == null) return <Loading label="Checking Antigravity worker…" />;
+  if (health === false) return <EmptyState icon="sparkles" title="Couldn't load AGY health" />;
+  const q = health.queue || {};
+  const act = async fn => { setBusy(true); try { await fn(); await load(); } catch (e) { alert(e.message || "AGY action failed."); } finally { setBusy(false); } };
+  return <div>
+    <div className="admin-metric-grid">
+      <div className="card admin-metric"><div className="admin-metric-num">{health.available ? "Ready" : "Offline"}</div><div className="muted">worker availability</div></div>
+      <div className="card admin-metric"><div className="admin-metric-num">{q.queued || 0}</div><div className="muted">queued</div></div>
+      <div className="card admin-metric"><div className="admin-metric-num">{q.running || 0}</div><div className="muted">running</div></div>
+      <div className="card admin-metric"><div className="admin-metric-num">{q.waiting_provider || 0}</div><div className="muted">waiting provider</div></div>
+    </div>
+    <div className="card" style={{ padding: 16, marginTop: 14 }}>
+      <div><b>Global switch:</b> {health.enabled ? "enabled" : "disabled"}</div>
+      <div><b>Worker:</b> {health.worker ? `${health.worker.status} · ${health.worker.version || "unknown version"} · plugin ${health.worker.plugin_version || "—"}` : "no heartbeat"}</div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Last success: {health.last_success_at || "none"} · oldest queued: {q.oldest_at || "none"}</div>
+      <div className="row" style={{ gap: 8, marginTop: 14 }}>
+        <button className="btn btn-ghost" disabled={busy || !health.enabled} onClick={() => act(window.API.admin.agySmoke)}>Run consuming smoke test</button>
+        <button className="btn btn-ghost" disabled={busy || !(q.waiting_provider > 0)} onClick={() => act(window.API.admin.retryWaitingAgy)}>Retry waiting jobs</button>
+      </div>
+      {health.recent_failures && health.recent_failures.length > 0 && <div className="muted" style={{ marginTop: 12, fontSize: 12 }}>
+        Recent failures: {health.recent_failures.map(x => `${x.code} (${x.count})`).join(", ")}
+      </div>}
+    </div>
+  </div>;
+}
+
 function Admin({ openLibrary, openNovel, currentUser }) {
   const [tab, setTab] = useState("users");
   if (!currentUser || currentUser.role !== "admin") {
@@ -328,6 +410,7 @@ function Admin({ openLibrary, openNovel, currentUser }) {
         {tab === "usage" && <UsageTab />}
         {tab === "moderation" && <ModerationTab openNovel={openNovel} />}
         {tab === "jobs" && <GlobalJobsTab openNovel={openNovel} />}
+        {tab === "agy" && <AgyHealthTab />}
       </div>
     </div>
   );

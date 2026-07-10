@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NovelWiki codex extraction",
+  "type": "object",
+  "required": ["schema_version", "chapter", "source_sha256", "mentions", "facts", "relationships", "events", "identity_reveals", "new_aliases", "warnings"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "chapter": {"type": "number"},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "mentions": {"type": "array"}, "facts": {"type": "array"},
+    "relationships": {"type": "array"}, "events": {"type": "array"},
+    "identity_reveals": {"type": "array"}, "new_aliases": {"type": "array"},
+    "warnings": {"type": "array"}
+  },
+  "additionalProperties": false
+}

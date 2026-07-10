@@ -2,11 +2,13 @@ import json
 import logging
 import asyncio
 import asyncpg
+import hashlib
+import uuid
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool, close_db_pool
 from novelwiki.db.queries import clear_caches
 from novelwiki.agent.llm_client import call_chat_completion
-from novelwiki.ingest.link import resolve_entity
+from novelwiki.ingest.link import create_entity, resolve_entity
 from novelwiki.agent.prompts import (
     EXTRACTION_SYSTEM,
     EXTRACTION_USER,
@@ -38,6 +40,10 @@ Output the updated running summary.
 
 # Top-level keys of the extraction schema (see prompts.EXTRACTION_SYSTEM).
 EXTRACTION_KEYS = ("mentions", "facts", "relationships", "events", "identity_reveals", "new_aliases")
+
+
+def chapter_source_sha256(content: str | None) -> str:
+    return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
 
 
 def _parse_json_object(raw: str):
@@ -154,6 +160,201 @@ async def _load_chapter_chunks(novel_id: int, chapter_number: float, conn: async
     return marked, valid, all_ids
 
 
+async def _clear_extraction_chapter(conn: asyncpg.Connection, novel_id: int, chapter: float) -> None:
+    """Remove chapter-scoped material before a controlled force rebuild."""
+    await conn.execute("DELETE FROM entity_facts WHERE novel_id=$1 AND chapter=$2;", novel_id, chapter)
+    await conn.execute("DELETE FROM relationships WHERE novel_id=$1 AND chapter=$2;", novel_id, chapter)
+    await conn.execute("DELETE FROM events WHERE novel_id=$1 AND chapter=$2;", novel_id, chapter)
+    await conn.execute("DELETE FROM entity_descriptions WHERE novel_id=$1 AND chapter=$2;", novel_id, chapter)
+    await conn.execute("DELETE FROM identity_links WHERE novel_id=$1 AND revealed_at_chapter=$2;", novel_id, chapter)
+    await conn.execute(
+        "DELETE FROM entity_aliases WHERE novel_id=$1 AND revealed_at_chapter=$2 AND revealed_at_chapter<>0;",
+        novel_id, chapter,
+    )
+    # Later running summaries depend on this chapter. Explicitly remove stale
+    # checkpoints; chronological rebuild recreates them as it advances.
+    await conn.execute("DELETE FROM extraction_state WHERE novel_id=$1 AND chapter >= $2;", novel_id, chapter)
+
+
+async def commit_extraction_proposal(
+    novel_id: int,
+    chapter_number: float,
+    data: dict,
+    running_summary: str,
+    *,
+    expected_source_hash: str,
+    resolved_refs: dict[str, int | None],
+    roster_refs: dict[str, int] | None = None,
+    entity_resolver=None,
+    run_id: uuid.UUID | None = None,
+    model_label: str | None = None,
+    force: bool = False,
+) -> dict:
+    """Transactionally commit a validated provider proposal.
+
+    The provider has no DB/commit tool. ``resolved_refs`` comes from deterministic
+    matching plus a separately validated gray-case decision batch; arbitrary IDs
+    in model output are never accepted.
+    """
+    normalized = _coerce_extraction(data)
+    if not running_summary or not running_summary.strip():
+        raise ValueError("running summary must not be empty")
+    roster_refs = dict(roster_refs or {})
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            chapter = await conn.fetchrow(
+                "SELECT title,content FROM chapters WHERE novel_id=$1 AND number=$2 FOR UPDATE;",
+                novel_id, chapter_number,
+            )
+            if not chapter or chapter_source_sha256(chapter["content"]) != expected_source_hash:
+                raise RuntimeError("source_changed")
+            existing = await conn.fetchrow(
+                "SELECT run_id,source_sha256 FROM extraction_state "
+                "WHERE novel_id=$1 AND chapter=$2 FOR UPDATE;", novel_id, chapter_number,
+            )
+            if existing and run_id is not None and existing["run_id"] == run_id \
+                    and existing["source_sha256"] == expected_source_hash:
+                return {"status": "done", "idempotent": True}
+            if existing and not force:
+                raise RuntimeError("chapter extraction was committed by another worker")
+            if force:
+                await _clear_extraction_chapter(conn, novel_id, chapter_number)
+            await clear_caches(conn, novel_id=novel_id, chapter_number=chapter_number)
+            _marked, valid_chunk_ids, all_chunk_ids = await _load_chapter_chunks(
+                novel_id, chapter_number, conn,
+            )
+            local: dict[str, int] = dict(roster_refs)
+
+            for mention in normalized["mentions"]:
+                ref = str(mention.get("entity_ref") or "").strip()
+                surface = str(mention.get("surface_form") or ref).strip()
+                if not ref or not surface or ref in roster_refs:
+                    continue
+                if ref in resolved_refs:
+                    entity = resolved_refs[ref]
+                elif entity_resolver is not None:
+                    position = (chapter["content"] or "").lower().find(surface.lower())
+                    context = ((chapter["content"] or "")[max(0, position-100):position+len(surface)+100]
+                               if position >= 0 else surface)
+                    entity = await entity_resolver(
+                        novel_id=novel_id, mention=ref or surface,
+                        entity_type=mention.get("type") or "concept", chapter=chapter_number,
+                        context=context, conn=conn, description=mention.get("description"),
+                    )
+                else:
+                    raise ValueError(f"unresolved entity reference: {ref}")
+                if entity is None:
+                    entity = await create_entity(
+                        novel_id, surface, mention.get("type") or "concept", chapter_number,
+                        conn, description=mention.get("description"),
+                    )
+                local[ref] = int(entity)
+                description = (mention.get("description") or "").strip()
+                if description:
+                    await conn.execute(
+                        """
+                        INSERT INTO entity_descriptions (novel_id,entity_id,chapter,description)
+                        VALUES ($1,$2,$3,$4) ON CONFLICT (entity_id,chapter) DO UPDATE
+                        SET description=EXCLUDED.description;
+                        """,
+                        novel_id, entity, chapter_number, description,
+                    )
+
+            async def ensure_entity_id(ref, fallback_type="concept") -> int:
+                key = str(ref or "").strip()
+                if key in local:
+                    return local[key]
+                if entity_resolver is None:
+                    raise ValueError(f"proposal references unknown entity ref: {key}")
+                entity = await entity_resolver(
+                    novel_id=novel_id, mention=key, entity_type=fallback_type,
+                    chapter=chapter_number, context=key, conn=conn,
+                )
+                local[key] = int(entity)
+                return int(entity)
+
+            for fact in normalized["facts"]:
+                if not fact.get("entity_ref") or not fact.get("content"):
+                    continue
+                await conn.execute(
+                    """
+                    INSERT INTO entity_facts (novel_id,entity_id,chapter,fact_type,content,source_chunk_ids)
+                    VALUES ($1,$2,$3,$4,$5,$6);
+                    """,
+                    novel_id, await ensure_entity_id(fact["entity_ref"]), chapter_number,
+                    fact.get("fact_type"), fact["content"],
+                    _clean_chunk_ids(fact.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids),
+                )
+            for rel in normalized["relationships"]:
+                if not rel.get("source_ref") or not rel.get("target_ref"):
+                    continue
+                await conn.execute(
+                    """
+                    INSERT INTO relationships
+                      (novel_id,source_id,target_id,chapter,relation_type,directed,content,source_chunk_ids)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8);
+                    """,
+                    novel_id, await ensure_entity_id(rel["source_ref"], "character"),
+                    await ensure_entity_id(rel["target_ref"], "character"),
+                    chapter_number, rel.get("relation_type"), bool(rel.get("directed", True)),
+                    rel.get("content"),
+                    _clean_chunk_ids(rel.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids),
+                )
+            for event in normalized["events"]:
+                participants = [await ensure_entity_id(ref, "character") for ref in (event.get("participant_refs") or []) if ref]
+                location = await ensure_entity_id(event["location_ref"], "location") if event.get("location_ref") else None
+                await conn.execute(
+                    """
+                    INSERT INTO events
+                      (novel_id,chapter,description,participants,location_id,significance,source_chunk_ids)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7);
+                    """,
+                    novel_id, chapter_number, event.get("description"), participants, location,
+                    event.get("significance"),
+                    _clean_chunk_ids(event.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids),
+                )
+            for reveal in normalized["identity_reveals"]:
+                if not reveal.get("persona_ref") or not reveal.get("true_entity_ref"):
+                    continue
+                persona = await ensure_entity_id(reveal["persona_ref"], "character")
+                true = await ensure_entity_id(reveal["true_entity_ref"], "character")
+                if persona != true:
+                    await conn.execute(
+                        """
+                        INSERT INTO identity_links (novel_id,entity_a,entity_b,revealed_at_chapter,note)
+                        VALUES ($1,$2,$3,$4,$5);
+                        """,
+                        novel_id, persona, true, chapter_number, reveal.get("note"),
+                    )
+            for alias in normalized["new_aliases"]:
+                if not alias.get("entity_ref") or not alias.get("alias"):
+                    continue
+                reveal_at = chapter_number if alias.get("is_reveal") else 0.0
+                await conn.execute(
+                    """
+                    INSERT INTO entity_aliases (novel_id,entity_id,alias,revealed_at_chapter)
+                    VALUES ($1,$2,$3,$4) ON CONFLICT (entity_id,alias) DO UPDATE
+                    SET revealed_at_chapter=LEAST(entity_aliases.revealed_at_chapter,EXCLUDED.revealed_at_chapter);
+                    """,
+                    novel_id, await ensure_entity_id(alias["entity_ref"]), alias["alias"], reveal_at,
+                )
+            await conn.execute(
+                """
+                INSERT INTO extraction_state
+                  (novel_id,chapter,running_summary,run_id,model_label,source_sha256,processed_at)
+                VALUES ($1,$2,$3,$4,$5,$6,now())
+                ON CONFLICT (novel_id,chapter) DO UPDATE SET
+                  running_summary=EXCLUDED.running_summary, run_id=EXCLUDED.run_id,
+                  model_label=EXCLUDED.model_label, source_sha256=EXCLUDED.source_sha256,
+                  processed_at=now();
+                """,
+                novel_id, chapter_number, running_summary.strip(), run_id,
+                model_label, expected_source_hash,
+            )
+    return {"status": "done", "idempotent": False}
+
+
 async def extract_knowledge_for_chapter(novel_id: int, chapter_number: float, force: bool = False):
     """
     Extracts structured knowledge from chapter_number in a forward-only transaction.
@@ -255,176 +456,36 @@ async def extract_knowledge_for_chapter(novel_id: int, chapter_number: float, fo
                     f"proceeding with first-pass extraction: {ve}"
                 )
 
-        # 3. Resolve & Link mentions to entities (Inside a transaction)
-        async with conn.transaction():
-            local_ref_to_id = {}
-
-            # Map mentions first (with descriptions for new-entity creation)
-            for mention in data.get("mentions", []):
-                ref = mention.get("entity_ref")
-                surface = mention.get("surface_form") or ref
-                etype = mention.get("type")
-                mdesc = mention.get("description")
-
-                # Locate surface form context snippet for disambiguation
-                context_snippet = ""
-                if surface:
-                    context_idx = chapter["content"].lower().find(surface.lower())
-                    if context_idx != -1:
-                        start = max(0, context_idx - 100)
-                        end = min(len(chapter["content"]), context_idx + len(surface) + 100)
-                        context_snippet = chapter["content"][start:end]
-
-                entity_id = await resolve_entity(
-                    novel_id=novel_id,
-                    mention=ref or surface,
-                    entity_type=etype,
-                    chapter=chapter_number,
-                    context=context_snippet,
-                    conn=conn,
-                    description=mdesc,
-                )
-                if ref:
-                    local_ref_to_id[ref] = entity_id
-
-                # Record the chapter-local description so the roster/UI can show the
-                # freshest spoiler-safe blurb (not just the frozen first-seen one).
-                if mdesc and mdesc.strip():
-                    await conn.execute(
-                        """
-                        INSERT INTO entity_descriptions (novel_id, entity_id, chapter, description)
-                        VALUES ($1, $2, $3, $4)
-                        ON CONFLICT (entity_id, chapter) DO UPDATE SET description = EXCLUDED.description;
-                        """,
-                        novel_id, entity_id, chapter_number, mdesc.strip()
-                    )
-
-            async def get_entity_id(ref_name: str, fallback_type: str = "concept") -> int:
-                if ref_name in local_ref_to_id:
-                    return local_ref_to_id[ref_name]
-                logger.info(f"Ref '{ref_name}' was not explicitly mentioned. Resolving dynamically...")
-                entity_id = await resolve_entity(novel_id, ref_name, fallback_type, chapter_number, ref_name, conn)
-                local_ref_to_id[ref_name] = entity_id
-                return entity_id
-
-            # 4. Insert entity facts (per-item provenance)
-            for fact in data.get("facts", []):
-                ref = fact.get("entity_ref")
-                if not ref:
-                    continue
-                fid = await get_entity_id(ref)
-                src_ids = _clean_chunk_ids(fact.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids)
-                await conn.execute(
-                    """
-                    INSERT INTO entity_facts (novel_id, entity_id, chapter, fact_type, content, source_chunk_ids)
-                    VALUES ($1, $2, $3, $4, $5, $6);
-                    """,
-                    novel_id, fid, chapter_number, fact.get("fact_type"), fact.get("content"), src_ids
-                )
-
-            # 5. Insert relationships (per-item provenance)
-            for rel in data.get("relationships", []):
-                if not rel.get("source_ref") or not rel.get("target_ref"):
-                    continue
-                src_id = await get_entity_id(rel.get("source_ref"), "character")
-                tgt_id = await get_entity_id(rel.get("target_ref"), "character")
-                src_ids = _clean_chunk_ids(rel.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids)
-                await conn.execute(
-                    """
-                    INSERT INTO relationships (novel_id, source_id, target_id, chapter, relation_type, directed, content, source_chunk_ids)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
-                    """,
-                    novel_id, src_id, tgt_id, chapter_number, rel.get("relation_type"),
-                    rel.get("directed", True), rel.get("content"), src_ids
-                )
-
-            # 6. Insert events (per-item provenance)
-            for ev in data.get("events", []):
-                participants = []
-                for p in ev.get("participant_refs", []):
-                    if p:
-                        participants.append(await get_entity_id(p, "character"))
-                loc_ref = ev.get("location_ref")
-                loc_id = await get_entity_id(loc_ref, "location") if loc_ref else None
-                src_ids = _clean_chunk_ids(ev.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids)
-                await conn.execute(
-                    """
-                    INSERT INTO events (novel_id, chapter, description, participants, location_id, significance, source_chunk_ids)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7);
-                    """,
-                    novel_id, chapter_number, ev.get("description"), participants, loc_id,
-                    ev.get("significance"), src_ids
-                )
-
-            # 7. Insert identity_links (masked personas)
-            for reveal in data.get("identity_reveals", []):
-                if not reveal.get("persona_ref") or not reveal.get("true_entity_ref"):
-                    continue
-                persona_id = await get_entity_id(reveal.get("persona_ref"), "character")
-                true_id = await get_entity_id(reveal.get("true_entity_ref"), "character")
-                if persona_id == true_id:
-                    continue
-                await conn.execute(
-                    """
-                    INSERT INTO identity_links (novel_id, entity_a, entity_b, revealed_at_chapter, note)
-                    VALUES ($1, $2, $3, $4, $5);
-                    """,
-                    novel_id, persona_id, true_id, chapter_number, reveal.get("note")
-                )
-                logger.info(f"Recorded Identity Reveal at Chapter {chapter_number}: Entity {persona_id} = Entity {true_id}")
-
-            # 8. Insert new aliases
-            for alias_item in data.get("new_aliases", []):
-                if not alias_item.get("entity_ref") or not alias_item.get("alias"):
-                    continue
-                ent_id = await get_entity_id(alias_item.get("entity_ref"))
-                alias_name = alias_item.get("alias")
-                is_rev = alias_item.get("is_reveal", False)
-                reveal_ch = chapter_number if is_rev else 0.0
-                await conn.execute(
-                    """
-                    INSERT INTO entity_aliases (novel_id, entity_id, alias, revealed_at_chapter)
-                    VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (entity_id, alias) DO UPDATE
-                    SET revealed_at_chapter = LEAST(entity_aliases.revealed_at_chapter, EXCLUDED.revealed_at_chapter);
-                    """,
-                    novel_id, ent_id, alias_name, reveal_ch
-                )
-
-            # 9. Update running summary using Flash
-            summary_messages = [
-                {"role": "system", "content": SUMMARY_SYSTEM},
-                {
-                    "role": "user",
-                    "content": SUMMARY_USER.format(
-                        prev_summary=prev_summary,
-                        title=chapter["title"],
-                        # Feed (effectively) the whole chapter so end-of-chapter
-                        # developments still reach the forward-carried summary. The
-                        # cap only guards against pathologically huge chapters.
-                        text=chapter["content"][:settings.SUMMARY_INPUT_MAX_CHARS]
-                    )
-                }
-            ]
-
-            logger.info(f"Generating updated running summary through Chapter {chapter_number}...")
-            new_summary = await call_chat_completion(
-                model=settings.MODEL_FLASH,
-                messages=summary_messages,
-                temperature=0.3
-            )
-
-            # Save state
-            await conn.execute(
-                """
-                INSERT INTO extraction_state (novel_id, chapter, running_summary, processed_at)
-                VALUES ($1, $2, $3, now())
-                ON CONFLICT (novel_id, chapter) DO UPDATE
-                SET running_summary = EXCLUDED.running_summary, processed_at = now();
-                """,
-                novel_id, chapter_number, new_summary
-            )
-
+        # 3. Build the forward summary proposal, then send both provider paths
+        # through the same source-checked transactional commit adapter.
+        summary_messages = [
+            {"role": "system", "content": SUMMARY_SYSTEM},
+            {
+                "role": "user",
+                "content": SUMMARY_USER.format(
+                    prev_summary=prev_summary,
+                    title=chapter["title"],
+                    text=chapter["content"][:settings.SUMMARY_INPUT_MAX_CHARS],
+                ),
+            },
+        ]
+        logger.info(f"Generating updated running summary through Chapter {chapter_number}...")
+        new_summary = await call_chat_completion(
+            model=settings.MODEL_FLASH,
+            messages=summary_messages,
+            temperature=0.3,
+        )
+        await commit_extraction_proposal(
+            novel_id,
+            chapter_number,
+            data,
+            new_summary,
+            expected_source_hash=chapter_source_sha256(chapter["content"]),
+            resolved_refs={},
+            entity_resolver=resolve_entity,
+            model_label=settings.MODEL_FLASH,
+            force=force,
+        )
         logger.info(f"--- Chapter {chapter_number} Extraction Complete ---")
 
 

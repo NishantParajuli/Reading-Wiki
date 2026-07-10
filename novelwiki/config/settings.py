@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -126,6 +129,52 @@ class Settings(BaseSettings):
     JOB_LEASE_TIMEOUT_SECONDS: int = 180
     JOB_MAX_ATTEMPTS: int = 3
 
+    # ── Hybrid Antigravity CLI backend ────────────────────────────────────
+    # AGY is deliberately dormant unless both this global switch and an admin-owned
+    # per-user workload grant are enabled.  The CLI keeps its own official
+    # browser/keyring authentication; no AGY credential belongs in NovelWiki's env.
+    AGY_ENABLED: bool = False
+    AGY_BINARY: str = "/home/nishantp/.local/bin/agy"
+    AGY_MIN_VERSION: str = "1.1.1"
+    # Integrity pin for the locally verified 1.1.1 binary (2026-07-10).  Updating
+    # AGY is an explicit operator action: re-run preflight/golden tests, then update
+    # this hash.  Set to an empty string only for a deliberate unpinned dev setup.
+    AGY_BINARY_SHA256: str = "32e394fc0e63a41ed4e7ac05304224678d3e062d707effdc3bbff868767659f9"
+    # Keep story-bearing workspaces outside both the checkout and public ASSET_DIR.
+    AGY_WORK_DIR: str = str(Path.home() / ".local" / "share" / "novelwiki" / "agy-jobs")
+
+    # Exact display names from `agy models`; preflight hard-fails on catalog drift.
+    AGY_MODEL_TRANSLATE: str = "Gemini 3.5 Flash (Medium)"
+    AGY_MODEL_CODEX: str = "Gemini 3.5 Flash (High)"
+    AGY_MODEL_SEGMENT: str = "Gemini 3.5 Flash (Medium)"
+    AGY_MODEL_OCR: str = "Gemini 3.5 Flash (High)"
+    # Empty omits the flag.  `accept-edits` may be selected after the operator's
+    # headless-write spike; permission rules and hooks remain the safety boundary.
+    AGY_MODE: str = ""
+
+    AGY_MAX_CONCURRENT: int = 1
+    AGY_PRINT_TIMEOUT_SECONDS: int = 1200
+    AGY_OUTER_TIMEOUT_GRACE_SECONDS: int = 30
+    AGY_KILL_GRACE_SECONDS: int = 10
+    AGY_STDOUT_MAX_BYTES: int = 1_048_576
+    AGY_STDERR_MAX_BYTES: int = 1_048_576
+    AGY_WORKSPACE_MAX_BYTES: int = 134_217_728
+
+    AGY_TRANSLATE_BATCH_CHAPTERS: int = 3
+    AGY_TRANSLATE_BATCH_MAX_CHARS: int = 120_000
+    AGY_CODEX_BATCH_CHAPTERS: int = 1
+    AGY_SEPARATE_CODEX_VERIFY: bool = False
+
+    AGY_MAX_ATTEMPTS: int = 2
+    AGY_PROVIDER_RETRY_MINUTES: int = 30
+    AGY_SUCCESS_RETENTION_HOURS: int = 24
+    AGY_FAILURE_RETENTION_HOURS: int = 168
+    AGY_FALLBACK_TO_API_DEFAULT: bool = False
+    AGY_PLUGIN_VERSION: str = "1.0.1"
+    AGY_PLUGIN_SHA256: str = "150a6f9174bcda5a45a71e46ceb509e2210379be6dcfa65485173989f4111953"
+    # Worker health is considered stale after this interval for /auth/me and admin UI.
+    AGY_WORKER_HEALTH_TTL_SECONDS: int = 90
+
     # Text segmentation/cleanup LLM (routed through OpenRouter alongside the codex models).
     SEGMENT_MODEL: str = "deepseek/deepseek-v4-pro"
 
@@ -239,6 +288,31 @@ class Settings(BaseSettings):
     DEFAULT_QUOTA_OCR_PAGES: int = 3000
     DEFAULT_QUOTA_CODEX_BUILDS: int = 20
     DEFAULT_QUOTA_TTS_CHAPTERS: int = 200    # chapters narrated per month (charged only on actual generation)
+
+    @model_validator(mode="after")
+    def _validate_agy_settings(self):
+        if self.AGY_MODE not in ("", "accept-edits", "plan"):
+            raise ValueError("AGY_MODE must be empty, 'accept-edits', or 'plan'")
+        if not 1 <= self.AGY_MAX_CONCURRENT <= 4:
+            raise ValueError("AGY_MAX_CONCURRENT must be between 1 and 4")
+        if not 60 <= self.AGY_PRINT_TIMEOUT_SECONDS <= 7200:
+            raise ValueError("AGY_PRINT_TIMEOUT_SECONDS must be between 60 and 7200")
+        if not 1 <= self.AGY_KILL_GRACE_SECONDS <= 60:
+            raise ValueError("AGY_KILL_GRACE_SECONDS must be between 1 and 60")
+        if not 1 <= self.AGY_TRANSLATE_BATCH_CHAPTERS <= 10:
+            raise ValueError("AGY_TRANSLATE_BATCH_CHAPTERS must be between 1 and 10")
+        if not 1_000 <= self.AGY_TRANSLATE_BATCH_MAX_CHARS <= 500_000:
+            raise ValueError("AGY_TRANSLATE_BATCH_MAX_CHARS is outside the safe range")
+        if not 1 <= self.AGY_MAX_ATTEMPTS <= 5:
+            raise ValueError("AGY_MAX_ATTEMPTS must be between 1 and 5")
+        if min(self.AGY_STDOUT_MAX_BYTES, self.AGY_STDERR_MAX_BYTES) < 4096:
+            raise ValueError("AGY stream retention limits must be at least 4096 bytes")
+        if self.AGY_WORKSPACE_MAX_BYTES < 1_048_576:
+            raise ValueError("AGY_WORKSPACE_MAX_BYTES must be at least 1 MiB")
+        for field in ("AGY_MODEL_TRANSLATE", "AGY_MODEL_CODEX", "AGY_MODEL_SEGMENT", "AGY_MODEL_OCR"):
+            if not getattr(self, field).strip():
+                raise ValueError(f"{field} must not be empty")
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,0 +1,21 @@
+[Unit]
+Description=NovelWiki AGY worker
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/wiki
+ExecStart=%h/wiki/.venv/bin/python -m novelwiki.agy.worker
+Restart=on-failure
+RestartSec=10
+Environment=AGY_CLI_DISABLE_AUTO_UPDATE=true
+Environment=AGY_CLI_HIDE_ACCOUNT_INFO=true
+
+MemoryMax=4G
+TasksMax=256
+CPUWeight=50
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

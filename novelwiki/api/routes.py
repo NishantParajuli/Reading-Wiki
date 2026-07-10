@@ -3,6 +3,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Literal
 from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Request, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -10,9 +11,11 @@ from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
 from novelwiki.auth.deps import current_user, require_admin
 from novelwiki.auth.access import require_readable, require_editable, can_edit, require_effective_ceiling
-from novelwiki.auth.users import self_user, public_user, valid_username, normalize_username
+from novelwiki.auth.users import self_user_with_capabilities, public_user, valid_username, normalize_username
 from novelwiki import quota, ai_limits
 from novelwiki.jobs import service as jobs_service
+from novelwiki.ai_backend.policy import resolve_backend
+from novelwiki.ai_backend.types import Workload
 from novelwiki.scraper.runner import set_source_offset
 from novelwiki.scraper.adapters import list_adapters
 from novelwiki.scraper.safe_fetch import SafeFetchError, validate_source_start_url
@@ -216,6 +219,7 @@ class TranslateTrigger(BaseModel):
     to_chapter: float | None = None
     force: bool = False
     seed_from_codex: bool = False
+    ai_backend: Literal["auto", "api", "agy"] = "auto"
 
 class GlossaryUpsert(BaseModel):
     source_term: str
@@ -228,6 +232,7 @@ class CodexBuild(BaseModel):
     force: bool = False
     from_chapter: float | None = None
     to_chapter: float | None = None
+    ai_backend: Literal["auto", "api", "agy"] = "auto"
 
 class MergePayload(BaseModel):
     keep_id: int
@@ -735,13 +740,13 @@ async def api_update_me(payload: ProfileUpdate, user: dict = Depends(current_use
                     raise HTTPException(status_code=409, detail="That username is already taken.")
                 args.append(uname); sets.append(f"username = ${len(args)}")
         if not sets:
-            return self_user(user)
+            return await self_user_with_capabilities(user)
         args.append(user["id"])
         row = await conn.fetchrow(
             f"UPDATE users SET {', '.join(sets)}, updated_at = now() WHERE id = ${len(args)} RETURNING *;",
             *args,
         )
-    return self_user(dict(row))
+    return await self_user_with_capabilities(dict(row))
 
 
 @router.post("/me/avatar")
@@ -1577,7 +1582,21 @@ async def api_translate(novel_id: int, payload: TranslateTrigger, user: dict = D
     quota exhaustion. Optionally seeds the glossary from the codex first."""
     # Spend on the shared base is owner/admin only (per-user self-translation is Phase 5).
     await require_editable(novel_id, user)
-    # Preflight the caller's quota (non-reserving) against the chapters this run would translate,
+    idem = (
+        f"translate:novel{novel_id}:{payload.from_chapter}:{payload.to_chapter}:"
+        f"{int(payload.force)}:seed{int(payload.seed_from_codex)}"
+    )
+    existing = await jobs_service.find_active("translate", idem)
+    if existing is not None:
+        view = jobs_service.job_view(existing)
+        return {"status": "success", "message": "A translation for this range is already running.",
+                "job_id": int(existing["id"]), "deduped": True,
+                "chapters": int((existing.get("progress") or {}).get("total") or 0),
+                "execution_backend": view["execution_backend"], "model": view["backend_model"],
+                "backend_reason": "already_active"}
+
+    decision = await resolve_backend(user, Workload.TRANSLATE_BATCH, payload.ai_backend)
+    # Preflight the caller's quota against the chapters this run would translate,
     # so an over-quota request fails fast with a 429 instead of scheduling a doomed job.
     pool = await get_db_pool()
     async with pool.acquire() as conn:
@@ -1591,21 +1610,35 @@ async def api_translate(novel_id: int, payload: TranslateTrigger, user: dict = D
             """,
             novel_id, payload.from_chapter, payload.to_chapter, payload.force,
         )
-    await quota.check_available(user, "translated_chapters", int(pending or 0))
-
-    idem = (
-        f"translate:novel{novel_id}:{payload.from_chapter}:{payload.to_chapter}:"
-        f"{int(payload.force)}:seed{int(payload.seed_from_codex)}"
-    )
-    job_id, created = await jobs_service.create_job(
-        "translate", novel_id=novel_id, user_id=user["id"],
-        options={"from_chapter": payload.from_chapter, "to_chapter": payload.to_chapter,
-                 "force": payload.force, "seed_from_codex": payload.seed_from_codex},
-        idempotency_key=idem,
-    )
+    pending = int(pending or 0)
+    if decision.resolved.value == "agy":
+        # Subscription work must not start only to discover product quota is gone.
+        await quota.check_and_reserve(user, "translated_chapters", pending)
+    else:
+        await quota.check_available(user, "translated_chapters", pending)
+    try:
+        job_id, created = await jobs_service.create_job(
+            "translate", novel_id=novel_id, user_id=user["id"],
+            options={"from_chapter": payload.from_chapter, "to_chapter": payload.to_chapter,
+                     "force": payload.force, "seed_from_codex": payload.seed_from_codex},
+            idempotency_key=idem,
+            quota_kind="translated_chapters" if decision.resolved.value == "agy" else None,
+            quota_reserved=pending if decision.resolved.value == "agy" else 0,
+            max_attempts=settings.AGY_MAX_ATTEMPTS if decision.resolved.value == "agy" else None,
+            **decision.as_job_fields(),
+        )
+    except (jobs_service.ActiveJobLimitError, jobs_service.BackendPolicyChangedError) as exc:
+        if decision.resolved.value == "agy" and pending:
+            await quota.refund(user["id"], "translated_chapters", pending)
+        status = 429 if isinstance(exc, jobs_service.ActiveJobLimitError) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
+    if not created and decision.resolved.value == "agy" and pending:
+        await quota.refund(user["id"], "translated_chapters", pending)
     msg = "Translation job scheduled." if created else "A translation for this range is already running."
     return {"status": "success", "message": msg, "job_id": job_id,
-            "deduped": not created, "chapters": int(pending or 0)}
+            "deduped": not created, "chapters": pending,
+            "execution_backend": decision.resolved.value, "model": decision.model,
+            "backend_reason": decision.reason}
 
 
 @router.post("/novels/{novel_id}/glossary/seed")
@@ -1972,8 +2005,13 @@ async def api_codex_build(novel_id: int, payload: CodexBuild, user: dict = Depen
     # A build already running for this exact target? Return it without charging again.
     existing = await jobs_service.find_active("codex_build", idem)
     if existing is not None:
+        view = jobs_service.job_view(existing)
         return {"status": "success", "message": "A codex build for this range is already running.",
-                "job_id": int(existing["id"]), "deduped": True}
+                "job_id": int(existing["id"]), "deduped": True,
+                "execution_backend": view["execution_backend"], "model": view["backend_model"],
+                "backend_reason": "already_active"}
+
+    decision = await resolve_backend(user, Workload.CODEX_EXTRACT, payload.ai_backend)
 
     # Reserve the codex-build credit up front (429 if over quota), recording the reservation on the
     # job so the worker can refund it on failure/cancel.
@@ -1981,16 +2019,25 @@ async def api_codex_build(novel_id: int, payload: CodexBuild, user: dict = Depen
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute("UPDATE novels SET codex_enabled = TRUE WHERE id = $1;", novel_id)
-    job_id, created = await jobs_service.create_job(
-        "codex_build", novel_id=novel_id, user_id=user["id"],
-        options={"force": payload.force, "from_chapter": payload.from_chapter, "to_chapter": payload.to_chapter},
-        idempotency_key=idem, quota_kind="codex_builds", quota_reserved=1,
-    )
+    try:
+        job_id, created = await jobs_service.create_job(
+            "codex_build", novel_id=novel_id, user_id=user["id"],
+            options={"force": payload.force, "from_chapter": payload.from_chapter, "to_chapter": payload.to_chapter},
+            idempotency_key=idem, quota_kind="codex_builds", quota_reserved=1,
+            max_attempts=settings.AGY_MAX_ATTEMPTS if decision.resolved.value == "agy" else None,
+            **decision.as_job_fields(),
+        )
+    except (jobs_service.ActiveJobLimitError, jobs_service.BackendPolicyChangedError) as exc:
+        await quota.refund(user["id"], "codex_builds", 1)
+        status = 429 if isinstance(exc, jobs_service.ActiveJobLimitError) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
     if not created:
         # Lost a race to a concurrent identical request — give the credit we just reserved back.
         await quota.refund(user["id"], "codex_builds", 1)
     msg = "Codex build scheduled." if created else "A codex build for this range is already running."
-    return {"status": "success", "message": msg, "job_id": job_id, "deduped": not created}
+    return {"status": "success", "message": msg, "job_id": job_id, "deduped": not created,
+            "execution_backend": decision.resolved.value, "model": decision.model,
+            "backend_reason": decision.reason}
 
 
 # ── Job center (durable scrape/codex/translation jobs) ────────────────────

@@ -75,6 +75,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not start the jobs worker (continuing): {e}")
 
+    # AGY is intentionally NOT started by the web lifespan. Warn clearly when the
+    # rollout switch is on but the separately authenticated host worker is absent.
+    if settings.AGY_ENABLED:
+        try:
+            from novelwiki.ai_backend.policy import worker_available
+            if not await worker_available():
+                logger.warning(
+                    "AGY_ENABLED is true, but no recent healthy dedicated AGY worker heartbeat exists. "
+                    "AGY jobs may remain queued until the host worker recovers."
+                )
+        except Exception as e:
+            logger.warning(f"Could not check dedicated AGY worker health: {e}")
+
     yield
 
     # ── Shutdown Phase ──
