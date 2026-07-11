@@ -152,59 +152,46 @@ async def _fallback_to_api(job: dict, exc: Exception) -> bool:
 
 async def _process(job: dict, preflight: PreflightResult, state: dict) -> None:
     job_id = int(job["id"])
-    state["job_id"] = job_id
     token = job.get("claim_token")
     stop_hb = asyncio.Event()
     lease_task = asyncio.create_task(_heartbeat(job_id, token, stop_hb))
     try:
-        allowed, reason, _user = await _reauthorize(job)
-        if not allowed:
-            await service.cancel_job(job_id)
-            await service.mark_canceled_if_running(job_id)
-            await audit.record("agy.run.canceled", user_id=job.get("user_id"), novel_id=job.get("novel_id"),
-                               data={"job_id": job_id, "reason": reason})
-            return
-        await audit.record("agy.run.started", user_id=job.get("user_id"), novel_id=job.get("novel_id"),
-                           data={"job_id": job_id, "kind": job["kind"], "model": job.get("backend_model")})
         from novelwiki.bootstrap.workers import build_agy_worker_registry
-        try:
-            handler = build_agy_worker_registry().resolve(job["kind"])
-        except LookupError:
-            handler = None
-        if handler is not None:
-            progress = await handler(job, preflight, _AgyExecutionContext())
-        else:
-            raise AgyError("unsupported AGY job kind", code="agy_artifact_invalid", retryable=False)
-        if job["kind"] == "agy_smoke":
-            await audit.record("agy.smoke.completed", user_id=job.get("user_id"), data={
-                "job_id": job_id, "version": progress.get("version"), "model": progress.get("model"),
-            })
-        if await service.mark_done_if_running(job_id, progress=progress):
-            await service.finalize(job_id, success=True)
-            await audit.record("agy.run.completed", user_id=job.get("user_id"), novel_id=job.get("novel_id"),
-                               data={"job_id": job_id, "kind": job["kind"]})
-        else:
-            await service.mark_canceled_if_running(job_id)
-    except AgyCanceled:
-        await service.mark_canceled_if_running(job_id)
-        await audit.record("agy.run.canceled", user_id=job.get("user_id"), novel_id=job.get("novel_id"),
-                           data={"job_id": job_id})
-    except Exception as exc:
-        code = getattr(exc, "code", "unknown")
-        if await service.is_canceled(job_id):
-            await service.mark_canceled_if_running(job_id)
-        elif code in PROVIDER_WAIT_CODES:
-            await service.wait_for_provider(job_id, code, safe_error_summary(exc), settings.AGY_PROVIDER_RETRY_MINUTES)
-        elif code in {"agy_not_authenticated", "agy_permission_blocked", "agy_plugin_invalid",
-                      "agy_version_unsupported", "agy_model_missing"}:
-            state.update(status="unhealthy", error=safe_error_summary(exc))
-            await service.wait_for_provider(job_id, code, safe_error_summary(exc), settings.AGY_PROVIDER_RETRY_MINUTES)
-        elif not await _fallback_to_api(job, exc):
-            await service.fail_or_retry(job, safe_error_summary(exc))
-        await audit.record("agy.run.failed", user_id=job.get("user_id"), novel_id=job.get("novel_id"),
-                           data={"job_id": job_id, "failure_code": code, "attempt": job.get("attempts")})
+        from novelwiki.modules.ai_execution.application.worker import AgyWorkerService
+        registry = build_agy_worker_registry()
+
+        class Operations:
+            reauthorize = staticmethod(_reauthorize)
+            resolve_handler = staticmethod(registry.resolve)
+            execution_context = staticmethod(_AgyExecutionContext)
+            cancel = staticmethod(service.cancel_job)
+            mark_canceled = staticmethod(service.mark_canceled_if_running)
+            mark_done = staticmethod(lambda jid, progress: service.mark_done_if_running(jid, progress=progress))
+            finalize = staticmethod(lambda jid, ok: service.finalize(jid, success=ok))
+            is_canceled = staticmethod(service.is_canceled)
+            fallback_to_api = staticmethod(_fallback_to_api)
+            fail_or_retry = staticmethod(service.fail_or_retry)
+            unsupported_error = staticmethod(lambda: AgyError(
+                "unsupported AGY job kind", code="agy_artifact_invalid", retryable=False
+            ))
+            is_canceled_error = staticmethod(lambda exc: isinstance(exc, AgyCanceled))
+            error_code = staticmethod(lambda exc: getattr(exc, "code", "unknown"))
+            error_summary = staticmethod(safe_error_summary)
+            provider_wait_code = staticmethod(lambda code: code in PROVIDER_WAIT_CODES)
+
+            @staticmethod
+            async def wait_for_provider(jid, code, summary):
+                await service.wait_for_provider(
+                    jid, code, summary, settings.AGY_PROVIDER_RETRY_MINUTES
+                )
+
+            @staticmethod
+            async def record(event, claimed_job, **data):
+                await audit.record(event, user_id=claimed_job.get("user_id"),
+                                   novel_id=claimed_job.get("novel_id"), data=data)
+
+        await AgyWorkerService(Operations()).process(job, preflight, state)
     finally:
-        state["job_id"] = None
         stop_hb.set()
         try:
             await lease_task

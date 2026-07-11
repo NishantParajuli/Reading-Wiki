@@ -22,11 +22,9 @@ from pydantic import BaseModel, Field
 
 from novelwiki.platform.config import settings
 from novelwiki.platform.auth import require_admin
-from novelwiki.platform.observability import audit
-import novelwiki.modules.ai_execution.public as backend_policy
-from novelwiki.modules.work.public import service as jobs_service
 from novelwiki.kernel.errors import InvalidOperation, NotFound, ValidationFailed
 from novelwiki.modules.identity.public import IdentityAdminApi, Principal
+from novelwiki.modules.experience.application.admin_commands import ExperienceAdminCommands
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -43,6 +41,10 @@ _QUOTA_COLS = ("quota_translated_chapters", "quota_ocr_pages", "quota_codex_buil
 
 async def identity_admin_service_dependency() -> IdentityAdminApi:
     raise RuntimeError("IdentityAdminService was not wired by the composition root")
+
+
+async def experience_admin_commands_dependency() -> ExperienceAdminCommands:
+    raise RuntimeError("ExperienceAdminCommands was not wired by the composition root")
 
 
 def _raise_identity_admin_error(exc: Exception) -> None:
@@ -166,28 +168,38 @@ def _policy_view(row: dict | None, user_id: int) -> dict:
 
 
 @router.get("/users/{user_id}/ai-backend-policy")
-async def admin_get_ai_backend_policy(user_id: int, admin: dict = Depends(require_admin)):
+async def admin_get_ai_backend_policy(
+    user_id: int, admin: dict = Depends(require_admin),
+    commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+):
     exists = await (await _operational_projections()).user_exists(user_id)
     if not exists:
         raise HTTPException(status_code=404, detail="User not found.")
-    return _policy_view(await backend_policy.get_policy(user_id), user_id)
+    return _policy_view(await commands.get_policy(user_id), user_id)
 
 
 @router.put("/users/{user_id}/ai-backend-policy")
 async def admin_put_ai_backend_policy(user_id: int, payload: AdminAiBackendPolicy,
-                                      admin: dict = Depends(require_admin)):
-    row = await backend_policy.upsert_policy(user_id, payload.model_dump(), int(admin["id"]))
+                                      admin: dict = Depends(require_admin),
+                                      commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency)):
+    row = await commands.put_policy(user_id, payload.model_dump(), int(admin["id"]))
     return _policy_view(row, user_id)
 
 
 @router.delete("/users/{user_id}/ai-backend-policy")
-async def admin_delete_ai_backend_policy(user_id: int, admin: dict = Depends(require_admin)):
-    changed = await backend_policy.delete_policy(user_id, int(admin["id"]))
+async def admin_delete_ai_backend_policy(
+    user_id: int, admin: dict = Depends(require_admin),
+    commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+):
+    changed = await commands.delete_policy(user_id, int(admin["id"]))
     return {"status": "revoked" if changed else "noop", "user_id": user_id}
 
 
 @router.get("/ai/agy/health")
-async def admin_agy_health(admin: dict = Depends(require_admin)):
+async def admin_agy_health(
+    admin: dict = Depends(require_admin),
+    commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+):
     heartbeat, counts, recent, last_success = await (
         await _operational_projections()
     ).agy_health()
@@ -197,7 +209,7 @@ async def admin_agy_health(admin: dict = Depends(require_admin)):
         except Exception: details = {}
     return {
         "enabled": settings.AGY_ENABLED,
-        "available": await backend_policy.worker_available(),
+        "available": await commands.worker_available(),
         "worker": ({"id": heartbeat["worker_id"], "status": heartbeat["status"],
                     "version": heartbeat["version"], "plugin_version": heartbeat["plugin_version"],
                     "plugin_sha256": heartbeat["plugin_sha256"], "details": details,
@@ -211,25 +223,25 @@ async def admin_agy_health(admin: dict = Depends(require_admin)):
 
 
 @router.post("/ai/agy/retry-waiting")
-async def admin_retry_waiting_agy(admin: dict = Depends(require_admin)):
-    count = await jobs_service.retry_waiting()
-    await audit.record("agy.run.retry_waiting", user_id=admin["id"], data={"jobs": count})
+async def admin_retry_waiting_agy(
+    admin: dict = Depends(require_admin),
+    commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+):
+    count = await commands.retry_waiting(int(admin["id"]))
     return {"status": "success", "jobs_requeued": count}
 
 
 @router.post("/ai/agy/smoke-test")
-async def admin_agy_smoke_test(admin: dict = Depends(require_admin)):
+async def admin_agy_smoke_test(
+    admin: dict = Depends(require_admin),
+    commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+):
     if not settings.AGY_ENABLED:
         raise HTTPException(status_code=409, detail="Enable AGY before running a consuming smoke test.")
     recent = await (await _operational_projections()).recent_smoke()
     if recent:
         raise HTTPException(status_code=429, detail="An AGY smoke test ran in the last 10 minutes.")
-    job_id, created = await jobs_service.create_job(
-        "agy_smoke", novel_id=None, user_id=int(admin["id"]), options={},
-        idempotency_key="agy-admin-smoke", max_attempts=1,
-        backend_requested="agy", execution_backend="agy",
-        backend_model=settings.AGY_MODEL_TRANSLATE,
-    )
+    job_id, created = await commands.queue_smoke(int(admin["id"]))
     return {"status": "queued", "job_id": job_id, "deduped": not created,
             "warning": "This explicit smoke test consumes AGY subscription capacity."}
 

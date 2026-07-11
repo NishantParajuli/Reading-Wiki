@@ -1,11 +1,12 @@
-import asyncio
-
 import typer
 
 from novelwiki.platform.cli_runtime import run_cli
-from novelwiki.modules.translation.adapters.outbound.runtime import translate_range, seed_glossary_from_entities
 
 app = typer.Typer()
+
+def _commands():
+    from novelwiki.bootstrap.feature_cli import build_translation_commands
+    return build_translation_commands()
 
 @app.command()
 def translate(
@@ -17,13 +18,14 @@ def translate(
 ):
     """Translates raw (foreign-language) chapters into English, growing the name glossary."""
     async def run():
+        seeded, count = await _commands().translate(
+            novel_id, start=from_chapter, end=to_chapter, force=force, seed=seed
+        )
         if seed:
-            n = await seed_glossary_from_entities(novel_id)
+            n = seeded
             typer.echo(f"Seeded {n} glossary terms from codex entities.")
         typer.echo("Translating raw chapters (on-demand glossary-consistent)...")
-        count = await translate_range(novel_id, from_chapter=from_chapter, to_chapter=to_chapter, force=force)
         typer.echo(typer.style(f"✔ Translated {count} chapters.", fg=typer.colors.GREEN, bold=True))
     run_cli(run())
-
 
 

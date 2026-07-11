@@ -34,3 +34,36 @@ async def build_operational_projection_repository():
 
 async def job_run_metadata(job_ids: set[int]) -> dict[int, dict]:
     return await (await build_operational_projection_repository()).job_run_metadata(job_ids)
+
+
+async def build_experience_admin_commands():
+    from novelwiki.modules.experience.application.admin_commands import ExperienceAdminCommands
+    from novelwiki.modules.ai_execution.adapters.outbound import policy
+    from novelwiki.modules.work.public import service
+    from novelwiki.platform.config import settings
+    from novelwiki.platform.observability import audit
+
+    class AiBridge:
+        get_policy = staticmethod(policy.get_policy)
+        upsert_policy = staticmethod(policy.upsert_policy)
+        delete_policy = staticmethod(policy.delete_policy)
+        worker_available = staticmethod(policy.worker_available)
+
+    class WorkBridge:
+        retry_waiting = staticmethod(service.retry_waiting)
+
+        @staticmethod
+        async def create_smoke(admin_id):
+            return await service.create_job(
+                "agy_smoke", novel_id=None, user_id=admin_id, options={},
+                idempotency_key="agy-admin-smoke", max_attempts=1,
+                backend_requested="agy", execution_backend="agy",
+                backend_model=settings.AGY_MODEL_TRANSLATE,
+            )
+
+    class AuditBridge:
+        @staticmethod
+        async def record(event, user_id, data):
+            await audit.record(event, user_id=user_id, data=data)
+
+    return ExperienceAdminCommands(AiBridge(), WorkBridge(), AuditBridge())

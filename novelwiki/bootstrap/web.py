@@ -1,17 +1,8 @@
-import logging
-import hmac
 from contextlib import asynccontextmanager
-from pathlib import Path
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-from novelwiki.platform.config import settings
 from novelwiki.platform.database import init_db_pool
 from novelwiki.modules.identity.adapters.inbound.cookies import set_csrf_cookie
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from novelwiki.platform.web.factory import create_web_app
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,115 +15,7 @@ async def lifespan(app: FastAPI):
     finally:
         await lifecycle.stop()
 
-app = FastAPI(
-    title="Novel Reading Platform",
-    description="A multi-novel reading platform with scraping, translation, and a spoiler-safe codex.",
-    version="2.0.0",
-    lifespan=lifespan
-)
-
-# CORS: cookie-based auth requires explicit origins (browsers reject `*` with
-# credentials). The SPA is served same-origin in prod; ALLOWED_ORIGINS covers the
-# tunnel domain + local dev. Comma-separated in the env var.
-_origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# The SPA is a precompiled Vite bundle served same-origin: no CDN scripts, no
-# eval (Babel Standalone is gone), fonts self-hosted. 'unsafe-inline' remains
-# only for the tiny theme-bootstrap script in index.html and inline styles.
-_CSP = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline'; "
-    "font-src 'self' data:; "
-    "img-src 'self' data: https:; "
-    "connect-src 'self'; "
-    "object-src 'none'; "
-    "base-uri 'self'; "
-    "frame-ancestors 'none'"
-)
-
-_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
-_PUBLIC_AUTH_MUTATIONS = {
-    "/api/auth/register",
-    "/api/auth/login",
-    "/api/auth/request-reset",
-    "/api/auth/reset",
-    "/api/auth/verify",
-}
-_REQUEST_HEADER = "x-tideglass-request"
-_CSRF_HEADERS = ("x-tideglass-csrf", "x-csrf-token")
-
-
-def _normalized_path(path: str) -> str:
-    stripped = path.rstrip("/")
-    return stripped or "/"
-
-
-def _csrf_rejection(request):
-    method = request.method.upper()
-    if method in _SAFE_METHODS or not request.url.path.startswith("/api"):
-        return None
-
-    path = _normalized_path(request.url.path)
-    if path in _PUBLIC_AUTH_MUTATIONS:
-        if request.headers.get(_REQUEST_HEADER) == "1":
-            return None
-        return JSONResponse(
-            {"detail": "Missing required request header."},
-            status_code=403,
-        )
-
-    cookie = request.cookies.get(settings.CSRF_COOKIE)
-    supplied = None
-    for name in _CSRF_HEADERS:
-        supplied = request.headers.get(name)
-        if supplied:
-            break
-    if cookie and supplied and hmac.compare_digest(cookie, supplied):
-        return None
-    return JSONResponse(
-        {"detail": "CSRF token missing or invalid."},
-        status_code=403,
-    )
-
-
-def _maybe_seed_csrf_cookie(request, response) -> None:
-    if request.cookies.get(settings.SESSION_COOKIE) and not request.cookies.get(settings.CSRF_COOKIE):
-        set_csrf_cookie(response)
-
-
-_REQUEST_ID_HEADER = "X-Request-ID"
-
-
-@app.middleware("http")
-async def security_headers(request, call_next):
-    # Correlation id: accept a caller-supplied X-Request-ID (trusted proxy) or mint one, stash it
-    # in a contextvar for the duration of the request so logs + audit rows can reference it, and
-    # echo it back on the response for client-side/debug correlation.
-    from novelwiki.platform.observability import audit
-    incoming = request.headers.get(_REQUEST_ID_HEADER, "").strip()
-    request_id = incoming[:64] if incoming else audit.new_request_id()
-    token = audit.set_request_id(request_id)
-    try:
-        response = _csrf_rejection(request)
-        if response is None:
-            response = await call_next(request)
-    finally:
-        audit.reset_request_id(token)
-    response.headers[_REQUEST_ID_HEADER] = request_id
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("Referrer-Policy", "same-origin")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Content-Security-Policy", _CSP)
-    _maybe_seed_csrf_cookie(request, response)
-    return response
+app = create_web_app(lifespan=lifespan, seed_csrf_cookie=set_csrf_cookie)
 
 # Bind API endpoints. The auth router is public (login/register); everything else under
 # /api requires a logged-in user via a router-level dependency. Handlers that need the
@@ -152,6 +35,7 @@ from novelwiki.modules.identity.adapters.inbound.account_http import (
     router as identity_account_router,
 )
 from novelwiki.modules.experience.adapters.inbound.admin_http import (
+    experience_admin_commands_dependency,
     identity_admin_service_dependency,
     router as admin_router,
 )
@@ -358,6 +242,16 @@ async def _identity_admin_service():
 app.dependency_overrides[identity_admin_service_dependency] = _identity_admin_service
 
 
+async def _experience_admin_commands():
+    from novelwiki.bootstrap.experience import build_experience_admin_commands
+    return await build_experience_admin_commands()
+
+
+app.dependency_overrides[
+    experience_admin_commands_dependency
+] = _experience_admin_commands
+
+
 async def _experience_projection_service():
     from novelwiki.bootstrap.experience import build_experience_projection_service
 
@@ -439,52 +333,7 @@ app.dependency_overrides[
     narration_principal_factory_dependency
 ] = _narration_principal_factory
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "novelwiki-backend"}
+from novelwiki.modules.acquisition.adapters.outbound.importer.storage import ensure_dirs
+from novelwiki.platform.web.static import mount_platform_surfaces
 
-# User avatars are intentionally public profile assets; imported novel/job assets are
-# served by authenticated /api/assets/... routes instead of this static mount.
-try:
-    from novelwiki.modules.acquisition.adapters.outbound.importer.storage import ensure_dirs
-    ensure_dirs()
-    avatar_dir = Path(settings.ASSET_DIR) / "_users"
-    avatar_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/assets/_users", StaticFiles(directory=str(avatar_dir)), name="user-assets")
-except Exception as e:
-    logger.warning(f"Could not mount public avatar assets folder: {e}")
-
-# Serve the built SPA (Vite output in frontend/dist).
-# IMPORTANT: a Mount at "/" matches every path, so it MUST be registered AFTER
-# the API router, /health, and /assets/_users, otherwise it shadows them.
-#
-# Cache policy: Vite emits content-hashed filenames under /assets/, so those are
-# immutable (max-age=1y); index.html (and the handful of unhashed public files:
-# favicon, manifest) revalidate on every load so a deploy is picked up
-# immediately. Unknown extension-less paths fall back to index.html so
-# BrowserRouter deep links (/n/12/read/512) survive a hard refresh.
-class SpaStaticFiles(StaticFiles):
-    def file_response(self, full_path, *args, **kwargs):
-        response = super().file_response(full_path, *args, **kwargs)
-        if "/assets/" in str(full_path).replace("\\", "/"):
-            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-        else:
-            response.headers["Cache-Control"] = "no-cache"
-        return response
-
-    async def get_response(self, path: str, scope):
-        from starlette.exceptions import HTTPException as StarletteHTTPException
-        try:
-            return await super().get_response(path, scope)
-        except StarletteHTTPException as e:
-            # SPA fallback: route-shaped paths (no file extension) get index.html;
-            # genuinely missing files still 404.
-            last = path.rsplit("/", 1)[-1]
-            if e.status_code == 404 and "." not in last:
-                return await super().get_response("index.html", scope)
-            raise
-
-try:
-    app.mount("/", SpaStaticFiles(directory="novelwiki/frontend/dist", html=True), name="frontend")
-except Exception as e:
-    logger.warning(f"Could not mount static frontend folder (run `npm run build` in novelwiki/frontend): {e}")
+mount_platform_surfaces(app, ensure_owner_assets=ensure_dirs)

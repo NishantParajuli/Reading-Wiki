@@ -484,26 +484,21 @@ async def _heartbeat(job_id: int, token: str | None, stop: asyncio.Event) -> Non
 
 async def _process(job: dict) -> None:
     job_id = int(job["id"])
-    status = job["status"]              # already the in-progress marker set by the atomic claim
     token = job.get("claim_token")
     stop_hb = asyncio.Event()
     heartbeat = asyncio.create_task(_heartbeat(job_id, token, stop_hb))
     try:
-        if status == "parsing":
-            if not await _job_owner_can_spend(job):
-                await fail_job(job_id, "Verify your email before importing files.")
-                return
-            await _do_parse(job)
-        elif status == "ocr_running":
-            if not await _job_owner_can_spend(job):
-                await fail_job(job_id, "Verify your email before running OCR.")
-                return
-            await _do_ocr(job)
-        elif status == "commit_running":
-            await _do_commit(job)
-    except Exception as e:
-        logger.exception(f"Import job {job_id} crashed during '{status}'.")
-        await fail_job(job_id, f"{type(e).__name__}: {e}")
+        from novelwiki.modules.acquisition.application.worker import ImportWorkerService
+
+        class Operations:
+            owner_can_spend = staticmethod(_job_owner_can_spend)
+            parse = staticmethod(_do_parse)
+            ocr = staticmethod(_do_ocr)
+            commit = staticmethod(_do_commit)
+            fail = staticmethod(fail_job)
+            exception = staticmethod(logger.exception)
+
+        await ImportWorkerService(Operations()).process(job)
     finally:
         stop_hb.set()
         try:

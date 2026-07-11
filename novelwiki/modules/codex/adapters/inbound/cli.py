@@ -1,15 +1,12 @@
-import asyncio
-
 import typer
 
 from novelwiki.platform.cli_runtime import run_cli
-from novelwiki.modules.codex.adapters.outbound.ingest.chunk import chunk_all_chapters
-from novelwiki.modules.codex.adapters.outbound.ingest.embed import embed_missing_chunks
-from novelwiki.modules.codex.adapters.outbound.ingest.extract import extract_all_chapters
-from novelwiki.modules.codex.adapters.outbound.ingest.link import merge_entities
-from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
 
 app = typer.Typer()
+
+def _commands():
+    from novelwiki.bootstrap.feature_cli import build_codex_commands
+    return build_codex_commands()
 
 @app.command()
 def chunk(
@@ -21,7 +18,7 @@ def chunk(
     """Splits readable chapter text into overlapping, within-chapter passage chunks."""
     async def run():
         typer.echo("Running within-chapter text chunker...")
-        count = await chunk_all_chapters(novel_id, force=force, from_chapter=from_chapter, to_chapter=to_chapter)
+        count = await _commands().chunk(novel_id, force=force, start=from_chapter, end=to_chapter)
         typer.echo(typer.style(f"✔ Successfully generated {count} overlapping chunks.", fg=typer.colors.GREEN, bold=True))
     run_cli(run())
 
@@ -35,7 +32,7 @@ def embed(
     """Generates vector embeddings for any chunks missing them."""
     async def run():
         typer.echo("Running vector embedding pipeline...")
-        count = await embed_missing_chunks(novel_id, from_chapter=from_chapter, to_chapter=to_chapter)
+        count = await _commands().embed(novel_id, start=from_chapter, end=to_chapter)
         typer.echo(typer.style(f"✔ Successfully embedded {count} chunks.", fg=typer.colors.GREEN, bold=True))
     run_cli(run())
 
@@ -50,7 +47,7 @@ def extract(
     """Performs forward-only structured entity/fact extraction in chronological order."""
     async def run():
         typer.echo("Launching forward-only structured knowledge extraction pass (Flash)...")
-        await extract_all_chapters(novel_id, force=force, from_chapter=from_chapter, to_chapter=to_chapter)
+        await _commands().extract(novel_id, force=force, start=from_chapter, end=to_chapter)
         typer.echo(typer.style("✔ Extraction and entity-resolution completed.", fg=typer.colors.GREEN, bold=True))
     run_cli(run())
 
@@ -62,7 +59,7 @@ def rebuild_bm25(
     """Rebuilds and persists the per-novel sparse BM25 lexical search index."""
     async def run():
         typer.echo("Building and persisting in-process BM25 lexical search index...")
-        await get_bm25_manager(novel_id).rebuild()
+        await _commands().rebuild(novel_id)
         typer.echo(typer.style("✔ BM25 index rebuilt and persisted.", fg=typer.colors.GREEN, bold=True))
     run_cli(run())
 
@@ -75,10 +72,8 @@ def merge(
 ):
     """Deduplicates and merges two duplicate entities in the database."""
     async def run():
-        from novelwiki.bootstrap.cli_services import merge_codex_entities
-        await merge_codex_entities(novel_id, keep_id, drop_id)
+        await _commands().merge(novel_id, keep_id, drop_id)
         typer.echo(typer.style(f"✔ Entity {drop_id} successfully merged into {keep_id}.", fg=typer.colors.GREEN, bold=True))
     run_cli(run())
-
 
 

@@ -316,57 +316,27 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
         return "generated"
 
 
+class _NarrationWorkerOperations:
+    load_user = staticmethod(_load_user)
+    spend_allowed = staticmethod(quota.spend_allowed)
+    is_canceled = staticmethod(_is_canceled)
+    sidecar_available = staticmethod(tts_client.sidecar_available)
+    generate_chapter = staticmethod(_generate_chapter)
+    update_job = staticmethod(update_job)
+    fail_job = staticmethod(fail_job)
+    chapter_label = staticmethod(_numstr)
+    info = staticmethod(logger.info)
+    exception = staticmethod(logger.exception)
+
+    @staticmethod
+    async def acquire_generation():
+        return _TTS_LOCK
+
+
 async def _run(job: dict, user: dict) -> None:
-    job_id = int(job["id"])
-    chapters = (job.get("options") or {}).get("chapters") or []
-    total = len(chapters)
-    if total == 0:
-        await update_job(job_id, status="done", stage="nothing to narrate", progress={"done": 0, "total": 0})
-        return
-
-    if await _is_canceled(job_id):
-        return
-
-    if not await tts_client.sidecar_available():
-        await fail_job(job_id, "TTS sidecar is unavailable. Start it with: docker compose up -d tts")
-        return
-
-    if await _is_canceled(job_id):
-        return
-
-    await update_job(job_id, status="generating", stage="narrating", error=None,
-                     progress={"done": 0, "total": total})
-    logger.info(f"TTS job {job_id} started: {total} chapter(s), voice={job['voice_id']}.")
-
-    done = skipped = 0
-    async with _TTS_LOCK:   # hold the GPU for this whole job
-        for number in chapters:
-            if await _is_canceled(job_id):
-                await update_job(job_id, status="canceled", stage="canceled",
-                                 progress={"done": done, "skipped": skipped, "total": total,
-                                           "stopped_reason": "canceled"})
-                logger.info(f"TTS job {job_id} canceled after {done}/{total} chapters.")
-                return
-
-            await update_job(job_id, progress={"done": done, "skipped": skipped, "total": total,
-                                               "current_chapter": _numstr(number)})
-            logger.info(f"TTS job {job_id}: processing chapter {_numstr(number)} ({done + skipped + 1}/{total}).")
-            result = await _generate_chapter(job, user, number)
-
-            if result == "quota":
-                await update_job(job_id, status="done", stage="monthly TTS quota reached",
-                                 progress={"done": done, "skipped": skipped, "total": total,
-                                           "stopped_reason": "quota"})
-                logger.info(f"TTS job {job_id} stopped on quota after {done}/{total} chapters.")
-                return
-            if result in ("cached", "generated"):
-                done += 1
-            else:
-                skipped += 1   # untranslated / empty / missing
-
-    await update_job(job_id, status="done", stage="done",
-                     progress={"done": done, "skipped": skipped, "total": total})
-    logger.info(f"TTS job {job_id} finished: {done} narrated/cached, {skipped} skipped of {total}.")
+    """Stable test seam; orchestration is owned by the application service."""
+    from novelwiki.modules.narration.application.worker import NarrationWorkerService
+    await NarrationWorkerService(_NarrationWorkerOperations())._run(job, user)
 
 
 # ── Worker loop ──────────────────────────────────────────────────────────────
@@ -385,19 +355,8 @@ async def _claim_next() -> dict | None:
 
 
 async def _process(job: dict) -> None:
-    job_id = int(job["id"])
-    try:
-        user = await _load_user(job.get("user_id"))
-        if user is None:
-            await fail_job(job_id, "Job has no owner.")
-            return
-        if not quota.spend_allowed(user):
-            await fail_job(job_id, "Verify your email to generate audiobooks.")
-            return
-        await _run(job, user)
-    except Exception as e:
-        logger.exception(f"TTS job {job_id} crashed.")
-        await fail_job(job_id, f"{type(e).__name__}: {e}")
+    from novelwiki.modules.narration.application.worker import NarrationWorkerService
+    await NarrationWorkerService(_NarrationWorkerOperations()).process(job)
 
 
 async def worker_loop(poll_interval: float = 2.0) -> None:

@@ -191,7 +191,9 @@ def test_experience_projection_registry_is_explicit_and_read_only():
 
 def test_bootstrap_web_lifespan_delegates_to_lifecycle_registry():
     source = (ROOT / "novelwiki/bootstrap/web.py").read_text(encoding="utf-8")
-    lifespan_source = source[source.index("async def lifespan"):source.index("app = FastAPI")]
+    lifespan_source = source[
+        source.index("async def lifespan"):source.index("app = create_web_app")
+    ]
     assert "build_application_lifecycle" in lifespan_source
     assert ".execute(" not in lifespan_source
     assert "start_worker" not in lifespan_source
@@ -201,6 +203,49 @@ def test_platform_web_is_a_passive_stable_entrypoint():
     source = (ROOT / "novelwiki/platform/web/app.py").read_text(encoding="utf-8")
     assert "from novelwiki.bootstrap.web import app" in source
     assert "novelwiki.modules" not in source
+
+
+def test_bootstrap_uses_platform_web_infrastructure_factory():
+    source = (ROOT / "novelwiki/bootstrap/web.py").read_text(encoding="utf-8")
+    assert "from novelwiki.platform.web.factory import create_web_app" in source
+    assert "from novelwiki.platform.web.static import mount_platform_surfaces" in source
+    assert "@app.middleware" not in source
+    assert "class SpaStaticFiles" not in source
+
+
+def test_worker_adapters_delegate_claimed_job_orchestration_to_application():
+    for owner, service in {
+        "work": "WorkWorkerService",
+        "ai_execution": "AgyWorkerService",
+        "narration": "NarrationWorkerService",
+        "acquisition": "ImportWorkerService",
+    }.items():
+        source = (MODULE_ROOT / owner / "adapters/inbound/worker.py").read_text(
+            encoding="utf-8"
+        )
+        assert f"novelwiki.modules.{owner}.application.worker" in source
+        assert service in source
+
+
+def test_feature_cli_adapters_delegate_to_application_commands():
+    for owner in ("acquisition", "codex", "translation"):
+        source = (MODULE_ROOT / owner / "adapters/inbound/cli.py").read_text(
+            encoding="utf-8"
+        )
+        assert "novelwiki.bootstrap" in source
+        assert "parse_epub(" not in source
+        assert "commit_job(" not in source
+        assert "translate_range(" not in source
+
+
+def test_experience_admin_commands_are_injected():
+    source = (MODULE_ROOT / "experience/adapters/inbound/admin_http.py").read_text(
+        encoding="utf-8"
+    )
+    assert "experience_admin_commands_dependency" in source
+    assert "novelwiki.modules.ai_execution" not in source
+    assert "novelwiki.modules.work" not in source
+    assert "platform.observability" not in source
 
 
 def test_experience_admin_adapter_contains_no_write_sql():

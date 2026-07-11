@@ -150,37 +150,30 @@ async def _run_maintenance(force: bool = False) -> None:
 
 async def _process(job: dict) -> None:
     job_id = int(job["id"])
-    kind = job["kind"]
     token = job.get("claim_token")
     from novelwiki.bootstrap.workers import build_api_worker_registry
     registry = build_api_worker_registry()
-    try:
-        handler = registry.resolve(kind)
-    except LookupError:
-        handler = None
     stop_hb = asyncio.Event()
     heartbeat = asyncio.create_task(_heartbeat(job_id, token, stop_hb))
     try:
-        if handler is None:
-            await service.fail_or_retry(job, f"Unknown job kind '{kind}'.")
-            return
-        try:
-            progress = await handler(job, _ExecutionContext())
-        except _Canceled:
-            logger.info(f"Job {job_id} ({kind}) canceled mid-run.")
-            await service.finalize(job_id, success=False)
-            return
-        # Completed the work. Mark done unless a cancel won the race; either way finalize quota.
-        if await service.mark_done_if_running(job_id, progress=progress):
-            await service.finalize(job_id, success=True)
-            logger.info(f"Job {job_id} ({kind}) done.")
-            await audit.record("job.done", user_id=job.get("user_id"), novel_id=job.get("novel_id"),
-                               data={"job_id": job_id, "kind": kind})
-        else:
-            await service.finalize(job_id, success=False)
-    except Exception as e:
-        logger.exception(f"Job {job_id} ({kind}) crashed.")
-        await service.fail_or_retry(job, f"{type(e).__name__}: {e}")
+        from novelwiki.modules.work.application.worker import WorkWorkerService
+
+        class Operations:
+            resolve_handler = staticmethod(registry.resolve)
+            execution_context = staticmethod(_ExecutionContext)
+            fail_or_retry = staticmethod(service.fail_or_retry)
+            finalize = staticmethod(lambda jid, ok: service.finalize(jid, success=ok))
+            mark_done = staticmethod(lambda jid, progress: service.mark_done_if_running(jid, progress=progress))
+            info = staticmethod(logger.info)
+            exception = staticmethod(logger.exception)
+            is_canceled_error = staticmethod(lambda exc: isinstance(exc, _Canceled))
+
+            @staticmethod
+            async def record(event, claimed_job, **data):
+                await audit.record(event, user_id=claimed_job.get("user_id"),
+                                   novel_id=claimed_job.get("novel_id"), data=data)
+
+        await WorkWorkerService(Operations()).process(job)
     finally:
         stop_hb.set()
         try:

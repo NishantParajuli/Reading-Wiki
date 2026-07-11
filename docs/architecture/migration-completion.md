@@ -14,12 +14,17 @@ now divided among ten business modules plus Platform; no service split or topolo
   recorded in ADR 003 and is not described as crash-atomic.
 - Experience registers every approved composite read, including operational/admin and job+AI-run
   views, and contains no write SQL.
-- Work and AI workers dispatch through composition-owned registries; feature handlers live with
-  Acquisition, Translation, and Codex. Acquisition and Narration inbound workers still contain
-  substantial state-machine orchestration and require a further application-service extraction.
-- The CLI entrypoint is composition-only and resource lifecycle is Platform-owned, with an exact
-  baseline help snapshot. Acquisition's Typer adapter still contains import pipeline orchestration
-  that must move behind application commands.
+- Work, AI, Acquisition, and Narration workers delegate claimed-job state-machine decisions to
+  application services. Inbound worker code retains polling, leases, heartbeats, concrete-provider
+  translation, and stable external entrypoints; Bootstrap owns handler registries and lifecycle.
+- The CLI entrypoint is composition-only and resource lifecycle is Platform-owned. Acquisition,
+  Codex, and Translation pipelines are application commands built by Bootstrap; Typer adapters
+  validate arguments and render results. Main and all 13 subcommand help surfaces match baseline.
+- Experience keeps its SQL projections read-only. Identity, AI Execution, and Work admin mutations
+  are injected through Experience-owned application ports, and recap execution is Codex-owned.
+- Bootstrap owns service/router/dependency/lifecycle composition. Platform Web owns the FastAPI
+  factory, security and CSRF middleware, health/static mounts, and SPA fallback/cache behavior; the
+  stable ASGI import path is unchanged.
 - The 2,166-line legacy router, per-module legacy HTTP bridges, and frontend global API facade are
   deleted. `novelwiki.api.routes` is a SQL-free stable direct-call wrapper only; FastAPI mounts
   native module routers.
@@ -30,7 +35,8 @@ now divided among ten business modules plus Platform; no service split or topolo
 
 The GitHub Actions workflow defines pgvector-backed backend tests, architecture checks, compile checks, query-plan
 budgets, contract snapshots, Docker Compose validation, frontend unit tests, production build, and
-the ten-path Chromium suite. The committed OpenAPI, route, CLI, schema, and job-state snapshots
+the mocked Chromium suite. Local release verification additionally runs the nine-path real-backend
+suite through `scripts/test_real_browser.py`. The committed OpenAPI, route, CLI, schema, and job-state snapshots
 remain the compatibility authority.
 
 Performance is ratcheted through `performance-baseline.json`: Library composite reads and Work,
@@ -38,8 +44,8 @@ Import, and Narration `SKIP LOCKED` claim plans must remain inside reviewed Post
 budgets. The budgets intentionally include environment headroom and require an explained review to
 change.
 
-The final local working tree must be committed and pushed before its remote Actions run can be
-observed; local verification evidence is recorded in `migration-equivalence-final.md`.
+Local verification evidence is recorded in `migration-equivalence-final.md`. Remote GitHub/Actions
+verification was explicitly excluded from this finalization run and is not presented as evidence.
 
 ## Release boundary
 

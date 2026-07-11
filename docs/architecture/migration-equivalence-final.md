@@ -26,22 +26,24 @@ and frontend route/module-endpoint inventories.
 
 ## Local release evidence
 
-- Backend with disposable PostgreSQL/pgvector: 499 passed.
-- Architecture/contracts/unit gate: 287 passed.
+- Backend with disposable PostgreSQL/pgvector: 511 passed.
+- Architecture/contracts/unit gate: 299 passed.
 - Python compilation: passed.
 - Contract snapshot verification: passed.
 - Frontend Vitest: 19 passed.
 - Frontend production build: passed.
 - Mocked Chromium paths: 10 passed.
-- Real browser/FastAPI/PostgreSQL path: 1 passed, covering two registrations,
-  CSRF/session cookies, owner creation and visibility mutation, Library/Discover,
-  logout/login, and server-side session re-gating.
+- Real browser/FastAPI/PostgreSQL suite: all nine required paths passed against a database created
+  and destroyed by `scripts/test_real_browser.py`. Coverage includes session re-gating,
+  Library/Discover, trusted progress/bookmarks, overlay conflict resolution, real EPUB
+  review/commit, job cancellation/Activity, cached spoiler-clamped Ask, authorized HTTP Range
+  audio, and an admin quota mutation. Provider boundaries use seeded cache/audio fixtures only.
 - Docker Compose validation: passed.
 - Query-plan budgets: passed (`11.37/200`, `2.39/10`, `3.42/10`, `2.39/10`).
 - PostgreSQL 18 custom-format backup/restore rehearsal: passed; table catalogs and
   every table row count matched and both disposable databases were removed.
 - `git diff --check`: passed.
 
-Provider-consuming AGY/OCR/TTS work and production deployment mutations were not
-performed. GitHub Actions for these uncommitted local changes cannot exist yet; the
-final remote run must be recorded after an authorized commit/push.
+Provider-consuming AGY/OCR/TTS work and production deployment mutations were not performed.
+GitHub/Actions checking was explicitly excluded by the user for this run; no remote-green claim is
+made. Every other work-package gate was executed locally.
