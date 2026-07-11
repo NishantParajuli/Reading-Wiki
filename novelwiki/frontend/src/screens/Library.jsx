@@ -6,13 +6,13 @@ import React, { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { API } from "../lib/api.js";
+import { catalogApi } from "../modules/catalog/api.js";
 import { Icon } from "../components/Icon.jsx";
 import { Button, Chip, Cover, EmptyState, Loading, PageHeader, ProgressBar, SegmentedControl, Tabs } from "../components/ui.jsx";
 import { Popover, MenuItem } from "../components/overlay.jsx";
 import { AddNovelDialog } from "../components/AddNovelDialog.jsx";
 import { useToast } from "../components/toast.jsx";
-import { useNovelsQuery } from "../lib/queries.js";
+import { useNovelsQuery } from "../modules/catalog/queries.js";
 import { useLocalStorage, useTitle } from "../lib/hooks.js";
 import { SHELF_LABELS, SHELF_ORDER } from "../lib/constants.js";
 import { fmtChapter, relativeTime } from "../lib/utils.js";
@@ -159,14 +159,14 @@ export function Library() {
     const prevShelf = n.shelf || "";
     qc.setQueryData(["novels"], (old) => (old || []).map(x => x.id === n.id ? { ...x, shelf: shelf || null } : x));
     try {
-      await API.updateNovel(n.id, { shelf });
+      await catalogApi.updateNovel(n.id, { shelf });
       toast(shelf ? `Moved to ${SHELF_LABELS[shelf]}.` : "Removed from shelf.", {
         tone: "ok",
         action: {
           label: "Undo",
           onClick: async () => {
             qc.setQueryData(["novels"], (old) => (old || []).map(x => x.id === n.id ? { ...x, shelf: prevShelf || null } : x));
-            try { await API.updateNovel(n.id, { shelf: prevShelf }); } catch (e) { qc.invalidateQueries({ queryKey: ["novels"] }); }
+            try { await catalogApi.updateNovel(n.id, { shelf: prevShelf }); } catch (e) { qc.invalidateQueries({ queryKey: ["novels"] }); }
           },
         },
       });
@@ -179,13 +179,13 @@ export function Library() {
   async function removeFromLibrary(n) {
     qc.setQueryData(["novels"], (old) => (old || []).filter(x => x.id !== n.id));
     try {
-      await API.removeFromLibrary(n.id);
+      await catalogApi.removeFromLibrary(n.id);
       toast(`Removed “${n.title}” from your library. Progress is kept.`, {
         tone: "ok",
         action: {
           label: "Undo",
           onClick: async () => {
-            try { await API.addToLibrary(n.id); } catch (e) { /* refetch below restores truth */ }
+            try { await catalogApi.addToLibrary(n.id); } catch (e) { /* refetch below restores truth */ }
             qc.invalidateQueries({ queryKey: ["novels"] });
           },
         },

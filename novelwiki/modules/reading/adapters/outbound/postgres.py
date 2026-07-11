@@ -19,6 +19,51 @@ class PostgresReadingRepository:
     def __init__(self, connection: Any):
         self._connection = connection
 
+    async def source_chapter_numbers(self, source_id: int) -> tuple[float, ...]:
+        rows = await self._connection.fetch(
+            "SELECT number FROM chapters WHERE source_id = $1 ORDER BY number;", source_id
+        )
+        return tuple(float(row["number"]) for row in rows)
+
+    async def renumber_source_chapters(
+        self, source_id: int, novel_id: int, delta: float
+    ) -> int:
+        if delta == 0:
+            return 0
+        await self._connection.execute(
+            """
+            UPDATE bookmarks SET chapter = chapter + $2
+            WHERE novel_id = $3
+              AND chapter IN (SELECT number FROM chapters WHERE source_id = $1);
+            """,
+            source_id, delta, novel_id,
+        )
+        await self._connection.execute(
+            """
+            UPDATE reading_progress SET
+                last_chapter = CASE
+                    WHEN last_chapter IN (SELECT number FROM chapters WHERE source_id = $1)
+                    THEN last_chapter + $2 ELSE last_chapter END,
+                max_chapter_read = CASE
+                    WHEN max_chapter_read IN (SELECT number FROM chapters WHERE source_id = $1)
+                    THEN max_chapter_read + $2 ELSE max_chapter_read END
+            WHERE novel_id = $3;
+            """,
+            source_id, delta, novel_id,
+        )
+        await self._connection.execute(
+            "UPDATE chapters SET number = number + $2 + 1000000 WHERE source_id = $1;",
+            source_id, delta,
+        )
+        status = await self._connection.execute(
+            "UPDATE chapters SET number = number - 1000000 WHERE source_id = $1;",
+            source_id,
+        )
+        try:
+            return int(status.split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
     async def get_progress(self, novel_id: int, user_id: int) -> Progress:
         row = await self._connection.fetchrow(
             "SELECT last_chapter, max_chapter_read, scroll_pct FROM reading_progress "
@@ -144,9 +189,8 @@ class PostgresReadingRepository:
             """
             SELECT c.number, c.title, c.content, c.raw_html, c.content_version, c.word_count,
                    (c.original_text IS NOT NULL) AS has_original,
-                   c.language, c.is_translated, c.translation_status,
-                   s.adapter, COALESCE(s.is_raw, FALSE) AS source_is_raw
-            FROM chapters c LEFT JOIN sources s ON s.id = c.source_id
+                   c.language, c.is_translated, c.translation_status, c.source_id
+            FROM chapters c
             WHERE c.novel_id = $1 AND c.number = $2;
             """,
             novel_id, number,
@@ -195,8 +239,9 @@ class PostgresReadingRepository:
             word_count=int(row["word_count"]) if row["word_count"] is not None else None,
             has_original=bool(row["has_original"]), language=row["language"],
             is_translated=bool(row["is_translated"]),
-            translation_status=row["translation_status"], adapter=row["adapter"],
-            source_is_raw=bool(row["source_is_raw"]),
+            translation_status=row["translation_status"],
+            source_id=int(row["source_id"]) if row["source_id"] is not None else None,
+            adapter=None, source_is_raw=False,
             previous_number=float(previous["number"]) if previous else None,
             previous_title=previous["title"] if previous else None,
             next_number=float(following["number"]) if following else None,

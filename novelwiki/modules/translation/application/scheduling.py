@@ -57,12 +57,16 @@ class TranslationSchedulingService:
             novel_id, command.from_chapter, command.to_chapter, command.force
         )
         reserved = pending if decision.resolved == "agy" else 0
-        if reserved:
-            await self._quota.reserve(principal, reserved)
-        else:
-            await self._quota.check_available(principal, pending)
-        try:
-            job_id, created = await self._work.schedule(
+        from novelwiki.workflows.schedule_ai_job import schedule_ai_job
+
+        async def reserve():
+            if reserved:
+                await self._quota.reserve(principal, reserved)
+            else:
+                await self._quota.check_available(principal, pending)
+
+        async def schedule():
+            return await self._work.schedule(
                 novel_id=novel_id,
                 user_id=principal.user_id,
                 options={
@@ -76,12 +80,12 @@ class TranslationSchedulingService:
                 quota_reserved=reserved,
                 max_attempts=self._agy_max_attempts if reserved else None,
             )
-        except (QuotaExceeded, Conflict):
+
+        async def refund():
             if reserved:
                 await self._quota.refund(principal.user_id, reserved)
-            raise
-        if not created and reserved:
-            await self._quota.refund(principal.user_id, reserved)
+
+        job_id, created = await schedule_ai_job(reserve, schedule, refund)
         return {
             "status": "success",
             "message": "Translation job scheduled." if created else "A translation for this range is already running.",

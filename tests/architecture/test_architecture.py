@@ -58,43 +58,17 @@ def test_cross_module_imports_target_public_contracts_only():
     assert not violations, "\n".join(violations)
 
 
-def test_legacy_router_does_not_regain_migrated_reading_routes():
-    source = (ROOT / "novelwiki/api/routes.py").read_text(encoding="utf-8")
-    for path in (
-        '"/novels/{novel_id}/progress"',
-        '"/novels/{novel_id}/bookmarks"',
-        '"/novels/{novel_id}/bookmarks/{bookmark_id}"',
-    ):
-        assert path not in source
-
-
-def test_every_legacy_http_bridge_has_exactly_one_module_owner():
-    from novelwiki.bootstrap.legacy_http import OWNERS
-    from novelwiki.legacy.routes import router
-
-    assigned = [name for names in OWNERS.values() for name in names]
-    available = [route.endpoint.__name__ for route in router.routes]
-    assert len(assigned) == len(set(assigned))
-    assert sorted(assigned) == sorted(available)
-
-
-def test_stable_api_routes_module_is_only_a_compatibility_alias():
+def test_stable_api_routes_module_is_sql_free_direct_call_wrapper():
     source = (ROOT / "novelwiki/api/routes.py").read_text(encoding="utf-8")
     assert "@router." not in source
-    assert "novelwiki.legacy.routes" in source
+    assert "get_db_pool" not in source
+    assert not re.search(r"\b(?:SELECT|INSERT|UPDATE|DELETE)\b", source, re.IGNORECASE)
 
 
-def test_completed_modules_have_no_legacy_http_handlers():
-    from novelwiki.bootstrap.legacy_http import OWNERS
-
-    assert OWNERS["catalog"] == frozenset()
-    assert OWNERS["reading"] == frozenset()
-    assert OWNERS["acquisition"] == frozenset()
-    assert OWNERS["translation"] == frozenset()
-    assert OWNERS["codex"] == frozenset()
-    assert OWNERS["experience"] == frozenset()
-    # This ratchet makes handler extraction monotonic. Lower it as each slice lands.
-    assert sum(len(names) for names in OWNERS.values()) == 0
+def test_legacy_http_implementation_is_deleted():
+    assert not (ROOT / "novelwiki/legacy/routes.py").exists()
+    assert not (ROOT / "novelwiki/bootstrap/legacy_http.py").exists()
+    assert not list(MODULE_ROOT.glob("*/adapters/inbound/legacy_http.py"))
 
 
 @pytest.mark.parametrize(
@@ -186,6 +160,28 @@ def test_experience_projection_registry_is_explicit_and_read_only():
         "public_profile": frozenset({
             "users", "library_entries", "novels", "reading_progress", "chapters",
         }),
+        "home": frozenset({
+            "users", "novels", "library_entries", "reading_progress", "chapters",
+            "sources", "chapter_audio",
+        }),
+        "activity": frozenset({
+            "import_jobs", "tts_jobs", "jobs", "ai_execution_runs",
+        }),
+        "job_view": frozenset({"jobs", "ai_execution_runs"}),
+        "novel_health": frozenset({
+            "novels", "chapters", "entities", "chunks", "sources", "jobs",
+            "import_jobs", "tts_jobs",
+        }),
+        "cost_estimate": frozenset({"chapters", "chapter_audio", "quota_usage"}),
+        "admin_users": frozenset({
+            "users", "quota_usage", "novels", "user_ai_backend_policies", "jobs",
+        }),
+        "admin_agy_health": frozenset({
+            "ai_worker_heartbeats", "jobs", "ai_execution_runs",
+        }),
+        "admin_usage": frozenset({"quota_usage", "users", "novels"}),
+        "admin_novels": frozenset({"novels", "users", "chapters"}),
+        "admin_global_novels": frozenset({"novels", "chapters", "sources"}),
     }
     path = MODULE_ROOT / "experience/adapters/outbound/projections.py"
     source = path.read_text(encoding="utf-8")
@@ -210,3 +206,43 @@ def test_experience_admin_adapter_contains_no_write_sql():
         re.IGNORECASE,
     )
     assert not writes, f"Experience admin adapter contains write SQL: {writes}"
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        Path("experience/adapters/inbound/http.py"),
+        Path("experience/adapters/inbound/admin_http.py"),
+        Path("acquisition/adapters/inbound/worker.py"),
+    ],
+)
+def test_all_remaining_inbound_adapters_are_database_free(relative: Path):
+    source = (MODULE_ROOT / relative).read_text(encoding="utf-8")
+    assert "get_db_pool" not in source
+    tree = ast.parse(source)
+    calls = [
+        node.func.attr for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"execute", "executemany", "fetch", "fetchrow", "fetchval"}
+    ]
+    assert not calls, f"{relative}: database calls in inbound adapter: {calls}"
+
+
+def test_table_reads_and_writes_respect_owner_boundaries():
+    from novelwiki.platform.architecture.checks import table_boundary_violations
+    assert table_boundary_violations(ROOT) == []
+
+
+def test_executable_module_dependency_graph_is_acyclic():
+    from novelwiki.platform.architecture.checks import module_dependency_cycles
+    assert module_dependency_cycles(ROOT) == []
+
+
+def test_frontend_feature_boundaries_and_screen_limits():
+    from novelwiki.platform.architecture.checks import frontend_boundary_violations
+    assert frontend_boundary_violations(ROOT) == []
+
+
+def test_every_module_inbound_adapter_is_database_free():
+    from novelwiki.platform.architecture.checks import inbound_database_violations
+    assert inbound_database_violations(ROOT) == []

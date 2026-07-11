@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 from novelwiki.kernel.errors import Conflict, NotFound, ValidationFailed
 from novelwiki.kernel.transactions import UnitOfWork
@@ -9,7 +10,7 @@ from novelwiki.modules.identity.public import Principal, UserDirectoryApi
 
 from ..public import ReadingTransactionApi
 from .dto import ChapterListItem, ServedChapter
-from .ports import ChapterTranslationPort, SelfTranslationQuotaPort
+from .ports import ChapterTranslationPort, SelfTranslationQuotaPort, SourceMetadataPort
 
 
 class ReadingMigrationService:
@@ -47,6 +48,13 @@ class ReadingMigrationService:
             ).require_readable(novel_id, principal)
             snapshot = await uow.transaction.bind(ReadingTransactionApi).get_chapter(
                 novel_id, number, principal.user_id if principal is not None else None
+            )
+            source = await uow.transaction.bind(SourceMetadataPort).source_metadata(
+                snapshot.source_id
+            )
+            snapshot = replace(
+                snapshot, adapter=source.get("adapter"),
+                source_is_raw=bool(source.get("is_raw")),
             )
 
         content = snapshot.content

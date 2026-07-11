@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { API } from "../../lib/api.js";
+import { codexApi } from "../../modules/codex/api.js";
 import { useNovel } from "../../layouts/NovelLayout.jsx";
 import { Icon } from "../../components/Icon.jsx";
 import { Chip, EmptyState, EntityAvatar, TypeBadge } from "../../components/ui.jsx";
@@ -92,7 +92,7 @@ export function CodexBrowser() {
     let cancel = false;
     setList(null);
     const type = filter === "all" ? null : filter;
-    API.listEntities(novelId, debCeiling, { type, q: debQ.trim() || null })
+    codexApi.listEntities(novelId, debCeiling, { type, q: debQ.trim() || null })
       .then(rows => {
         if (cancel) return;
         const sorted = [...rows].sort((a, b) => a.name.localeCompare(b.name));

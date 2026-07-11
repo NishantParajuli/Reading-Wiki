@@ -5,16 +5,6 @@ from typing import Protocol
 
 
 class WorkerStateRepository(Protocol):
-    async def load_user(self, user_id: int) -> dict | None: ...
-
-    async def pending_translations(
-        self,
-        novel_id: int,
-        from_chapter: float | None,
-        to_chapter: float | None,
-        force: bool,
-    ) -> list[float]: ...
-
     async def renew_lease(self, job_id: int, token: str) -> None: ...
 
     async def stale_leases(self, lease: timedelta) -> list[dict]: ...
@@ -26,3 +16,13 @@ class WorkerStateRepository(Protocol):
     async def requeue_stale_lease(self, job_id: int, lease: timedelta) -> bool: ...
 
     async def release_due_provider_waits(self) -> None: ...
+
+
+class WorkerIdentityPort(Protocol):
+    async def load_user(self, user_id: int) -> dict | None: ...
+
+
+class WorkerTranslationPort(Protocol):
+    async def translation_range(
+        self, novel_id: int, start: float | None, end: float | None, force: bool
+    ) -> list[float]: ...

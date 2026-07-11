@@ -8,11 +8,6 @@ class PostgresAgyWorkerStateRepository:
         self._pool = pool
         self._lock_connection = None
 
-    async def load_user(self, user_id: int) -> dict | None:
-        async with self._pool.acquire() as connection:
-            row = await connection.fetchrow("SELECT * FROM users WHERE id=$1;", user_id)
-        return dict(row) if row else None
-
     async def write_heartbeat(self, **fields) -> None:
         async with self._pool.acquire() as connection:
             await connection.execute(
@@ -43,7 +38,17 @@ class PostgresAgyWorkerStateRepository:
             )
         return [dict(row) for row in rows]
 
-    async def mark_orphan_lost(self, run_id: int, release_translation: bool) -> None:
+    async def resumable_runs(self, job_id: int, workloads: tuple[str, ...]) -> list[dict]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                "SELECT id,parent_run_id,workload,workspace_relpath,input_sha256 "
+                "FROM ai_execution_runs WHERE job_id=$1 AND workload=ANY($2::text[]) "
+                "AND status='validating' ORDER BY created_at;",
+                job_id, list(workloads),
+            )
+        return [dict(row) for row in rows]
+
+    async def mark_orphan_lost(self, run_id: int) -> None:
         async with self._pool.acquire() as connection:
             await connection.execute(
                 """
@@ -55,44 +60,6 @@ class PostgresAgyWorkerStateRepository:
                 """,
                 run_id,
             )
-            if release_translation:
-                await connection.execute(
-                    """
-                    UPDATE chapters SET translation_status='failed',
-                      translation_run_id=NULL
-                    WHERE translation_run_id=$1 AND translation_status='translating';
-                    """,
-                    run_id,
-                )
-
-    async def active_job_count(self, user_id: int) -> int:
-        async with self._pool.acquire() as connection:
-            return int(await connection.fetchval(
-                """
-                SELECT count(*) FROM jobs WHERE user_id=$1
-                  AND execution_backend='agy'
-                  AND status IN ('queued','running','waiting_provider');
-                """,
-                user_id,
-            ) or 0)
-
-    async def fallback_to_api(
-        self, job_id: int, model: str, max_attempts: int, error: str
-    ) -> bool:
-        async with self._pool.acquire() as connection:
-            changed = await connection.fetchrow(
-                """
-                UPDATE jobs SET execution_backend='api',backend_fallback_from='agy',
-                  backend_model=$2,backend_fallback_allowed=FALSE,status='queued',
-                  stage='AGY failed; switching to API',attempts=0,max_attempts=$3,
-                  error=$4,claim_token=NULL,claimed_at=NULL,not_before=NULL,
-                  cancel_requested_at=NULL,updated_at=now()
-                WHERE id=$1 AND status='running' RETURNING id;
-                """,
-                job_id, model, max_attempts, error,
-            )
-        return changed is not None
-
     async def acquire_subscription_lock(self, key: str) -> bool:
         connection = await self._pool.acquire()
         try:

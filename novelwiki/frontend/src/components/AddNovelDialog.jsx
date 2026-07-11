@@ -1,6 +1,7 @@
 /* Add-novel dialog (form logic preserved from the old AddNovelForm). */
 import React, { useEffect, useState } from "react";
-import { API } from "../lib/api.js";
+import { acquisitionApi } from "../modules/acquisition/api.js";
+import { catalogApi } from "../modules/catalog/api.js";
 import { Dialog } from "./overlay.jsx";
 import { Button } from "./ui.jsx";
 
@@ -16,7 +17,7 @@ export function AddNovelDialog({ onCreated, onClose }) {
   const [err, setErr] = useState(null);
 
   useEffect(() => {
-    API.adapters().then(list => {
+    acquisitionApi.adapters().then(list => {
       setAdapters(list);
       if (list[0]) setAdapter(a => a || list[0].name);
     }).catch(() => setAdapters([]));
@@ -33,7 +34,7 @@ export function AddNovelDialog({ onCreated, onClose }) {
     if (!title.trim() || !startUrl.trim() || busy) return;
     setBusy(true); setErr(null);
     try {
-      const res = await API.createNovel({
+      const res = await catalogApi.createNovel({
         title: title.trim(),
         codex_enabled: codex,
         original_language: language,

@@ -4,7 +4,7 @@ from novelwiki.kernel.errors import Conflict, NotFound
 from novelwiki.modules.identity.public import Principal
 
 from ..domain.tags import clean_status_tags
-from ..public import NovelAccess, NovelDraft, TagSuggestionRecord
+from ..public import ImportedNovelDraft, NovelAccess, NovelDraft, TagSuggestionRecord
 from .access import CatalogAccessService
 from .ports import CatalogRepository
 
@@ -22,7 +22,7 @@ class CatalogTransactionService:
     async def require_editable(self, novel_id: int, principal: object) -> NovelAccess:
         return await self._access.require_editable(novel_id, principal)
 
-    async def create_novel(self, draft: NovelDraft, owner_id: int) -> int:
+    async def create_novel(self, draft: NovelDraft, owner_id: int | None) -> int:
         return await self._repository.create_novel(draft, owner_id)
 
     async def add_to_library(self, novel_id: int, user_id: int) -> None:
@@ -30,6 +30,27 @@ class CatalogTransactionService:
 
     async def delete_novel(self, novel_id: int) -> None:
         await self._repository.delete_novel(novel_id)
+
+    async def enable_codex(self, novel_id: int) -> None:
+        await self._repository.update_metadata(novel_id, {"codex_enabled": True})
+
+    async def create_imported_novel(self, draft: ImportedNovelDraft) -> int:
+        novel_id = await self._repository.create_imported_novel(draft)
+        if draft.owner_id is not None:
+            await self._repository.add_to_library(novel_id, draft.owner_id)
+        return novel_id
+
+    async def novel_exists(self, novel_id: int) -> bool:
+        return await self._repository.novel_exists(novel_id)
+
+    async def codex_enabled(self, novel_id: int) -> bool:
+        return await self._repository.codex_enabled(novel_id)
+
+    async def set_cover_if_missing(self, novel_id: int, cover_url: str) -> None:
+        await self._repository.set_cover_if_missing(novel_id, cover_url)
+
+    async def touch_novel(self, novel_id: int) -> None:
+        await self._repository.touch_novel(novel_id)
 
     async def create_tag_suggestion(
         self, novel_id: int, from_user_id: int, tags: list[str], note: str | None

@@ -14,7 +14,6 @@ import asyncio
 import hashlib
 import logging
 import uuid
-from decimal import Decimal
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
 from novelwiki.agent.llm_client import call_chat_completion
@@ -26,6 +25,11 @@ logger = logging.getLogger(__name__)
 # Per-(novel, chapter) locks so an on-demand request and a prefetch task never
 # translate the same chapter twice (single-process uvicorn).
 _locks: dict[tuple[int, float], asyncio.Lock] = {}
+
+
+async def _translation_runtime():
+    from novelwiki.bootstrap.translation import build_translation_runtime
+    return await build_translation_runtime()
 
 
 def _lock_for(novel_id: int, number: float) -> asyncio.Lock:
@@ -154,62 +158,17 @@ async def stage_translation_batch(
     reader request now sees ``translating`` and will not launch an API call for a
     chapter already staged by the host worker.
     """
-    if not chapter_numbers:
-        return []
-    pool = await get_db_pool()
-    staged: list[dict] = []
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            rows = await conn.fetch(
-                """
-                SELECT number, title, original_text, content, language,
-                       translation_status, content_version
-                FROM chapters
-                WHERE novel_id=$1 AND number=ANY($2::numeric[])
-                ORDER BY number ASC FOR UPDATE;
-                """,
-                novel_id, [Decimal(str(number)) for number in chapter_numbers],
-            )
-            for row in rows:
-                if not row["original_text"]:
-                    continue
-                if row["content"] and not force:
-                    continue
-                if row["translation_status"] == "translating":
-                    continue
-                digest = source_sha256(row["original_text"])
-                await conn.execute(
-                    """
-                    UPDATE chapters SET translation_status='translating', translation_run_id=$3,
-                      translation_source_sha256=$4
-                    WHERE novel_id=$1 AND number=$2;
-                    """,
-                    novel_id, row["number"], run_id, digest,
-                )
-                staged.append({
-                    "number": float(row["number"]),
-                    "title": row["title"],
-                    "original_text": row["original_text"],
-                    "language": row["language"] or "the source language",
-                    "source_sha256": digest,
-                    "source_content_version": int(row["content_version"] or 1),
-                })
-    return staged
+    reading, _uow_factory = await _translation_runtime()
+    return await reading.stage_translation_batch(
+        novel_id, chapter_numbers, run_id, force
+    )
 
 
 async def reset_staged_translations(run_id: uuid.UUID, *, status: str = "failed") -> int:
     if status not in ("failed", "pending", "none"):
         raise ValueError("invalid translation reset status")
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        result = await conn.execute(
-            """
-            UPDATE chapters SET translation_status=$2, translation_run_id=NULL
-            WHERE translation_run_id=$1 AND translation_status='translating';
-            """,
-            run_id, status,
-        )
-    return int(result.rsplit(" ", 1)[-1])
+    reading, _uow_factory = await _translation_runtime()
+    return await reading.reset_staged_translations(run_id, status)
 
 
 async def commit_translation(
@@ -234,61 +193,22 @@ async def commit_translation(
     """
     if not translation or not translation.strip():
         raise ValueError("translation must not be empty")
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
-                SELECT original_text, content, content_version, translation_status,
-                       translation_run_id, translation_source_sha256
-                FROM chapters WHERE novel_id=$1 AND number=$2 FOR UPDATE;
-                """,
-                novel_id, chapter_number,
-            )
-            if not row:
-                raise SourceChangedError("chapter no longer exists")
-            actual_hash = source_sha256(row["original_text"])
+    from novelwiki.workflows.commit_translation import commit_translation as workflow
 
-            # Replay after commit: the same AGY run is already durable.
-            if run_id is not None and row["translation_run_id"] == run_id \
-                    and row["translation_status"] == "done" \
-                    and row["translation_source_sha256"] == expected_source_hash:
-                return {"status": "done", "content": row["content"], "idempotent": True}
-
-            if actual_hash != expected_source_hash or int(row["content_version"] or 1) != int(expected_content_version):
-                raise SourceChangedError("chapter source or content version changed")
-            if run_id is not None and row["translation_run_id"] != run_id:
-                raise SourceChangedError("chapter is no longer staged by this AGY run")
-            if run_id is None and row["translation_run_id"] is not None:
-                raise SourceChangedError("chapter is staged by another translation worker")
-
-            title = (translated_title or "").strip() or None
-            word_count = len(translation.split())
-            await conn.execute(
-                """
-                UPDATE chapters SET
-                  title=COALESCE($3, title), content=$4, is_translated=TRUE,
-                  translation_status='done', translation_model=$5, word_count=$6,
-                  content_version=content_version + 1,
-                  translation_run_id=$7, translation_source_sha256=$8
-                WHERE novel_id=$1 AND number=$2;
-                """,
-                novel_id, chapter_number, title, translation.strip(), model_label,
-                word_count, run_id, expected_source_hash,
-            )
-            await conn.execute(
-                """
-                UPDATE chapter_overlays SET conflict=TRUE, updated_at=now()
-                WHERE novel_id=$1 AND chapter=$2
-                  AND base_version < (SELECT content_version FROM chapters WHERE novel_id=$1 AND number=$2);
-                """,
-                novel_id, chapter_number,
-            )
-            await _upsert_terms(novel_id, new_terms, conn)
-            if job_id is not None:
-                from novelwiki.jobs import service as jobs_service
-                await jobs_service.increment_quota_consumed(job_id, 1, conn=conn)
-    return {"status": "done", "content": translation.strip(), "new_terms": len(new_terms), "idempotent": False}
+    _reading, uow_factory = await _translation_runtime()
+    try:
+        return await workflow(
+            uow_factory, novel_id, chapter_number,
+            expected_source_hash=expected_source_hash,
+            expected_content_version=expected_content_version,
+            translated_title=translated_title, translation=translation,
+            new_terms=new_terms, model_label=model_label, run_id=run_id,
+            job_id=job_id,
+        )
+    except RuntimeError as exc:
+        if str(exc).startswith("chapter "):
+            raise SourceChangedError(str(exc)) from exc
+        raise
 
 
 async def translate_chapter(novel_id: int, number: float, force: bool = False,
@@ -299,39 +219,28 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
     Returns {status, content, new_terms}."""
     charged_user_id = None
     async with _lock_for(novel_id, number):
+        reading, _uow_factory = await _translation_runtime()
+        ch = await reading.translation_candidate(novel_id, number)
+        if not ch:
+            return {"status": "missing", "content": None}
+        if ch["content"] and not force:
+            return {"status": "done", "content": ch["content"]}
+        if not ch["original_text"]:
+            return {"status": ch["translation_status"] or "none", "content": ch["content"]}
+        if ch["translation_status"] == "translating" or ch["translation_run_id"] is not None:
+            return {"status": "translating", "content": ch["content"]}
+        if meter_user is not None:
+            from novelwiki import quota
+            if not await quota.try_reserve(meter_user, "translated_chapters", 1):
+                return {"status": "quota_exceeded", "content": ch["content"]}
+            charged_user_id = int(meter_user["id"])
+        language = ch["language"] or "the source language"
+        expected_hash = source_sha256(ch["original_text"])
+        expected_version = int(ch["content_version"] or 1)
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            ch = await conn.fetchrow(
-                """
-                SELECT title, original_text, content, translation_status, language, content_version,
-                       translation_run_id
-                FROM chapters WHERE novel_id = $1 AND number = $2;
-                """,
-                novel_id, number,
-            )
-            if not ch:
-                return {"status": "missing", "content": None}
-            # Already translated (or a normal English chapter): nothing to do.
-            if ch["content"] and not force:
-                return {"status": "done", "content": ch["content"]}
-            if not ch["original_text"]:
-                return {"status": ch["translation_status"] or "none", "content": ch["content"]}
-            if ch["translation_status"] == "translating" or ch["translation_run_id"] is not None:
-                return {"status": "translating", "content": ch["content"]}
-            if meter_user is not None:
-                from novelwiki import quota
-                if not await quota.try_reserve(meter_user, "translated_chapters", 1):
-                    return {"status": "quota_exceeded", "content": ch["content"]}
-                charged_user_id = int(meter_user["id"])
-            language = ch["language"] or "the source language"
-            expected_hash = source_sha256(ch["original_text"])
-            expected_version = int(ch["content_version"] or 1)
             confirmed_g, established_g = _format_glossary(await _load_glossary(novel_id, conn))
-            await conn.execute(
-                "UPDATE chapters SET translation_status='translating', translation_run_id=NULL, "
-                "translation_source_sha256=$3 WHERE novel_id=$1 AND number=$2;",
-                novel_id, number, expected_hash,
-            )
+        await reading.mark_translation_started(novel_id, number, expected_hash)
 
         title = f": {ch['title']}" if ch["title"] else ""
         text = ch["original_text"][: settings.TRANSLATE_MAX_INPUT_CHARS]
@@ -349,11 +258,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
                 raise ValueError("empty translation returned")
         except Exception as e:
             logger.error(f"Translation failed for novel {novel_id} ch {number}: {e}")
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE chapters SET translation_status = 'failed' WHERE novel_id = $1 AND number = $2;",
-                    novel_id, number,
-                )
+            await reading.mark_translation_failed(novel_id, number)
             if charged_user_id is not None:
                 from novelwiki import quota
                 refunded = await quota.refund(charged_user_id, "translated_chapters", 1)
@@ -375,13 +280,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
             )
         except Exception as e:
             logger.warning(f"Translation commit lost race for novel {novel_id} ch {number}: {e}")
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE chapters SET translation_status='failed' "
-                    "WHERE novel_id=$1 AND number=$2 AND translation_run_id IS NULL "
-                    "AND translation_status='translating';",
-                    novel_id, number,
-                )
+            await reading.mark_translation_failed(novel_id, number, only_unowned=True)
             if charged_user_id is not None:
                 from novelwiki import quota
                 await quota.refund(charged_user_id, "translated_chapters", 1)
@@ -394,14 +293,12 @@ async def translate_raw_text(novel_id: int, number: float) -> str | None:
     """Translate a raw chapter's original_text and RETURN the text without touching the
     shared base. Used by per-user self-translation overlays (Phase 5): the result is stored
     in chapter_overlays, never in chapters.content. Returns None if there's nothing to translate."""
+    reading, _uow_factory = await _translation_runtime()
+    ch = await reading.translation_candidate(novel_id, number)
+    if not ch or not ch["original_text"]:
+        return None
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        ch = await conn.fetchrow(
-            "SELECT title, original_text, language FROM chapters WHERE novel_id = $1 AND number = $2;",
-            novel_id, number,
-        )
-        if not ch or not ch["original_text"]:
-            return None
         confirmed_g, established_g = _format_glossary(await _load_glossary(novel_id, conn))
 
     language = ch["language"] or "the source language"
@@ -419,19 +316,8 @@ async def translate_raw_text(novel_id: int, number: float) -> str | None:
 
 
 async def _pending_after(novel_id: int, after_number: float, count: int) -> list[float]:
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT number FROM chapters
-            WHERE novel_id = $1 AND number > $2
-              AND content IS NULL AND original_text IS NOT NULL
-              AND translation_status IN ('none', 'pending', 'failed')
-            ORDER BY number ASC LIMIT $3;
-            """,
-            novel_id, after_number, count,
-        )
-    return [float(r["number"]) for r in rows]
+    reading, _uow_factory = await _translation_runtime()
+    return await reading.pending_after(novel_id, after_number, count)
 
 
 async def prefetch_translations(novel_id: int, after_number: float, count: int | None = None,
@@ -456,22 +342,13 @@ async def translate_range(novel_id: int, from_chapter: float | None = None,
                           meter_user: dict | None = None) -> int:
     """Translate all (pending, unless force) raw chapters in a range. Used by the
     manual 'Translate' action / CLI; reading itself uses on-demand + prefetch."""
-    pool = await get_db_pool()
-    conds = ["novel_id = $1", "original_text IS NOT NULL"]
-    args: list = [novel_id]
-    if not force:
-        conds.append("content IS NULL")
-    if from_chapter is not None:
-        args.append(from_chapter); conds.append(f"number >= ${len(args)}")
-    if to_chapter is not None:
-        args.append(to_chapter); conds.append(f"number <= ${len(args)}")
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            f"SELECT number FROM chapters WHERE {' AND '.join(conds)} ORDER BY number ASC;", *args
-        )
+    reading, _uow_factory = await _translation_runtime()
+    rows = await reading.translation_range(
+        novel_id, from_chapter, to_chapter, force
+    )
     done = 0
-    for r in rows:
-        res = await translate_chapter(novel_id, float(r["number"]), force=force, meter_user=meter_user)
+    for number in rows:
+        res = await translate_chapter(novel_id, number, force=force, meter_user=meter_user)
         if res.get("status") == "quota_exceeded":
             break
         if res.get("status") == "done":
@@ -485,32 +362,8 @@ async def seed_glossary_from_entities(novel_id: int) -> int:
     left equal to the canonical name (the model fills the real foreign term as it meets
     it); the point is to hand the translator the established English spellings so a raw
     continuation keeps "Lin Xuan" rather than inventing "Lin Xenon"."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT canonical_name, type FROM entities
-            WHERE novel_id = $1 AND type IN ('character', 'location', 'faction', 'organization', 'item')
-            ORDER BY first_seen_chapter ASC;
-            """,
-            novel_id,
-        )
-        n = 0
-        for r in rows:
-            name = (r["canonical_name"] or "").strip()
-            if not name:
-                continue
-            ttype = {"character": "name", "location": "place", "faction": "name",
-                     "organization": "name", "item": "item"}.get(r["type"], "term")
-            res = await conn.execute(
-                """
-                INSERT INTO translation_glossary (novel_id, source_term, translation, term_type, notes)
-                VALUES ($1, $2, $2, $3, 'seeded from codex')
-                ON CONFLICT (novel_id, source_term) DO NOTHING;
-                """,
-                novel_id, name, ttype,
-            )
-            if res.endswith("1"):
-                n += 1
+    from novelwiki.bootstrap.translation import seed_system_glossary
+    n = await seed_system_glossary(novel_id)
     logger.info(f"Seeded {n} glossary terms from codex entities for novel {novel_id}.")
     return n
+

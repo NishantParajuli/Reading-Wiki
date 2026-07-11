@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 
-class LegacyImportGateway:
+class ImportRuntimeGateway:
     """Adapter over the existing durable importer and filesystem implementation."""
 
     def __init__(self, pool):

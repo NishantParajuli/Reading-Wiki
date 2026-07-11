@@ -7,13 +7,16 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { API } from "../lib/api.js";
+import { codexApi } from "../modules/codex/api.js";
+import { experienceApi } from "../modules/experience/api.js";
+import { identityApi } from "../modules/identity/api.js";
 import { useAuth, useTheme } from "../App.jsx";
 import { Icon } from "../components/Icon.jsx";
 import { Cover, ProgressBar, UserAvatar } from "../components/ui.jsx";
 import { MenuItem, Popover } from "../components/overlay.jsx";
 import { useToast } from "../components/toast.jsx";
-import { useActivityQuery, isActiveJob, useNovelQuery, useNovelsQuery } from "../lib/queries.js";
+import { useNovelQuery, useNovelsQuery } from "../modules/catalog/queries.js";
+import { isActiveJob, useActivityQuery } from "../modules/experience/queries.js";
 import { useDebounce, useLocalStorage, useOnline } from "../lib/hooks.js";
 import { ACT_KIND_LABEL } from "../lib/constants.js";
 
@@ -64,7 +67,7 @@ function UserMenu() {
 
   useEffect(() => {
     if (open && usage == null) {
-      API.usage().then(setUsage).catch(() => setUsage({ unlimited: true }));
+      identityApi.usage().then(setUsage).catch(() => setUsage({ unlimited: true }));
     }
   }, [open, usage]);
 
@@ -124,11 +127,11 @@ function CommandPalette({ onClose, novelId, ceiling }) {
   useEffect(() => {
     if (!debQ.trim()) { setRemote([]); setEntities([]); return; }
     let cancel = false;
-    API.discover({ q: debQ.trim(), limit: 6 })
+    experienceApi.discover({ q: debQ.trim(), limit: 6 })
       .then(r => { if (!cancel) setRemote(Array.isArray(r) ? r : (r.items || [])); })
       .catch(() => {});
     if (novelId != null && ceiling != null) {
-      API.listEntities(novelId, ceiling, { q: debQ.trim() })
+      codexApi.listEntities(novelId, ceiling, { q: debQ.trim() })
         .then(rows => { if (!cancel) setEntities(rows.slice(0, 6)); })
         .catch(() => {});
     }

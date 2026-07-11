@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 
-from .ports import WorkerStateRepository
+from .ports import WorkerIdentityPort, WorkerStateRepository, WorkerTranslationPort
 
 
 @dataclass(frozen=True)
@@ -15,13 +15,18 @@ class LeaseRecovery:
 class WorkerStateService:
     """Application policy for generic-worker persistence and lease recovery."""
 
-    def __init__(self, repository: WorkerStateRepository):
+    def __init__(
+        self, repository: WorkerStateRepository, identity: WorkerIdentityPort,
+        translation: WorkerTranslationPort,
+    ):
         self._repository = repository
+        self._identity = identity
+        self._translation = translation
 
     async def load_user(self, user_id: int | None) -> dict | None:
         if user_id is None:
             return None
-        return await self._repository.load_user(user_id)
+        return await self._identity.load_user(user_id)
 
     async def pending_translations(
         self,
@@ -30,7 +35,7 @@ class WorkerStateService:
         to_chapter: float | None,
         force: bool,
     ) -> list[float]:
-        return await self._repository.pending_translations(
+        return await self._translation.translation_range(
             novel_id, from_chapter, to_chapter, force
         )
 

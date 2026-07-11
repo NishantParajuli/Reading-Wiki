@@ -173,6 +173,16 @@ async def _charge_gemini_budget() -> int:
     return int(used)
 
 
+async def gemini_budget_remaining(daily_budget: int) -> int:
+    from novelwiki.db.connection import get_db_pool
+    pool = await get_db_pool()
+    async with pool.acquire() as connection:
+        used = await connection.fetchval(
+            "SELECT used FROM provider_budget WHERE provider='gemini' AND day=CURRENT_DATE;"
+        )
+    return max(0, int(daily_budget) - int(used or 0))
+
+
 async def _gemini_rate_gate():
     """Sleeps just enough to keep at least 60/RPM seconds between Gemini calls."""
     global _gemini_last_call

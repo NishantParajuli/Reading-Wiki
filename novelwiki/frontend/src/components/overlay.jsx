@@ -6,7 +6,7 @@ import React, { useEffect, useState } from "react";
 import { Icon } from "./Icon.jsx";
 import { Button } from "./ui.jsx";
 import { useDismissable, useFocusTrap } from "../lib/hooks.js";
-import { API } from "../lib/api.js";
+import { experienceApi } from "../modules/experience/api.js";
 
 export function Dialog({ title, icon, danger, wide, onClose, children, busy }) {
   const trapRef = useFocusTrap(true);
@@ -71,7 +71,7 @@ export function CostConfirmDialog({ novelId, action, params, title, actionLabel 
   useEffect(() => {
     let cancel = false;
     setEst(null);
-    API.costEstimate(novelId, action, params || {})
+    experienceApi.costEstimate(novelId, action, params || {})
       .then(e => { if (!cancel) setEst(e); })
       .catch(() => { if (!cancel) setEst(false); });
     return () => { cancel = true; };

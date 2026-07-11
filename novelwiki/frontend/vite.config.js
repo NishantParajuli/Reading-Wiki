@@ -6,6 +6,9 @@ import react from "@vitejs/plugin-react";
 // mounts with immutable cache headers + an SPA fallback for BrowserRouter paths.
 export default defineConfig({
   plugins: [react()],
+  test: {
+    include: ["src/**/*.test.{js,jsx}"],
+  },
   build: {
     outDir: "dist",
     sourcemap: false,

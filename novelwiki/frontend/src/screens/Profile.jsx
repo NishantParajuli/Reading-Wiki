@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { API } from "../lib/api.js";
+import { identityApi } from "../modules/identity/api.js";
 import { useAuth } from "../App.jsx";
 import { Button, Chip, Cover, EmptyState, Loading, ProgressBar, StatTile, UserAvatar } from "../components/ui.jsx";
 import { useTitle } from "../lib/hooks.js";
@@ -43,7 +43,7 @@ export function Profile() {
 
   useEffect(() => {
     setData(null); setErr(null);
-    API.profile(username).then(setData).catch(e => setErr(e.message || "Couldn't load this profile."));
+    identityApi.profile(username).then(setData).catch(e => setErr(e.message || "Couldn't load this profile."));
   }, [username]);
 
   if (err) {

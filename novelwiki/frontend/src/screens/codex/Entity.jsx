@@ -3,7 +3,8 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { API, portraitLabel } from "../../lib/api.js";
+import { codexApi } from "../../modules/codex/api.js";
+import { portraitLabel } from "../../modules/codex/presentation.js";
 import { useNovel } from "../../layouts/NovelLayout.jsx";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, Chip, EmptyState, EntityAvatar, Loading, TypeBadge } from "../../components/ui.jsx";
@@ -42,13 +43,13 @@ export function EntityPage() {
     setStatus("loading");
     (async () => {
       try {
-        const p = await API.entityProfile(novelId, id, debCeiling);
+        const p = await codexApi.entityProfile(novelId, id, debCeiling);
         if (cancel) return;
         setProfile(p);
         const [r, t, i] = await Promise.all([
-          API.relationships(novelId, id, debCeiling).catch(() => []),
-          API.timeline(novelId, id, debCeiling).catch(() => []),
-          API.identities(novelId, id, debCeiling).catch(() => []),
+          codexApi.relationships(novelId, id, debCeiling).catch(() => []),
+          codexApi.timeline(novelId, id, debCeiling).catch(() => []),
+          codexApi.identities(novelId, id, debCeiling).catch(() => []),
         ]);
         if (cancel) return;
         setRels(r || []); setTl(t || []); setIdl(i || []);

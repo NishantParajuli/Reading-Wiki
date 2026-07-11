@@ -1,7 +1,7 @@
 /* Tag vocabulary editing: radio groups + genre checkboxes, the reader
    "suggest tags" flow, and the shelf segmented control. */
 import React, { useState } from "react";
-import { API } from "../lib/api.js";
+import { catalogApi } from "../modules/catalog/api.js";
 import { Icon } from "../components/Icon.jsx";
 import { Button, Chip, SegmentedControl } from "../components/ui.jsx";
 import { useToast } from "../components/toast.jsx";
@@ -57,7 +57,7 @@ export function TagSuggestForm({ novel, current, onClose }) {
   async function submit() {
     setBusy(true);
     try {
-      await API.suggestTags(novel.id, tags, note);
+      await catalogApi.suggestTags(novel.id, tags, note);
       toast("Tag suggestion sent to the owner for review.", { tone: "ok" });
       onClose();
     } catch (e) {
@@ -90,7 +90,7 @@ export function ShelfControl({ novel, reloadNovel }) {
     if (busy) return;
     const next = shelf === s ? "" : s;
     setBusy(true);
-    try { await API.updateNovel(novel.id, { shelf: next }); reloadNovel(); }
+    try { await catalogApi.updateNovel(novel.id, { shelf: next }); reloadNovel(); }
     catch (e) { toast(e.message || "Couldn't change the shelf.", { tone: "danger" }); }
     finally { setBusy(false); }
   };

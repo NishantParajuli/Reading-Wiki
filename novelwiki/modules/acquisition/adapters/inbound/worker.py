@@ -32,7 +32,6 @@ import uuid
 from datetime import timedelta
 
 from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
 from novelwiki.importer import storage
 
 logger = logging.getLogger(__name__)
@@ -76,6 +75,11 @@ _stop = asyncio.Event()
 _OCR_LOCK = asyncio.Lock()
 
 
+async def _worker_repository():
+    from novelwiki.bootstrap.acquisition import build_import_worker_repository
+    return await build_import_worker_repository()
+
+
 # ── Row (de)serialization ────────────────────────────────────────────────────
 
 def _loads(v):
@@ -102,13 +106,8 @@ async def _job_owner_can_spend(job: dict) -> bool:
     user_id = job.get("user_id")
     if user_id is None:
         return True
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM users WHERE id = $1;", user_id)
-    if row is None:
-        return False
-    from novelwiki import quota
-    return quota.spend_allowed(dict(row))
+    from novelwiki.bootstrap.acquisition import import_worker_owner_can_spend
+    return await import_worker_owner_can_spend(user_id)
 
 
 async def create_job(format: str, original_path: str, file_sha256: str | None = None,
@@ -117,38 +116,20 @@ async def create_job(format: str, original_path: str, file_sha256: str | None = 
     """Insert a job row owned by `user_id` (the uploader). Callers that already have the file
     on disk use the default 'uploaded' status (the worker picks it up); the multipart upload
     path inserts as 'receiving' first, saves the blob under the new id, then flips to 'uploaded'."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        return int(await conn.fetchval(
-            """
-            INSERT INTO import_jobs (format, original_path, file_sha256, options, detected_meta, status, user_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id;
-            """,
-            format, original_path, file_sha256,
-            json.dumps(options or {}), json.dumps(detected_meta or {}), status, user_id,
-        ))
+    return await (await _worker_repository()).create_job(
+        format, original_path, file_sha256, options or {}, detected_meta or {},
+        status, user_id,
+    )
 
 
 async def get_job(job_id: int) -> dict | None:
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM import_jobs WHERE id = $1;", job_id)
+    row = await (await _worker_repository()).get_job(job_id)
     return _row_to_job(row) if row else None
 
 
 async def list_jobs(limit: int = 100, user_id: int | None = None) -> list[dict]:
     """All jobs (admin) or only those owned by `user_id`."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        if user_id is None:
-            rows = await conn.fetch(
-                "SELECT * FROM import_jobs ORDER BY created_at DESC LIMIT $1;", limit
-            )
-        else:
-            rows = await conn.fetch(
-                "SELECT * FROM import_jobs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2;",
-                user_id, limit,
-            )
+    rows = await (await _worker_repository()).list_jobs(limit, user_id)
     return [_row_to_job(r) for r in rows]
 
 
@@ -156,17 +137,7 @@ async def update_job(job_id: int, **fields) -> None:
     """Patch a job row. JSONB fields are json-dumped automatically; `updated_at` bumps."""
     if not fields:
         return
-    sets, args = [], []
-    for k, v in fields.items():
-        args.append(json.dumps(v) if k in _JSON_FIELDS and v is not None else v)
-        sets.append(f"{k} = ${len(args)}")
-    args.append(job_id)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            f"UPDATE import_jobs SET {', '.join(sets)}, updated_at = now() WHERE id = ${len(args)};",
-            *args,
-        )
+    await (await _worker_repository()).update_job(job_id, fields)
 
 
 async def fail_job(job_id: int, error: str) -> None:
@@ -177,9 +148,7 @@ async def fail_job(job_id: int, error: str) -> None:
 async def touch_job(job_id: int) -> None:
     """Bump ``updated_at`` alone — marks a `receiving` upload session as still alive so its chunks
     still arriving don't let the abandoned-session sweep read it as dead."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE import_jobs SET updated_at = now() WHERE id = $1;", job_id)
+    await (await _worker_repository()).touch_job(job_id)
 
 
 # ── Stage handlers ───────────────────────────────────────────────────────────
@@ -263,11 +232,7 @@ _PRE_REVIEW = ("receiving", "uploaded", "parsing", "segmenting",
 async def _batch_siblings(batch_id: str) -> list[dict]:
     if not batch_id:
         return []
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM import_jobs WHERE options->>'batch_id' = $1 ORDER BY id ASC;", batch_id
-        )
+    rows = await (await _worker_repository()).batch_siblings(batch_id)
     return [_row_to_job(r) for r in rows]
 
 
@@ -314,22 +279,18 @@ async def imports_with_hash(file_sha256: str, exclude_job_id: int | None = None)
     callers surface committed ones as a 'you already imported this' warning."""
     if not file_sha256:
         return []
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT j.id, j.novel_id, j.status, j.created_at, n.title AS novel_title
-            FROM import_jobs j LEFT JOIN novels n ON n.id = j.novel_id
-            WHERE j.file_sha256 = $1 AND ($2::bigint IS NULL OR j.id <> $2)
-            ORDER BY j.created_at DESC;
-            """,
-            file_sha256, exclude_job_id,
-        )
+    rows = await (await _worker_repository()).duplicate_imports(
+        file_sha256, exclude_job_id
+    )
+    from novelwiki.bootstrap.acquisition import import_job_novel_titles
+    titles = await import_job_novel_titles({
+        int(row["novel_id"]) for row in rows if row["novel_id"] is not None
+    })
     return [
         {
             "job_id": int(r["id"]),
             "novel_id": int(r["novel_id"]) if r["novel_id"] is not None else None,
-            "novel_title": r["novel_title"],
+            "novel_title": titles.get(int(r["novel_id"])) if r["novel_id"] is not None else None,
             "status": r["status"],
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         }
@@ -340,12 +301,8 @@ async def imports_with_hash(file_sha256: str, exclude_job_id: int | None = None)
 # ── OCR (scanned PDF) ────────────────────────────────────────────────────────
 
 async def _gemini_budget_remaining() -> int:
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        used = await conn.fetchval(
-            "SELECT used FROM provider_budget WHERE provider='gemini' AND day=CURRENT_DATE;"
-        )
-    return max(0, settings.GEMINI_DAILY_BUDGET - int(used or 0))
+    from novelwiki.bootstrap.acquisition import gemini_budget_remaining
+    return await gemini_budget_remaining()
 
 
 async def _enter_ocr_confirm(job_id: int, document, job: dict) -> None:
@@ -441,18 +398,11 @@ async def _recover_stale_leases() -> None:
     reclaimable). Resuming is clean: re-parse from scratch, OCR from on-disk page checkpoints,
     re-run the idempotent + crash-safe commit."""
     lease = timedelta(seconds=settings.IMPORT_LEASE_TIMEOUT_SECONDS)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        for markers, trigger in _MARKER_RESUME:
-            n = await conn.execute(
-                "UPDATE import_jobs SET status = $2, stage = 'requeued (lease expired)', "
-                "claim_token = NULL, claimed_at = NULL "
-                "WHERE status = ANY($1::text[]) "
-                "  AND (claimed_at IS NULL OR claimed_at < now() - $3::interval);",
-                list(markers), trigger, lease,
-            )
-            if n and not n.endswith(" 0"):
-                logger.info(f"Recovered orphaned import leases → {trigger}: {n}.")
+    repository = await _worker_repository()
+    for markers, trigger in _MARKER_RESUME:
+        result = await repository.recover_stale_leases(markers, trigger, lease)
+        if result and not result.endswith(" 0"):
+            logger.info(f"Recovered orphaned import leases → {trigger}: {result}.")
 
 
 async def _cleanup_stale_uploads() -> None:
@@ -461,27 +411,16 @@ async def _cleanup_stale_uploads() -> None:
     unbounded). The DELETE re-checks the stale predicate so a session that received a fresh chunk
     between the scan and the delete (its ``updated_at`` bumped, see ``touch_job``) is left alone."""
     ttl = timedelta(hours=settings.IMPORT_UPLOAD_SESSION_TTL_HOURS)
-    pool = await get_db_pool()
     removed = 0
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT id FROM import_jobs WHERE status = 'receiving' AND updated_at < now() - $1::interval;",
-            ttl,
-        )
-        for r in rows:
-            jid = int(r["id"])
-            res = await conn.execute(
-                "DELETE FROM import_jobs "
-                "WHERE id = $1 AND status = 'receiving' AND updated_at < now() - $2::interval;",
-                jid, ttl,
-            )
-            if res.endswith(" 0"):
-                continue    # a chunk landed since the scan — still active, keep it
-            try:
-                storage.cleanup_job(jid)
-            except Exception as e:
-                logger.warning(f"Cleanup of abandoned upload {jid} left files behind: {e}")
-            removed += 1
+    repository = await _worker_repository()
+    for job_id in await repository.stale_upload_ids(ttl):
+        if not await repository.delete_stale_upload(job_id, ttl):
+            continue
+        try:
+            storage.cleanup_job(job_id)
+        except Exception as e:
+            logger.warning(f"Cleanup of abandoned upload {job_id} left files behind: {e}")
+        removed += 1
     if removed:
         logger.info(f"Cleaned up {removed} abandoned upload session(s).")
 
@@ -501,17 +440,8 @@ async def _run_maintenance(force: bool = False) -> None:
 async def _reactivate_paused() -> None:
     """Unpause budget-held OCR jobs once Gemini quota is available again (e.g. the daily
     counter reset overnight). One cheap statement per tick; a no-op when nothing is paused."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            UPDATE import_jobs SET status='ocr_pending', stage='resuming OCR (budget available)',
-                   claim_token=NULL, claimed_at=NULL
-            WHERE status='ocr_paused'
-              AND COALESCE((SELECT used FROM provider_budget WHERE provider='gemini' AND day=CURRENT_DATE), 0) < $1;
-            """,
-            settings.GEMINI_DAILY_BUDGET,
-        )
+    if await _gemini_budget_remaining() > 0:
+        await (await _worker_repository()).reactivate_paused()
 
 
 async def _claim_next() -> dict | None:
@@ -520,32 +450,9 @@ async def _claim_next() -> dict | None:
     worker's lease (`claim_token` + `claimed_at`). Because the marker is not a trigger status, the
     job leaves the queue the instant it's claimed, so two workers can never process the same job.
     The returned row already carries the new in-progress status, which `_process` dispatches on."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            UPDATE import_jobs j
-            SET status = CASE j.status
-                    WHEN 'uploaded'    THEN 'parsing'
-                    WHEN 'ocr_pending' THEN 'ocr_running'
-                    WHEN 'committing'  THEN 'commit_running'
-                    ELSE j.status
-                END,
-                stage = 'claimed',
-                claim_token = $2,
-                claimed_at = now(),
-                updated_at = now()
-            WHERE j.id = (
-                SELECT id FROM import_jobs
-                WHERE status = ANY($1::text[])
-                ORDER BY updated_at ASC
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-            )
-            RETURNING j.*;
-            """,
-            list(TRIGGER_STATUSES), _WORKER_ID,
-        )
+    row = await (await _worker_repository()).claim_next(
+        TRIGGER_STATUSES, _WORKER_ID
+    )
     return _row_to_job(row) if row else None
 
 
@@ -554,12 +461,7 @@ async def _renew_lease(job_id: int, token: str | None) -> None:
     lease that recovery already handed to another worker."""
     if not token:
         return
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE import_jobs SET claimed_at = now() WHERE id = $1 AND claim_token = $2;",
-            job_id, token,
-        )
+    await (await _worker_repository()).renew_lease(job_id, token)
 
 
 async def _heartbeat(job_id: int, token: str | None, stop: asyncio.Event) -> None:

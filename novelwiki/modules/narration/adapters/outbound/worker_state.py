@@ -115,11 +115,6 @@ class PostgresNarrationWorkerRepository:
                 "SELECT status FROM tts_jobs WHERE id=$1;", job_id,
             )
 
-    async def load_user(self, user_id: int) -> dict | None:
-        async with self._pool.acquire() as connection:
-            row = await connection.fetchrow("SELECT * FROM users WHERE id=$1;", user_id)
-        return dict(row) if row else None
-
     async def find_audio(self, **criteria) -> dict | None:
         async with self._pool.acquire() as connection:
             if criteria["user_id"] is None:

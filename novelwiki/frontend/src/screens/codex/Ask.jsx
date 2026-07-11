@@ -5,7 +5,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { API, buildCiteMap } from "../../lib/api.js";
+import { codexApi } from "../../modules/codex/api.js";
+import { buildCiteMap } from "../../modules/codex/presentation.js";
+import { experienceApi } from "../../modules/experience/api.js";
 import { useNovel } from "../../layouts/NovelLayout.jsx";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, Chip, EmptyState, Spinner } from "../../components/ui.jsx";
@@ -63,7 +65,7 @@ function RecapCard({ novelId, ceiling }) {
   async function run() {
     setState({ status: "loading" });
     try {
-      const r = await API.recap(novelId, ceiling);
+      const r = await experienceApi.recap(novelId, ceiling);
       setState({ status: "ready", data: r });
     } catch (e) {
       setState({ status: "error", message: e.message || "Recap failed." });
@@ -132,7 +134,7 @@ export function Ask() {
     timers.current.push(setTimeout(() => setStageIdx(1), 1100));
     timers.current.push(setTimeout(() => setStageIdx(2), 2600));
     try {
-      const res = await API.ask(novelId, question, ceiling);
+      const res = await codexApi.ask(novelId, question, ceiling);
       clearTimers();
       setStageIdx(STAGES.length);
       setResult(res);

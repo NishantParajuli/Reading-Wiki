@@ -7,7 +7,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { API } from "../lib/api.js";
+import { catalogApi } from "../modules/catalog/api.js";
+import { experienceApi } from "../modules/experience/api.js";
 import { Icon } from "../components/Icon.jsx";
 import { Button, Chip, Cover, EmptyState, Loading, PageHeader } from "../components/ui.jsx";
 import { Popover, MenuItem } from "../components/overlay.jsx";
@@ -109,7 +110,7 @@ export function Discover() {
   useEffect(() => {
     let cancel = false;
     setItems(null);
-    API.discover({ q: debQ.trim(), ...filters, offset: 0, limit: PAGE }).then(r => {
+    experienceApi.discover({ q: debQ.trim(), ...filters, offset: 0, limit: PAGE }).then(r => {
       if (cancel) return;
       const list = Array.isArray(r) ? r : (r.items || []);
       setItems(list);
@@ -121,7 +122,7 @@ export function Discover() {
   async function loadMore() {
     setLoadingMore(true);
     try {
-      const r = await API.discover({ q: debQ.trim(), ...filters, offset: items.length, limit: PAGE });
+      const r = await experienceApi.discover({ q: debQ.trim(), ...filters, offset: items.length, limit: PAGE });
       const list = Array.isArray(r) ? r : (r.items || []);
       setItems(prev => [...prev, ...list]);
       if (!Array.isArray(r) && r.total != null) setTotal(r.total);
@@ -136,7 +137,7 @@ export function Discover() {
   async function add(n) {
     setAddedIds(prev => new Set(prev).add(n.id));
     try {
-      await API.addToLibrary(n.id);
+      await catalogApi.addToLibrary(n.id);
       qc.invalidateQueries({ queryKey: ["novels"] });
       toast(`Added “${n.title}” to your library.`, {
         tone: "ok",

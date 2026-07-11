@@ -46,116 +46,76 @@ def _assign_global_numbers(included: list[dict], offset: float) -> None:
         last = g
 
 
-async def _resolve_target(conn, job: dict, meta: dict):
-    """Create-or-pick the target novel + source for this import. Three modes, keyed off
-    ``options.target``:
-
-      * ``"new"`` (or missing) — make a new novel (autofilled from meta) + a fresh source.
-      * ``{"novel_id", "offset"}`` — append to an existing novel as an additional source.
-      * ``{"source_id", "offset"?}`` — *replace* an existing source's chapters: its old
-        chapters are deleted (chunks cascade), the source is re-pointed at this file, and the
-        affected chapter range is returned so the codex over it can be invalidated.
-
-    Returns ``(novel_id, source_dict, offset, cover_pending, invalidate_range)`` where
-    ``invalidate_range`` is ``(lo, hi)`` of the replaced source's old chapters, else ``None``."""
+async def _resolve_target(apis, job: dict, meta: dict):
+    if not hasattr(apis, "acquisition"):
+        from novelwiki.bootstrap.acquisition_routes import bind_import_commit_apis
+        apis = bind_import_commit_apis(apis)
     options = job.get("options") or {}
     target = options.get("target", "new")
     language = (meta.get("language") or "en")[:8]
     fmt = job["format"]
-    # OCR'd CJK scans are stored as a raw source (text == source language) so the reader's
-    # translation pipeline kicks in; EPUB/digital PDF are read as-is (is_raw stays False).
     is_raw = bool(options.get("is_raw"))
 
-    # ── Replace an existing source's chapters ──
     if isinstance(target, dict) and target.get("source_id"):
-        sid = int(target["source_id"])
-        src_row = await conn.fetchrow(
-            "SELECT id, novel_id, chapter_offset FROM sources WHERE id = $1;", sid)
-        if not src_row:
-            raise ValueError(f"Replace target source {sid} does not exist.")
-        novel_id = int(src_row["novel_id"])
-        offset = float(target.get("offset", src_row["chapter_offset"]) or 0)
-        old = await conn.fetchrow(
-            "SELECT MIN(number) AS lo, MAX(number) AS hi FROM chapters WHERE source_id = $1;", sid)
-        old_rows = await conn.fetch(
-            "SELECT number, content_version FROM chapters WHERE source_id = $1;", sid)
-        old_versions = {
-            float(r["number"]): int(r["content_version"] or 1)
-            for r in old_rows
-        }
+        source_id = int(target["source_id"])
+        source_row = await apis.acquisition.import_source(source_id)
+        if not source_row:
+            raise ValueError(f"Replace target source {source_id} does not exist.")
+        novel_id = int(source_row["novel_id"])
+        offset = float(target.get("offset", source_row["chapter_offset"]) or 0)
+        old_versions = await apis.reading.source_versions(source_id)
         if old_versions:
-            await conn.execute(
-                """
-                UPDATE chapter_overlays SET conflict = TRUE, updated_at = now()
-                WHERE novel_id = $1 AND chapter = ANY($2::numeric[]);
-                """,
-                novel_id, list(old_versions.keys()),
+            await apis.reading.mark_overlay_conflicts(
+                novel_id, tuple(old_versions)
             )
-        # Drop the old chapters first (chunks FK-cascade) so the collision guard and the new
-        # writes see a clean slate for this source.
-        await conn.execute("DELETE FROM chapters WHERE source_id = $1;", sid)
-        await conn.execute(
-            """
-            UPDATE sources SET adapter = $2, start_url = $3, language = $4, is_raw = $5,
-                   chapter_offset = $6, label = $7 WHERE id = $1;
-            """,
-            sid, fmt, job["original_path"], language, is_raw, offset,
-            f"Imported {fmt.upper()} (replaced)",
+        await apis.reading.delete_source_chapters(source_id)
+        await apis.acquisition.replace_import_source(
+            source_id, adapter=fmt, start_url=job["original_path"],
+            language=language, is_raw=is_raw, offset=offset,
+            label=f"Imported {fmt.upper()} (replaced)",
         )
-        source = {"id": sid, "novel_id": novel_id, "is_raw": is_raw, "language": language,
-                  "old_versions": old_versions}
-        invalidate = (float(old["lo"]), float(old["hi"])) if old and old["lo"] is not None else None
+        source = {
+            "id": source_id, "novel_id": novel_id, "is_raw": is_raw,
+            "language": language, "old_versions": old_versions,
+        }
+        invalidate = (
+            (min(old_versions), max(old_versions)) if old_versions else None
+        )
         return novel_id, source, offset, None, invalidate
 
-    # ── Append to an existing novel ──
     if isinstance(target, dict) and target.get("novel_id"):
         novel_id = int(target["novel_id"])
         offset = float(target.get("offset", 0) or 0)
-        exists = await conn.fetchval("SELECT id FROM novels WHERE id = $1;", novel_id)
-        if not exists:
+        if not await apis.catalog.novel_exists(novel_id):
             raise ValueError(f"Append target novel {novel_id} does not exist.")
         cover_pending = None
-    # ── Brand-new novel ──
     else:
-        # The uploader owns the imported novel; it starts private (they can publish it later).
-        # Jobs created by CLI/tests/legacy code may not have a user; keep those readable as
-        # system/global imports instead of creating an ownerless private orphan.
+        from novelwiki.modules.acquisition.public import ImportNovelDraft
         owner_id = job.get("user_id")
-        visibility = "private" if owner_id is not None else "global"
-        novel_id = await conn.fetchval(
-            """
-            INSERT INTO novels (title, author, description, original_language, codex_enabled, series,
-                                owner_id, visibility)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
-            """,
-            meta.get("title") or "Imported book", meta.get("author"),
-            meta.get("description"), language, settings.IMPORT_AUTO_BUILD_CODEX,
-            (meta.get("series") or None), owner_id, visibility,
-        )
-        novel_id = int(novel_id)
+        novel_id = await apis.catalog.create_imported_novel(ImportNovelDraft(
+            title=meta.get("title") or "Imported book",
+            author=meta.get("author"), description=meta.get("description"),
+            original_language=language,
+            codex_enabled=settings.IMPORT_AUTO_BUILD_CODEX,
+            series=meta.get("series") or None, owner_id=owner_id,
+            visibility="private" if owner_id is not None else "global",
+        ))
         offset = 0.0
         cover_pending = meta.get("cover_sha")
-        # The owner sees their imported novel in their library immediately.
-        if owner_id is not None:
-            await conn.execute(
-                "INSERT INTO library_entries (user_id, novel_id) VALUES ($1, $2) "
-                "ON CONFLICT (user_id, novel_id) DO NOTHING;",
-                owner_id, novel_id,
-            )
 
-    source_id = await conn.fetchval(
-        """
-        INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw, chapter_offset, label)
-        VALUES ($1, $2, $3, '{}'::jsonb, $4, $5, $6, $7) RETURNING id;
-        """,
-        novel_id, fmt, job["original_path"], language, is_raw, offset,
-        f"Imported {fmt.upper()}",
+    source_id = await apis.acquisition.create_import_source(
+        novel_id, adapter=fmt, start_url=job["original_path"],
+        language=language, is_raw=is_raw, offset=offset,
+        label=f"Imported {fmt.upper()}",
     )
-    source = {"id": int(source_id), "novel_id": novel_id, "is_raw": is_raw, "language": language}
+    source = {
+        "id": source_id, "novel_id": novel_id,
+        "is_raw": is_raw, "language": language,
+    }
     return novel_id, source, offset, cover_pending, None
 
 
-async def _commit_assets(conn, novel_id: int, job_id: int, shas: set[str], meta: dict) -> dict:
+async def _commit_assets(acquisition, novel_id: int, job_id: int, shas: set[str], meta: dict) -> dict:
     """Promote every referenced staged image into the novel asset dir and return a
     sha → {url,width,height,mime} resolver map for the renderer."""
     assets_meta = meta.get("assets", {})
@@ -165,43 +125,24 @@ async def _commit_assets(conn, novel_id: int, job_id: int, shas: set[str], meta:
         if not am:
             continue
         ext = am.get("ext", "bin")
-        await storage.commit_asset(
-            conn, novel_id, job_id, sha, ext,
-            am.get("mime"), am.get("kind", "illustration"), am.get("width"), am.get("height"),
+        resolver[sha] = await acquisition.commit_import_asset(
+            novel_id, job_id, sha, ext, am.get("mime"),
+            am.get("kind", "illustration"), am.get("width"), am.get("height"),
         )
-        resolver[sha] = {
-            "url": storage.asset_url(novel_id, sha, ext),
-            "width": am.get("width"), "height": am.get("height"), "mime": am.get("mime"),
-        }
     return resolver
 
 
-async def _preserve_replaced_content_version(conn, novel_id: int, number: float, source: dict) -> int | None:
-    """A replace import deletes old chapters before inserting the new render. Carry the old
-    content_version forward so pending overlays/contributions see the replacement as a newer
-    base instead of a clean version-1 chapter."""
-    old_versions = source.get("old_versions") or {}
-    prior = old_versions.get(float(number))
-    if prior is None:
+async def _preserve_replaced_content_version(
+    connection, novel_id: int, number: float, source: dict
+) -> int | None:
+    """Compatibility seam retained for the pre-migration regression fixture."""
+    previous = (source.get("old_versions") or {}).get(float(number))
+    if previous is None:
         return None
-    new_version = int(prior) + 1
-    actual = await conn.fetchval(
-        """
-        UPDATE chapters
-        SET content_version = GREATEST(COALESCE(content_version, 1), $3)
-        WHERE novel_id = $1 AND number = $2
-        RETURNING content_version;
-        """,
-        novel_id, number, new_version,
+    from novelwiki.bootstrap.acquisition_routes import bind_import_commit_apis
+    return await bind_import_commit_apis(connection).reading.preserve_content_version(
+        novel_id, number, int(previous) + 1
     )
-    await conn.execute(
-        """
-        UPDATE chapter_overlays SET conflict = TRUE, updated_at = now()
-        WHERE novel_id = $1 AND chapter = $2 AND base_version < $3;
-        """,
-        novel_id, number, int(actual or new_version),
-    )
-    return int(actual or new_version)
 
 
 async def _load_for_commit(job: dict) -> tuple:
@@ -231,104 +172,75 @@ async def _load_for_commit(job: dict) -> tuple:
     return document, included
 
 
-async def _write_segments(conn, job_id: int, blocks: list, meta: dict, included: list[dict],
-                          novel_id: int, source: dict, offset: float,
-                          cover_pending: str | None, *, force_part_label: str | None = None,
+async def _write_segments(apis, job_id: int, blocks: list, meta: dict,
+                          included: list[dict], novel_id: int, source: dict,
+                          offset: float, cover_pending: str | None, *,
+                          force_part_label: str | None = None,
                           sequential: bool = False) -> tuple[int, float, float]:
-    """Render + persist every included segment into ``novel_id`` under ``source``. Shared by
-    single-book commit, replace, and per-volume series commit. ``sequential`` ignores parsed
-    numbers and lays the segments out as a contiguous run starting just after ``offset`` (used
-    when stacking series volumes so a per-volume ``Chapter 1`` never collides). Returns
-    ``(written, lo, hi)``."""
     from novelwiki.scraper.adapters import ChapterData
-    from novelwiki.scraper.runner import _persist_chapter
 
     if sequential:
-        for k, s in enumerate(included, start=1):
-            s["_global"] = round(float(offset) + k, 4)
+        for index, segment in enumerate(included, start=1):
+            segment["_global"] = round(float(offset) + index, 4)
     else:
         _assign_global_numbers(included, offset)
 
-    # Collision guard: never overwrite a chapter that belongs to a *different* source.
-    existing = {
-        float(r["number"])
-        for r in await conn.fetch(
-            "SELECT number FROM chapters WHERE novel_id = $1 AND source_id IS DISTINCT FROM $2;",
-            novel_id, source["id"],
-        )
-    }
-    clashes = sorted(s["_global"] for s in included if s["_global"] in existing)
+    existing = await apis.reading.other_source_numbers(novel_id, source["id"])
+    clashes = sorted(
+        segment["_global"] for segment in included
+        if segment["_global"] in existing
+    )
     if clashes:
         raise ValueError(
             f"Import would collide with existing chapters at {clashes[:6]}"
             + ("…" if len(clashes) > 6 else "")
-            + ". Adjust the append offset and retry.")
+            + ". Adjust the append offset and retry."
+        )
 
-    ref_shas = {b.asset_sha for s in included
-                for b in blocks[s["block_range"][0]:s["block_range"][1] + 1]
-                if b.asset_sha}
+    ref_shas = {
+        block.asset_sha
+        for segment in included
+        for block in blocks[
+            segment["block_range"][0]:segment["block_range"][1] + 1
+        ]
+        if block.asset_sha
+    }
     if cover_pending:
         ref_shas.add(cover_pending)
-    resolver_map = await _commit_assets(conn, novel_id, job_id, ref_shas, meta)
-
-    def resolver(sha):
-        return resolver_map.get(sha)
-
-    written = 0
-    for s in included:
-        seg_blocks = blocks[s["block_range"][0]:s["block_range"][1] + 1]
-        raw_html, flat_text = render_segment(seg_blocks, resolver)
-        ch = ChapterData(
-            number=s["_global"], title=s.get("title") or f"Chapter {s['_global']}",
-            content=flat_text, url=None, raw_html=raw_html,
-        )
-        await _persist_chapter(conn, source, s["_global"], ch, force=True)
-        await conn.execute(
-            "UPDATE chapters SET kind = $3, part_label = $4 WHERE novel_id = $1 AND number = $2;",
-            novel_id, s["_global"], s.get("kind", "chapter"), force_part_label or s.get("part_label"),
-        )
-        await _preserve_replaced_content_version(conn, novel_id, s["_global"], source)
-        written += 1
-
-    # Autofill the cover from this book — but never clobber a cover already set (so a series'
-    # later volumes don't overwrite the cover chosen from volume 1).
-    if cover_pending and cover_pending in resolver_map:
-        await conn.execute(
-            "UPDATE novels SET cover_url = $2, updated_at = now() WHERE id = $1 AND cover_url IS NULL;",
-            novel_id, resolver_map[cover_pending]["url"])
-
-    lo = min(s["_global"] for s in included)
-    hi = max(s["_global"] for s in included)
-    return written, lo, hi
-
-
-async def _finalize_job(conn, job_id: int, novel_id: int, source_id: int, stats: dict) -> None:
-    """Record job completion INSIDE the caller's transaction so the novel, its chapters, the
-    assets AND the 'committed' status all land atomically — a crash mid-commit rolls
-    everything back (clean re-run) and a finished job is no longer a worker trigger state."""
-    await conn.execute(
-        """
-        UPDATE import_jobs
-        SET novel_id = $2, source_id = $3, status = 'committed', stage = 'committed',
-            stats = $4::jsonb, error = NULL, updated_at = now()
-        WHERE id = $1;
-        """,
-        job_id, novel_id, source_id, json.dumps(stats),
+    resolver_map = await _commit_assets(
+        apis.acquisition, novel_id, job_id, ref_shas, meta
     )
 
+    written = 0
+    old_versions = source.get("old_versions") or {}
+    for segment in included:
+        raw_html, flat_text = render_segment(
+            blocks[segment["block_range"][0]:segment["block_range"][1] + 1],
+            resolver_map.get,
+        )
+        chapter = ChapterData(
+            number=segment["_global"],
+            title=segment.get("title") or f"Chapter {segment['_global']}",
+            content=flat_text, url=None, raw_html=raw_html,
+        )
+        previous = old_versions.get(float(segment["_global"]))
+        await apis.reading.upsert_ingested_chapter(
+            source, segment["_global"], chapter, True,
+            kind=segment.get("kind", "chapter"),
+            part_label=force_part_label or segment.get("part_label"),
+            minimum_content_version=(int(previous) + 1 if previous is not None else None),
+        )
+        written += 1
 
-async def _invalidate_codex_range(conn, novel_id: int, lo: float, hi: float) -> None:
-    """After a source's chapters were replaced, drop the per-chapter codex artifacts over the
-    affected range so a rebuild repopulates them. Chunks already vanished with the chapter
-    delete (FK cascade); these tables key off the chapter number without an FK, so clear them
-    by hand. Identity (entities/aliases/links) is left for the rebuild's extractor to reuse."""
-    for table in ("extraction_state", "entity_facts", "relationships", "events", "entity_descriptions"):
-        await conn.execute(
-            f"DELETE FROM {table} WHERE novel_id = $1 AND chapter BETWEEN $2 AND $3;",
-            novel_id, lo, hi)
-    # Spoiler-ceiling caches are invalid once any content changed — cheap to drop wholesale.
-    await conn.execute("DELETE FROM wiki_cache WHERE novel_id = $1;", novel_id)
-    await conn.execute("DELETE FROM query_cache WHERE novel_id = $1;", novel_id)
+    if cover_pending and cover_pending in resolver_map:
+        await apis.catalog.set_cover_if_missing(
+            novel_id, resolver_map[cover_pending]["url"]
+        )
+    return (
+        written,
+        min(segment["_global"] for segment in included),
+        max(segment["_global"] for segment in included),
+    )
 
 
 async def commit_job(job: dict) -> dict:
@@ -338,24 +250,41 @@ async def commit_job(job: dict) -> dict:
     document, included = await _load_for_commit(job)
     blocks, meta = document.blocks, document.meta
 
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            novel_id, source, offset, cover_pending, invalidate = await _resolve_target(conn, job, meta)
-            written, lo, hi = await _write_segments(
-                conn, job_id, blocks, meta, included, novel_id, source, offset, cover_pending)
+    from novelwiki.bootstrap.acquisition_routes import build_import_commit_uow_factory
+    from novelwiki.workflows.commit_import import commit_import
 
-            if invalidate is not None:
-                # Replace: invalidate the codex over both the old and the new chapter spans.
-                await _invalidate_codex_range(conn, novel_id, min(invalidate[0], lo), max(invalidate[1], hi))
-            await conn.execute("UPDATE novels SET updated_at = now() WHERE id = $1;", novel_id)
+    state = {}
 
-            codex_enabled = await conn.fetchval("SELECT codex_enabled FROM novels WHERE id = $1;", novel_id)
-            result_stats = {
-                **(job.get("stats") or {}),
-                "chapters_written": written, "from_chapter": lo, "to_chapter": hi,
-            }
-            await _finalize_job(conn, job_id, novel_id, source["id"], result_stats)
+    async def operation(apis):
+        novel_id, source, offset, cover_pending, invalidate = await _resolve_target(
+            apis, job, meta
+        )
+        written, lo, hi = await _write_segments(
+            apis, job_id, blocks, meta, included, novel_id, source, offset,
+            cover_pending,
+        )
+        if invalidate is not None:
+            await apis.codex.invalidate_chapter_range(
+                novel_id, min(invalidate[0], lo), max(invalidate[1], hi)
+            )
+        await apis.catalog.touch_novel(novel_id)
+        result_stats = {
+            **(job.get("stats") or {}), "chapters_written": written,
+            "from_chapter": lo, "to_chapter": hi,
+        }
+        await apis.acquisition.finalize_import_job(
+            job_id, novel_id, source["id"], result_stats
+        )
+        state.update(
+            novel_id=novel_id, source_id=source["id"], lo=lo, hi=hi,
+            codex_enabled=await apis.catalog.codex_enabled(novel_id),
+            stats=result_stats,
+        )
+        return state
+
+    await commit_import(await build_import_commit_uow_factory(), operation)
+    novel_id, lo, hi = state["novel_id"], state["lo"], state["hi"]
+    codex_enabled, result_stats = state["codex_enabled"], state["stats"]
 
     if codex_enabled or settings.IMPORT_AUTO_BUILD_CODEX:
         if await _reserve_auto_codex(job.get("user_id")):
@@ -363,7 +292,7 @@ async def commit_job(job: dict) -> dict:
         else:
             logger.info(f"Skipped automatic codex build for imported novel {novel_id}: owner is not quota-eligible.")
 
-    return {"novel_id": novel_id, "source_id": source["id"], "stats": result_stats}
+    return {"novel_id": novel_id, "source_id": state["source_id"], "stats": result_stats}
 
 
 def _series_index(meta: dict) -> float | None:
@@ -412,53 +341,55 @@ async def commit_series(job_ids: list[int]) -> dict:
     owner_id = loaded[0]["job"].get("user_id")
     visibility = "private" if owner_id is not None else "global"
 
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            novel_id = int(await conn.fetchval(
-                """
-                INSERT INTO novels (title, author, description, original_language, codex_enabled, series,
-                                    owner_id, visibility)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
-                """,
-                series_name, first_meta.get("author"), first_meta.get("description"),
-                language, settings.IMPORT_AUTO_BUILD_CODEX, series_name, owner_id, visibility,
-            ))
-            if owner_id is not None:
-                await conn.execute(
-                    "INSERT INTO library_entries (user_id, novel_id) VALUES ($1, $2) "
-                    "ON CONFLICT (user_id, novel_id) DO NOTHING;",
-                    owner_id, novel_id,
-                )
-            running = 0.0
-            lo_all = hi_all = None
-            for i, item in enumerate(loaded):
-                job, document, included = item["job"], item["doc"], item["included"]
-                meta = document.meta
-                is_raw = bool((job.get("options") or {}).get("is_raw"))
-                fmt = job["format"]
-                label = _volume_label(item["idx"], meta)
-                source_id = int(await conn.fetchval(
-                    """
-                    INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw, chapter_offset, label)
-                    VALUES ($1, $2, $3, '{}'::jsonb, $4, $5, $6, $7) RETURNING id;
-                    """,
-                    novel_id, fmt, job["original_path"], language, is_raw, running, label,
-                ))
-                source = {"id": source_id, "novel_id": novel_id, "is_raw": is_raw, "language": language}
-                cover = meta.get("cover_sha") if i == 0 else None
-                written, lo, hi = await _write_segments(
-                    conn, int(job["id"]), document.blocks, meta, included, novel_id, source,
-                    running, cover, force_part_label=label, sequential=True)
-                running = hi  # the next volume stacks straight after this volume's last chapter
-                lo_all = lo if lo_all is None else min(lo_all, lo)
-                hi_all = hi if hi_all is None else max(hi_all, hi)
-                await _finalize_job(conn, int(job["id"]), novel_id, source_id, {
-                    **(job.get("stats") or {}),
-                    "chapters_written": written, "from_chapter": lo, "to_chapter": hi,
-                    "series": series_name,
-                })
-            codex_enabled = await conn.fetchval("SELECT codex_enabled FROM novels WHERE id = $1;", novel_id)
+    from novelwiki.bootstrap.acquisition_routes import build_import_commit_uow_factory
+    from novelwiki.modules.acquisition.public import ImportNovelDraft
+    from novelwiki.workflows.commit_import import commit_import
+
+    state = {}
+
+    async def operation(apis):
+        novel_id = await apis.catalog.create_imported_novel(ImportNovelDraft(
+            title=series_name, author=first_meta.get("author"),
+            description=first_meta.get("description"), original_language=language,
+            codex_enabled=settings.IMPORT_AUTO_BUILD_CODEX, series=series_name,
+            owner_id=owner_id, visibility=visibility,
+        ))
+        running = 0.0
+        lo_all = hi_all = None
+        for index, item in enumerate(loaded):
+            job, document, included = item["job"], item["doc"], item["included"]
+            meta = document.meta
+            is_raw = bool((job.get("options") or {}).get("is_raw"))
+            label = _volume_label(item["idx"], meta)
+            source_id = await apis.acquisition.create_import_source(
+                novel_id, adapter=job["format"], start_url=job["original_path"],
+                language=language, is_raw=is_raw, offset=running, label=label,
+            )
+            source = {"id": source_id, "novel_id": novel_id,
+                      "is_raw": is_raw, "language": language}
+            written, lo, hi = await _write_segments(
+                apis, int(job["id"]), document.blocks, meta, included, novel_id,
+                source, running, meta.get("cover_sha") if index == 0 else None,
+                force_part_label=label, sequential=True,
+            )
+            running = hi
+            lo_all = lo if lo_all is None else min(lo_all, lo)
+            hi_all = hi if hi_all is None else max(hi_all, hi)
+            await apis.acquisition.finalize_import_job(
+                int(job["id"]), novel_id, source_id, {
+                    **(job.get("stats") or {}), "chapters_written": written,
+                    "from_chapter": lo, "to_chapter": hi, "series": series_name,
+                },
+            )
+        state.update(
+            novel_id=novel_id, lo=lo_all, hi=hi_all,
+            codex_enabled=await apis.catalog.codex_enabled(novel_id),
+        )
+        return state
+
+    await commit_import(await build_import_commit_uow_factory(), operation)
+    novel_id, lo_all, hi_all = state["novel_id"], state["lo"], state["hi"]
+    codex_enabled = state["codex_enabled"]
 
     if codex_enabled or settings.IMPORT_AUTO_BUILD_CODEX:
         if await _reserve_auto_codex(owner_id):
@@ -478,13 +409,8 @@ async def _reserve_auto_codex(user_id: int | None) -> bool:
     under quota before the build is scheduled."""
     if user_id is None:
         return True
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM users WHERE id = $1;", user_id)
-    if row is None:
-        return False
-    from novelwiki import quota
-    return await quota.try_reserve(dict(row), "codex_builds", 1)
+    from novelwiki.bootstrap.acquisition_routes import reserve_auto_codex
+    return await reserve_auto_codex(user_id)
 
 
 async def _schedule_codex(novel_id: int, frm: float, to: float, user_id: int | None) -> None:

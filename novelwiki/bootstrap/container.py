@@ -14,6 +14,6 @@ class ApplicationContainer:
 
 def build_container() -> ApplicationContainer:
     from novelwiki.platform.config import settings
-    from novelwiki.platform.observability import LegacyAuditSink
+    from novelwiki.platform.observability import FunctionAuditSink
 
-    return ApplicationContainer(settings=settings, audit_sink=LegacyAuditSink())
+    return ApplicationContainer(settings=settings, audit_sink=FunctionAuditSink())

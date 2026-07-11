@@ -12,7 +12,7 @@ import { useAuth } from "../App.jsx";
 import { Icon } from "../components/Icon.jsx";
 import { Button, Cover, ProgressBar, Skeleton, RelativeTime } from "../components/ui.jsx";
 import { AddNovelDialog } from "../components/AddNovelDialog.jsx";
-import { useHomeQuery, useActivityQuery, isActiveJob } from "../lib/queries.js";
+import { isActiveJob, useActivityQuery, useHomeQuery } from "../modules/experience/queries.js";
 import { activityProgress, activityFraction, ACT_KIND_LABEL } from "../lib/constants.js";
 import { timeGreeting, fmtChapter, relativeTime } from "../lib/utils.js";
 import { useTitle } from "../lib/hooks.js";

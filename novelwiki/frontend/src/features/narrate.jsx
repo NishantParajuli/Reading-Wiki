@@ -3,7 +3,8 @@
    (deduplicates the old reader/novel voice UIs).
    ============================================================ */
 import React, { useEffect, useRef, useState } from "react";
-import { API } from "../lib/api.js";
+import { experienceApi } from "../modules/experience/api.js";
+import { narrationApi } from "../modules/narration/api.js";
 import { Icon } from "../components/Icon.jsx";
 import { Button, Chip, ProgressBar } from "../components/ui.jsx";
 import { Popover, MenuItem, CostConfirmDialog } from "../components/overlay.jsx";
@@ -68,7 +69,7 @@ export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChan
   useEffect(() => () => stopPoll(), []);
 
   useEffect(() => {
-    API.ttsVoices().then(r => {
+    narrationApi.ttsVoices().then(r => {
       const list = (r.voices || []).filter(v => v.ready);
       setVoices(list);
       setDefaultVoice(r.default || null);
@@ -82,7 +83,7 @@ export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChan
     stopPoll();
     pollRef.current = setInterval(async () => {
       try {
-        const j = await API.ttsJob(id);
+        const j = await narrationApi.ttsJob(id);
         setJob(j);
         if (["done", "failed", "canceled"].includes(j.status)) { stopPoll(); onChange && onChange(); }
       } catch (e) { stopPoll(); }
@@ -93,7 +94,7 @@ export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChan
   useEffect(() => {
     if (!voice) return;
     let cancel = false;
-    API.bookAudioStatus(novelId, voice).then(r => {
+    narrationApi.bookAudioStatus(novelId, voice).then(r => {
       if (cancel) return;
       if (r.active && r.job) {
         setMsg(null);
@@ -111,7 +112,7 @@ export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChan
   useEffect(() => {
     if (!open || !voice) { setEst(null); return; }
     let cancel = false;
-    API.costEstimate(novelId, "audiobook", {
+    experienceApi.costEstimate(novelId, "audiobook", {
       voice_id: voice,
       from_chapter: startCh.trim() ? parseFloat(startCh) : null,
       to_chapter: endCh.trim() ? parseFloat(endCh) : null,
@@ -130,7 +131,7 @@ export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChan
     if (!p.voice_id) return;
     setMsg(null); setJob(null);
     try {
-      const r = await API.generateBookAudio(novelId, p.voice_id, p.from_chapter, p.to_chapter);
+      const r = await narrationApi.generateBookAudio(novelId, p.voice_id, p.from_chapter, p.to_chapter);
       if (r.status === "ready") { setMsg(r.message || "Every chapter is already narrated in this voice."); return; }
       setMsg(r.existing
         ? "Already narrating this book in that voice."
@@ -146,7 +147,7 @@ export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChan
 
   async function cancel() {
     if (!job) return;
-    try { await API.cancelTtsJob(job.id); } catch (e) { /* already finished */ }
+    try { await narrationApi.cancelTtsJob(job.id); } catch (e) { /* already finished */ }
   }
 
   if (voices == null || voices.length === 0) return null;   // hidden while loading / sidecar offline

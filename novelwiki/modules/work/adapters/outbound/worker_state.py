@@ -8,37 +8,42 @@ class PostgresWorkerStateRepository:
     def __init__(self, pool: Any):
         self._pool = pool
 
-    async def load_user(self, user_id: int) -> dict | None:
+    async def active_job_count(self, user_id: int) -> int:
         async with self._pool.acquire() as connection:
-            row = await connection.fetchrow(
-                "SELECT * FROM users WHERE id = $1;", user_id
-            )
-        return dict(row) if row else None
+            return int(await connection.fetchval(
+                """
+                SELECT count(*) FROM jobs WHERE user_id=$1
+                  AND execution_backend='agy'
+                  AND status IN ('queued','running','waiting_provider');
+                """,
+                user_id,
+            ) or 0)
 
-    async def pending_translations(
-        self,
-        novel_id: int,
-        from_chapter: float | None,
-        to_chapter: float | None,
-        force: bool,
-    ) -> list[float]:
-        conditions = ["novel_id = $1", "original_text IS NOT NULL"]
-        arguments: list[object] = [novel_id]
-        if not force:
-            conditions.append("content IS NULL")
-        if from_chapter is not None:
-            arguments.append(from_chapter)
-            conditions.append(f"number >= ${len(arguments)}")
-        if to_chapter is not None:
-            arguments.append(to_chapter)
-            conditions.append(f"number <= ${len(arguments)}")
+    async def fallback_to_api(
+        self, job_id: int, model: str, max_attempts: int, error: str
+    ) -> bool:
+        async with self._pool.acquire() as connection:
+            changed = await connection.fetchrow(
+                """
+                UPDATE jobs SET execution_backend='api',backend_fallback_from='agy',
+                  backend_model=$2,backend_fallback_allowed=FALSE,status='queued',
+                  stage='AGY failed; switching to API',attempts=0,max_attempts=$3,
+                  error=$4,claim_token=NULL,claimed_at=NULL,not_before=NULL,
+                  cancel_requested_at=NULL,updated_at=now()
+                WHERE id=$1 AND status='running' RETURNING id;
+                """,
+                job_id, model, max_attempts, error,
+            )
+        return changed is not None
+
+    async def revoked_job_ids(self, user_id: int, kinds: list[str]) -> list[int]:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(
-                f"SELECT number FROM chapters WHERE {' AND '.join(conditions)} "
-                "ORDER BY number ASC;",
-                *arguments,
+                "SELECT id FROM jobs WHERE user_id=$1 AND execution_backend='agy' "
+                "AND kind=ANY($2::text[]) AND status=ANY($3::text[]);",
+                user_id, kinds, ["queued", "running", "waiting_provider"],
             )
-        return [float(row["number"]) for row in rows]
+        return [int(row["id"]) for row in rows]
 
     async def renew_lease(self, job_id: int, token: str) -> None:
         async with self._pool.acquire() as connection:

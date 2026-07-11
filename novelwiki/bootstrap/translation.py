@@ -57,3 +57,53 @@ async def build_translation_scheduling_service():
         BackendResolutionBridge(), TranslationWorkBridge(),
         TranslationQuotaBridge(quota), settings.AGY_MAX_ATTEMPTS,
     )
+
+
+async def build_translation_runtime():
+    """Compatibility runtime for provider-facing translation functions."""
+    from novelwiki.modules.reading.adapters.outbound.translation import (
+        PostgresReadingTranslationQuery,
+        PostgresReadingTranslationTransactionService,
+    )
+    from novelwiki.modules.reading.public import ReadingTranslationTransactionApi
+    from novelwiki.modules.translation.adapters.outbound.postgres import (
+        PostgresTranslationTransactionService,
+    )
+    from novelwiki.modules.translation.public import TranslationTransactionApi
+    from novelwiki.modules.work.adapters.outbound.transactions import (
+        PostgresWorkTransactionService,
+    )
+    from novelwiki.modules.work.public import WorkTransactionApi
+    from novelwiki.platform.database import AsyncpgUnitOfWork, init_db_pool
+
+    pool = await init_db_pool()
+    factories = {
+        ReadingTranslationTransactionApi: PostgresReadingTranslationTransactionService,
+        TranslationTransactionApi: PostgresTranslationTransactionService,
+        WorkTransactionApi: PostgresWorkTransactionService,
+    }
+    return PostgresReadingTranslationQuery(pool), lambda: AsyncpgUnitOfWork(pool, factories)
+
+
+async def seed_system_glossary(novel_id: int) -> int:
+    """Trusted CLI/worker seed preserving the historical system-principal semantics."""
+    from novelwiki.modules.codex.adapters.outbound.postgres_terms import PostgresEstablishedTerms
+    from novelwiki.modules.codex.public import EstablishedTermsApi
+    from novelwiki.modules.translation.adapters.outbound.postgres import (
+        PostgresTranslationTransactionService,
+    )
+    from novelwiki.modules.translation.public import TranslationTransactionApi
+    from novelwiki.platform.database import AsyncpgUnitOfWork, init_db_pool
+
+    pool = await init_db_pool()
+    factories = {
+        EstablishedTermsApi: PostgresEstablishedTerms,
+        TranslationTransactionApi: PostgresTranslationTransactionService,
+    }
+    async with AsyncpgUnitOfWork(pool, factories) as uow:
+        terms = await uow.transaction.bind(EstablishedTermsApi).list_established_terms(
+            novel_id
+        )
+        return await uow.transaction.bind(
+            TranslationTransactionApi
+        ).seed_established_terms(novel_id, terms)

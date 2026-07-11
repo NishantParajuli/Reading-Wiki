@@ -6,12 +6,15 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { API } from "../lib/api.js";
+import { acquisitionApi } from "../modules/acquisition/api.js";
+import { narrationApi } from "../modules/narration/api.js";
+import { workApi } from "../modules/work/api.js";
 import { Icon } from "../components/Icon.jsx";
 import { Button, Cover, EmptyState, Loading, PageHeader, Tabs } from "../components/ui.jsx";
 import { JobRow } from "../components/JobRow.jsx";
 import { useToast } from "../components/toast.jsx";
-import { useActivityQuery, isActiveJob, useNovelsQuery } from "../lib/queries.js";
+import { useNovelsQuery } from "../modules/catalog/queries.js";
+import { isActiveJob, useActivityQuery } from "../modules/experience/queries.js";
 import { useTitle } from "../lib/hooks.js";
 import { fmtDuration } from "../lib/utils.js";
 
@@ -45,7 +48,12 @@ export function Jobs() {
   async function cancel(job) {
     const rowKey = `${job.source}:${job.id}`;
     setBusyId(rowKey);
-    try { await API.cancelActivity(job); await refetch(); }
+    try {
+      if (job.source === "tts") await narrationApi.cancelTtsJob(job.id);
+      else if (job.source === "import") await acquisitionApi.cancelImport(job.id);
+      else await workApi.cancelJob(job.id);
+      await refetch();
+    }
     catch (e) { toast(e.message || "Cancel failed.", { tone: "danger" }); }
     finally { setBusyId(null); }
   }

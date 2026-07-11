@@ -14,6 +14,15 @@ class CodexArtifacts(Protocol):
     async def invalidate_chapter_range(self, novel_id: int, start: float, end: float) -> None: ...
 
 
+class CodexTransactionApi(Protocol):
+    async def has_chapter_artifacts(
+        self, novel_id: int, chapters: tuple[float, ...]
+    ) -> bool: ...
+    async def invalidate_chapter_range(
+        self, novel_id: int, start: float, end: float
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class EstablishedTerm:
     canonical_name: str

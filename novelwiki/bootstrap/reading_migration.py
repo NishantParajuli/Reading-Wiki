@@ -21,8 +21,12 @@ async def build_reading_migration_service():
         PostgresReadingRepository,
     )
     from novelwiki.modules.reading.application.migration import ReadingMigrationService
+    from novelwiki.modules.reading.application.ports import SourceMetadataPort
+    from novelwiki.modules.acquisition.adapters.outbound.catalog_workflows import (
+        PostgresAcquisitionTransactionService,
+    )
     from novelwiki.modules.reading.public import ReadingTransactionApi
-    from novelwiki.modules.translation.adapters.outbound.legacy import (
+    from novelwiki.modules.translation.adapters.outbound.runtime import (
         prefetch_translations,
         translate_chapter,
         translate_raw_text,
@@ -37,6 +41,7 @@ async def build_reading_migration_service():
         ),
         ReadingTransactionApi: PostgresReadingRepository,
         UserDirectoryApi: PostgresUserDirectory,
+        SourceMetadataPort: PostgresAcquisitionTransactionService,
     }
 
     def user_mapping(principal: Principal) -> dict:
@@ -50,7 +55,7 @@ async def build_reading_migration_service():
             result[f"quota_{kind}"] = limit
         return result
 
-    class LegacyChapterTranslationAdapter:
+    class ChapterTranslationGateway:
         async def translate_chapter(self, novel_id, number, principal):
             return await translate_chapter(
                 novel_id, number,
@@ -69,7 +74,36 @@ async def build_reading_migration_service():
     quota = QuotaService(PostgresQuotaRepository(pool=pool))
     return ReadingMigrationService(
         lambda: AsyncpgUnitOfWork(pool, factories),
-        LegacyChapterTranslationAdapter(),
+        ChapterTranslationGateway(),
         quota,
         settings.TRANSLATE_PREFETCH,
     )
+
+
+async def build_reading_ingestion_gateway():
+    from novelwiki.modules.reading.adapters.outbound.ingestion import (
+        PostgresReadingIngestionGateway,
+    )
+    from novelwiki.platform.database import init_db_pool
+    return PostgresReadingIngestionGateway(await init_db_pool())
+
+
+async def build_reading_narration_gateway():
+    from novelwiki.modules.reading.adapters.outbound.narration import (
+        PostgresReadingNarrationGateway,
+    )
+    from novelwiki.platform.database import init_db_pool
+    return PostgresReadingNarrationGateway(await init_db_pool())
+
+
+async def build_reading_codex_gateway():
+    from novelwiki.modules.reading.adapters.outbound.codex import PostgresReadingCodexGateway
+    from novelwiki.platform.database import init_db_pool
+    return PostgresReadingCodexGateway(await init_db_pool())
+
+
+def bind_reading_codex(connection):
+    from novelwiki.modules.reading.adapters.outbound.codex import (
+        PostgresReadingCodexTransactionService,
+    )
+    return PostgresReadingCodexTransactionService(connection)

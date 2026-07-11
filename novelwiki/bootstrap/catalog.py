@@ -1,4 +1,4 @@
-"""Catalog dependency wiring shared by HTTP and temporary compatibility callables."""
+"""Catalog dependency wiring shared by HTTP and stable direct-call entrypoints."""
 
 from __future__ import annotations
 

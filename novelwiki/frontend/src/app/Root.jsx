@@ -8,7 +8,8 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from "
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { API, setUnauthorizedHandler } from "../lib/api.js";
+import { authApi } from "../modules/identity/api.js";
+import { setUnauthorizedHandler } from "../shared/api/http.js";
 import { CiteProvider } from "../lib/markdown.jsx";
 import { ToastProvider, useToast } from "../components/toast.jsx";
 import { Shell } from "../layouts/Shell.jsx";
@@ -146,7 +147,7 @@ function Gate() {
 
   useEffect(() => {
     let cancel = false;
-    API.auth.me()
+    authApi.me()
       .then(u => { if (!cancel) setState({ loading: false, user: u }); })
       .catch(() => { if (!cancel) setState({ loading: false, user: null }); });
     return () => { cancel = true; };
@@ -201,7 +202,7 @@ function Gate() {
       user={state.user}
       setUser={(u) => setState(s => ({ ...s, user: u }))}
       onLogout={async () => {
-        try { await API.auth.logout(); } catch (e) { /* session may already be gone */ }
+        try { await authApi.logout(); } catch (e) { /* session may already be gone */ }
         queryClient.clear();
         setState({ loading: false, user: null });
         navigate("/login");

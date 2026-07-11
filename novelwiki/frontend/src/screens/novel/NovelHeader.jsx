@@ -6,7 +6,8 @@ import React, { useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { API } from "../../lib/api.js";
+import { catalogApi } from "../../modules/catalog/api.js";
+import { readingApi } from "../../modules/reading/api.js";
 import { useAuth } from "../../App.jsx";
 import { useNovel } from "../../layouts/NovelLayout.jsx";
 import { Icon } from "../../components/Icon.jsx";
@@ -16,7 +17,8 @@ import { ProvenanceBadges } from "../../components/ProvenanceBadges.jsx";
 import { useToast } from "../../components/toast.jsx";
 import { NarrateBookControl } from "../../features/narrate.jsx";
 import { ShelfControl } from "../../features/tags.jsx";
-import { useAudioCoverageQuery, useInvalidate } from "../../lib/queries.js";
+import { useAudioCoverageQuery } from "../../modules/narration/queries.js";
+import { useInvalidate } from "../../shared/query/useInvalidate.js";
 import { TRANSLATION_TYPE_LABELS, VIS_LABELS } from "../../lib/constants.js";
 import { fmtChapter, relativeTime } from "../../lib/utils.js";
 
@@ -29,7 +31,7 @@ function NovelKebab({ novel, canEdit, onDelete }) {
   async function removeFromLibrary() {
     setOpen(false);
     try {
-      await API.removeFromLibrary(novel.id);
+      await catalogApi.removeFromLibrary(novel.id);
       qc.invalidateQueries({ queryKey: ["novels"] });
       toast(`Removed “${novel.title}” from your library.`, { tone: "ok" });
       navigate("/library");
@@ -90,8 +92,8 @@ export function NovelHeader() {
     if (!canEdit) return;
     let cancel = false;
     Promise.all([
-      API.contributions(novelId).catch(() => []),
-      API.tagSuggestions(novelId).catch(() => []),
+      readingApi.contributions(novelId).catch(() => []),
+      catalogApi.tagSuggestions(novelId).catch(() => []),
     ]).then(([c, t]) => { if (!cancel) setInboxCount((c || []).length + (t || []).length); });
     return () => { cancel = true; };
   }, [novelId, canEdit]);
@@ -99,7 +101,7 @@ export function NovelHeader() {
   async function doDelete() {
     setDeleting(true);
     try {
-      await API.deleteNovel(novelId);
+      await catalogApi.deleteNovel(novelId);
       invalidate(["novels"], ["home"]);
       toast(`Deleted “${novel.title}”.`, { tone: "ok" });
       navigate("/library");

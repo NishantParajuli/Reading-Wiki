@@ -67,7 +67,7 @@ class AuditSink(Protocol):
     async def record(self, event: str, **fields) -> None: ...
 
 
-class LegacyAuditSink:
+class FunctionAuditSink:
     """Object adapter for modules that consume the explicit AuditSink port."""
 
     async def record(self, event: str, **fields) -> None:

@@ -1,4 +1,8 @@
 """Admin dashboard endpoints, mounted at /api/admin (every route Depends(require_admin)).
+    period = _period()
+    totals, user_count, novel_count, months, top = await (
+        await _operational_projections()
+    ).admin_usage(period)
 
 Tabs the SPA's admin.jsx drives:
   • Users       — list/search, suspend/ban, promote to admin, adjust per-user quotas, delete.
@@ -17,7 +21,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
 from novelwiki.auth.deps import require_admin
 from novelwiki import audit
 from novelwiki.ai_backend import policy as backend_policy
@@ -27,6 +30,11 @@ from novelwiki.modules.identity.public import IdentityAdminApi, Principal
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _operational_projections():
+    from novelwiki.bootstrap.experience import build_operational_projection_repository
+    return await build_operational_projection_repository()
 
 USER_STATUSES = {"active", "suspended", "banned"}
 USER_ROLES = {"user", "admin"}
@@ -76,35 +84,7 @@ class AdminAiBackendPolicy(BaseModel):
 @router.get("/users")
 async def admin_list_users(q: str | None = None, admin: dict = Depends(require_admin)):
     """All accounts with this month's usage and effective quota limits."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT u.id, u.email, u.username, u.display_name, u.avatar_path, u.role, u.status,
-                   u.email_verified, u.created_at,
-                   u.quota_translated_chapters, u.quota_ocr_pages, u.quota_codex_builds,
-                   u.quota_tts_chapters,
-                   COALESCE(qz.translated_chapters, 0) AS used_translated,
-                   COALESCE(qz.ocr_pages, 0)          AS used_ocr,
-                   COALESCE(qz.codex_builds, 0)       AS used_codex,
-                   COALESCE(qz.tts_chapters, 0)       AS used_tts,
-                   (SELECT COUNT(*) FROM novels n WHERE n.owner_id = u.id) AS novels_owned,
-                   p.agy_enabled, p.default_backend, p.agy_workloads, p.fallback_to_api,
-                   p.max_concurrent_agy_jobs, p.policy_version, p.notes AS agy_notes,
-                   p.updated_at AS agy_updated_at, p.granted_by,
-                   (SELECT COUNT(*) FROM jobs j WHERE j.user_id=u.id AND j.execution_backend='agy'
-                     AND j.status IN ('queued','running','waiting_provider')) AS agy_active_jobs
-            FROM users u
-            LEFT JOIN quota_usage qz ON qz.user_id = u.id AND qz.period = $1
-            LEFT JOIN user_ai_backend_policies p ON p.user_id=u.id
-            WHERE ($2::text IS NULL
-                   OR u.email ILIKE '%' || $2 || '%'
-                   OR u.username ILIKE '%' || $2 || '%'
-                   OR u.display_name ILIKE '%' || $2 || '%')
-            ORDER BY u.created_at DESC LIMIT 500;
-            """,
-            _period(), q,
-        )
+    rows = await (await _operational_projections()).admin_users(_period(), q)
     return [
         {
             "id": int(r["id"]), "email": r["email"], "username": r["username"],
@@ -187,9 +167,7 @@ def _policy_view(row: dict | None, user_id: int) -> dict:
 
 @router.get("/users/{user_id}/ai-backend-policy")
 async def admin_get_ai_backend_policy(user_id: int, admin: dict = Depends(require_admin)):
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        exists = await conn.fetchval("SELECT 1 FROM users WHERE id=$1;", user_id)
+    exists = await (await _operational_projections()).user_exists(user_id)
     if not exists:
         raise HTTPException(status_code=404, detail="User not found.")
     return _policy_view(await backend_policy.get_policy(user_id), user_id)
@@ -210,30 +188,9 @@ async def admin_delete_ai_backend_policy(user_id: int, admin: dict = Depends(req
 
 @router.get("/ai/agy/health")
 async def admin_agy_health(admin: dict = Depends(require_admin)):
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        heartbeat = await conn.fetchrow(
-            "SELECT * FROM ai_worker_heartbeats WHERE backend='agy' ORDER BY heartbeat_at DESC LIMIT 1;"
-        )
-        counts = await conn.fetchrow(
-            """
-            SELECT count(*) FILTER (WHERE status='queued') AS queued,
-                   count(*) FILTER (WHERE status='running') AS running,
-                   count(*) FILTER (WHERE status='waiting_provider') AS waiting,
-                   min(created_at) FILTER (WHERE status IN ('queued','waiting_provider')) AS oldest
-            FROM jobs WHERE execution_backend='agy';
-            """
-        )
-        recent = await conn.fetch(
-            """
-            SELECT failure_code,count(*) AS count FROM ai_execution_runs
-            WHERE backend='agy' AND failure_code IS NOT NULL AND created_at > now()-interval '7 days'
-            GROUP BY failure_code ORDER BY count(*) DESC;
-            """
-        )
-        last_success = await conn.fetchval(
-            "SELECT max(finished_at) FROM ai_execution_runs WHERE backend='agy' AND status='completed';"
-        )
+    heartbeat, counts, recent, last_success = await (
+        await _operational_projections()
+    ).agy_health()
     details = heartbeat["details"] if heartbeat else {}
     if isinstance(details, str):
         try: details = __import__("json").loads(details)
@@ -264,12 +221,7 @@ async def admin_retry_waiting_agy(admin: dict = Depends(require_admin)):
 async def admin_agy_smoke_test(admin: dict = Depends(require_admin)):
     if not settings.AGY_ENABLED:
         raise HTTPException(status_code=409, detail="Enable AGY before running a consuming smoke test.")
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        recent = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM audit_events WHERE event='agy.smoke.completed' "
-            "AND created_at > now()-interval '10 minutes');"
-        )
+    recent = await (await _operational_projections()).recent_smoke()
     if recent:
         raise HTTPException(status_code=429, detail="An AGY smoke test ran in the last 10 minutes.")
     job_id, created = await jobs_service.create_job(
@@ -301,44 +253,10 @@ async def admin_delete_user(
 async def admin_usage(admin: dict = Depends(require_admin)):
     """Platform-wide spend: this month's totals, active spender count, the last six months,
     and the top spenders this month."""
-    pool = await get_db_pool()
     period = _period()
-    async with pool.acquire() as conn:
-        totals = await conn.fetchrow(
-            """
-            SELECT COALESCE(SUM(translated_chapters), 0) AS translated_chapters,
-                   COALESCE(SUM(ocr_pages), 0)          AS ocr_pages,
-                   COALESCE(SUM(codex_builds), 0)       AS codex_builds,
-                   COUNT(DISTINCT user_id)              AS active_users
-            FROM quota_usage WHERE period = $1;
-            """,
-            period,
-        )
-        user_count = await conn.fetchval("SELECT COUNT(*) FROM users;")
-        novel_count = await conn.fetchval("SELECT COUNT(*) FROM novels;")
-        months = await conn.fetch(
-            """
-            SELECT period,
-                   SUM(translated_chapters) AS translated_chapters,
-                   SUM(ocr_pages) AS ocr_pages,
-                   SUM(codex_builds) AS codex_builds
-            FROM quota_usage
-            WHERE period >= ($1::date - INTERVAL '5 months')
-            GROUP BY period ORDER BY period DESC;
-            """,
-            period,
-        )
-        top = await conn.fetch(
-            """
-            SELECT u.id, u.username, u.display_name,
-                   qz.translated_chapters, qz.ocr_pages, qz.codex_builds
-            FROM quota_usage qz JOIN users u ON u.id = qz.user_id
-            WHERE qz.period = $1
-            ORDER BY (qz.translated_chapters + qz.ocr_pages + qz.codex_builds) DESC
-            LIMIT 10;
-            """,
-            period,
-        )
+    totals, user_count, novel_count, months, top = await (
+        await _operational_projections()
+    ).admin_usage(period)
     return {
         "period": period.isoformat(),
         "totals": {
@@ -370,20 +288,7 @@ async def admin_list_novels(visibility: str | None = None, q: str | None = None,
                             admin: dict = Depends(require_admin)):
     """Every novel for moderation: owner, visibility, size. Take-down / promote are done with
     the shared PATCH /api/novels/{id}/visibility (admins may set any visibility)."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT n.id, n.title, n.author, n.visibility, n.owner_id, n.updated_at,
-                   u.username AS owner_username,
-                   (SELECT COUNT(*) FROM chapters c WHERE c.novel_id = n.id) AS chapter_count
-            FROM novels n LEFT JOIN users u ON u.id = n.owner_id
-            WHERE ($1::text IS NULL OR n.visibility = $1)
-              AND ($2::text IS NULL OR n.title ILIKE '%' || $2 || '%')
-            ORDER BY n.updated_at DESC NULLS LAST, n.id DESC LIMIT 400;
-            """,
-            visibility, q,
-        )
+    rows = await (await _operational_projections()).admin_novels(visibility, q)
     return [
         {"id": int(r["id"]), "title": r["title"], "author": r["author"], "visibility": r["visibility"],
          "owner_id": int(r["owner_id"]) if r["owner_id"] is not None else None,
@@ -398,21 +303,7 @@ async def admin_global_novels(admin: dict = Depends(require_admin)):
     """The curated Global library with per-novel pipeline status, for the Global jobs tab.
     The triggers themselves reuse the shared per-novel endpoints (scrape / translate /
     codex/build), which already let an admin act on any novel — this just lists what's there."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT n.id, n.title, n.codex_enabled, n.updated_at,
-                   (SELECT COUNT(*) FROM chapters c WHERE c.novel_id = n.id) AS chapter_count,
-                   (SELECT COUNT(*) FROM sources s WHERE s.novel_id = n.id) AS source_count,
-                   COALESCE((SELECT bool_or(s.is_raw) FROM sources s WHERE s.novel_id = n.id), FALSE) AS has_raw,
-                   (SELECT MAX(s.last_scraped_at) FROM sources s WHERE s.novel_id = n.id) AS last_scraped_at,
-                   (SELECT COUNT(*) FROM chapters c
-                      WHERE c.novel_id = n.id AND c.original_text IS NOT NULL AND c.content IS NULL) AS untranslated
-            FROM novels n WHERE n.visibility = 'global'
-            ORDER BY n.updated_at DESC NULLS LAST, n.id DESC;
-            """,
-        )
+    rows = await (await _operational_projections()).global_novels()
     return [
         {"id": int(r["id"]), "title": r["title"], "codex_enabled": r["codex_enabled"],
          "chapter_count": int(r["chapter_count"] or 0), "source_count": int(r["source_count"] or 0),

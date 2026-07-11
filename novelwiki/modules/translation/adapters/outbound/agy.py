@@ -4,7 +4,6 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -40,20 +39,12 @@ def _chapter_ref(number: float) -> str:
 
 async def _pending(job: dict) -> list[float]:
     opts = job.get("options") or {}
-    conds = ["novel_id=$1", "original_text IS NOT NULL", "translation_status <> 'translating'"]
-    args: list = [int(job["novel_id"])]
-    if not opts.get("force"):
-        conds.append("content IS NULL")
-    if opts.get("from_chapter") is not None:
-        args.append(opts["from_chapter"]); conds.append(f"number >= ${len(args)}")
-    if opts.get("to_chapter") is not None:
-        args.append(opts["to_chapter"]); conds.append(f"number <= ${len(args)}")
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            f"SELECT number FROM chapters WHERE {' AND '.join(conds)} ORDER BY number ASC;", *args,
-        )
-    return [float(row["number"]) for row in rows]
+    from novelwiki.bootstrap.translation import build_translation_runtime
+    reading, _uow = await build_translation_runtime()
+    return await reading.agy_pending(
+        int(job["novel_id"]), opts.get("from_chapter"),
+        opts.get("to_chapter"), bool(opts.get("force")),
+    )
 
 
 async def _glossary(novel_id: int) -> dict:
@@ -98,14 +89,9 @@ def _batch(numbers: list[float], lengths: dict[float, int]) -> list[list[float]]
 async def _lengths(novel_id: int, numbers: list[float]) -> dict[float, int]:
     if not numbers:
         return {}
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT number, length(original_text) AS chars FROM chapters "
-            "WHERE novel_id=$1 AND number=ANY($2::numeric[]);",
-            novel_id, [Decimal(str(number)) for number in numbers],
-        )
-    return {float(row["number"]): int(row["chars"] or 0) for row in rows}
+    from novelwiki.bootstrap.translation import build_translation_runtime
+    reading, _uow = await build_translation_runtime()
+    return await reading.source_lengths(novel_id, numbers)
 
 
 def _validate_quality(source: str, translation: str, glossary: dict) -> None:
@@ -276,16 +262,8 @@ async def _run_batch(job: dict, numbers: list[float], preflight: PreflightResult
 
 async def _resume_ready_commits(job: dict) -> int:
     """Commit complete artifacts left by a crash after AGY exit, without rerunning AGY."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id,workspace_relpath,input_sha256 FROM ai_execution_runs
-            WHERE job_id=$1 AND workload='translate_batch' AND status='validating'
-            ORDER BY created_at;
-            """,
-            int(job["id"]),
-        )
+    from novelwiki.bootstrap.ai_execution_worker import resumable_ai_runs
+    rows = await resumable_ai_runs(int(job["id"]), ("translate_batch",))
     committed = 0
     for row in rows:
         run_id = row["id"]

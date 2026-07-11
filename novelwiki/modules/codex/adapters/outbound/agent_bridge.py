@@ -6,8 +6,8 @@ from ...domain.prompts import (
 from ...public import ChapterCeiling
 
 
-class LegacyCodexAgentBridge:
-    """Compatibility bridge retaining the established orchestration/cache byte contract."""
+class CodexAgentGateway:
+    """Adapter retaining the established orchestration/cache byte contract."""
 
     def query_hash(self, question: str) -> str:
         from .agent import compute_query_hash
@@ -73,4 +73,3 @@ class LegacyCodexAgentBridge:
             ],
             temperature=0.0,
         )
-

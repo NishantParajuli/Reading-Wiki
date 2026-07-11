@@ -8,9 +8,14 @@ from novelwiki.tts.chapter_text import resolve_chapter_text
 from novelwiki.tts.coverage import shared_audio_coverage
 
 
-class LegacyChapterTextAdapter:
+class ReadingChapterTextAdapter:
+    def __init__(self, reading):
+        self._reading = reading
+
     async def resolve(self, novel_id: int, chapter: float, user_id: int) -> dict:
-        return await resolve_chapter_text(novel_id, chapter, {"id": user_id})
+        return await self._reading.resolve_narration_text(
+            novel_id, chapter, user_id
+        )
 
 
 class IdentityNarrationQuota:
@@ -22,47 +27,35 @@ class IdentityNarrationQuota:
 
 
 class PostgresNarrationQueries:
-    def __init__(self, pool):
+    def __init__(self, pool, reading):
         self._pool = pool
+        self._reading = reading
 
     async def book_candidates(
         self, novel_id: int, voice: str, start: float | None, end: float | None
     ) -> list[dict]:
+        chapters = await self._reading.prose_chapters(novel_id, start, end)
+        versions = {chapter["number"]: chapter["content_version"] for chapter in chapters}
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(
-                """
-                SELECT c.number, (a.id IS NOT NULL) AS has_audio
-                FROM chapters c
-                LEFT JOIN chapter_audio a
-                  ON a.novel_id = c.novel_id AND a.chapter = c.number AND a.voice_id = $3
-                     AND a.content_version = c.content_version AND a.user_id IS NULL
-                WHERE c.novel_id = $1
-                  AND (c.kind IS NULL OR c.kind = 'chapter')
-                  AND ($2::numeric IS NULL OR c.number >= $2)
-                  AND ($4::numeric IS NULL OR c.number <= $4)
-                ORDER BY c.number ASC;
-                """,
-                novel_id, start, voice, end,
+                "SELECT chapter,content_version FROM chapter_audio WHERE novel_id=$1 "
+                "AND voice_id=$2 AND user_id IS NULL;", novel_id, voice,
             )
-        return [dict(row) for row in rows]
+        current = {
+            float(row["chapter"]) for row in rows
+            if versions.get(float(row["chapter"])) == int(row["content_version"])
+        }
+        return [
+            {"number": chapter["number"], "has_audio": chapter["number"] in current}
+            for chapter in chapters
+        ]
 
     async def shared_audio_chapters(self, novel_id: int, voice: str) -> list[float]:
-        async with self._pool.acquire() as connection:
-            rows = await connection.fetch(
-                """
-                SELECT DISTINCT a.chapter
-                FROM chapter_audio a
-                JOIN chapters c
-                  ON c.novel_id = a.novel_id
-                 AND c.number = a.chapter
-                 AND c.content_version = a.content_version
-                WHERE a.novel_id = $1 AND a.voice_id = $2 AND a.user_id IS NULL
-                  AND (c.kind IS NULL OR c.kind = 'chapter')
-                ORDER BY a.chapter;
-                """,
-                novel_id, voice,
-            )
-        return [float(row["chapter"]) for row in rows]
+        return [
+            row["number"] for row in await self.book_candidates(
+                novel_id, voice, None, None
+            ) if row["has_audio"]
+        ]
 
     async def available_voices(
         self, novel_id: int, chapter: float, content_version: int,
@@ -92,10 +85,42 @@ class PostgresNarrationQueries:
         return [str(row["voice_id"]) for row in rows]
 
     async def coverage(self, novel_id: int) -> dict:
-        return await shared_audio_coverage(novel_id)
+        chapters = await self._reading.prose_chapters(novel_id)
+        versions = {chapter["number"]: chapter["content_version"] for chapter in chapters}
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                "SELECT chapter,voice_id,duration_seconds,file_bytes,content_version "
+                "FROM chapter_audio WHERE novel_id=$1 AND user_id IS NULL;", novel_id,
+            )
+        current = [
+            row for row in rows
+            if versions.get(float(row["chapter"])) == int(row["content_version"])
+        ]
+        by_chapter, by_voice = {}, {}
+        for row in current:
+            chapter, voice = float(row["chapter"]), str(row["voice_id"])
+            by_chapter.setdefault(chapter, set()).add(voice)
+            record = by_voice.setdefault(voice, {"chapters": set(), "duration": 0, "bytes": 0})
+            record["chapters"].add(chapter)
+            record["duration"] += int(row["duration_seconds"] or 0)
+            record["bytes"] += int(row["file_bytes"] or 0)
+        voices = [{
+            "voice_id": voice, "have": len(record["chapters"]),
+            "missing": max(0, len(chapters)-len(record["chapters"])),
+            "chapters": sorted(record["chapters"]),
+            "duration_seconds": record["duration"], "file_bytes": record["bytes"],
+        } for voice, record in sorted(by_voice.items())]
+        any_count = len(by_chapter)
+        return {
+            "prose_chapters": len(chapters), "chapters_with_any_audio": any_count,
+            "have": any_count, "missing_any": max(0, len(chapters)-any_count),
+            "missing": max(0, len(chapters)-any_count), "voices": voices,
+            "chapters": [{"chapter": chapter, "voices": sorted(items)}
+                         for chapter, items in sorted(by_chapter.items())],
+        }
 
 
-class LegacyNarrationJobs:
+class PostgresNarrationJobs:
     async def find_audio(
         self, novel_id: int, chapter: float, voice: str,
         content_version: int, user_id: int | None,

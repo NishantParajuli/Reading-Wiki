@@ -205,9 +205,9 @@ async def commit_extraction_proposal(
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            chapter = await conn.fetchrow(
-                "SELECT title,content FROM chapters WHERE novel_id=$1 AND number=$2 FOR UPDATE;",
-                novel_id, chapter_number,
+            from novelwiki.bootstrap.reading_migration import bind_reading_codex
+            chapter = await bind_reading_codex(conn).locked_chapter_snapshot(
+                novel_id, chapter_number
             )
             if not chapter or chapter_source_sha256(chapter["content"]) != expected_source_hash:
                 raise RuntimeError("source_changed")
@@ -385,9 +385,9 @@ async def extract_knowledge_for_chapter(
         await clear_caches(conn, novel_id=novel_id, chapter_number=chapter_number)
 
         # Load chapter info
-        chapter = await conn.fetchrow(
-            "SELECT title, content FROM chapters WHERE number = $1 AND novel_id = $2;",
-            chapter_number, novel_id
+        from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
+        chapter = await (await build_reading_codex_gateway()).chapter_snapshot(
+            novel_id, chapter_number
         )
         if not chapter:
             logger.error(f"Chapter {chapter_number} not found in DB.")
@@ -516,25 +516,16 @@ async def extract_all_chapters(
     """Processes chapters in strict ascending order (Invariant 2), optionally limited
     to a [from_chapter, to_chapter] range so the prompt can be iterated on the first
     ~50 chapters before committing to the full paid run."""
-    pool = await get_db_pool()
-    conditions = ["novel_id = $1"]
-    args: list = [novel_id]
-    if from_chapter is not None:
-        args.append(from_chapter)
-        conditions.append(f"number >= ${len(args)}")
-    if to_chapter is not None:
-        args.append(to_chapter)
-        conditions.append(f"number <= ${len(args)}")
-    where = " WHERE " + " AND ".join(conditions)
+    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
+    numbers = await (await build_reading_codex_gateway()).chapter_numbers(
+        novel_id, from_chapter, to_chapter
+    )
 
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(f"SELECT number FROM chapters{where} ORDER BY number ASC;", *args)
-
-    for row in rows:
+    for number in numbers:
         if cancel_check is not None:
             await cancel_check()
         await extract_knowledge_for_chapter(
-            novel_id, float(row["number"]), force=force, cancel_check=cancel_check,
+            novel_id, number, force=force, cancel_check=cancel_check,
         )
 
 

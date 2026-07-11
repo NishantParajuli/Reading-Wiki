@@ -212,10 +212,10 @@ class CodexCommandService:
                 "model": existing.model, "backend_reason": "already_active",
             }
         decision = await self._backend.resolve(principal, command.ai_backend)
-        await self._quota.reserve(principal)
-        await self._catalog.enable_codex(novel_id)
-        try:
-            job_id, created = await self._work.schedule(
+        from novelwiki.workflows.schedule_ai_job import schedule_ai_job
+
+        async def schedule():
+            return await self._work.schedule(
                 novel_id=novel_id, user_id=principal.user_id,
                 options={
                     "force": command.force,
@@ -227,11 +227,14 @@ class CodexCommandService:
                     self._agy_max_attempts if decision.resolved == "agy" else None
                 ),
             )
-        except Exception:
+
+        async def refund():
             await self._quota.refund(principal.user_id)
-            raise
-        if not created:
-            await self._quota.refund(principal.user_id)
+
+        job_id, created = await schedule_ai_job(
+            lambda: self._quota.reserve(principal), schedule, refund,
+            lambda: self._catalog.enable_codex(novel_id),
+        )
         return {
             "status": "success",
             "message": (
@@ -260,4 +263,3 @@ class CodexMigrationService:
     def __init__(self, queries: CodexQueryService, commands: CodexCommandService):
         self.queries = queries
         self.commands = commands
-

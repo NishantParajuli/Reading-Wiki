@@ -1,3 +1,3 @@
-from .audit import AuditSink, LegacyAuditSink
+from .audit import AuditSink, FunctionAuditSink
 
-__all__ = ["AuditSink", "LegacyAuditSink"]
+__all__ = ["AuditSink", "FunctionAuditSink"]

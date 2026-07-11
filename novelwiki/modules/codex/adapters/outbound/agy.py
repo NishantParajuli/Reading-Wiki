@@ -33,31 +33,32 @@ _LOCAL_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,79}$")
 
 async def _chapters(job: dict) -> list[float]:
     opts = job.get("options") or {}
-    conds = ["c.novel_id=$1", "c.content IS NOT NULL"]
-    args: list = [int(job["novel_id"])]
-    if opts.get("from_chapter") is not None:
-        args.append(opts["from_chapter"]); conds.append(f"c.number >= ${len(args)}")
-    if opts.get("to_chapter") is not None:
-        args.append(opts["to_chapter"]); conds.append(f"c.number <= ${len(args)}")
-    if not opts.get("force"):
-        conds.append("NOT EXISTS (SELECT 1 FROM extraction_state x WHERE x.novel_id=c.novel_id AND x.chapter=c.number)")
+    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
+    novel_id = int(job["novel_id"])
+    numbers = await (await build_reading_codex_gateway()).chapter_numbers(
+        novel_id, opts.get("from_chapter"), opts.get("to_chapter"), True
+    )
+    if opts.get("force") or not numbers:
+        return numbers
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT c.number FROM chapters c WHERE {' AND '.join(conds)} ORDER BY c.number ASC;", *args,
+            "SELECT chapter FROM extraction_state WHERE novel_id=$1 "
+            "AND chapter=ANY($2::numeric[]);", novel_id, numbers,
         )
-    return [float(row["number"]) for row in rows]
+    completed = {float(row["chapter"]) for row in rows}
+    return [number for number in numbers if number not in completed]
 
 
 async def _chapter_input(novel_id: int, chapter_number: float) -> dict:
+    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
+    chapter = await (await build_reading_codex_gateway()).chapter_snapshot(
+        novel_id, chapter_number
+    )
+    if not chapter or not chapter["content"]:
+        raise RuntimeError("chapter source is missing")
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        chapter = await conn.fetchrow(
-            "SELECT title,content FROM chapters WHERE novel_id=$1 AND number=$2;",
-            novel_id, chapter_number,
-        )
-        if not chapter or not chapter["content"]:
-            raise RuntimeError("chapter source is missing")
         chunks = await conn.fetch(
             "SELECT id,chunk_index,text FROM chunks WHERE novel_id=$1 AND chapter=$2 ORDER BY chunk_index;",
             novel_id, chapter_number,
@@ -458,16 +459,10 @@ async def _extract_chapter(job: dict, chapter_number: float, preflight: Prefligh
 
 async def _resume_ready_commits(job: dict, preflight: PreflightResult) -> set[float]:
     """Use a complete extraction artifact after worker loss without rerunning extraction."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id,parent_run_id,workload,workspace_relpath,input_sha256 FROM ai_execution_runs
-            WHERE job_id=$1 AND workload IN ('codex_extract','codex_verify') AND status='validating'
-            ORDER BY created_at DESC;
-            """,
-            int(job["id"]),
-        )
+    from novelwiki.bootstrap.ai_execution_worker import resumable_ai_runs
+    rows = list(reversed(await resumable_ai_runs(
+        int(job["id"]), ("codex_extract", "codex_verify")
+    )))
     completed: set[float] = set()
     for row in rows:
         run_id = row["id"]

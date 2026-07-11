@@ -13,25 +13,37 @@ async def build_narration_service():
     )
     from novelwiki.modules.catalog.application import CatalogAccessService
     from novelwiki.modules.narration.adapters.outbound.migration import (
-        IdentityNarrationQuota, LegacyChapterTextAdapter,
-        LegacyNarrationJobs, LocalAudioFiles, NarrationSidecar,
+        IdentityNarrationQuota, ReadingChapterTextAdapter,
+        LocalAudioFiles, NarrationSidecar, PostgresNarrationJobs,
         PostgresNarrationQueries,
     )
     from novelwiki.modules.narration.application import NarrationService
 
     pool = await get_db_pool()
+    from novelwiki.modules.reading.adapters.outbound.narration import (
+        PostgresReadingNarrationGateway,
+    )
+    reading = PostgresReadingNarrationGateway(pool)
     return NarrationService(
         _PoolCatalogAccess(pool, CatalogAccessService, PostgresCatalogRepository),
-        LegacyChapterTextAdapter(),
+        ReadingChapterTextAdapter(reading),
         IdentityNarrationQuota(QuotaService(PostgresQuotaRepository(pool=pool))),
-        PostgresNarrationQueries(pool),
-        LegacyNarrationJobs(),
+        PostgresNarrationQueries(pool, reading),
+        PostgresNarrationJobs(),
         NarrationSidecar(),
         LocalAudioFiles(),
         default_voice=settings.TTS_DEFAULT_VOICE,
         enabled=settings.TTS_ENABLED,
         max_batch_chapters=settings.TTS_MAX_BATCH_CHAPTERS,
     )
+
+
+async def build_narration_queries():
+    from novelwiki.modules.narration.adapters.outbound.migration import PostgresNarrationQueries
+    from novelwiki.modules.reading.adapters.outbound.narration import PostgresReadingNarrationGateway
+    from novelwiki.platform.database import init_db_pool
+    pool = await init_db_pool()
+    return PostgresNarrationQueries(pool, PostgresReadingNarrationGateway(pool))
 
 
 def build_narration_principal_factory():

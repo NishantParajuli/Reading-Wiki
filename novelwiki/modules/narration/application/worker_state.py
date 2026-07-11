@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from .ports import NarrationWorkerRepository
+from .ports import NarrationWorkerIdentityPort, NarrationWorkerRepository
 
 
 class NarrationWorkerState:
-    def __init__(self, repository: NarrationWorkerRepository):
+    def __init__(
+        self, repository: NarrationWorkerRepository,
+        identity: NarrationWorkerIdentityPort,
+    ):
         self._repository = repository
+        self._identity = identity
 
     async def create_job(self, *args, **kwargs):
         return await self._repository.create_job(*args, **kwargs)
@@ -29,7 +33,7 @@ class NarrationWorkerState:
         return await self._repository.status(job_id)
 
     async def load_user(self, user_id: int | None):
-        return None if user_id is None else await self._repository.load_user(user_id)
+        return None if user_id is None else await self._identity.load_user(user_id)
 
     async def find_audio(self, **criteria):
         return await self._repository.find_audio(**criteria)

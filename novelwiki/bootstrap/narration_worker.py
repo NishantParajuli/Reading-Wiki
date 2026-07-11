@@ -6,8 +6,12 @@ async def build_narration_worker_state():
         PostgresNarrationWorkerRepository,
     )
     from novelwiki.modules.narration.application import NarrationWorkerState
+    from novelwiki.modules.identity.adapters.outbound.worker_lookup import (
+        PostgresIdentityWorkerLookup,
+    )
     from novelwiki.platform.database import init_db_pool
 
+    pool = await init_db_pool()
     return NarrationWorkerState(
-        PostgresNarrationWorkerRepository(await init_db_pool())
+        PostgresNarrationWorkerRepository(pool), PostgresIdentityWorkerLookup(pool)
     )

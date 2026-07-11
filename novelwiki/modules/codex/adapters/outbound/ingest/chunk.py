@@ -107,16 +107,15 @@ async def chunk_chapter(novel_id: int, chapter_number: float, force: bool = Fals
     Fetches readable chapter text, chunks it, and writes chunks to the chunks table.
     Deletes prior chunks first if force=True.
     """
+    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
+    chapter = await (await build_reading_codex_gateway()).chapter_snapshot(
+        novel_id, chapter_number
+    )
+    if not chapter or not chapter["content"]:
+        logger.error(f"Chapter {chapter_number} not found (or has no content) in DB.")
+        return 0
     pool = await get_db_pool()
-
     async with pool.acquire() as conn:
-        chapter = await conn.fetchrow(
-            "SELECT content FROM chapters WHERE number = $1 AND novel_id = $2;",
-            chapter_number, novel_id
-        )
-        if not chapter or not chapter["content"]:
-            logger.error(f"Chapter {chapter_number} not found (or has no content) in DB.")
-            return 0
 
         # Check if chunks already exist
         existing = await conn.fetchval(
@@ -163,25 +162,15 @@ async def chunk_all_chapters(
     finishing a whole-book pass. The callback signals cancellation by raising the
     worker's cancellation exception.
     """
-    pool = await get_db_pool()
-    conditions = ["novel_id = $1"]
-    args: list = [novel_id]
-    if from_chapter is not None:
-        args.append(from_chapter)
-        conditions.append(f"number >= ${len(args)}")
-    if to_chapter is not None:
-        args.append(to_chapter)
-        conditions.append(f"number <= ${len(args)}")
-    where = " WHERE " + " AND ".join(conditions)
-
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(f"SELECT number FROM chapters{where} ORDER BY number ASC;", *args)
+    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
+    numbers = await (await build_reading_codex_gateway()).chapter_numbers(
+        novel_id, from_chapter, to_chapter
+    )
 
     total_chunks = 0
-    for row in rows:
+    for num in numbers:
         if cancel_check is not None:
             await cancel_check()
-        num = float(row["number"])
         cnt = await chunk_chapter(novel_id, num, force=force)
         total_chunks += cnt
 

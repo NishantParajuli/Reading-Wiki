@@ -33,7 +33,6 @@ from novelwiki.agent.orchestrator import (
 from novelwiki.auth.access import can_edit, is_admin, require_readable, require_effective_ceiling
 from novelwiki.auth.deps import current_user
 from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
 from novelwiki.jobs import service as jobs_service
 from novelwiki.retrieval.bm25 import get_bm25_manager
 from novelwiki.tts.coverage import shared_audio_coverage
@@ -54,6 +53,11 @@ RECAP_QUESTION = (
 # Terminal states per job system (everything else counts as "active / in progress").
 _IMPORT_TERMINAL = {"committed", "failed", "canceled"}
 _TTS_ACTIVE = ("queued", "generating")
+
+
+async def _operational_projections():
+    from novelwiki.bootstrap.experience import build_operational_projection_repository
+    return await build_operational_projection_repository()
 
 
 # ── Unified activity feed (generic + import + TTS jobs) ───────────────────────
@@ -159,21 +163,9 @@ async def _list_import_jobs(user_id: int | None, *, active_only: bool, limit: in
     """
     import json
 
-    conds, args = [], []
-    if user_id is not None:
-        args.append(user_id); conds.append(f"user_id = ${len(args)}")
-    if active_only:
-        args.append(list(_IMPORT_TERMINAL)); conds.append(f"status <> ALL(${len(args)}::text[])")
-    where = f"WHERE {' AND '.join(conds)}" if conds else ""
-    args.append(max(1, min(int(limit), 200)))
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            f"SELECT id, novel_id, status, stage, progress, error, original_path, "
-            f"created_at, updated_at FROM import_jobs {where} "
-            f"ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT ${len(args)};",
-            *args,
-        )
+    rows = await (await _operational_projections()).import_activity(
+        user_id, active_only, _IMPORT_TERMINAL, max(1, min(int(limit), 200))
+    )
     out = []
     for r in rows:
         d = dict(r)
@@ -188,20 +180,9 @@ async def _list_import_jobs(user_id: int | None, *, active_only: bool, limit: in
 
 
 async def _list_tts_jobs(user_id: int | None, *, active_only: bool, limit: int) -> list[dict]:
-    conds, args = [], []
-    if user_id is not None:
-        args.append(user_id); conds.append(f"user_id = ${len(args)}")
-    if active_only:
-        args.append(list(_TTS_ACTIVE)); conds.append(f"status = ANY(${len(args)}::text[])")
-    where = f"WHERE {' AND '.join(conds)}" if conds else ""
-    args.append(max(1, min(int(limit), 200)))
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            f"SELECT id, novel_id, user_id, scope, voice_id, status, stage, progress, error, "
-            f"created_at, updated_at FROM tts_jobs {where} ORDER BY created_at DESC LIMIT ${len(args)};",
-            *args,
-        )
+    rows = await (await _operational_projections()).tts_activity(
+        user_id, active_only, _TTS_ACTIVE, max(1, min(int(limit), 200))
+    )
     out = []
     for r in rows:
         d = dict(r)
@@ -239,85 +220,9 @@ async def api_home(user: dict = Depends(current_user)):
     and the newest shared novels. Every novel surfaced here is one the caller can actually read
     (shared, owned, or admin-readable) — never a private novel they've lost access to."""
     admin = is_admin(user)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        # Continue reading: novels the reader has started, that they can still read. Each row
-        # carries whether shared narration audio exists so the UI can also offer "continue listening",
-        # plus the resume chapter's title, when they last read, and how many chapters arrived since.
-        cont_rows = await conn.fetch(
-            """
-            SELECT n.id, n.title, n.author, n.cover_url, n.visibility, n.owner_id,
-                   le.shelf AS shelf,
-                   p.last_chapter, p.max_chapter_read, p.scroll_pct, p.updated_at,
-                   (SELECT MAX(number) FROM chapters c WHERE c.novel_id = n.id) AS max_chapter,
-                   (SELECT c.title FROM chapters c
-                     WHERE c.novel_id = n.id AND c.number = p.last_chapter LIMIT 1) AS resume_chapter_title,
-                   (SELECT COUNT(DISTINCT a.chapter)
-                      FROM chapter_audio a
-                      JOIN chapters c
-                        ON c.novel_id = a.novel_id
-                       AND c.number = a.chapter
-                       AND c.content_version = a.content_version
-                     WHERE a.novel_id = n.id
-                       AND a.user_id IS NULL
-                       AND (c.kind IS NULL OR c.kind = 'chapter')) AS audio_chapters
-            FROM reading_progress p
-            JOIN novels n ON n.id = p.novel_id
-            LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
-            WHERE p.user_id = $1
-              AND p.last_chapter IS NOT NULL
-              AND (n.visibility IN ('global','public') OR n.owner_id = $1 OR $2)
-            ORDER BY p.updated_at DESC NULLS LAST
-            LIMIT 12;
-            """,
-            user["id"], admin,
-        )
-
-        # Library novels whose source grew past the reader's progress ("New for you").
-        updated_rows = await conn.fetch(
-            """
-            SELECT n.id, n.title, n.author, n.cover_url,
-                   p.max_chapter_read,
-                   (SELECT MAX(number) FROM chapters c WHERE c.novel_id = n.id) AS max_chapter,
-                   (SELECT COUNT(*) FROM chapters c
-                     WHERE c.novel_id = n.id AND c.number > p.max_chapter_read
-                       AND (c.kind IS NULL OR c.kind = 'chapter')) AS new_chapters,
-                   (SELECT MAX(s.last_scraped_at) FROM sources s WHERE s.novel_id = n.id) AS source_updated_at
-            FROM reading_progress p
-            JOIN novels n ON n.id = p.novel_id
-            LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
-            WHERE p.user_id = $1
-              AND p.max_chapter_read IS NOT NULL
-              AND (le.id IS NOT NULL OR n.owner_id = $1)
-              AND (n.visibility IN ('global','public') OR n.owner_id = $1 OR $2)
-              AND EXISTS (SELECT 1 FROM chapters c
-                           WHERE c.novel_id = n.id AND c.number > p.max_chapter_read)
-            ORDER BY source_updated_at DESC NULLS LAST, n.id DESC
-            LIMIT 8;
-            """,
-            user["id"], admin,
-        )
-
-        # Newest shared novels the reader doesn't already own (a lightweight discover teaser).
-        newest_rows = await conn.fetch(
-            """
-            SELECT n.id, n.title, n.author, n.cover_url, n.visibility, n.codex_enabled,
-                   u.username AS owner_username,
-                   (SELECT COUNT(*) FROM chapters c WHERE c.novel_id = n.id) AS chapter_count,
-                   EXISTS (SELECT 1 FROM chapter_audio a
-                            JOIN chapters c ON c.novel_id = a.novel_id
-                             AND c.number = a.chapter AND c.content_version = a.content_version
-                           WHERE a.novel_id = n.id AND a.user_id IS NULL
-                             AND (c.kind IS NULL OR c.kind = 'chapter')) AS has_audio
-            FROM novels n
-            LEFT JOIN users u ON u.id = n.owner_id
-            WHERE n.visibility IN ('global','public')
-              AND n.owner_id IS DISTINCT FROM $1
-            ORDER BY (n.visibility = 'global') DESC, n.updated_at DESC NULLS LAST, n.id DESC
-            LIMIT 8;
-            """,
-            user["id"],
-        )
+    cont_rows, updated_rows, newest_rows = await (
+        await _operational_projections()
+    ).home_rows(int(user["id"]), admin)
 
     def _cont(r):
         max_ch = float(r["max_chapter"]) if r["max_chapter"] is not None else None
@@ -406,9 +311,13 @@ async def _recent_imports(user: dict, *, limit: int) -> list[dict]:
 
 
 def _rewrite(cover_url, novel_id):
-    """Reuse the main router's asset URL rewriter so private covers resolve through the authed mount."""
-    from novelwiki.api.routes import _rewrite_asset_url
-    return _rewrite_asset_url(cover_url, novel_id)
+    """Map historical public asset URLs onto the access-controlled asset endpoint."""
+    if not cover_url:
+        return cover_url
+    match = re.match(r"^/assets/(?P<novel_id>\d+)/(?P<filename>[^/?#]+)$", cover_url)
+    if not match or int(match.group("novel_id")) != int(novel_id):
+        return cover_url
+    return f"/api/assets/novels/{novel_id}/{match.group('filename')}"
 
 
 # ── Novel health panel ────────────────────────────────────────────────────────
@@ -423,62 +332,26 @@ async def api_novel_health(novel_id: int, voice_id: str | None = None,
     editor = can_edit(novel, user)
     voice = (voice_id or "").strip()
 
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        total_chapters = int(await conn.fetchval(
-            "SELECT COUNT(*) FROM chapters WHERE novel_id = $1;", novel_id) or 0)
-        book_max = await conn.fetchval("SELECT MAX(number) FROM chapters WHERE novel_id = $1;", novel_id)
-        entities_count = int(await conn.fetchval(
-            "SELECT COUNT(*) FROM entities WHERE novel_id = $1;", novel_id) or 0)
-        # How far the codex extraction has actually reached (chunks are the coverage floor).
-        codex_max = await conn.fetchval("SELECT MAX(chapter) FROM chunks WHERE novel_id = $1;", novel_id)
-        untranslated = int(await conn.fetchval(
-            """
-            SELECT COUNT(*) FROM chapters
-            WHERE novel_id = $1 AND original_text IS NOT NULL
-              AND (content IS NULL OR translation_status <> 'done');
-            """,
-            novel_id) or 0)
-        source_last_scraped = await conn.fetchval(
-            "SELECT MAX(last_scraped_at) FROM sources WHERE novel_id = $1;", novel_id)
-
-        recent_errors = []
-        if editor:
-            gen_errs = await conn.fetch(
-                "SELECT kind, error, updated_at FROM jobs "
-                "WHERE novel_id = $1 AND status = 'failed' AND error IS NOT NULL "
-                "ORDER BY updated_at DESC LIMIT 5;",
-                novel_id)
-            imp_errs = await conn.fetch(
-                "SELECT error, updated_at FROM import_jobs "
-                "WHERE novel_id = $1 AND status = 'failed' AND error IS NOT NULL "
-                "ORDER BY updated_at DESC LIMIT 5;",
-                novel_id)
-            tts_errs = await conn.fetch(
-                "SELECT error, updated_at FROM tts_jobs "
-                "WHERE novel_id = $1 AND status = 'failed' AND error IS NOT NULL "
-                "ORDER BY updated_at DESC LIMIT 5;",
-                novel_id)
-            for r in gen_errs:
-                recent_errors.append({"kind": r["kind"], "error": (r["error"] or "")[:200],
-                                      "at": r["updated_at"].isoformat() if r["updated_at"] else None})
-            for r in imp_errs:
-                recent_errors.append({"kind": "import", "error": (r["error"] or "")[:200],
-                                      "at": r["updated_at"].isoformat() if r["updated_at"] else None})
-            for r in tts_errs:
-                recent_errors.append({"kind": "tts", "error": (r["error"] or "")[:200],
-                                      "at": r["updated_at"].isoformat() if r["updated_at"] else None})
-            recent_errors.sort(key=lambda e: e["at"] or "", reverse=True)
-            recent_errors = recent_errors[:5]
+    metrics, error_rows = await (
+        await _operational_projections()
+    ).novel_health(novel_id, editor)
+    total_chapters = int(metrics["total_chapters"] or 0)
+    book_max = metrics["book_max"]
+    entities_count = int(metrics["entities_count"] or 0)
+    codex_max = metrics["codex_max"]
+    untranslated = int(metrics["untranslated"] or 0)
+    source_last_scraped = metrics["source_last_scraped"]
+    recent_errors = [
+        {"kind": row["kind"], "error": (row["error"] or "")[:200],
+         "at": row["updated_at"].isoformat() if row["updated_at"] else None}
+        for row in error_rows
+    ]
 
     book_max_f = float(book_max) if book_max is not None else None
     codex_max_f = float(codex_max) if codex_max is not None else None
     codex_enabled = bool(novel.get("codex_enabled")) if "codex_enabled" in novel else None
     if codex_enabled is None:
-        # require_readable's slim novel dict may not include codex_enabled — fetch it.
-        async with pool.acquire() as conn:
-            codex_enabled = bool(await conn.fetchval(
-                "SELECT codex_enabled FROM novels WHERE id = $1;", novel_id))
+        codex_enabled = bool(metrics["codex_enabled"])
 
     # Codex is "missing" if enabled but nothing extracted; "stale" if extraction lags the book.
     codex_missing = codex_enabled and entities_count == 0
@@ -534,39 +407,21 @@ async def api_cost_estimate(novel_id: int, action: str,
         raise HTTPException(status_code=422, detail=f"Unknown action '{action}'.")
     kind = _ESTIMATE_KIND[action]
 
-    pool = await get_db_pool()
     capped = False
     if action == "codex_build":
         units = 1
     elif action == "translate":
-        async with pool.acquire() as conn:
-            units = int(await conn.fetchval(
-                """
-                SELECT COUNT(*) FROM chapters
-                WHERE novel_id = $1 AND original_text IS NOT NULL
-                  AND ($4 OR content IS NULL)
-                  AND ($2::numeric IS NULL OR number >= $2)
-                  AND ($3::numeric IS NULL OR number <= $3);
-                """,
-                novel_id, from_chapter, to_chapter, force) or 0)
+        units = await (await _operational_projections()).translation_units(
+            novel_id, from_chapter, to_chapter, force
+        )
     else:  # audiobook
         voice = (voice_id or settings.TTS_DEFAULT_VOICE or "").strip()
         if not voice:
             units = 0
         else:
-            async with pool.acquire() as conn:
-                missing = int(await conn.fetchval(
-                    """
-                    SELECT COUNT(*) FROM chapters c
-                    WHERE c.novel_id = $1 AND (c.kind IS NULL OR c.kind = 'chapter')
-                      AND ($2::numeric IS NULL OR c.number >= $2)
-                      AND ($3::numeric IS NULL OR c.number <= $3)
-                      AND NOT EXISTS (
-                        SELECT 1 FROM chapter_audio a
-                        WHERE a.novel_id = c.novel_id AND a.chapter = c.number AND a.voice_id = $4
-                          AND a.content_version = c.content_version AND a.user_id IS NULL);
-                    """,
-                    novel_id, from_chapter, to_chapter, voice) or 0)
+            missing = await (await _operational_projections()).audiobook_missing(
+                novel_id, from_chapter, to_chapter, voice
+            )
             cap = settings.TTS_MAX_BATCH_CHAPTERS
             capped = missing > cap
             units = min(missing, cap)

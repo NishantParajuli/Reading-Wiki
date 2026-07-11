@@ -30,7 +30,7 @@ def _convert_http(exc: HTTPException) -> Exception:
     return kind(str(exc.detail))
 
 
-class LegacyReadingCeilingBridge:
+class ReadingCeilingGateway:
     """Temporary Reading adapter until its public ceiling query is promoted."""
 
     def __init__(self, pool):
@@ -49,13 +49,10 @@ class LegacyReadingCeilingBridge:
             if exc.status_code == 404:
                 raise NotFound(str(exc.detail)) from exc
             raise _convert_http(exc) from exc
-        async with self._pool.acquire() as connection:
-            row = await connection.fetchrow(
-                "SELECT number,title FROM chapters "
-                "WHERE novel_id=$1 AND number <= $2 "
-                "ORDER BY number DESC LIMIT 1;",
-                novel_id, result.effective_ceiling,
-            )
+        from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
+        row = await (await build_reading_codex_gateway()).chapter_at_or_before(
+            novel_id, result.effective_ceiling
+        )
         novel = result.novel
         return CeilingContext(
             ceiling=ChapterCeiling(float(result.effective_ceiling)),
@@ -70,7 +67,7 @@ class LegacyReadingCeilingBridge:
         )
 
 
-class LegacyAiCostBridge:
+class AiCostGateway:
     def require_spend_allowed(self, principal: Principal) -> None:
         from novelwiki import quota
         try:
@@ -93,27 +90,6 @@ class LegacyAiCostBridge:
             await ai_limits.consume_ask_rate(_user(principal), kind)
         except HTTPException as exc:
             raise _convert_http(exc) from exc
-
-
-class LegacyCatalogEditBridge:
-    def __init__(self, pool):
-        self._pool = pool
-
-    async def require_editable(self, novel_id: int, principal: Principal) -> None:
-        from novelwiki.auth.access import require_editable
-        try:
-            await require_editable(novel_id, _user(principal))
-        except HTTPException as exc:
-            from novelwiki.kernel.errors import NotFound
-            if exc.status_code == 404:
-                raise NotFound(str(exc.detail)) from exc
-            raise _convert_http(exc) from exc
-
-    async def enable_codex(self, novel_id: int) -> None:
-        async with self._pool.acquire() as connection:
-            await connection.execute(
-                "UPDATE novels SET codex_enabled=TRUE WHERE id=$1;", novel_id
-            )
 
 
 class BackendResolutionBridge:

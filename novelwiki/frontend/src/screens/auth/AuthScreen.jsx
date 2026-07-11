@@ -4,7 +4,7 @@
    ============================================================ */
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { API } from "../../lib/api.js";
+import { authApi } from "../../modules/identity/api.js";
 import { Icon } from "../../components/Icon.jsx";
 import { Button } from "../../components/ui.jsx";
 import { useTitle } from "../../lib/hooks.js";
@@ -53,7 +53,7 @@ export function AuthScreen({ onAuthed }) {
   useTitle(mode === "register" ? "Create account" : mode === "login" ? "Sign in" : "Account");
 
   useEffect(() => {
-    API.auth.providers().then(r => setProviders(r.providers || [])).catch(() => {});
+    authApi.providers().then(r => setProviders(r.providers || [])).catch(() => {});
   }, []);
   useEffect(() => { setError(""); }, [location.pathname]);
 
@@ -76,23 +76,23 @@ export function AuthScreen({ onAuthed }) {
     setError(""); setBusy(true);
     try {
       if (mode === "login") {
-        const user = await API.auth.login(identifier.trim(), password);
+        const user = await authApi.login(identifier.trim(), password);
         onAuthed(user);
       } else if (mode === "register") {
-        const user = await API.auth.register(email.trim(), username.trim(), password);
+        const user = await authApi.register(email.trim(), username.trim(), password);
         onAuthed(user);
       } else if (mode === "forgot") {
-        await API.auth.requestReset(email.trim());
+        await authApi.requestReset(email.trim());
         setInfo("If that email has an account, a reset link is on its way.");
         navigate("/login");
       } else if (mode === "reset") {
-        await API.auth.reset(token, password);
+        await authApi.reset(token, password);
         setInfo("Password updated — please sign in.");
         navigate("/login");
       } else if (mode === "verify") {
-        await API.auth.verify(token);
+        await authApi.verify(token);
         try {
-          const user = await API.auth.me();
+          const user = await authApi.me();
           onAuthed(user);
         } catch (e2) {
           setInfo("Email verified — you can sign in.");
@@ -203,7 +203,7 @@ export function AuthScreen({ onAuthed }) {
             <>
               <div className="auth-divider"><span>or continue with</span></div>
               {providers.map(p => (
-                <Button key={p} variant="ghost" full onClick={() => API.auth.oauthStart(p)} icon="external">
+                <Button key={p} variant="ghost" full onClick={() => authApi.oauthStart(p)} icon="external">
                   {OAUTH_NAMES[p] || p}
                 </Button>
               ))}

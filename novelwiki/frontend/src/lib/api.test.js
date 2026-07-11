@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { API, setUnauthorizedHandler } from "./api.js";
+import { acquisitionApi } from "../modules/acquisition/api.js";
+import { catalogApi } from "../modules/catalog/api.js";
+import { authApi } from "../modules/identity/api.js";
+import { readingApi } from "../modules/reading/api.js";
+import { setUnauthorizedHandler } from "../shared/api/http.js";
 
 function response(body, { status = 200, statusText = "OK" } = {}) {
   return {
@@ -19,7 +23,7 @@ describe("HTTP compatibility transport", () => {
   });
 
   it("preserves credentials and CSRF/request headers for progress mutations", async () => {
-    await API.setProgress(12, { last_chapter: 4, scroll_pct: 0.75 });
+    await readingApi.setProgress(12, { last_chapter: 4, scroll_pct: 0.75 });
 
     expect(fetch).toHaveBeenCalledWith("/api/novels/12/progress", {
       method: "PUT",
@@ -35,7 +39,7 @@ describe("HTTP compatibility transport", () => {
   });
 
   it("keeps ordinary reads free of mutation headers", async () => {
-    await API.chapter(7, 2.5);
+    await readingApi.chapter(7, 2.5);
     const [, options] = fetch.mock.calls[0];
     expect(options.credentials).toBe("include");
     expect(options.headers).toEqual({ Accept: "application/json" });
@@ -46,11 +50,11 @@ describe("HTTP compatibility transport", () => {
     setUnauthorizedHandler(unauthorized);
     fetch.mockResolvedValue(response({ detail: "Not authenticated." }, { status: 401, statusText: "Unauthorized" }));
 
-    await expect(API.novels()).rejects.toThrow("Not authenticated.");
+    await expect(catalogApi.novels()).rejects.toThrow("Not authenticated.");
     expect(unauthorized).toHaveBeenCalledOnce();
 
     unauthorized.mockClear();
-    await expect(API.auth.login("reader", "wrong")).rejects.toThrow("Not authenticated.");
+    await expect(authApi.login("reader", "wrong")).rejects.toThrow("Not authenticated.");
     expect(unauthorized).not.toHaveBeenCalled();
   });
 
@@ -61,7 +65,7 @@ describe("HTTP compatibility transport", () => {
       .mockResolvedValueOnce(response({ id: 44, status: "uploaded" }));
     const file = new File(["abc"], "book.epub", { type: "application/epub+zip" });
 
-    await API.uploadChunked(file);
+    await acquisitionApi.uploadChunked(file);
 
     expect(fetch.mock.calls[1][0]).toBe("/api/import/upload/44/chunk");
     expect(fetch.mock.calls[1][1].headers).toMatchObject({

@@ -90,16 +90,8 @@ async def capability_for_user(user_id: int) -> dict:
 
 
 async def _active_agy_count(user_id: int) -> int:
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        return int(await conn.fetchval(
-            """
-            SELECT count(*) FROM jobs
-            WHERE user_id=$1 AND execution_backend='agy'
-              AND status IN ('queued','running','waiting_provider');
-            """,
-            user_id,
-        ) or 0)
+    from novelwiki.bootstrap.ai_execution_worker import active_agy_job_count
+    return await active_agy_job_count(user_id)
 
 
 async def resolve_backend(
@@ -192,7 +184,8 @@ async def upsert_policy(user_id: int, values: dict, admin_id: int) -> dict:
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            exists = await conn.fetchval("SELECT 1 FROM users WHERE id=$1;", user_id)
+            from novelwiki.bootstrap.ai_execution_worker import identity_user_exists
+            exists = await identity_user_exists(user_id)
             if not exists:
                 raise HTTPException(status_code=404, detail="User not found.")
             previous = await conn.fetchrow(
@@ -255,16 +248,9 @@ async def cancel_revoked_jobs(user_id: int, removed_workloads: set[str] | None) 
         kinds.append("codex_build")
     if not kinds:
         return 0
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id FROM jobs WHERE user_id=$1 AND execution_backend='agy'
-              AND kind=ANY($2::text[]) AND status=ANY($3::text[]);
-            """,
-            user_id, kinds, ["queued", "running", "waiting_provider"],
-        )
+    from novelwiki.bootstrap.ai_execution_worker import revoked_agy_job_ids
+    rows = await revoked_agy_job_ids(user_id, kinds)
     changed = 0
-    for row in rows:
-        changed += int(await service.cancel_job(int(row["id"])))
+    for job_id in rows:
+        changed += int(await service.cancel_job(job_id))
     return changed

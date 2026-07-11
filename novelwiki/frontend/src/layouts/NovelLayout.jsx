@@ -7,8 +7,8 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from "
 import { Outlet, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { API } from "../lib/api.js";
-import { useNovelQuery } from "../lib/queries.js";
+import { codexApi } from "../modules/codex/api.js";
+import { useNovelQuery } from "../modules/catalog/queries.js";
 import { useDebounce } from "../lib/hooks.js";
 import { Loading, EmptyState } from "../components/ui.jsx";
 
@@ -41,7 +41,7 @@ export function NovelLayout() {
   useEffect(() => {
     if (!ceilingInit || !novel || !novel.codex_enabled) return;
     let cancel = false;
-    API.stats(novelId, debCeiling).then(s => {
+    codexApi.stats(novelId, debCeiling).then(s => {
       if (cancel) return;
       setStats(s);
       if (s && s.ceiling_clamped && s.effective_ceiling != null) {

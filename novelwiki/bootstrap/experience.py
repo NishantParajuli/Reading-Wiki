@@ -22,3 +22,15 @@ async def build_experience_projection_service():
     return ExperienceProjectionService(
         PostgresExperienceProjectionRepository(pool), CatalogReadBridge()
     )
+
+
+async def build_operational_projection_repository():
+    from novelwiki.modules.experience.adapters.outbound.operational_projections import (
+        PostgresOperationalProjectionRepository,
+    )
+    from novelwiki.platform.database import init_db_pool
+    return PostgresOperationalProjectionRepository(await init_db_pool())
+
+
+async def job_run_metadata(job_ids: set[int]) -> dict[int, dict]:
+    return await (await build_operational_projection_repository()).job_run_metadata(job_ids)

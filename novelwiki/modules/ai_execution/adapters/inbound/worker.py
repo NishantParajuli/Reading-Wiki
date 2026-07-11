@@ -14,11 +14,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from novelwiki import audit
-from novelwiki.agy.codex import execute_codex_job
 from novelwiki.agy.errors import AgyCanceled, AgyError, PROVIDER_WAIT_CODES, safe_error_summary
 from novelwiki.agy.preflight import PreflightResult, run_preflight
 from novelwiki.agy.runner import process_identity_matches, terminate_process_group
-from novelwiki.agy.translation import execute_translation_job
 from novelwiki.agy.workspace import cleanup_expired_workspaces, validate_work_root
 from novelwiki.ai_backend.policy import get_policy, model_for, reauthorize_job
 from novelwiki.ai_backend.types import ExecutionBackend, Workload
@@ -112,35 +110,26 @@ async def _reauthorize(job: dict) -> tuple[bool, str, dict | None]:
 
 
 async def _handle_codex(job: dict, preflight: PreflightResult) -> dict:
-    from novelwiki.ingest.chunk import chunk_all_chapters
-    from novelwiki.ingest.embed import embed_missing_chunks
-    from novelwiki.retrieval.bm25 import get_bm25_manager
+    from novelwiki.bootstrap.workers import build_agy_worker_registry
+    return await build_agy_worker_registry().resolve("codex_build")(
+        job, preflight, _AgyExecutionContext()
+    )
 
-    opts = job.get("options") or {}
-    job_id, novel_id = int(job["id"]), int(job["novel_id"])
 
-    async def cancel_check() -> None:
+class _AgyExecutionContext:
+    @staticmethod
+    async def bail_if_canceled(job_id: int) -> None:
         if await service.is_canceled(job_id):
             raise AgyCanceled()
 
-    await cancel_check()
-    await service.set_progress(job_id, {"step": 1, "steps": 4, "stage": "chunking"}, stage="chunking")
-    await chunk_all_chapters(
-        novel_id, force=bool(opts.get("force")), from_chapter=opts.get("from_chapter"),
-        to_chapter=opts.get("to_chapter"), cancel_check=cancel_check,
-    )
-    await cancel_check()
-    await service.set_progress(job_id, {"step": 2, "steps": 4, "stage": "embedding"}, stage="embedding")
-    await embed_missing_chunks(
-        novel_id, from_chapter=opts.get("from_chapter"), to_chapter=opts.get("to_chapter"),
-        cancel_check=cancel_check,
-    )
-    await cancel_check()
-    extracted = await execute_codex_job(job, preflight)
-    await cancel_check()
-    await service.set_progress(job_id, {"step": 4, "steps": 4, **extracted}, stage="indexing")
-    await get_bm25_manager(novel_id).rebuild()
-    return {"step": 4, "steps": 4, **extracted}
+    set_progress = staticmethod(service.set_progress)
+    execute_codex_job = staticmethod(lambda *args, **kwargs: execute_codex_job(*args, **kwargs))
+
+
+async def execute_codex_job(job: dict, preflight):
+    """Stable test/entrypoint seam; feature registration remains in the composition root."""
+    from novelwiki.agy.codex import execute_codex_job as implementation
+    return await implementation(job, preflight)
 
 
 async def _fallback_to_api(job: dict, exc: Exception) -> bool:
@@ -177,18 +166,19 @@ async def _process(job: dict, preflight: PreflightResult, state: dict) -> None:
             return
         await audit.record("agy.run.started", user_id=job.get("user_id"), novel_id=job.get("novel_id"),
                            data={"job_id": job_id, "kind": job["kind"], "model": job.get("backend_model")})
-        if job["kind"] == "translate":
-            progress = await execute_translation_job(job, preflight)
-        elif job["kind"] == "codex_build":
-            progress = await _handle_codex(job, preflight)
-        elif job["kind"] == "agy_smoke":
-            from novelwiki.agy.smoke import run_smoke_test
-            progress = await run_smoke_test(job_id)
+        from novelwiki.bootstrap.workers import build_agy_worker_registry
+        try:
+            handler = build_agy_worker_registry().resolve(job["kind"])
+        except LookupError:
+            handler = None
+        if handler is not None:
+            progress = await handler(job, preflight, _AgyExecutionContext())
+        else:
+            raise AgyError("unsupported AGY job kind", code="agy_artifact_invalid", retryable=False)
+        if job["kind"] == "agy_smoke":
             await audit.record("agy.smoke.completed", user_id=job.get("user_id"), data={
                 "job_id": job_id, "version": progress.get("version"), "model": progress.get("model"),
             })
-        else:
-            raise AgyError("unsupported AGY job kind", code="agy_artifact_invalid", retryable=False)
         if await service.mark_done_if_running(job_id, progress=progress):
             await service.finalize(job_id, success=True)
             await audit.record("agy.run.completed", user_id=job.get("user_id"), novel_id=job.get("novel_id"),

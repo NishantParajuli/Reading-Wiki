@@ -70,3 +70,20 @@ class PostgresTranslationTransactionService:
             if result.endswith("1"):
                 seeded += 1
         return seeded
+
+    async def insert_discovered_terms(self, novel_id: int, terms: list[dict]) -> int:
+        inserted = 0
+        for term in terms:
+            result = await self._connection.execute(
+                """
+                INSERT INTO translation_glossary
+                  (novel_id, source_term, translation, term_type)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (novel_id, source_term) DO NOTHING;
+                """,
+                novel_id, term["source_term"].strip(), term["translation"].strip(),
+                term.get("term_type") or None,
+            )
+            if result.endswith("1"):
+                inserted += 1
+        return inserted

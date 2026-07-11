@@ -2,14 +2,14 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { API } from "../../lib/api.js";
+import { readingApi } from "../../modules/reading/api.js";
 import { useNovel } from "../../layouts/NovelLayout.jsx";
 import { NovelHeader } from "./NovelHeader.jsx";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, Chip, EmptyState, Loading } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
 import { TagSuggestForm, TagChips } from "../../features/tags.jsx";
-import { useChaptersQuery } from "../../lib/queries.js";
+import { useChaptersQuery } from "../../modules/reading/queries.js";
 import { useTitle } from "../../lib/hooks.js";
 import { fmtChapter } from "../../lib/utils.js";
 import { VIS_LABELS } from "../../lib/constants.js";
@@ -23,7 +23,7 @@ export function Overview() {
   const { toast } = useToast();
   useTitle(novel.title);
 
-  const loadBookmarks = () => API.bookmarks(novelId).then(setBookmarks).catch(() => setBookmarks([]));
+  const loadBookmarks = () => readingApi.bookmarks(novelId).then(setBookmarks).catch(() => setBookmarks([]));
   useEffect(() => { loadBookmarks(); }, [novelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const maxRead = (novel.progress && novel.progress.max_chapter_read) || 0;
@@ -73,7 +73,7 @@ export function Overview() {
                       <span className="toc-title">{b.note || "Bookmarked"}</span>
                     </button>
                     <button className="icon-btn plain" aria-label="Remove bookmark"
-                            onClick={async () => { await API.delBookmark(novelId, b.id); loadBookmarks(); toast("Bookmark removed.", { tone: "ok" }); }}>
+                            onClick={async () => { await readingApi.delBookmark(novelId, b.id); loadBookmarks(); toast("Bookmark removed.", { tone: "ok" }); }}>
                       <Icon name="x" size={14} />
                     </button>
                   </div>

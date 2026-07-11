@@ -19,12 +19,25 @@ async def build_acquisition_service():
         validate_source_start_url,
     )
     from novelwiki.modules.acquisition.application import AcquisitionService
+    from novelwiki.modules.acquisition.adapters.outbound.catalog_workflows import (
+        PostgresAcquisitionTransactionService,
+    )
+    from novelwiki.modules.acquisition.public import AcquisitionTransactionApi
     from novelwiki.modules.catalog.adapters.outbound.postgres import (
         PostgresCatalogRepository,
     )
     from novelwiki.modules.catalog.application import CatalogAccessService
     from novelwiki.modules.identity.application import QuotaService
-    from novelwiki.platform.database import init_db_pool
+    from novelwiki.modules.codex.adapters.outbound.artifacts import (
+        PostgresCodexTransactionService,
+    )
+    from novelwiki.modules.codex.public import CodexTransactionApi
+    from novelwiki.modules.reading.adapters.outbound.postgres import (
+        PostgresReadingRepository,
+    )
+    from novelwiki.modules.reading.public import ReadingTransactionApi
+    from novelwiki.platform.database import AsyncpgUnitOfWork, init_db_pool
+    from novelwiki.workflows.update_source_offset import update_source_offset
 
     pool = await init_db_pool()
 
@@ -45,6 +58,18 @@ async def build_acquisition_service():
         def ensure_allowed(self, principal):
             QuotaService.require_spend_allowed(principal)
 
+    factories = {
+        AcquisitionTransactionApi: PostgresAcquisitionTransactionService,
+        ReadingTransactionApi: PostgresReadingRepository,
+        CodexTransactionApi: PostgresCodexTransactionService,
+    }
+
+    class SourceOffsetBridge:
+        async def update(self, source_id, offset):
+            return await update_source_offset(
+                lambda: AsyncpgUnitOfWork(pool, factories), source_id, offset
+            )
+
     return AcquisitionService(
         PostgresAcquisitionRepository(pool),
         CatalogAccessBridge(),
@@ -52,6 +77,7 @@ async def build_acquisition_service():
         SpendPolicyBridge(),
         DurableScrapeWorkAdapter(jobs_service.create_job),
         AcquisitionAssetFilesystem(),
+        SourceOffsetBridge(),
     )
 
 
@@ -64,7 +90,7 @@ def build_acquisition_routes():
 async def build_import_service():
     from novelwiki.config.settings import settings
     from novelwiki.modules.acquisition.adapters.outbound.import_gateway import (
-        LegacyImportGateway,
+        ImportRuntimeGateway,
     )
     from novelwiki.modules.acquisition.application import (
         ImportConfig, ImportService,
@@ -105,7 +131,7 @@ async def build_import_service():
             await self._quota.check_and_reserve(principal, "ocr_pages", pages)
 
     return ImportService(
-        LegacyImportGateway(pool), CatalogAccessBridge(), SpendPolicyBridge(),
+        ImportRuntimeGateway(pool), CatalogAccessBridge(), SpendPolicyBridge(),
         ImportConfig(
             incoming_dir=settings.IMPORT_INCOMING_DIR,
             max_upload_bytes=settings.MAX_UPLOAD_MB * 1024 * 1024,
@@ -119,3 +145,61 @@ async def build_import_service():
 def build_acquisition_principal_factory():
     from novelwiki.modules.identity.adapters.principals import principal_from_user
     return principal_from_user
+
+
+async def build_import_commit_uow_factory():
+    from novelwiki.modules.acquisition.adapters.outbound.catalog_workflows import (
+        PostgresAcquisitionTransactionService,
+    )
+    from novelwiki.modules.acquisition.public import AcquisitionTransactionApi
+    from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
+    from novelwiki.modules.catalog.application import CatalogTransactionService
+    from novelwiki.modules.catalog.public import CatalogTransactionApi
+    from novelwiki.modules.codex.adapters.outbound.artifacts import PostgresCodexTransactionService
+    from novelwiki.modules.codex.public import CodexTransactionApi
+    from novelwiki.modules.reading.adapters.outbound.ingestion import (
+        PostgresReadingIngestionTransactionService,
+    )
+    from novelwiki.modules.reading.public import ReadingIngestionTransactionApi
+    from novelwiki.platform.database import AsyncpgUnitOfWork, init_db_pool
+
+    pool = await init_db_pool()
+    factories = {
+        AcquisitionTransactionApi: PostgresAcquisitionTransactionService,
+        CatalogTransactionApi: lambda connection: CatalogTransactionService(
+            PostgresCatalogRepository(connection)
+        ),
+        ReadingIngestionTransactionApi: PostgresReadingIngestionTransactionService,
+        CodexTransactionApi: PostgresCodexTransactionService,
+    }
+    return lambda: AsyncpgUnitOfWork(pool, factories)
+
+
+def bind_import_commit_apis(connection):
+    from novelwiki.modules.acquisition.adapters.outbound.catalog_workflows import (
+        PostgresAcquisitionTransactionService,
+    )
+    from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
+    from novelwiki.modules.catalog.application import CatalogTransactionService
+    from novelwiki.modules.codex.adapters.outbound.artifacts import PostgresCodexTransactionService
+    from novelwiki.modules.reading.adapters.outbound.ingestion import (
+        PostgresReadingIngestionTransactionService,
+    )
+    from novelwiki.workflows.commit_import import ImportCommitApis
+    return ImportCommitApis(
+        acquisition=PostgresAcquisitionTransactionService(connection),
+        catalog=CatalogTransactionService(PostgresCatalogRepository(connection)),
+        reading=PostgresReadingIngestionTransactionService(connection),
+        codex=PostgresCodexTransactionService(connection),
+    )
+
+
+async def reserve_auto_codex(user_id: int) -> bool:
+    from novelwiki.modules.identity.adapters.outbound.worker_lookup import (
+        PostgresIdentityWorkerLookup,
+    )
+    from novelwiki.platform.database import init_db_pool
+    from novelwiki import quota
+
+    user = await PostgresIdentityWorkerLookup(await init_db_pool()).load_user(user_id)
+    return bool(user and await quota.try_reserve(user, "codex_builds", 1))

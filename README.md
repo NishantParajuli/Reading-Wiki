@@ -114,6 +114,9 @@ contract; HTTP/CLI/worker adapters call application use cases, while PostgreSQL,
 provider, and sidecar details live behind outbound adapters. Atomic cross-module operations are
 named workflows coordinated by the composition root. See
 [`docs/architecture/module-ownership.md`](docs/architecture/module-ownership.md).
+The final ownership evidence and automated gates are recorded in
+[`docs/architecture/migration-completion.md`](docs/architecture/migration-completion.md); deployment
+and rollback steps are in [`docs/release-runbook.md`](docs/release-runbook.md).
 
 ```
    webnovel site ─► Scraper (adapter per site) ─┐

@@ -15,80 +15,26 @@ logger = logging.getLogger(__name__)
 async def _persist_chapter(conn, source: dict, global_number: float, ch, force: bool) -> bool:
     """Upserts one scraped chapter into the novel's global chapter sequence.
     Returns True if a row was written, False if skipped (already present, no force)."""
-    novel_id = source["novel_id"]
-    is_raw = source["is_raw"]
-    language = source["language"]
-
-    exists = await conn.fetchrow(
-        "SELECT number, title, content, original_text, content_version FROM chapters WHERE novel_id = $1 AND number = $2;",
-        novel_id, global_number,
+    from novelwiki.bootstrap.reading_migration import build_reading_ingestion_gateway
+    return await (await build_reading_ingestion_gateway()).upsert_ingested_chapter(
+        source, global_number, ch, force
     )
-    if exists and not force:
-        logger.info(f"Chapter {global_number} ('{exists['title']}') already exists. Skipping.")
-        return False
-
-    import re
-    if is_raw or language in ("zh", "ja", "ko"):
-        word_count = len(re.sub(r"\s+", "", ch.content or ""))
-    else:
-        word_count = len(ch.content.split())
-    if is_raw:
-        # Raw source: keep the source-language text; the reader translates on demand.
-        original_text, content = ch.content, None
-        translation_status, is_translated = "pending", False
-    else:
-        original_text, content = None, ch.content
-        translation_status, is_translated = "none", False
-
-    base_changed = bool(
-        exists
-        and (
-            exists["content"] != content
-            or exists["original_text"] != original_text
-        )
-    )
-    new_version = await conn.fetchval(
-        """
-        INSERT INTO chapters
-            (novel_id, number, source_id, title, url, raw_html, original_text, content,
-             language, is_translated, translation_status, word_count)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        ON CONFLICT (novel_id, number) DO UPDATE SET
-            source_id = EXCLUDED.source_id, title = EXCLUDED.title, url = EXCLUDED.url,
-            raw_html = EXCLUDED.raw_html, original_text = EXCLUDED.original_text,
-            content = EXCLUDED.content, language = EXCLUDED.language,
-            is_translated = EXCLUDED.is_translated, translation_status = EXCLUDED.translation_status,
-            word_count = EXCLUDED.word_count, scraped_at = now(),
-            content_version = CASE
-                WHEN $13 THEN COALESCE(chapters.content_version, 1) + 1
-                ELSE COALESCE(chapters.content_version, 1)
-            END
-        RETURNING content_version;
-        """,
-        novel_id, global_number, source["id"], ch.title, ch.url, ch.raw_html,
-        original_text, content, language, is_translated, translation_status, word_count,
-        base_changed,
-    )
-    if base_changed:
-        await conn.execute(
-            """
-            UPDATE chapter_overlays SET conflict = TRUE, updated_at = now()
-            WHERE novel_id = $1 AND chapter = $2 AND base_version < $3;
-            """,
-            novel_id, global_number, int(new_version or 1),
-        )
-    logger.info(f"Saved Chapter {global_number}: '{ch.title}' ({word_count} words)")
-    return True
 
 
 async def _resume_url(pool, source_id: int) -> str | None:
     """The URL of the furthest-progressed chapter already scraped by this source, so a
     re-run can jump straight there instead of re-walking every prior chapter page."""
-    async with pool.acquire() as conn:
-        return await conn.fetchval(
-            "SELECT url FROM chapters WHERE source_id = $1 AND url IS NOT NULL ORDER BY number DESC LIMIT 1;",
-            source_id,
-        )
+    from novelwiki.bootstrap.reading_migration import build_reading_ingestion_gateway
+    return await (await build_reading_ingestion_gateway()).resume_url(source_id)
+
+
+async def set_source_offset(_connection, source_id: int, new_offset: float) -> int:
+    """Compatibility callable; new routes use the named owner-bound workflow directly."""
+    from novelwiki.bootstrap.acquisition_routes import build_import_commit_uow_factory
+    from novelwiki.workflows.update_source_offset import update_source_offset
+    return await update_source_offset(
+        await build_import_commit_uow_factory(), source_id, new_offset
+    )
 
 
 async def scrape_source(
@@ -190,91 +136,6 @@ async def scrape_source(
         await conn.execute("UPDATE sources SET last_scraped_at = now() WHERE id = $1;", source_id)
 
     return scraped_count
-
-
-async def set_source_offset(conn, source_id: int, new_offset: float) -> int:
-    """Re-points a source's `chapter_offset` and shifts its already-scraped chapters onto
-    the new GLOBAL numbering, so correcting an offset takes effect immediately without a
-    re-scrape (e.g. a raw that is one chapter ahead of the translation → offset -1).
-
-    Bookmarks and reading-progress pointers that fall inside the source's chapters move by
-    the same delta so they keep pointing at the same text. Returns the number of chapters
-    renumbered. Must be called inside a transaction. Raises ValueError if the codex (chunks)
-    was already built on the current numbering, since chapter numbers are referenced there
-    without ON UPDATE CASCADE."""
-    row = await conn.fetchrow("SELECT novel_id, chapter_offset FROM sources WHERE id = $1;", source_id)
-    if row is None:
-        raise ValueError(f"Source {source_id} not found.")
-    novel_id = row["novel_id"]
-    delta = float(new_offset) - float(row["chapter_offset"] or 0)
-
-    renumbered = 0
-    if delta != 0:
-        has_codex_artifacts = await conn.fetchval(
-            """
-            WITH source_chapters AS (
-                SELECT novel_id, number FROM chapters WHERE source_id = $1
-            )
-            SELECT
-                EXISTS (SELECT 1 FROM chunks x JOIN source_chapters s ON (x.novel_id, x.chapter) = (s.novel_id, s.number))
-             OR EXISTS (SELECT 1 FROM entities x JOIN source_chapters s ON (x.novel_id, x.first_seen_chapter) = (s.novel_id, s.number))
-             OR EXISTS (SELECT 1 FROM entity_descriptions x JOIN source_chapters s ON (x.novel_id, x.chapter) = (s.novel_id, s.number))
-             OR EXISTS (SELECT 1 FROM entity_aliases x JOIN source_chapters s ON (x.novel_id, x.revealed_at_chapter) = (s.novel_id, s.number))
-             OR EXISTS (SELECT 1 FROM identity_links x JOIN source_chapters s ON (x.novel_id, x.revealed_at_chapter) = (s.novel_id, s.number))
-             OR EXISTS (SELECT 1 FROM entity_facts x JOIN source_chapters s ON (x.novel_id, x.chapter) = (s.novel_id, s.number))
-             OR EXISTS (SELECT 1 FROM relationships x JOIN source_chapters s ON (x.novel_id, x.chapter) = (s.novel_id, s.number))
-             OR EXISTS (SELECT 1 FROM events x JOIN source_chapters s ON (x.novel_id, x.chapter) = (s.novel_id, s.number))
-             OR EXISTS (SELECT 1 FROM extraction_state x JOIN source_chapters s ON (x.novel_id, x.chapter) = (s.novel_id, s.number));
-            """,
-            source_id,
-        )
-        if has_codex_artifacts:
-            raise ValueError(
-                "This source has codex artifacts built on its current chapter numbering; "
-                "clear/rebuild the codex before changing the offset."
-            )
-        # Move reader state that points into this source's chapters BEFORE renumbering them,
-        # while the chapters table still holds the OLD numbers used to identify the range.
-        # (Bookmarks / reading_progress aren't FK-linked to chapters, so we shift by hand.)
-        await conn.execute(
-            """
-            UPDATE bookmarks SET chapter = chapter + $2
-            WHERE novel_id = $3
-              AND chapter IN (SELECT number FROM chapters WHERE source_id = $1);
-            """,
-            source_id, delta, novel_id,
-        )
-        await conn.execute(
-            """
-            UPDATE reading_progress SET
-                last_chapter = CASE
-                    WHEN last_chapter IN (SELECT number FROM chapters WHERE source_id = $1)
-                    THEN last_chapter + $2 ELSE last_chapter END,
-                max_chapter_read = CASE
-                    WHEN max_chapter_read IN (SELECT number FROM chapters WHERE source_id = $1)
-                    THEN max_chapter_read + $2 ELSE max_chapter_read END
-            WHERE novel_id = $3;
-            """,
-            source_id, delta, novel_id,
-        )
-        # Shift through a far range first so a contiguous block never collides with its own
-        # not-yet-moved rows (the chapters PK is checked per row, mid-statement). The second
-        # step lands on the final numbers and surfaces any real clash with other sources.
-        await conn.execute(
-            "UPDATE chapters SET number = number + $2 + 1000000 WHERE source_id = $1;",
-            source_id, delta,
-        )
-        status = await conn.execute(
-            "UPDATE chapters SET number = number - 1000000 WHERE source_id = $1;",
-            source_id,
-        )
-        try:
-            renumbered = int(status.split()[-1])
-        except (ValueError, IndexError):
-            renumbered = 0
-
-    await conn.execute("UPDATE sources SET chapter_offset = $2 WHERE id = $1;", source_id, new_offset)
-    return renumbered
 
 
 async def scrape_novel(

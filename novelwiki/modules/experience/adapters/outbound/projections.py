@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from .operational_projections import OPERATIONAL_PROJECTION_TABLES
+
 from novelwiki.modules.identity.public import Principal
 
 _OLD_ASSET_RE = re.compile(r"^/assets/(?P<novel_id>\d+)/(?P<filename>[^/?#]+)$")
@@ -40,6 +42,7 @@ PROJECTION_TABLES = {
     "public_profile": frozenset({
         "users", "library_entries", "novels", "reading_progress", "chapters",
     }),
+    **OPERATIONAL_PROJECTION_TABLES,
 }
 
 

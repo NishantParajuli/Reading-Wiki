@@ -14,4 +14,8 @@ export const catalogApi = {
     const form = new FormData(); form.append("file", file);
     return postMultipart(`${novel(id)}/cover`, form);
   },
+  suggestTags: (id, tags, note) => postJSON(`${novel(id)}/tag-suggestions`, { tags, note: note || null }),
+  tagSuggestions: (id, status) => getJSON(`${novel(id)}/tag-suggestions${status ? `?status=${status}` : ""}`),
+  acceptTagSuggestion: (id, suggestionId) => postJSON(`${novel(id)}/tag-suggestions/${suggestionId}/accept`, {}),
+  rejectTagSuggestion: (id, suggestionId) => postJSON(`${novel(id)}/tag-suggestions/${suggestionId}/reject`, {}),
 };

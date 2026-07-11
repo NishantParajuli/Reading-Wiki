@@ -57,6 +57,7 @@ class ChapterSnapshot:
     language: str | None
     is_translated: bool
     translation_status: str | None
+    source_id: int | None
     adapter: str | None
     source_is_raw: bool
     previous_number: float | None

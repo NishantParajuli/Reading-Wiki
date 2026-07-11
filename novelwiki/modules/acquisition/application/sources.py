@@ -12,6 +12,7 @@ from .ports import (
     AssetFilesystemPort,
     CatalogAccessPort,
     ScrapeWorkPort,
+    SourceOffsetPort,
     SourceUrlPort,
     SpendPolicyPort,
 )
@@ -35,6 +36,7 @@ class AcquisitionService:
         spend_policy: SpendPolicyPort,
         work: ScrapeWorkPort,
         filesystem: AssetFilesystemPort,
+        source_offsets: SourceOffsetPort | None = None,
     ):
         self._repository = repository
         self._catalog = catalog
@@ -42,6 +44,7 @@ class AcquisitionService:
         self._spend_policy = spend_policy
         self._work = work
         self._filesystem = filesystem
+        self._source_offsets = source_offsets
 
     async def add_source(
         self, novel_id: int, principal: Principal, draft: SourceDraft
@@ -77,7 +80,13 @@ class AcquisitionService:
         if not await self._repository.source_exists(novel_id, source_id):
             raise NotFound("Source not found.")
         try:
-            renumbered = await self._repository.update_source(source_id, fields)
+            renumbered = 0
+            if "chapter_offset" in fields and self._source_offsets is not None:
+                renumbered = await self._source_offsets.update(
+                    source_id, float(fields.pop("chapter_offset"))
+                )
+            if fields:
+                renumbered += await self._repository.update_source(source_id, fields)
         except ValueError as exc:
             raise Conflict(str(exc)) from exc
         except Exception as exc:

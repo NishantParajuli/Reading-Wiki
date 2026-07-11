@@ -9,7 +9,8 @@ import { Icon } from "../../components/Icon.jsx";
 import { Button, EmptyState, Loading, SegmentedControl } from "../../components/ui.jsx";
 import { VolumeTOC } from "../../features/toc.jsx";
 import { readTtsPrefs } from "../../features/narrate.jsx";
-import { useChaptersQuery, useAudioCoverageQuery, useVoicesQuery } from "../../lib/queries.js";
+import { useAudioCoverageQuery, useVoicesQuery } from "../../modules/narration/queries.js";
+import { useChaptersQuery } from "../../modules/reading/queries.js";
 import { useTitle } from "../../lib/hooks.js";
 
 export function Chapters() {

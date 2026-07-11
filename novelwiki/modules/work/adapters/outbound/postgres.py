@@ -163,10 +163,8 @@ async def create_job(kind: str, *, novel_id: int | None, user_id: int | None,
                     "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2));",
                     "agy_user_queue", str(user_id),
                 )
-                policy = await conn.fetchrow(
-                    "SELECT agy_enabled,max_concurrent_agy_jobs FROM user_ai_backend_policies "
-                    "WHERE user_id=$1;", user_id,
-                )
+                from novelwiki.bootstrap.ai_execution_worker import ai_policy_for_user
+                policy = await ai_policy_for_user(user_id)
                 if not policy or not policy["agy_enabled"]:
                     raise BackendPolicyChangedError("AGY grant changed before the job was created")
                 active = int(await conn.fetchval(
@@ -207,17 +205,13 @@ async def create_job(kind: str, *, novel_id: int | None, user_id: int | None,
 async def get_job(job_id: int) -> dict | None:
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT j.*,r.id AS current_run_id,r.plugin_version AS current_plugin_version
-            FROM jobs j LEFT JOIN LATERAL (
-              SELECT id,plugin_version FROM ai_execution_runs
-              WHERE job_id=j.id ORDER BY created_at DESC LIMIT 1
-            ) r ON TRUE WHERE j.id=$1;
-            """,
-            job_id,
-        )
-    return _row_to_job(row) if row else None
+        row = await conn.fetchrow("SELECT * FROM jobs WHERE id=$1;", job_id)
+    if row is None:
+        return None
+    result = _row_to_job(row)
+    from novelwiki.bootstrap.experience import job_run_metadata
+    result.update((await job_run_metadata({job_id})).get(job_id, {}))
+    return result
 
 
 async def list_jobs(*, user_id: int | None = None, kind: str | None = None, status: str | None = None,
@@ -239,15 +233,15 @@ async def list_jobs(*, user_id: int | None = None, kind: str | None = None, stat
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"""
-            SELECT j.*,r.id AS current_run_id,r.plugin_version AS current_plugin_version
-            FROM jobs j LEFT JOIN LATERAL (
-              SELECT id,plugin_version FROM ai_execution_runs
-              WHERE job_id=j.id ORDER BY created_at DESC LIMIT 1
-            ) r ON TRUE {where} ORDER BY j.created_at DESC LIMIT ${len(args)};
-            """, *args
+            f"SELECT * FROM jobs {where} ORDER BY created_at DESC LIMIT ${len(args)};",
+            *args,
         )
-    return [_row_to_job(r) for r in rows]
+    jobs = [_row_to_job(row) for row in rows]
+    from novelwiki.bootstrap.experience import job_run_metadata
+    metadata = await job_run_metadata({int(job["id"]) for job in jobs})
+    for job in jobs:
+        job.update(metadata.get(int(job["id"]), {}))
+    return jobs
 
 
 # ── Write / transitions ──────────────────────────────────────────────────────

@@ -18,3 +18,5 @@ data/agy-jobs/
 
 implementation-plan/
 node_modules/
+test-results/
+playwright-report/

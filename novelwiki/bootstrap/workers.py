@@ -25,3 +25,33 @@ class WorkerRegistry:
     @property
     def workloads(self) -> tuple[str, ...]:
         return tuple(sorted(self._handlers))
+
+
+def build_api_worker_registry() -> WorkerRegistry:
+    from novelwiki.modules.acquisition.adapters.inbound.jobs import execute_scrape_job
+    from novelwiki.modules.codex.adapters.inbound.jobs import execute_codex_job
+    from novelwiki.modules.translation.adapters.inbound.jobs import execute_translation_job
+
+    registry = WorkerRegistry()
+    registry.register("scrape", execute_scrape_job)
+    registry.register("codex_build", execute_codex_job)
+    registry.register("translate", execute_translation_job)
+    return registry
+
+
+def build_agy_worker_registry() -> WorkerRegistry:
+    from novelwiki.agy.translation import execute_translation_job
+    from novelwiki.modules.codex.adapters.inbound.jobs import execute_agy_codex_job
+
+    async def translation(job, preflight, _context):
+        return await execute_translation_job(job, preflight)
+
+    async def smoke(job, _preflight, _context):
+        from novelwiki.agy.smoke import run_smoke_test
+        return await run_smoke_test(int(job["id"]))
+
+    registry = WorkerRegistry()
+    registry.register("translate", translation)
+    registry.register("codex_build", execute_agy_codex_job)
+    registry.register("agy_smoke", smoke)
+    return registry

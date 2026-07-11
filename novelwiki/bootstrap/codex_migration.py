@@ -5,11 +5,11 @@ from __future__ import annotations
 
 async def build_codex_migration_service():
     from novelwiki.modules.codex.adapters.outbound.agent_bridge import (
-        LegacyCodexAgentBridge,
+        CodexAgentGateway,
     )
     from novelwiki.modules.codex.adapters.outbound.migration_bridges import (
         BackendResolutionBridge, CodexQuotaBridge, CodexWorkBridge,
-        LegacyAiCostBridge, LegacyCatalogEditBridge, LegacyReadingCeilingBridge,
+        AiCostGateway, ReadingCeilingGateway,
     )
     from novelwiki.modules.codex.adapters.outbound.postgres_queries import (
         PostgresCodexQueries, PostgresEntityMerger,
@@ -21,20 +21,38 @@ async def build_codex_migration_service():
         PostgresQuotaRepository,
     )
     from novelwiki.modules.identity.application import QuotaService
+    from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
+    from novelwiki.modules.catalog.application import (
+        CatalogAccessService, CatalogTransactionService,
+    )
     from novelwiki.platform.config import settings
     from novelwiki.platform.database import init_db_pool
 
     pool = await init_db_pool()
+
+    class CatalogEditBridge:
+        async def require_editable(self, novel_id, principal):
+            async with pool.acquire() as connection:
+                await CatalogAccessService(
+                    PostgresCatalogRepository(connection)
+                ).require_editable(novel_id, principal)
+
+        async def enable_codex(self, novel_id):
+            async with pool.acquire() as connection:
+                async with connection.transaction():
+                    await CatalogTransactionService(
+                        PostgresCatalogRepository(connection)
+                    ).enable_codex(novel_id)
     queries = CodexQueryService(
-        LegacyReadingCeilingBridge(pool), PostgresCodexQueries(pool),
-        LegacyCodexAgentBridge(), LegacyAiCostBridge(),
+        ReadingCeilingGateway(pool), PostgresCodexQueries(pool),
+        CodexAgentGateway(), AiCostGateway(),
         ask_max_query_chars=settings.ASK_MAX_QUERY_CHARS,
         ask_requires_verified=settings.ASK_REQUIRE_VERIFIED,
         profile_requires_verified=settings.ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED,
         profile_model=settings.MODEL_PRO,
     )
     commands = CodexCommandService(
-        LegacyCatalogEditBridge(pool), BackendResolutionBridge(),
+        CatalogEditBridge(), BackendResolutionBridge(),
         CodexWorkBridge(),
         CodexQuotaBridge(QuotaService(PostgresQuotaRepository(pool=pool))),
         PostgresEntityMerger(pool), settings.AGY_MAX_ATTEMPTS,

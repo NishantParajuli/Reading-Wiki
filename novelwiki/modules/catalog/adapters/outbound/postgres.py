@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...public import NovelAccess, NovelDraft, TagSuggestionRecord
+from ...public import ImportedNovelDraft, NovelAccess, NovelDraft, TagSuggestionRecord
 
 
 class PostgresCatalogRepository:
@@ -91,7 +91,7 @@ class PostgresCatalogRepository:
             *arguments,
         )
 
-    async def create_novel(self, draft: NovelDraft, owner_id: int) -> int:
+    async def create_novel(self, draft: NovelDraft, owner_id: int | None) -> int:
         return int(await self._connection.fetchval(
             """
             INSERT INTO novels (title, author, description, cover_url, original_language,
@@ -101,6 +101,47 @@ class PostgresCatalogRepository:
             draft.title, draft.author, draft.description, draft.cover_url,
             draft.original_language, draft.codex_enabled, owner_id,
         ))
+
+    async def create_imported_novel(self, draft: ImportedNovelDraft) -> int:
+        return int(await self._connection.fetchval(
+            """
+            INSERT INTO novels
+              (title,author,description,original_language,codex_enabled,series,
+               owner_id,visibility)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id;
+            """,
+            draft.title, draft.author, draft.description, draft.original_language,
+            draft.codex_enabled, draft.series, draft.owner_id, draft.visibility,
+        ))
+
+    async def novel_exists(self, novel_id: int) -> bool:
+        return bool(await self._connection.fetchval(
+            "SELECT 1 FROM novels WHERE id=$1;", novel_id
+        ))
+
+    async def codex_enabled(self, novel_id: int) -> bool:
+        return bool(await self._connection.fetchval(
+            "SELECT codex_enabled FROM novels WHERE id=$1;", novel_id
+        ))
+
+    async def set_cover_if_missing(self, novel_id: int, cover_url: str) -> None:
+        await self._connection.execute(
+            "UPDATE novels SET cover_url=$2,updated_at=now() "
+            "WHERE id=$1 AND cover_url IS NULL;", novel_id, cover_url,
+        )
+
+    async def touch_novel(self, novel_id: int) -> None:
+        await self._connection.execute(
+            "UPDATE novels SET updated_at=now() WHERE id=$1;", novel_id
+        )
+
+    async def novel_titles(self, novel_ids: set[int]) -> dict[int, str]:
+        if not novel_ids:
+            return {}
+        rows = await self._connection.fetch(
+            "SELECT id,title FROM novels WHERE id=ANY($1::bigint[]);", sorted(novel_ids)
+        )
+        return {int(row["id"]): row["title"] for row in rows}
 
     async def delete_novel(self, novel_id: int) -> None:
         await self._connection.execute("DELETE FROM novels WHERE id = $1;", novel_id)
