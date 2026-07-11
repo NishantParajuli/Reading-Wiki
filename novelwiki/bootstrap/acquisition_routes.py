@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 async def build_acquisition_service():
-    from novelwiki.modules.work.public import service as jobs_service
+    from novelwiki.modules.work.adapters.outbound import postgres as jobs_service
     from novelwiki.modules.acquisition.adapters.outbound.assets import (
         AcquisitionAssetFilesystem,
     )

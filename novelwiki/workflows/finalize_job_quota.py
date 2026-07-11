@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 from novelwiki.kernel.transactions import UnitOfWork
 from novelwiki.modules.identity.public import IdentityQuotaTransactionApi
-from novelwiki.modules.work.public import (
+from novelwiki.modules.work.application.contracts import (
     JobQuotaSettlement,
     WorkQuotaFinalizationTransactionApi,
 )

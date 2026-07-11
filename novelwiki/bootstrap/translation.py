@@ -28,6 +28,8 @@ async def build_glossary_service():
 
 
 async def build_translation_scheduling_service():
+    from novelwiki.modules.ai_execution.adapters.outbound.policy import get_policy, resolve_backend
+    from novelwiki.modules.ai_execution.domain.backend import Workload
     from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
     from novelwiki.modules.catalog.application import CatalogAccessService
     from novelwiki.modules.identity.adapters.outbound.postgres_quota import PostgresQuotaRepository
@@ -39,6 +41,7 @@ async def build_translation_scheduling_service():
         TranslationWorkBridge,
     )
     from novelwiki.modules.translation.application import TranslationSchedulingService
+    from novelwiki.modules.work.adapters.outbound import postgres as work_service
     from novelwiki.platform.config import settings
     from novelwiki.platform.database import init_db_pool
 
@@ -52,9 +55,27 @@ async def build_translation_scheduling_service():
                 ).require_editable(novel_id, principal)
 
     quota = QuotaService(PostgresQuotaRepository(pool=pool))
+
+    class WorkRuntime:
+        ActiveJobLimitError = work_service.ActiveJobLimitError
+        BackendPolicyChangedError = work_service.BackendPolicyChangedError
+        find_active = staticmethod(work_service.find_active)
+        job_view = staticmethod(work_service.job_view)
+
+        @staticmethod
+        async def create_job(*args, **kwargs):
+            return await work_service.create_job(
+                *args, **kwargs, policy_lookup=get_policy
+            )
+
     return TranslationSchedulingService(
         CatalogBridge(), PostgresReadingTranslationQuery(pool),
-        BackendResolutionBridge(), TranslationWorkBridge(),
+        BackendResolutionBridge(resolve_backend, Workload.TRANSLATE_BATCH),
+        TranslationWorkBridge(
+            WorkRuntime(),
+            work_service.ActiveJobLimitError,
+            work_service.BackendPolicyChangedError,
+        ),
         TranslationQuotaBridge(quota), settings.AGY_MAX_ATTEMPTS,
     )
 

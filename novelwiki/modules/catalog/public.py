@@ -75,34 +75,3 @@ class CatalogTransactionApi(Protocol):
     async def reject_tag_suggestion(
         self, novel_id: int, suggestion_id: int, reviewed_by: int
     ) -> None: ...
-
-
-def can_edit(novel: dict, user: dict | None) -> bool:
-    from .adapters.inbound.access import can_edit as implementation
-
-    return implementation(novel, user)
-
-
-def is_admin(user: dict | None) -> bool:
-    from .adapters.inbound.access import is_admin as implementation
-
-    return implementation(user)
-
-
-async def fetch_novel(novel_id: int) -> dict | None:
-    from .adapters.inbound.access import fetch_novel as implementation
-
-    return await implementation(novel_id)
-
-
-async def require_readable(novel_id: int, user: dict | None) -> dict:
-    from .adapters.inbound.access import require_readable as implementation
-
-    return await implementation(novel_id, user)
-
-
-def catalog_access_service(connection: object):
-    from .adapters.outbound.postgres import PostgresCatalogRepository
-    from .application import CatalogAccessService
-
-    return CatalogAccessService(PostgresCatalogRepository(connection))

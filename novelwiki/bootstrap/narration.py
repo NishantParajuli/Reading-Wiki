@@ -18,6 +18,10 @@ async def build_narration_service():
         PostgresNarrationQueries,
     )
     from novelwiki.modules.narration.application import NarrationService
+    from novelwiki.modules.narration.adapters.inbound import worker as tts_worker
+    from novelwiki.bootstrap.narration_worker import build_narration_worker_runtime
+
+    tts_worker.configure_worker_runtime(build_narration_worker_runtime())
 
     pool = await get_db_pool()
     from novelwiki.modules.reading.adapters.outbound.narration import (
@@ -29,7 +33,7 @@ async def build_narration_service():
         ReadingChapterTextAdapter(reading),
         IdentityNarrationQuota(QuotaService(PostgresQuotaRepository(pool=pool))),
         PostgresNarrationQueries(pool, reading),
-        PostgresNarrationJobs(),
+        PostgresNarrationJobs(tts_worker),
         NarrationSidecar(),
         LocalAudioFiles(),
         default_voice=settings.TTS_DEFAULT_VOICE,

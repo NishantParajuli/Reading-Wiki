@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from novelwiki.modules.work.public import JobQuotaSettlement
+from novelwiki.modules.work.application.contracts import JobQuotaSettlement
 
 
 class PostgresWorkTransactionService:

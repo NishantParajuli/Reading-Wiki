@@ -232,7 +232,8 @@ def test_feature_cli_adapters_delegate_to_application_commands():
         source = (MODULE_ROOT / owner / "adapters/inbound/cli.py").read_text(
             encoding="utf-8"
         )
-        assert "novelwiki.bootstrap" in source
+        assert "novelwiki.bootstrap" not in source
+        assert "configure_" in source
         assert "parse_epub(" not in source
         assert "commit_job(" not in source
         assert "translate_range(" not in source

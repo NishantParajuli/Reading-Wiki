@@ -39,7 +39,7 @@ async def job_run_metadata(job_ids: set[int]) -> dict[int, dict]:
 async def build_experience_admin_commands():
     from novelwiki.modules.experience.application.admin_commands import ExperienceAdminCommands
     from novelwiki.modules.ai_execution.adapters.outbound import policy
-    from novelwiki.modules.work.public import service
+    from novelwiki.modules.work.adapters.outbound import postgres as service
     from novelwiki.platform.config import settings
     from novelwiki.platform.observability import audit
 

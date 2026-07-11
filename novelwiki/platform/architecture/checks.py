@@ -82,6 +82,30 @@ def _python_imports(path: Path) -> Iterator[tuple[str, int]]:
                     yield f"novelwiki.{alias.name}", node.lineno
 
 
+def _resolved_python_imports(path: Path, module_root: Path) -> Iterator[tuple[str, int]]:
+    """Yield absolute import targets, including imports relative to a module package."""
+    relative = path.relative_to(module_root).with_suffix("")
+    module_parts = ["novelwiki", "modules", *relative.parts]
+    if module_parts[-1] == "__init__":
+        package_parts = module_parts[:-1]
+    else:
+        package_parts = module_parts[:-1]
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield alias.name, node.lineno
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                keep = len(package_parts) - (node.level - 1)
+                prefix = package_parts[:keep]
+                target = ".".join([*prefix, *(node.module or "").split(".")]).rstrip(".")
+            else:
+                target = node.module or ""
+            if target:
+                yield target, node.lineno
+
+
 def _module_owner(imported: str) -> str | None:
     if imported.startswith(MODULE_PREFIX):
         parts = imported.split(".")
@@ -210,6 +234,61 @@ def cross_module_import_violations(root: Path) -> list[str]:
             if len(parts) < 4 or parts[3] != "public":
                 violations.append(
                     f"{path.relative_to(root)}:{line}: imports {imported} instead of {MODULE_PREFIX}{target}.public"
+                )
+    return violations
+
+
+def layer_dependency_violations(root: Path) -> list[str]:
+    """Enforce the final Clean Architecture layer and composition directions."""
+    module_root = root / "novelwiki" / "modules"
+    violations: list[str] = []
+    for path in sorted(module_root.rglob("*.py")):
+        relative = path.relative_to(module_root)
+        owner = relative.parts[0]
+        layer = None
+        if len(relative.parts) >= 4 and relative.parts[1:3] == ("adapters", "inbound"):
+            layer = "inbound"
+        elif len(relative.parts) >= 4 and relative.parts[1:3] == ("adapters", "outbound"):
+            layer = "outbound"
+        elif len(relative.parts) == 2 and relative.name == "public.py":
+            layer = "public"
+        own_adapters = f"novelwiki.modules.{owner}.adapters"
+        for imported, line in _resolved_python_imports(path, module_root):
+            if imported == "novelwiki.bootstrap" or imported.startswith("novelwiki.bootstrap."):
+                violations.append(
+                    f"{path.relative_to(root)}:{line}: module code imports composition root {imported}"
+                )
+            if layer == "inbound" and imported.startswith(f"{own_adapters}.outbound"):
+                violations.append(
+                    f"{path.relative_to(root)}:{line}: inbound adapter imports outbound adapter {imported}"
+                )
+            if layer == "outbound" and imported.startswith(f"{own_adapters}.inbound"):
+                violations.append(
+                    f"{path.relative_to(root)}:{line}: outbound adapter imports inbound adapter {imported}"
+                )
+            if layer == "public" and imported.startswith(own_adapters):
+                violations.append(
+                    f"{path.relative_to(root)}:{line}: public contract imports adapter {imported}"
+                )
+            if layer == "outbound" and (
+                imported == "fastapi" or imported.startswith("fastapi.")
+            ):
+                violations.append(
+                    f"{path.relative_to(root)}:{line}: outbound adapter imports FastAPI {imported}"
+                )
+    return violations
+
+
+def public_surface_violations(root: Path) -> list[str]:
+    """Keep public.py as DTO/protocol contracts, never executable implementation lookup."""
+    module_root = root / "novelwiki" / "modules"
+    violations: list[str] = []
+    for path in sorted(module_root.glob("*/public.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                violations.append(
+                    f"{path.relative_to(root)}:{node.lineno}: public contract defines executable function {node.name}"
                 )
     return violations
 

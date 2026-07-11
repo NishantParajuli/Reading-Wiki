@@ -25,14 +25,11 @@ from novelwiki.platform.auth import require_admin
 from novelwiki.kernel.errors import InvalidOperation, NotFound, ValidationFailed
 from novelwiki.modules.identity.public import IdentityAdminApi, Principal
 from novelwiki.modules.experience.application.admin_commands import ExperienceAdminCommands
+from .dependencies import operational_projection_dependency
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-
-async def _operational_projections():
-    from novelwiki.bootstrap.experience import build_operational_projection_repository
-    return await build_operational_projection_repository()
 
 USER_STATUSES = {"active", "suspended", "banned"}
 USER_ROLES = {"user", "admin"}
@@ -84,9 +81,12 @@ class AdminAiBackendPolicy(BaseModel):
 
 
 @router.get("/users")
-async def admin_list_users(q: str | None = None, admin: dict = Depends(require_admin)):
+async def admin_list_users(
+    q: str | None = None, admin: dict = Depends(require_admin),
+    projections=Depends(operational_projection_dependency),
+):
     """All accounts with this month's usage and effective quota limits."""
-    rows = await (await _operational_projections()).admin_users(_period(), q)
+    rows = await projections.admin_users(_period(), q)
     return [
         {
             "id": int(r["id"]), "email": r["email"], "username": r["username"],
@@ -171,8 +171,9 @@ def _policy_view(row: dict | None, user_id: int) -> dict:
 async def admin_get_ai_backend_policy(
     user_id: int, admin: dict = Depends(require_admin),
     commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+    projections=Depends(operational_projection_dependency),
 ):
-    exists = await (await _operational_projections()).user_exists(user_id)
+    exists = await projections.user_exists(user_id)
     if not exists:
         raise HTTPException(status_code=404, detail="User not found.")
     return _policy_view(await commands.get_policy(user_id), user_id)
@@ -199,10 +200,9 @@ async def admin_delete_ai_backend_policy(
 async def admin_agy_health(
     admin: dict = Depends(require_admin),
     commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+    projections=Depends(operational_projection_dependency),
 ):
-    heartbeat, counts, recent, last_success = await (
-        await _operational_projections()
-    ).agy_health()
+    heartbeat, counts, recent, last_success = await projections.agy_health()
     details = heartbeat["details"] if heartbeat else {}
     if isinstance(details, str):
         try: details = __import__("json").loads(details)
@@ -226,6 +226,7 @@ async def admin_agy_health(
 async def admin_retry_waiting_agy(
     admin: dict = Depends(require_admin),
     commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+    projections=Depends(operational_projection_dependency),
 ):
     count = await commands.retry_waiting(int(admin["id"]))
     return {"status": "success", "jobs_requeued": count}
@@ -238,7 +239,7 @@ async def admin_agy_smoke_test(
 ):
     if not settings.AGY_ENABLED:
         raise HTTPException(status_code=409, detail="Enable AGY before running a consuming smoke test.")
-    recent = await (await _operational_projections()).recent_smoke()
+    recent = await projections.recent_smoke()
     if recent:
         raise HTTPException(status_code=429, detail="An AGY smoke test ran in the last 10 minutes.")
     job_id, created = await commands.queue_smoke(int(admin["id"]))
@@ -262,13 +263,14 @@ async def admin_delete_user(
 
 
 @router.get("/usage")
-async def admin_usage(admin: dict = Depends(require_admin)):
+async def admin_usage(
+    admin: dict = Depends(require_admin),
+    projections=Depends(operational_projection_dependency),
+):
     """Platform-wide spend: this month's totals, active spender count, the last six months,
     and the top spenders this month."""
     period = _period()
-    totals, user_count, novel_count, months, top = await (
-        await _operational_projections()
-    ).admin_usage(period)
+    totals, user_count, novel_count, months, top = await projections.admin_usage(period)
     return {
         "period": period.isoformat(),
         "totals": {
@@ -297,10 +299,11 @@ async def admin_usage(admin: dict = Depends(require_admin)):
 
 @router.get("/novels")
 async def admin_list_novels(visibility: str | None = None, q: str | None = None,
-                            admin: dict = Depends(require_admin)):
+                            admin: dict = Depends(require_admin),
+                            projections=Depends(operational_projection_dependency)):
     """Every novel for moderation: owner, visibility, size. Take-down / promote are done with
     the shared PATCH /api/novels/{id}/visibility (admins may set any visibility)."""
-    rows = await (await _operational_projections()).admin_novels(visibility, q)
+    rows = await projections.admin_novels(visibility, q)
     return [
         {"id": int(r["id"]), "title": r["title"], "author": r["author"], "visibility": r["visibility"],
          "owner_id": int(r["owner_id"]) if r["owner_id"] is not None else None,
@@ -311,11 +314,14 @@ async def admin_list_novels(visibility: str | None = None, q: str | None = None,
 
 
 @router.get("/global-novels")
-async def admin_global_novels(admin: dict = Depends(require_admin)):
+async def admin_global_novels(
+    admin: dict = Depends(require_admin),
+    projections=Depends(operational_projection_dependency),
+):
     """The curated Global library with per-novel pipeline status, for the Global jobs tab.
     The triggers themselves reuse the shared per-novel endpoints (scrape / translate /
     codex/build), which already let an admin act on any novel — this just lists what's there."""
-    rows = await (await _operational_projections()).global_novels()
+    rows = await projections.global_novels()
     return [
         {"id": int(r["id"]), "title": r["title"], "codex_enabled": r["codex_enabled"],
          "chapter_count": int(r["chapter_count"] or 0), "source_count": int(r["source_count"] or 0),

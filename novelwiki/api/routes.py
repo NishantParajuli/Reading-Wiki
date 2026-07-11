@@ -9,7 +9,8 @@ import inspect
 from functools import wraps
 
 import novelwiki.modules.identity.public as quota
-from novelwiki.modules.codex.public import answer_question, get_bm25_manager
+from novelwiki.modules.codex.adapters.outbound.agent import answer_question
+from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
 
 from novelwiki.modules.acquisition.adapters.inbound import http as acquisition
 from novelwiki.modules.catalog.adapters.inbound import http as catalog
@@ -139,6 +140,9 @@ async def _invoke(handler, *args, **kwargs):
     elif module == experience.__name__ and "service" in parameters:
         from novelwiki.bootstrap.experience import build_experience_projection_service
         kwargs.setdefault("service", await build_experience_projection_service())
+    elif module == work.__name__ and "service" in parameters:
+        from novelwiki.bootstrap.work import build_work_service
+        kwargs.setdefault("service", await build_work_service())
     result = await handler(*args, **kwargs)
     if module == codex.__name__ and name == "ask_question" and isinstance(result, dict):
         return codex.AskResponse(**result)

@@ -4,9 +4,17 @@ from novelwiki.platform.cli_runtime import run_cli
 
 app = typer.Typer()
 
+_command_factory = None
+
+
+def configure_commands(factory) -> None:
+    global _command_factory
+    _command_factory = factory
+
 def _commands():
-    from novelwiki.bootstrap.feature_cli import build_codex_commands
-    return build_codex_commands()
+    if _command_factory is None:
+        raise RuntimeError("Codex CLI commands were not wired by the composition root")
+    return _command_factory()
 
 @app.command()
 def chunk(
@@ -75,5 +83,4 @@ def merge(
         await _commands().merge(novel_id, keep_id, drop_id)
         typer.echo(typer.style(f"✔ Entity {drop_id} successfully merged into {keep_id}.", fg=typer.colors.GREEN, bold=True))
     run_cli(run())
-
 

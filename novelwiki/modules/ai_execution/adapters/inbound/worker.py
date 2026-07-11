@@ -14,34 +14,45 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from novelwiki.platform.observability import audit
-from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import AgyCanceled, AgyError, PROVIDER_WAIT_CODES, safe_error_summary
-from novelwiki.modules.ai_execution.adapters.outbound.agy.preflight import PreflightResult, run_preflight
-from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import process_identity_matches, terminate_process_group
-from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import cleanup_expired_workspaces, validate_work_root
-from novelwiki.modules.ai_execution.adapters.outbound.policy import get_policy, model_for, reauthorize_job
 from novelwiki.modules.ai_execution.domain.backend import ExecutionBackend, Workload
-from novelwiki.modules.catalog.public import can_edit, fetch_novel
+from novelwiki.kernel.errors import Forbidden, NotFound
+from novelwiki.modules.identity.public import Principal
 from novelwiki.platform.config import settings
-from novelwiki.modules.work.public import service
-from novelwiki.modules.work.public import (
-    _heartbeat, _recover_stale_leases, _release_due_provider_waits, claim_next,
-)
 
 logger = logging.getLogger(__name__)
 WORKER_ID = f"agy-{os.getpid()}-{uuid.uuid4().hex[:12]}"
 ADVISORY_LOCK_KEY = "novelwiki-agy-subscription-v1"
+_runtime = None
+
+
+def configure_worker_runtime(runtime) -> None:
+    global _runtime
+    _runtime = runtime
+
+
+def _configured_runtime():
+    if _runtime is None:
+        raise RuntimeError("AI Execution worker runtime was not wired by the composition root")
+    return _runtime
+
+
+class _ServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_configured_runtime().work_service, name)
+
+
+service = _ServiceProxy()
 
 
 async def _worker_state():
-    from novelwiki.bootstrap.ai_execution_worker import build_agy_worker_state_service
-    return await build_agy_worker_state_service()
+    return await _configured_runtime().worker_state_factory()
 
 
 async def _load_user(user_id: int | None) -> dict | None:
     return await (await _worker_state()).load_user(user_id)
 
 
-async def _write_heartbeat(status: str, preflight: PreflightResult | None, **details) -> None:
+async def _write_heartbeat(status: str, preflight: object | None, **details) -> None:
     if preflight is not None:
         details = {**details, "configured_models_present": preflight.healthy,
                    "models": list(preflight.models), "preflight_error_code": preflight.error_code}
@@ -74,8 +85,8 @@ async def _reap_orphans() -> None:
     rows = await state.orphan_runs()
     for row in rows:
         pgid, started = row["process_group_id"], row["process_started_at"]
-        if pgid and process_identity_matches(int(pgid), started):
-            await terminate_process_group(int(pgid), started_at=started)
+        if pgid and _configured_runtime().process_identity_matches(int(pgid), started):
+            await _configured_runtime().terminate_process_group(int(pgid), started_at=started)
         run_id = row["id"]
         workspace = Path(settings.AGY_WORK_DIR) / (row["workspace_relpath"] or "")
         # A complete final manifest may still be committed by the retried handler.
@@ -88,19 +99,25 @@ async def _reap_orphans() -> None:
         )
 
 
-async def _reauthorize(job: dict) -> tuple[bool, str, dict | None]:
+async def _reauthorize(job: dict, catalog_access) -> tuple[bool, str, dict | None]:
     user = await _load_user(job.get("user_id"))
     if not user:
         return False, "user_missing", None
     if job.get("kind") == "agy_smoke":
         return (user.get("status") == "active" and user.get("role") == "admin"), "admin_smoke", user
-    allowed, reason = await reauthorize_job(job, user)
+    allowed, reason = await _configured_runtime().reauthorize_job(job, user)
     if not allowed:
         return False, reason, user
-    novel = await fetch_novel(int(job["novel_id"])) if job.get("novel_id") is not None else None
-    if not novel or not can_edit(novel, user):
+    if job.get("novel_id") is None:
         return False, "novel_edit_revoked", user
-    policy = await get_policy(int(user["id"]))
+    try:
+        await catalog_access.require_editable(
+            int(job["novel_id"]),
+            Principal.from_user(user),
+        )
+    except (NotFound, Forbidden):
+        return False, "novel_edit_revoked", user
+    policy = await _configured_runtime().get_policy(int(user["id"]))
     if not policy:
         return False, "grant_revoked", user
     active = await (await _worker_state()).active_job_count(int(user["id"]))
@@ -109,27 +126,28 @@ async def _reauthorize(job: dict) -> tuple[bool, str, dict | None]:
     return True, reason, user
 
 
-async def _handle_codex(job: dict, preflight: PreflightResult) -> dict:
-    from novelwiki.bootstrap.workers import build_agy_worker_registry
-    return await build_agy_worker_registry().resolve("codex_build")(
-        job, preflight, _AgyExecutionContext()
+async def _handle_codex(job: dict, preflight: object) -> dict:
+
+    class LegacyCodexContext(_AgyExecutionContext):
+        execute_codex_job = staticmethod(execute_codex_job)
+
+    return await _configured_runtime().registry_factory().resolve("codex_build")(
+        job, preflight, LegacyCodexContext()
     )
+
+
+async def execute_codex_job(job: dict, preflight):
+    """Compatibility seam replaced by Bootstrap in production and tests."""
+    raise RuntimeError("Codex AGY execution was not wired")
 
 
 class _AgyExecutionContext:
     @staticmethod
     async def bail_if_canceled(job_id: int) -> None:
         if await service.is_canceled(job_id):
-            raise AgyCanceled()
+            raise _configured_runtime().canceled_error()
 
-    set_progress = staticmethod(service.set_progress)
-    execute_codex_job = staticmethod(lambda *args, **kwargs: execute_codex_job(*args, **kwargs))
-
-
-async def execute_codex_job(job: dict, preflight):
-    """Stable test/entrypoint seam; feature registration remains in the composition root."""
-    from novelwiki.modules.codex.public import execute_agy_codex_job as implementation
-    return await implementation(job, preflight)
+    set_progress = staticmethod(lambda *args, **kwargs: service.set_progress(*args, **kwargs))
 
 
 async def _fallback_to_api(job: dict, exc: Exception) -> bool:
@@ -137,12 +155,12 @@ async def _fallback_to_api(job: dict, exc: Exception) -> bool:
         return False
     if job["kind"] == "translate":
         await service.release_translation_reservation_for_fallback(int(job["id"]))
-        model = model_for(Workload.TRANSLATE_BATCH, ExecutionBackend.API)
+        model = _configured_runtime().model_for(Workload.TRANSLATE_BATCH, ExecutionBackend.API)
     else:
-        model = model_for(Workload.CODEX_EXTRACT, ExecutionBackend.API)
+        model = _configured_runtime().model_for(Workload.CODEX_EXTRACT, ExecutionBackend.API)
     changed = await (await _worker_state()).fallback_to_api(
         int(job["id"]), model, settings.JOB_MAX_ATTEMPTS,
-        safe_error_summary(exc),
+        _configured_runtime().safe_error_summary(exc),
     )
     if changed:
         await audit.record("agy.run.fallback_to_api", user_id=job.get("user_id"), novel_id=job.get("novel_id"),
@@ -150,18 +168,17 @@ async def _fallback_to_api(job: dict, exc: Exception) -> bool:
     return bool(changed)
 
 
-async def _process(job: dict, preflight: PreflightResult, state: dict) -> None:
+async def _process(job: dict, preflight: object, state: dict, catalog_access) -> None:
     job_id = int(job["id"])
     token = job.get("claim_token")
     stop_hb = asyncio.Event()
-    lease_task = asyncio.create_task(_heartbeat(job_id, token, stop_hb))
+    lease_task = asyncio.create_task(_configured_runtime().heartbeat(job_id, token, stop_hb))
     try:
-        from novelwiki.bootstrap.workers import build_agy_worker_registry
         from novelwiki.modules.ai_execution.application.worker import AgyWorkerService
-        registry = build_agy_worker_registry()
+        registry = _configured_runtime().registry_factory()
 
         class Operations:
-            reauthorize = staticmethod(_reauthorize)
+            reauthorize = staticmethod(lambda claimed: _reauthorize(claimed, catalog_access))
             resolve_handler = staticmethod(registry.resolve)
             execution_context = staticmethod(_AgyExecutionContext)
             cancel = staticmethod(service.cancel_job)
@@ -171,13 +188,13 @@ async def _process(job: dict, preflight: PreflightResult, state: dict) -> None:
             is_canceled = staticmethod(service.is_canceled)
             fallback_to_api = staticmethod(_fallback_to_api)
             fail_or_retry = staticmethod(service.fail_or_retry)
-            unsupported_error = staticmethod(lambda: AgyError(
+            unsupported_error = staticmethod(lambda: _configured_runtime().agy_error(
                 "unsupported AGY job kind", code="agy_artifact_invalid", retryable=False
             ))
-            is_canceled_error = staticmethod(lambda exc: isinstance(exc, AgyCanceled))
+            is_canceled_error = staticmethod(_configured_runtime().is_canceled_error)
             error_code = staticmethod(lambda exc: getattr(exc, "code", "unknown"))
-            error_summary = staticmethod(safe_error_summary)
-            provider_wait_code = staticmethod(lambda code: code in PROVIDER_WAIT_CODES)
+            error_summary = staticmethod(_configured_runtime().safe_error_summary)
+            provider_wait_code = staticmethod(_configured_runtime().is_provider_wait_code)
 
             @staticmethod
             async def wait_for_provider(jid, code, summary):
@@ -198,7 +215,9 @@ async def _process(job: dict, preflight: PreflightResult, state: dict) -> None:
         except Exception:
             pass
 
-async def worker_loop(poll_interval: float = 2.0, stop: asyncio.Event | None = None) -> None:
+async def worker_loop(
+    poll_interval: float = 2.0, stop: asyncio.Event | None = None, *, catalog_access
+) -> None:
     stop = stop or asyncio.Event()
     state = {"status": "starting", "preflight": None, "job_id": None, "error": None}
     hb = asyncio.create_task(_heartbeat_loop(stop, state))
@@ -209,11 +228,11 @@ async def worker_loop(poll_interval: float = 2.0, stop: asyncio.Event | None = N
             state.update(status="standby", error="another AGY worker holds the subscription lock")
             await _write_heartbeat("standby", None, error=state["error"])
             raise RuntimeError("another AGY worker holds the subscription lock")
-        await _release_due_provider_waits()
-        await _recover_stale_leases()
+        await _configured_runtime().release_due_provider_waits()
+        await _configured_runtime().recover_stale_leases()
         await _reap_orphans()
-        validate_work_root().mkdir(parents=True, exist_ok=True, mode=0o700)
-        preflight = await run_preflight(raise_on_error=False)
+        _configured_runtime().validate_work_root().mkdir(parents=True, exist_ok=True, mode=0o700)
+        preflight = await _configured_runtime().run_preflight(raise_on_error=False)
         state["preflight"] = preflight
         state["status"] = "healthy" if settings.AGY_ENABLED and preflight.healthy else (
             "disabled" if not settings.AGY_ENABLED else "unhealthy")
@@ -227,17 +246,17 @@ async def worker_loop(poll_interval: float = 2.0, stop: asyncio.Event | None = N
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=30)
                 except asyncio.TimeoutError:
-                    preflight = await run_preflight(raise_on_error=False)
+                    preflight = await _configured_runtime().run_preflight(raise_on_error=False)
                     state.update(preflight=preflight,
                                  status="healthy" if settings.AGY_ENABLED and preflight.healthy else "unhealthy",
                                  error=preflight.error)
                 continue
             maintenance += 1
             if maintenance % 30 == 0:
-                await _release_due_provider_waits()
-                await _recover_stale_leases()
-                await cleanup_expired_workspaces()
-            job = await claim_next(execution_backend="agy", worker_id=WORKER_ID,
+                await _configured_runtime().release_due_provider_waits()
+                await _configured_runtime().recover_stale_leases()
+                await _configured_runtime().cleanup_expired_workspaces()
+            job = await _configured_runtime().claim_next(execution_backend="agy", worker_id=WORKER_ID,
                                    kinds=("translate", "codex_build", "agy_smoke"))
             if job is None:
                 try:
@@ -245,7 +264,7 @@ async def worker_loop(poll_interval: float = 2.0, stop: asyncio.Event | None = N
                 except asyncio.TimeoutError:
                     pass
                 continue
-            await _process(job, preflight, state)
+            await _process(job, preflight, state, catalog_access)
     finally:
         try:
             await worker_state.release_subscription_lock(ADVISORY_LOCK_KEY)

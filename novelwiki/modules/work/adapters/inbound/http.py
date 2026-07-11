@@ -2,23 +2,23 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from novelwiki.kernel.errors import NotFound
+from novelwiki.modules.work.application import WorkPrincipal, WorkService
 from novelwiki.platform.auth import current_user
-from novelwiki.modules.work.adapters.outbound import postgres as service
 
 router = APIRouter()
 
 
-def _job_is_owner_or_admin(job: dict, user: dict) -> bool:
-    if user.get("role") == "admin":
-        return True
-    return job.get("user_id") is not None and int(job["user_id"]) == int(user["id"])
+async def work_service_dependency() -> WorkService:
+    raise RuntimeError("WorkService was not wired by the composition root")
 
 
-async def _require_own_generic_job(job_id: int, user: dict) -> dict:
-    job = await service.get_job(job_id)
-    if not job or not _job_is_owner_or_admin(job, user):
-        raise HTTPException(status_code=404, detail="Job not found.")
-    return job
+def _principal(user: dict) -> WorkPrincipal:
+    return WorkPrincipal(int(user["id"]), user.get("role") == "admin")
+
+
+def _not_found(exc: NotFound):
+    raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/jobs")
@@ -30,33 +30,45 @@ async def api_list_jobs(
     active: bool = False,
     limit: int = 100,
     user: dict = Depends(current_user),
+    service: WorkService = Depends(work_service_dependency),
 ):
     """List background jobs. Non-admins are scoped to their own jobs; admins may pass `user_id`
     (and other filters) to inspect any user's jobs."""
-    is_admin = user.get("role") == "admin"
-    scope_user = None if is_admin else user["id"]
-    if is_admin and user_id is not None:
-        scope_user = user_id
     jobs = await service.list_jobs(
-        user_id=scope_user,
+        _principal(user),
+        requested_user_id=user_id,
         kind=kind,
         status=status,
         novel_id=novel_id,
-        active_only=active,
+        active=active,
         limit=limit,
     )
-    return {"jobs": [service.job_view(job) for job in jobs]}
+    return {"jobs": jobs}
 
 
 @router.get("/jobs/{job_id}")
-async def api_get_job(job_id: int, user: dict = Depends(current_user)):
-    return service.job_view(await _require_own_generic_job(job_id, user))
+async def api_get_job(
+    job_id: int, user: dict = Depends(current_user),
+    service: WorkService = Depends(work_service_dependency),
+):
+    try:
+        return await service.get_job(job_id, _principal(user))
+    except NotFound as exc:
+        _not_found(exc)
 
 
 @router.post("/jobs/{job_id}/cancel")
-async def api_cancel_job(job_id: int, user: dict = Depends(current_user)):
+async def api_cancel_job(
+    job_id: int, user: dict = Depends(current_user),
+    service: WorkService = Depends(work_service_dependency),
+):
     """Request cancellation. A queued job never starts; a running job stops at its next
     cancellation checkpoint, keeping whatever it already finished. Reserved quota is refunded."""
-    await _require_own_generic_job(job_id, user)
-    changed = await service.cancel_job(job_id)
+    try:
+        changed = await service.cancel_job(job_id, _principal(user))
+    except NotFound as exc:
+        _not_found(exc)
     return {"status": "success", "canceled": changed}
+
+
+__all__ = ["router", "work_service_dependency"]

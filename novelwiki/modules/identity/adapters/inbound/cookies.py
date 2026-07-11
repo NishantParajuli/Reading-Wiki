@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from fastapi import Response
 
-from novelwiki.modules.identity.adapters.outbound.tokens import new_token
 from novelwiki.platform.config import settings
 
 
-def set_csrf_cookie(response: Response, token: str | None = None) -> str:
-    token = token or new_token()
+def set_csrf_cookie(response: Response, token: str) -> str:
     response.set_cookie(
         settings.CSRF_COOKIE,
         token,
@@ -20,7 +18,7 @@ def set_csrf_cookie(response: Response, token: str | None = None) -> str:
     return token
 
 
-def set_session_cookie(response: Response, token: str) -> None:
+def set_session_cookie(response: Response, token: str, csrf_token: str) -> None:
     response.set_cookie(
         settings.SESSION_COOKIE,
         token,
@@ -30,7 +28,7 @@ def set_session_cookie(response: Response, token: str) -> None:
         samesite="lax",
         path="/",
     )
-    set_csrf_cookie(response)
+    set_csrf_cookie(response, csrf_token)
 
 
 def clear_session_cookie(response: Response) -> None:

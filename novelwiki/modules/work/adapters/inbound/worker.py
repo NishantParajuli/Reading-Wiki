@@ -27,8 +27,6 @@ from datetime import timedelta
 
 from novelwiki.platform.observability import audit
 from novelwiki.platform.config import settings
-from novelwiki.modules.work.adapters.outbound import postgres as service
-from novelwiki.modules.work.adapters.outbound.claims import claim_next
 from novelwiki.modules.work.application import WorkerStateService
 
 logger = logging.getLogger(__name__)
@@ -42,12 +40,22 @@ _last_maintenance = 0.0
 
 _worker_task: asyncio.Task | None = None
 _stop = asyncio.Event()
-async def _worker_state() -> WorkerStateService:
-    from novelwiki.bootstrap.work_worker import build_worker_state_service
+_runtime = None
 
-    # Pool ownership belongs to Platform and test/application lifecycles may replace
-    # it. Rebuild this lightweight facade so it always points at the active pool.
-    return await build_worker_state_service()
+
+def configure_worker_runtime(runtime) -> None:
+    global _runtime
+    _runtime = runtime
+
+
+def _configured_runtime():
+    if _runtime is None:
+        raise RuntimeError("Work worker runtime was not wired by the composition root")
+    return _runtime
+
+
+async def _worker_state() -> WorkerStateService:
+    return await _configured_runtime().worker_state_factory()
 
 
 # ── User + cancellation helpers ──────────────────────────────────────────────
@@ -61,7 +69,7 @@ class _Canceled(Exception):
 
 
 async def _bail_if_canceled(job_id: int) -> None:
-    if await service.is_canceled(job_id):
+    if await _configured_runtime().service.is_canceled(job_id):
         raise _Canceled()
 
 
@@ -73,8 +81,8 @@ async def _pending_translations(novel_id: int, frm, to, force: bool) -> list[flo
 
 class _ExecutionContext:
     bail_if_canceled = staticmethod(_bail_if_canceled)
-    update_job = staticmethod(service.update_job)
-    set_progress = staticmethod(service.set_progress)
+    update_job = staticmethod(lambda *args, **kwargs: _configured_runtime().service.update_job(*args, **kwargs))
+    set_progress = staticmethod(lambda *args, **kwargs: _configured_runtime().service.set_progress(*args, **kwargs))
     load_user = staticmethod(_load_user)
     pending_translations = staticmethod(_pending_translations)
 
@@ -84,7 +92,9 @@ class _ExecutionContext:
 async def _claim_next() -> dict | None:
     """Atomically claim the oldest queued job → ``running``, bump attempts, and stamp this worker's
     lease. The marker is not a trigger status, so the job leaves the queue the instant it's claimed."""
-    return await claim_next(execution_backend="api", worker_id=_WORKER_ID)
+    return await _configured_runtime().claim_next(
+        execution_backend="api", worker_id=_WORKER_ID
+    )
 
 
 async def _renew_lease(job_id: int, token: str | None) -> None:
@@ -114,7 +124,7 @@ async def _recover_stale_leases() -> None:
     for recovery in recoveries:
         job_id = recovery.job_id
         if recovery.action == "canceled":
-            await service.finalize(job_id, success=False)
+            await _configured_runtime().service.finalize(job_id, success=False)
             await audit.record(
                 "job.canceled",
                 data={"job_id": job_id, "reason": "lease_expired_after_cancel"},
@@ -123,7 +133,7 @@ async def _recover_stale_leases() -> None:
             logger.warning(
                 f"Job {job_id} failed after lease expiry (attempts exhausted)."
             )
-            await service.finalize(job_id, success=False)
+            await _configured_runtime().service.finalize(job_id, success=False)
             await audit.record(
                 "job.failed", data={"job_id": job_id, "reason": "lease_expired"}
             )
@@ -151,8 +161,7 @@ async def _run_maintenance(force: bool = False) -> None:
 async def _process(job: dict) -> None:
     job_id = int(job["id"])
     token = job.get("claim_token")
-    from novelwiki.bootstrap.workers import build_api_worker_registry
-    registry = build_api_worker_registry()
+    registry = _configured_runtime().registry_factory()
     stop_hb = asyncio.Event()
     heartbeat = asyncio.create_task(_heartbeat(job_id, token, stop_hb))
     try:
@@ -161,9 +170,9 @@ async def _process(job: dict) -> None:
         class Operations:
             resolve_handler = staticmethod(registry.resolve)
             execution_context = staticmethod(_ExecutionContext)
-            fail_or_retry = staticmethod(service.fail_or_retry)
-            finalize = staticmethod(lambda jid, ok: service.finalize(jid, success=ok))
-            mark_done = staticmethod(lambda jid, progress: service.mark_done_if_running(jid, progress=progress))
+            fail_or_retry = staticmethod(_configured_runtime().service.fail_or_retry)
+            finalize = staticmethod(lambda jid, ok: _configured_runtime().service.finalize(jid, success=ok))
+            mark_done = staticmethod(lambda jid, progress: _configured_runtime().service.mark_done_if_running(jid, progress=progress))
             info = staticmethod(logger.info)
             exception = staticmethod(logger.exception)
             is_canceled_error = staticmethod(lambda exc: isinstance(exc, _Canceled))

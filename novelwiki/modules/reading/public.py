@@ -147,11 +147,3 @@ class ReadingCodexTransactionApi(Protocol):
     async def locked_chapter_snapshot(
         self, novel_id: int, chapter: float
     ) -> dict | None: ...
-
-
-async def require_effective_ceiling(
-    novel_id: int, user: dict | None, requested_ceiling: float | None
-):
-    from .adapters.outbound.access import require_effective_ceiling as implementation
-
-    return await implementation(novel_id, user, requested_ceiling)

@@ -122,13 +122,9 @@ def _raise_import_http(exc: Exception) -> None:
 
 async def _import_dependencies(service, principal_factory):
     if not isinstance(service, ImportService):
-        from novelwiki.bootstrap.acquisition_routes import build_import_service
-        service = await build_import_service()
+        raise RuntimeError("ImportService was not wired by the composition root")
     if not callable(principal_factory):
-        from novelwiki.bootstrap.acquisition_routes import (
-            build_acquisition_principal_factory,
-        )
-        principal_factory = build_acquisition_principal_factory()
+        raise RuntimeError("Import principal factory was not wired by the composition root")
     return service, principal_factory
 
 

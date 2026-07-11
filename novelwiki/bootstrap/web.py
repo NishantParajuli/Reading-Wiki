@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from novelwiki.platform.database import init_db_pool
 from novelwiki.modules.identity.adapters.inbound.cookies import set_csrf_cookie
+from novelwiki.modules.identity.adapters.outbound.tokens import new_token
 from novelwiki.platform.web.factory import create_web_app
 
 @asynccontextmanager
@@ -15,18 +16,31 @@ async def lifespan(app: FastAPI):
     finally:
         await lifecycle.stop()
 
-app = create_web_app(lifespan=lifespan, seed_csrf_cookie=set_csrf_cookie)
+app = create_web_app(
+    lifespan=lifespan,
+    seed_csrf_cookie=lambda response: set_csrf_cookie(response, new_token()),
+)
 
 # Bind API endpoints. The auth router is public (login/register); everything else under
 # /api requires a logged-in user via a router-level dependency. Handlers that need the
 # user object additionally declare `Depends(current_user)` — FastAPI caches it per request.
 from fastapi import Depends
 from novelwiki.modules.identity.adapters.inbound.http import (
+    configure_email_delivery,
     identity_auth_persistence_dependency,
     router as auth_router,
 )
+from novelwiki.modules.identity.adapters.outbound.email import (
+    send_reset_email,
+    send_verification_email,
+)
+
+configure_email_delivery(send_verification_email, send_reset_email)
 from novelwiki.platform.auth import current_user, require_admin
 from novelwiki.modules.identity.adapters.inbound.dependencies import (
+    ai_capability_dependency,
+    avatar_storage_dependency,
+    identity_auth_runtime_dependency,
     identity_session_service_dependency,
 )
 from novelwiki.modules.identity.adapters.inbound.account_http import (
@@ -45,8 +59,10 @@ from novelwiki.modules.narration.adapters.inbound.http import (
     router as tts_router,
 )
 from novelwiki.modules.experience.adapters.inbound.http import (
+    catalog_read_access_dependency,
     codex_recap_principal_factory_dependency,
     codex_recap_service_dependency,
+    narration_coverage_dependency,
     router as product_router,
 )
 from novelwiki.modules.reading.adapters.inbound.http import (
@@ -54,7 +70,10 @@ from novelwiki.modules.reading.adapters.inbound.http import (
     reading_service_dependency,
     router as reading_router,
 )
-from novelwiki.modules.work.adapters.inbound.http import router as work_router
+from novelwiki.modules.work.adapters.inbound.http import (
+    router as work_router,
+    work_service_dependency,
+)
 from novelwiki.modules.catalog.adapters.inbound.http import (
     catalog_migration_service_dependency,
     catalog_service_dependency,
@@ -81,6 +100,10 @@ from novelwiki.modules.translation.adapters.inbound.http import (
 from novelwiki.modules.experience.adapters.inbound.projections_http import (
     experience_projection_service_dependency,
     router as experience_projection_router,
+)
+from novelwiki.modules.experience.adapters.inbound.dependencies import (
+    operational_projection_dependency,
+    quota_projection_dependency,
 )
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(reading_router, prefix="/api", dependencies=[Depends(current_user)])
@@ -233,6 +256,26 @@ app.dependency_overrides[codex_recap_service_dependency] = _codex_migration_serv
 app.dependency_overrides[codex_recap_principal_factory_dependency] = _codex_principal_factory
 
 
+async def _narration_coverage():
+    from novelwiki.bootstrap.narration import build_narration_queries
+    return await build_narration_queries()
+
+
+app.dependency_overrides[narration_coverage_dependency] = _narration_coverage
+
+
+async def _experience_catalog_access():
+    from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
+    from novelwiki.modules.catalog.application import CatalogAccessService
+
+    pool = await init_db_pool()
+    async with pool.acquire() as connection:
+        yield CatalogAccessService(PostgresCatalogRepository(connection))
+
+
+app.dependency_overrides[catalog_read_access_dependency] = _experience_catalog_access
+
+
 async def _identity_admin_service():
     from novelwiki.bootstrap.identity_admin import build_identity_admin_service
 
@@ -279,6 +322,63 @@ app.dependency_overrides[
 ] = _identity_session_service
 
 
+async def _ai_capability():
+    from novelwiki.modules.ai_execution.adapters.outbound.policy import capability_for_user
+
+    return capability_for_user
+
+
+app.dependency_overrides[ai_capability_dependency] = _ai_capability
+
+
+async def _identity_auth_runtime():
+    from types import SimpleNamespace
+
+    from novelwiki.modules.identity.adapters.outbound import oauth
+    from novelwiki.modules.identity.adapters.outbound.email import (
+        send_reset_email,
+        send_verification_email,
+    )
+    from novelwiki.modules.identity.adapters.outbound.passwords import (
+        hash_password,
+        verify_password,
+    )
+    from novelwiki.modules.identity.adapters.outbound.tokens import (
+        hash_token,
+        new_token,
+        sign,
+        stamped,
+        unsign,
+    )
+
+    return SimpleNamespace(
+        authorize_url=oauth.authorize_url,
+        configured_providers=oauth.configured_providers,
+        exchange_code=oauth.exchange_code,
+        hash_password=hash_password,
+        hash_token=hash_token,
+        is_provider_configured=oauth.is_configured,
+        new_token=new_token,
+        send_reset_email=send_reset_email,
+        send_verification_email=send_verification_email,
+        sign=sign,
+        stamped=stamped,
+        unsign=unsign,
+        verify_password=verify_password,
+    )
+
+
+async def _avatar_storage():
+    from novelwiki.modules.identity.adapters.outbound.avatars import AvatarFilesystem
+    from novelwiki.platform.config import settings
+
+    return AvatarFilesystem(settings.ASSET_DIR)
+
+
+app.dependency_overrides[identity_auth_runtime_dependency] = _identity_auth_runtime
+app.dependency_overrides[avatar_storage_dependency] = _avatar_storage
+
+
 async def _quota_service():
     from novelwiki.modules.identity.adapters.outbound.postgres_quota import (
         PostgresQuotaRepository,
@@ -316,6 +416,42 @@ async def _identity_auth_persistence():
 app.dependency_overrides[
     identity_auth_persistence_dependency
 ] = _identity_auth_persistence
+
+
+async def _work_service():
+    from novelwiki.bootstrap.work import build_work_service
+
+    return await build_work_service()
+
+
+app.dependency_overrides[work_service_dependency] = _work_service
+
+
+async def _operational_projection_repository():
+    from novelwiki.bootstrap.experience import build_operational_projection_repository
+    return await build_operational_projection_repository()
+
+
+app.dependency_overrides[
+    operational_projection_dependency
+] = _operational_projection_repository
+
+
+async def _quota_projection():
+    from types import SimpleNamespace
+
+    from novelwiki.modules.identity.adapters.inbound.presentation import quota_limits
+    from novelwiki.modules.identity.adapters.outbound import quota_compat
+
+    return SimpleNamespace(
+        is_exempt=quota_compat.is_exempt,
+        quota_limits=quota_limits,
+        remaining=quota_compat.remaining,
+        spend_allowed=quota_compat.spend_allowed,
+    )
+
+
+app.dependency_overrides[quota_projection_dependency] = _quota_projection
 
 
 async def _narration_service():

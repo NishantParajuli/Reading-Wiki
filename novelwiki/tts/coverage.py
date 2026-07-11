@@ -1,3 +1,23 @@
-import sys
-from novelwiki.modules.narration.adapters.outbound import coverage as _implementation
-sys.modules[__name__] = _implementation
+"""Stable compatibility helper for shared narration coverage."""
+
+from collections.abc import Iterable
+
+
+async def shared_audio_coverage(
+    novel_id: int, include_voice_ids: Iterable[str] | None = None
+) -> dict:
+    from novelwiki.bootstrap.narration import build_narration_queries
+
+    result = await (await build_narration_queries()).coverage(novel_id)
+    existing = {row["voice_id"] for row in result["voices"]}
+    for voice in sorted({
+        str(value).strip() for value in (include_voice_ids or ())
+        if str(value or "").strip()
+    } - existing):
+        result["voices"].append({
+            "voice_id": voice, "have": 0,
+            "missing": result["prose_chapters"], "chapters": [],
+            "duration_seconds": 0, "file_bytes": 0,
+        })
+    result["voices"].sort(key=lambda row: row["voice_id"])
+    return result

@@ -33,7 +33,7 @@ from novelwiki.modules.identity.public import (
     IdentityQuotaTransactionApi,
     quota_transaction_factory,
 )
-from novelwiki.modules.work.public import WorkQuotaFinalizationTransactionApi
+from novelwiki.modules.work.application.contracts import WorkQuotaFinalizationTransactionApi
 from novelwiki.platform.database import AsyncpgUnitOfWork
 from novelwiki.workflows.finalize_job_quota import finalize_job_quota
 
@@ -47,6 +47,22 @@ ACTIVE_STATUSES = ("queued", "running", "waiting_provider")
 TERMINAL_STATUSES = ("done", "failed", "canceled")
 
 _JSON_FIELDS = {"progress", "options"}
+
+
+class PostgresWorkRepository:
+    """Repository facade used by injected Work application services."""
+
+    async def get_job(self, job_id: int):
+        return await get_job(job_id)
+
+    async def list_jobs(self, **filters):
+        return await list_jobs(**filters)
+
+    async def cancel_job(self, job_id: int):
+        return await cancel_job(job_id)
+
+    def job_view(self, job: dict):
+        return job_view(job)
 
 
 class ActiveJobLimitError(RuntimeError):
@@ -136,7 +152,8 @@ async def create_job(kind: str, *, novel_id: int | None, user_id: int | None,
                      backend_requested: str = "auto", execution_backend: str = "api",
                      backend_policy_version: int | None = None,
                      backend_fallback_allowed: bool = False,
-                     backend_model: str | None = None) -> tuple[int, bool]:
+                     backend_model: str | None = None,
+                     policy_lookup=None) -> tuple[int, bool]:
     """Insert a job, deduping onto an existing active job with the same ``idempotency_key``.
 
     Returns ``(job_id, created)`` — ``created`` is False when an existing active job was reused,
@@ -172,8 +189,11 @@ async def create_job(kind: str, *, novel_id: int | None, user_id: int | None,
                     "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2));",
                     "agy_user_queue", str(user_id),
                 )
-                from novelwiki.bootstrap.ai_execution_worker import ai_policy_for_user
-                policy = await ai_policy_for_user(user_id)
+                if policy_lookup is None:
+                    raise BackendPolicyChangedError(
+                        "AI policy lookup was not supplied by the scheduling workflow"
+                    )
+                policy = await policy_lookup(user_id)
                 if not policy or not policy["agy_enabled"]:
                     raise BackendPolicyChangedError("AGY grant changed before the job was created")
                 active = int(await conn.fetchval(
@@ -217,10 +237,7 @@ async def get_job(job_id: int) -> dict | None:
         row = await conn.fetchrow("SELECT * FROM jobs WHERE id=$1;", job_id)
     if row is None:
         return None
-    result = _row_to_job(row)
-    from novelwiki.bootstrap.experience import job_run_metadata
-    result.update((await job_run_metadata({job_id})).get(job_id, {}))
-    return result
+    return _row_to_job(row)
 
 
 async def list_jobs(*, user_id: int | None = None, kind: str | None = None, status: str | None = None,
@@ -246,10 +263,6 @@ async def list_jobs(*, user_id: int | None = None, kind: str | None = None, stat
             *args,
         )
     jobs = [_row_to_job(row) for row in rows]
-    from novelwiki.bootstrap.experience import job_run_metadata
-    metadata = await job_run_metadata({int(job["id"]) for job in jobs})
-    for job in jobs:
-        job.update(metadata.get(int(job["id"]), {}))
     return jobs
 
 

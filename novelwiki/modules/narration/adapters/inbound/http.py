@@ -39,11 +39,9 @@ async def narration_principal_factory_dependency() -> Callable[[dict], Principal
 
 async def _dependencies(service, principal_factory):
     if not isinstance(service, NarrationService):
-        from novelwiki.bootstrap.narration import build_narration_service
-        service = await build_narration_service()
+        raise RuntimeError("NarrationService was not wired by the composition root")
     if not callable(principal_factory):
-        from novelwiki.bootstrap.narration import build_narration_principal_factory
-        principal_factory = build_narration_principal_factory()
+        raise RuntimeError("Narration principal factory was not wired by the composition root")
     return service, principal_factory
 
 

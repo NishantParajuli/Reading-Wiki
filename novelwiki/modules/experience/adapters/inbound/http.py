@@ -22,18 +22,19 @@ caller can read.
 from __future__ import annotations
 
 import logging
+import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-import novelwiki.modules.identity.public as quota
-from novelwiki.modules.catalog.public import can_edit, is_admin, require_readable
 from novelwiki.platform.auth import current_user
 from novelwiki.platform.config import settings
-from novelwiki.modules.work.public import service as jobs_service
 from novelwiki.modules.codex.public import CodexRecapApi
 from novelwiki.modules.identity.public import Principal
-from novelwiki.modules.narration.public import shared_audio_coverage
+from novelwiki.modules.experience.application.ports import CatalogReadAccess
+from novelwiki.modules.narration.public import NarrationCoverageApi
+from .dependencies import operational_projection_dependency, quota_projection_dependency
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,21 +46,38 @@ async def codex_recap_service_dependency() -> CodexRecapApi:
 async def codex_recap_principal_factory_dependency():
     raise RuntimeError("Codex recap principal factory was not wired by the composition root")
 
+
+async def narration_coverage_dependency() -> NarrationCoverageApi:
+    raise RuntimeError("Narration coverage was not wired by the composition root")
+
+
+async def catalog_read_access_dependency() -> CatalogReadAccess:
+    raise RuntimeError("Catalog read access was not wired by the composition root")
+
 # Terminal states per job system (everything else counts as "active / in progress").
 _IMPORT_TERMINAL = {"committed", "failed", "canceled"}
 _TTS_ACTIVE = ("queued", "generating")
 
 
-async def _operational_projections():
-    from novelwiki.bootstrap.experience import build_operational_projection_repository
-    return await build_operational_projection_repository()
-
-
 # ── Unified activity feed (generic + import + TTS jobs) ───────────────────────
 
 def _generic_job_row(j: dict) -> dict:
-    v = jobs_service.job_view(j)
-    active = v["status"] in jobs_service.ACTIVE_STATUSES
+    progress = j.get("progress") or {}
+    options = j.get("options") or {}
+    if isinstance(progress, str):
+        progress = json.loads(progress)
+    if isinstance(options, str):
+        options = json.loads(options)
+    v = {
+        **j, "progress": progress, "options": options,
+        "execution_backend": j.get("execution_backend") or "api",
+        "backend_model": j.get("backend_model"),
+        "plugin_version": j.get("current_plugin_version") or (
+            settings.AGY_PLUGIN_VERSION
+            if (j.get("execution_backend") or "api") == "agy" else None
+        ),
+    }
+    active = v["status"] in {"queued", "running", "waiting_provider"}
     return {
         "source": "job",
         "id": v["id"],
@@ -76,8 +94,8 @@ def _generic_job_row(j: dict) -> dict:
         "backend_fallback_from": v["backend_fallback_from"],
         "plugin_version": v["plugin_version"],
         "cancelable": active,
-        "updated_at": v["updated_at"],
-        "created_at": v["created_at"],
+        "updated_at": v["updated_at"].isoformat() if v.get("updated_at") else None,
+        "created_at": v["created_at"].isoformat() if v.get("created_at") else None,
     }
 
 
@@ -123,17 +141,25 @@ def _tts_job_row(j: dict) -> dict:
     }
 
 
-async def _collect_activity(user: dict, *, active_only: bool, limit: int) -> list[dict]:
+async def _collect_activity(
+    user: dict, *, active_only: bool, limit: int, projections
+) -> list[dict]:
     """Merge the caller's jobs from all three durable systems into one normalized, newest-first
     feed. Non-admins only ever see their own jobs (the underlying listers scope by user_id)."""
-    admin = is_admin(user)
+    admin = Principal.from_user(user).is_admin
     scope = None if admin else user["id"]
 
-    generic = await jobs_service.list_jobs(user_id=scope, active_only=active_only, limit=limit)
-    import_rows = await _list_import_jobs(scope, active_only=active_only, limit=limit)
-    tts_rows = await _list_tts_jobs(scope, active_only=active_only, limit=limit)
+    generic = await projections.generic_activity(
+        scope, active_only, ("queued", "running", "waiting_provider"), limit
+    )
+    import_rows = await _list_import_jobs(
+        scope, active_only=active_only, limit=limit, projections=projections
+    )
+    tts_rows = await _list_tts_jobs(
+        scope, active_only=active_only, limit=limit, projections=projections
+    )
 
-    rows = [_generic_job_row(j) for j in generic]
+    rows = [_generic_job_row(dict(j)) for j in generic]
     rows += [_import_job_row(j) for j in import_rows]
     rows += [_tts_job_row(j) for j in tts_rows]
 
@@ -150,7 +176,9 @@ async def _collect_activity(user: dict, *, active_only: bool, limit: int) -> lis
     return rows[:limit]
 
 
-async def _list_import_jobs(user_id: int | None, *, active_only: bool, limit: int) -> list[dict]:
+async def _list_import_jobs(
+    user_id: int | None, *, active_only: bool, limit: int, projections
+) -> list[dict]:
     """Import jobs with the active filter applied in SQL before LIMIT.
 
     ``importer.jobs.list_jobs`` is intentionally a simple newest-first lister; the unified
@@ -158,7 +186,7 @@ async def _list_import_jobs(user_id: int | None, *, active_only: bool, limit: in
     """
     import json
 
-    rows = await (await _operational_projections()).import_activity(
+    rows = await projections.import_activity(
         user_id, active_only, _IMPORT_TERMINAL, max(1, min(int(limit), 200))
     )
     out = []
@@ -174,8 +202,10 @@ async def _list_import_jobs(user_id: int | None, *, active_only: bool, limit: in
     return out
 
 
-async def _list_tts_jobs(user_id: int | None, *, active_only: bool, limit: int) -> list[dict]:
-    rows = await (await _operational_projections()).tts_activity(
+async def _list_tts_jobs(
+    user_id: int | None, *, active_only: bool, limit: int, projections
+) -> list[dict]:
+    rows = await projections.tts_activity(
         user_id, active_only, _TTS_ACTIVE, max(1, min(int(limit), 200))
     )
     out = []
@@ -193,7 +223,11 @@ async def _list_tts_jobs(user_id: int | None, *, active_only: bool, limit: int) 
 
 
 @router.get("/activity")
-async def api_activity(status: str = "active", limit: int = 100, user: dict = Depends(current_user)):
+async def api_activity(
+    status: str = "active", limit: int = 100,
+    user: dict = Depends(current_user),
+    projections=Depends(operational_projection_dependency),
+):
     """The caller's background work across the generic, import, and TTS job systems in one feed.
 
     ``status=active`` (default) shows only in-flight / needs-attention work; ``status=all`` includes
@@ -201,7 +235,10 @@ async def api_activity(status: str = "active", limit: int = 100, user: dict = De
     jobs. The frontend dispatches Cancel to the right endpoint using each row's ``source``.
     """
     active_only = status != "all"
-    rows = await _collect_activity(user, active_only=active_only, limit=max(1, min(int(limit), 200)))
+    rows = await _collect_activity(
+        user, active_only=active_only, limit=max(1, min(int(limit), 200)),
+        projections=projections,
+    )
     return {"jobs": rows}
 
 
@@ -210,14 +247,17 @@ async def api_activity(status: str = "active", limit: int = 100, user: dict = De
 # global/public, owned by the caller, or the caller is an admin.
 
 @router.get("/home")
-async def api_home(user: dict = Depends(current_user)):
+async def api_home(
+    user: dict = Depends(current_user),
+    projections=Depends(operational_projection_dependency),
+):
     """The first screen after login: resume reading/listening, see active work, recent imports,
     and the newest shared novels. Every novel surfaced here is one the caller can actually read
     (shared, owned, or admin-readable) — never a private novel they've lost access to."""
-    admin = is_admin(user)
-    cont_rows, updated_rows, newest_rows = await (
-        await _operational_projections()
-    ).home_rows(int(user["id"]), admin)
+    admin = Principal.from_user(user).is_admin
+    cont_rows, updated_rows, newest_rows = await projections.home_rows(
+        int(user["id"]), admin
+    )
 
     def _cont(r):
         max_ch = float(r["max_chapter"]) if r["max_chapter"] is not None else None
@@ -266,8 +306,12 @@ async def api_home(user: dict = Depends(current_user)):
     # track a separate audio playback position, but we do know where they're reading and what's narrated.
     continue_listening = [c for c in continue_reading if c["audio_chapters"] > 0]
 
-    activity = await _collect_activity(user, active_only=True, limit=8)
-    recent_imports = await _recent_imports(user, limit=5)
+    activity = await _collect_activity(
+        user, active_only=True, limit=8, projections=projections
+    )
+    recent_imports = await _recent_imports(
+        user, limit=5, projections=projections
+    )
 
     newest = [
         {"id": int(r["id"]), "title": r["title"], "author": r["author"],
@@ -287,11 +331,12 @@ async def api_home(user: dict = Depends(current_user)):
     }
 
 
-async def _recent_imports(user: dict, *, limit: int) -> list[dict]:
-    from novelwiki.modules.acquisition.public import list_import_jobs
+async def _recent_imports(user: dict, *, limit: int, projections) -> list[dict]:
     import os
-    scope = None if is_admin(user) else user["id"]
-    rows = await list_import_jobs(user_id=scope, limit=limit)
+    scope = None if Principal.from_user(user).is_admin else user["id"]
+    rows = await _list_import_jobs(
+        scope, active_only=False, limit=limit, projections=projections
+    )
     return [
         {
             "id": int(j["id"]),
@@ -319,17 +364,19 @@ def _rewrite(cover_url, novel_id):
 
 @router.get("/novels/{novel_id}/health")
 async def api_novel_health(novel_id: int, voice_id: str | None = None,
-                           user: dict = Depends(current_user)):
+                           user: dict = Depends(current_user),
+                           narration: NarrationCoverageApi = Depends(narration_coverage_dependency),
+                           catalog: CatalogReadAccess = Depends(catalog_read_access_dependency),
+                           projections=Depends(operational_projection_dependency)):
     """Operator-facing pipeline health for a novel: codex coverage, untranslated raw chapters,
     missing narration for a voice, source freshness, and (for editors) recent pipeline errors.
     Readable by anyone who can read the novel; error detail is editor-only."""
-    novel = await require_readable(novel_id, user)
-    editor = can_edit(novel, user)
+    principal = Principal.from_user(user)
+    novel = await catalog.require_readable(novel_id, principal)
+    editor = principal.is_admin or novel.owner_id == principal.user_id
     voice = (voice_id or "").strip()
 
-    metrics, error_rows = await (
-        await _operational_projections()
-    ).novel_health(novel_id, editor)
+    metrics, error_rows = await projections.novel_health(novel_id, editor)
     total_chapters = int(metrics["total_chapters"] or 0)
     book_max = metrics["book_max"]
     entities_count = int(metrics["entities_count"] or 0)
@@ -344,15 +391,21 @@ async def api_novel_health(novel_id: int, voice_id: str | None = None,
 
     book_max_f = float(book_max) if book_max is not None else None
     codex_max_f = float(codex_max) if codex_max is not None else None
-    codex_enabled = bool(novel.get("codex_enabled")) if "codex_enabled" in novel else None
-    if codex_enabled is None:
-        codex_enabled = bool(metrics["codex_enabled"])
+    codex_enabled = bool(metrics["codex_enabled"])
 
     # Codex is "missing" if enabled but nothing extracted; "stale" if extraction lags the book.
     codex_missing = codex_enabled and entities_count == 0
     codex_stale = bool(codex_enabled and codex_max_f is not None and book_max_f is not None
                        and codex_max_f < book_max_f)
-    audio = await shared_audio_coverage(novel_id, [voice] if voice else None)
+    audio = await narration.coverage(novel_id)
+    existing = {row["voice_id"] for row in audio["voices"]}
+    if voice and voice not in existing:
+        audio["voices"].append({
+            "voice_id": voice, "have": 0,
+            "missing": audio["prose_chapters"], "chapters": [],
+            "duration_seconds": 0, "file_bytes": 0,
+        })
+        audio["voices"].sort(key=lambda row: row["voice_id"])
 
     return {
         "total_chapters": total_chapters,
@@ -393,11 +446,14 @@ _ESTIMATE_KIND = {
 async def api_cost_estimate(novel_id: int, action: str,
                             from_chapter: float | None = None, to_chapter: float | None = None,
                             force: bool = False, voice_id: str | None = None,
-                            user: dict = Depends(current_user)):
+                            user: dict = Depends(current_user),
+                            catalog: CatalogReadAccess = Depends(catalog_read_access_dependency),
+                            projections=Depends(operational_projection_dependency),
+                            quota=Depends(quota_projection_dependency)):
     """Estimate the units an expensive action would consume and the caller's remaining quota,
     WITHOUT charging or scheduling anything. Drives the pre-action confirmation UI so a user sees
     exactly what a codex build, a batch translation, or a whole-book narration will cost first."""
-    await require_readable(novel_id, user)
+    await catalog.require_readable(novel_id, Principal.from_user(user))
     if action not in _ESTIMATE_KIND:
         raise HTTPException(status_code=422, detail=f"Unknown action '{action}'.")
     kind = _ESTIMATE_KIND[action]
@@ -406,7 +462,7 @@ async def api_cost_estimate(novel_id: int, action: str,
     if action == "codex_build":
         units = 1
     elif action == "translate":
-        units = await (await _operational_projections()).translation_units(
+        units = await projections.translation_units(
             novel_id, from_chapter, to_chapter, force
         )
     else:  # audiobook
@@ -414,7 +470,7 @@ async def api_cost_estimate(novel_id: int, action: str,
         if not voice:
             units = 0
         else:
-            missing = await (await _operational_projections()).audiobook_missing(
+            missing = await projections.audiobook_missing(
                 novel_id, from_chapter, to_chapter, voice
             )
             cap = settings.TTS_MAX_BATCH_CHAPTERS
@@ -422,7 +478,7 @@ async def api_cost_estimate(novel_id: int, action: str,
             units = min(missing, cap)
 
     remaining = await quota.remaining(user, kind)   # None → unlimited (admin)
-    limits = None if quota.is_exempt(user) else _quota_limit(user, kind)
+    limits = None if quota.is_exempt(user) else quota.quota_limits(user)[kind]
     allowed = quota.spend_allowed(user) and (remaining is None or remaining >= units)
 
     return {
@@ -436,11 +492,6 @@ async def api_cost_estimate(novel_id: int, action: str,
         "spend_allowed": quota.spend_allowed(user),
         "allowed": allowed,
     }
-
-
-def _quota_limit(user: dict, kind: str) -> int:
-    from novelwiki.modules.identity.public import quota_limits
-    return quota_limits(user)[kind]
 
 
 # ── No-spoiler recap ──────────────────────────────────────────────────────────

@@ -4,8 +4,15 @@ from __future__ import annotations
 
 class AcquisitionCliGateway:
     async def safe_url(self, url):
-        from novelwiki.modules.acquisition.adapters.outbound.scraper.safe_fetch import validate_source_start_url
-        return await validate_source_start_url(url)
+        from novelwiki.modules.acquisition.application.commands import UnsafeSourceError
+        from novelwiki.modules.acquisition.adapters.outbound.scraper.safe_fetch import (
+            SafeFetchError,
+            validate_source_start_url,
+        )
+        try:
+            return await validate_source_start_url(url)
+        except SafeFetchError as exc:
+            raise UnsafeSourceError(str(exc)) from exc
 
     async def create_novel(self, **fields):
         from novelwiki.bootstrap.cli_services import create_system_novel_from_cli
@@ -67,9 +74,10 @@ class AcquisitionCliGateway:
         return await commit_series(job_ids)
 
     async def build_codex(self, novel_id, start, end):
-        from novelwiki.modules.codex.public import (
-            chunk_all_chapters, embed_missing_chunks, extract_all_chapters, get_bm25_manager,
-        )
+        from novelwiki.modules.codex.adapters.outbound.ingest.chunk import chunk_all_chapters
+        from novelwiki.modules.codex.adapters.outbound.ingest.embed import embed_missing_chunks
+        from novelwiki.modules.codex.adapters.outbound.ingest.extract import extract_all_chapters
+        from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
         await chunk_all_chapters(novel_id, force=False, from_chapter=start, to_chapter=end)
         await embed_missing_chunks(novel_id, from_chapter=start, to_chapter=end)
         await extract_all_chapters(novel_id, force=False, from_chapter=start, to_chapter=end)

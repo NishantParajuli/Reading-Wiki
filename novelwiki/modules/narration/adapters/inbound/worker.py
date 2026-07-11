@@ -27,10 +27,7 @@ import os
 from pathlib import Path
 
 from novelwiki.platform.config import settings
-import novelwiki.modules.identity.public as quota
-from novelwiki.modules.narration.adapters.outbound import sidecar as tts_client
 from novelwiki.modules.narration.domain import textprep
-from novelwiki.modules.narration.adapters.outbound.chapter_text import resolve_chapter_text
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +40,22 @@ _stop = asyncio.Event()
 # One GPU behind the TTS sidecar → never run two narrations at once (the worker is already
 # sequential, but this also guards a future standalone worker process).
 _TTS_LOCK = asyncio.Lock()
+_runtime = None
+
+
+def configure_worker_runtime(runtime) -> None:
+    global _runtime
+    _runtime = runtime
+
+
+def _configured_runtime():
+    if _runtime is None:
+        raise RuntimeError("Narration worker runtime was not wired by the composition root")
+    return _runtime
 
 
 async def _worker_state():
-    from novelwiki.bootstrap.narration_worker import build_narration_worker_state
-    return await build_narration_worker_state()
+    return await _configured_runtime().worker_state_factory()
 
 
 # ── Row (de)serialization ────────────────────────────────────────────────────
@@ -199,7 +207,7 @@ async def find_audio(novel_id: int, number, voice_id: str, version: int, user_id
 async def lookup_for_reader(novel_id: int, number: float, voice_id: str, user: dict | None) -> dict | None:
     """What audio (if any) THIS reader should hear: their overlay audio if they have an overlay
     for the chapter, else the shared base audio at the current content version."""
-    info = await resolve_chapter_text(novel_id, number, user)
+    info = await _configured_runtime().resolve_chapter_text(novel_id, number, user)
     if info["reason"] != "ok":
         return None
     uid = user["id"] if (info["is_overlay"] and isinstance(user, dict)) else None
@@ -248,7 +256,7 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
     lang_override = opts.get("language")
     force = bool(opts.get("force"))   # regenerate even if cached (the ⟳ button)
 
-    info = await resolve_chapter_text(novel_id, number, user)
+    info = await _configured_runtime().resolve_chapter_text(novel_id, number, user)
     if info["reason"] == "not_found":
         return "missing"
     if info["reason"] == "untranslated":
@@ -266,7 +274,7 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
 
         # Charge quota right before the (expensive) generation, mirroring how the importer reserves
         # close to the work. A cache hit above never reaches here, so reuse stays free.
-        if not await quota.try_reserve(user, "tts_chapters", 1):
+        if not await _configured_runtime().quota.try_reserve(user, "tts_chapters", 1):
             return "quota"
 
         paras = textprep.to_paragraphs(
@@ -288,7 +296,7 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
 
         heartbeat_task = asyncio.create_task(heartbeat())
         try:
-            opus, duration = await tts_client.narrate(
+            opus, duration = await _configured_runtime().tts_client.narrate(
                 paras, voice_id, language=language,
                 speed=settings.TTS_SPEED, num_step=settings.TTS_NUM_STEP,
                 silence_ms=settings.TTS_PARA_SILENCE_MS, opus_bitrate=settings.TTS_OPUS_BITRATE,
@@ -318,9 +326,9 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
 
 class _NarrationWorkerOperations:
     load_user = staticmethod(_load_user)
-    spend_allowed = staticmethod(quota.spend_allowed)
+    spend_allowed = staticmethod(lambda user: _configured_runtime().quota.spend_allowed(user))
     is_canceled = staticmethod(_is_canceled)
-    sidecar_available = staticmethod(tts_client.sidecar_available)
+    sidecar_available = staticmethod(lambda: _configured_runtime().tts_client.sidecar_available())
     generate_chapter = staticmethod(_generate_chapter)
     update_job = staticmethod(update_job)
     fail_job = staticmethod(fail_job)

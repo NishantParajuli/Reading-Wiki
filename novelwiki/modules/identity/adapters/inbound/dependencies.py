@@ -1,14 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from fastapi import Depends, HTTPException, Request
 
 from novelwiki.platform.config import settings
 
 from ...application import IdentitySessionService
+from ...application.ports import AuthRuntime, AvatarStorage
 
 
 async def identity_session_service_dependency() -> IdentitySessionService:
     raise RuntimeError("IdentitySessionService was not wired by the composition root")
+
+
+async def ai_capability_dependency() -> Callable[[int], Awaitable[dict]]:
+    raise RuntimeError("AI capability projection was not wired by the composition root")
+
+
+async def identity_auth_runtime_dependency() -> AuthRuntime:
+    raise RuntimeError("Identity auth runtime was not wired by the composition root")
+
+
+async def avatar_storage_dependency() -> AvatarStorage:
+    raise RuntimeError("Avatar storage was not wired by the composition root")
 
 
 async def _load_user_by_token(

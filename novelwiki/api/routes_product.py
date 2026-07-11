@@ -3,7 +3,75 @@
 from novelwiki.modules.experience.adapters.inbound.http import *  # noqa: F403
 from novelwiki.modules.experience.adapters.inbound import http as _native
 from novelwiki.modules.codex.application.services import RECAP_QUESTION
-from novelwiki.modules.codex.public import answer_question, get_bm25_manager
+from novelwiki.modules.codex.adapters.outbound.agent import answer_question
+from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
+
+
+async def _projections():
+    from novelwiki.bootstrap.experience import build_operational_projection_repository
+    return await build_operational_projection_repository()
+
+
+def _quota_projection():
+    from types import SimpleNamespace
+    from novelwiki.modules.identity.adapters.inbound.presentation import quota_limits
+    from novelwiki.modules.identity.adapters.outbound import quota_compat
+
+    return SimpleNamespace(
+        is_exempt=quota_compat.is_exempt,
+        quota_limits=quota_limits,
+        remaining=quota_compat.remaining,
+        spend_allowed=quota_compat.spend_allowed,
+    )
+
+
+async def api_activity(status="active", limit=100, user=None):
+    return await _native.api_activity(
+        status=status, limit=limit, user=user, projections=await _projections()
+    )
+
+
+async def api_home(user=None):
+    return await _native.api_home(user=user, projections=await _projections())
+
+
+async def api_novel_health(novel_id: int, voice_id=None, user=None):
+    """Compose Narration coverage for legacy direct-call fixtures."""
+    from novelwiki.bootstrap.narration import build_narration_queries
+
+    from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
+    from novelwiki.modules.catalog.application import CatalogAccessService
+    from novelwiki.platform.database import init_db_pool
+
+    pool = await init_db_pool()
+    async with pool.acquire() as connection:
+        return await _native.api_novel_health(
+            novel_id,
+            voice_id=voice_id,
+            user=user,
+            narration=await build_narration_queries(),
+            catalog=CatalogAccessService(PostgresCatalogRepository(connection)),
+            projections=await _projections(),
+        )
+
+
+async def api_cost_estimate(
+    novel_id: int, action: str, from_chapter=None, to_chapter=None,
+    force: bool = False, voice_id=None, user=None,
+):
+    from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
+    from novelwiki.modules.catalog.application import CatalogAccessService
+    from novelwiki.platform.database import init_db_pool
+
+    pool = await init_db_pool()
+    async with pool.acquire() as connection:
+        return await _native.api_cost_estimate(
+            novel_id, action, from_chapter=from_chapter, to_chapter=to_chapter,
+            force=force, voice_id=voice_id, user=user,
+            catalog=CatalogAccessService(PostgresCatalogRepository(connection)),
+            projections=await _projections(),
+            quota=_quota_projection(),
+        )
 
 
 async def api_recap(novel_id: int, req: RecapRequest, user: dict):  # noqa: F405

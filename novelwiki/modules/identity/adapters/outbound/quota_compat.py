@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException
-
 from novelwiki.platform.database import get_db_pool
-from novelwiki.kernel.errors import Forbidden, QuotaExceeded
 from novelwiki.modules.identity.adapters.outbound.postgres_quota import (
     PostgresQuotaRepository,
 )
@@ -47,10 +44,7 @@ def spend_allowed(user: dict) -> bool:
 
 
 def require_spend_allowed(user: dict) -> None:
-    try:
-        QuotaService.require_spend_allowed(_principal(user))
-    except Forbidden as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    QuotaService.require_spend_allowed(_principal(user))
 
 
 async def get_usage(user_id: int) -> dict:
@@ -72,12 +66,7 @@ async def remaining(user: dict, kind: str) -> int | None:
 
 
 async def check_available(user: dict, kind: str, n: int = 1) -> None:
-    try:
-        await (await _service()).check_available(_principal(user), kind, n)
-    except Forbidden as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except QuotaExceeded as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    await (await _service()).check_available(_principal(user), kind, n)
 
 
 async def try_reserve(user: dict, kind: str, n: int = 1) -> bool:
@@ -89,9 +78,4 @@ async def refund(user_id: int, kind: str, n: int = 1, *, conn=None) -> int:
 
 
 async def check_and_reserve(user: dict, kind: str, n: int = 1) -> None:
-    try:
-        await (await _service()).check_and_reserve(_principal(user), kind, n)
-    except Forbidden as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except QuotaExceeded as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    await (await _service()).check_and_reserve(_principal(user), kind, n)

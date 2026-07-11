@@ -17,20 +17,36 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
 from novelwiki.platform.config import settings
-from novelwiki.modules.identity.adapters.outbound import oauth, rate_limit
-from novelwiki.modules.identity.adapters.inbound.dependencies import current_user
-from novelwiki.modules.identity.adapters.outbound.email import send_verification_email, send_reset_email
-from novelwiki.modules.identity.adapters.outbound.passwords import hash_password, verify_password
+from novelwiki.modules.identity.adapters.inbound.dependencies import (
+    ai_capability_dependency,
+    current_user,
+    identity_auth_runtime_dependency,
+)
 from novelwiki.modules.identity.adapters.inbound.cookies import (
     clear_session_cookie, set_session_cookie,
 )
-from novelwiki.modules.identity.adapters.outbound.tokens import new_token, hash_token, sign, unsign, stamped
 from novelwiki.modules.identity.adapters.inbound.presentation import self_user_with_capabilities
 from novelwiki.modules.identity.domain.policies import normalize_username, valid_username
-from novelwiki.modules.identity.application.ports import AuthPersistence, DuplicateRegistration
+from novelwiki.modules.identity.application.ports import AuthPersistence, AuthRuntime, DuplicateRegistration
+from novelwiki.modules.identity.application import rate_limits as rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _email_not_configured(*_args, **_kwargs):
+    raise RuntimeError("Identity email delivery was not wired by the composition root")
+
+
+send_verification_email = _email_not_configured
+send_reset_email = _email_not_configured
+
+
+def configure_email_delivery(verification, reset) -> None:
+    """Composition hook retained as a stable monkeypatch seam for auth tests."""
+    global send_verification_email, send_reset_email
+    send_verification_email = verification
+    send_reset_email = reset
 
 
 async def identity_auth_persistence_dependency() -> AuthPersistence:
@@ -138,7 +154,11 @@ def _rate_limited(exc: rate_limit.RateLimitExceeded) -> None:
 
 
 def _log_auth_event(event: str, request: Request, scope: str) -> None:
-    logger.warning("auth.%s ip=%s scope=%s", event, rate_limit.client_ip(request), scope)
+    logger.warning("auth.%s ip=%s scope=%s", event, _client_ip(request), scope)
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client and request.client.host else "unknown"
 
 
 async def _ensure_or_429(
@@ -181,40 +201,44 @@ async def _consume_silent(
 async def register(
     payload: RegisterPayload, request: Request, response: Response,
     persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+    capability_for_user=Depends(ai_capability_dependency),
+    runtime: AuthRuntime = Depends(identity_auth_runtime_dependency),
 ):
     email = payload.email.lower()
     username = normalize_username(payload.username)
     if not valid_username(username):
         raise HTTPException(status_code=422, detail="Username must be 3–24 chars: a–z, 0–9, underscore.")
-    ip_key = rate_limit.bucket_key("auth:register:ip", rate_limit.client_ip(request))
+    ip_key = rate_limit.bucket_key("auth:register:ip", _client_ip(request))
     await _consume_or_429(persistence, ip_key, _register_ip_limit(), request, "register:ip")
-    token = new_token()
+    token = runtime.new_token()
     try:
         row, session = await persistence.register_user(
-            email, username, hash_password(payload.password), token,
+            email, username, runtime.hash_password(payload.password), token,
             dt.datetime.now(dt.timezone.utc) + VERIFY_TTL,
             request.headers.get("user-agent"),
         )
     except DuplicateRegistration as exc:
         raise HTTPException(status_code=409, detail=f"That {exc.field} is already taken.")
     await send_verification_email(email, _verify_link(token))
-    set_session_cookie(response, session)
-    return await self_user_with_capabilities(dict(row))
+    set_session_cookie(response, session, runtime.new_token())
+    return await self_user_with_capabilities(dict(row), capability_for_user)
 
 
 @router.post("/login")
 async def login(
     payload: LoginPayload, request: Request, response: Response,
     persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+    capability_for_user=Depends(ai_capability_dependency),
+    runtime: AuthRuntime = Depends(identity_auth_runtime_dependency),
 ):
     ident = payload.identifier.strip()
     ident_key = ident.lower()
-    ip_key = rate_limit.bucket_key("auth:login:ip", rate_limit.client_ip(request))
+    ip_key = rate_limit.bucket_key("auth:login:ip", _client_ip(request))
     account_key = rate_limit.bucket_key("auth:login:account", ident_key)
     await _ensure_or_429(persistence, ip_key, _login_ip_limit(), request, "login:ip")
     await _ensure_or_429(persistence, account_key, _login_account_limit(), request, "login:account")
     row = await persistence.find_login_user(ident_key)
-    if row is None or not row["password_hash"] or not verify_password(row["password_hash"], payload.password):
+    if row is None or not row["password_hash"] or not runtime.verify_password(row["password_hash"], payload.password):
         await _consume_or_429(persistence, ip_key, _login_ip_limit(), request, "login:ip")
         await _consume_or_429(persistence, account_key, _login_account_limit(), request, "login:account")
         _log_auth_event("failure", request, "login")
@@ -225,8 +249,8 @@ async def login(
     await persistence.clear_rate(ip_key)
     await persistence.clear_rate(account_key)
     session = await persistence.create_user_session(row["id"], request.headers.get("user-agent"))
-    set_session_cookie(response, session)
-    return await self_user_with_capabilities(dict(row))
+    set_session_cookie(response, session, runtime.new_token())
+    return await self_user_with_capabilities(dict(row), capability_for_user)
 
 
 @router.post("/logout")
@@ -242,8 +266,11 @@ async def logout(
 
 
 @router.get("/me")
-async def me(user: dict = Depends(current_user)):
-    return await self_user_with_capabilities(user)
+async def me(
+    user: dict = Depends(current_user),
+    capability_for_user=Depends(ai_capability_dependency),
+):
+    return await self_user_with_capabilities(user, capability_for_user)
 
 
 @router.get("/links")
@@ -259,18 +286,19 @@ async def oauth_links(
 @router.post("/change-password")
 async def change_password(payload: ChangePasswordPayload, request: Request, response: Response,
                           user: dict = Depends(current_user),
-                          persistence: AuthPersistence = Depends(identity_auth_persistence_dependency)):
+                          persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+                          runtime: AuthRuntime = Depends(identity_auth_runtime_dependency)):
     """Set or change the account password. If one is already set, the current one must match.
     Succeeds for OAuth-only users (no current password) so they can add password login.
     All other sessions are revoked; this device gets a fresh session so it stays signed in."""
     if user.get("password_hash"):
-        if not payload.current_password or not verify_password(user["password_hash"], payload.current_password):
+        if not payload.current_password or not runtime.verify_password(user["password_hash"], payload.current_password):
             raise HTTPException(status_code=403, detail="Current password is incorrect.")
-    new_hash = hash_password(payload.new_password)
+    new_hash = runtime.hash_password(payload.new_password)
     session = await persistence.change_password(
         user["id"], new_hash, request.headers.get("user-agent"),
     )
-    set_session_cookie(response, session)
+    set_session_cookie(response, session, runtime.new_token())
     return {"status": "ok"}
 
 
@@ -278,8 +306,9 @@ async def change_password(payload: ChangePasswordPayload, request: Request, resp
 async def verify_email(
     token: str,
     persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+    runtime: AuthRuntime = Depends(identity_auth_runtime_dependency),
 ):
-    th = hash_token(token)
+    th = runtime.hash_token(token)
     valid = await persistence.verification_token_valid(th)
     dest = f"/verify?token={token}" if valid else "/verify-failed"
     return RedirectResponse(url=dest, status_code=303)
@@ -289,10 +318,11 @@ async def verify_email(
 async def request_reset(
     payload: ResetRequestPayload, request: Request,
     persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+    runtime: AuthRuntime = Depends(identity_auth_runtime_dependency),
 ):
     email = payload.email.lower()
     should_issue = True
-    ip_key = rate_limit.bucket_key("auth:reset-request:ip", rate_limit.client_ip(request))
+    ip_key = rate_limit.bucket_key("auth:reset-request:ip", _client_ip(request))
     email_key = rate_limit.bucket_key("auth:reset-request:email", email)
     should_issue = await _consume_silent(
         persistence, ip_key, _reset_request_ip_limit(), request, "reset-request:ip",
@@ -302,7 +332,7 @@ async def request_reset(
             persistence, email_key, _reset_request_email_limit(), request, "reset-request:email",
         )
     ) and should_issue
-    token = new_token() if should_issue else None
+    token = runtime.new_token() if should_issue else None
     if token is not None:
         issued = await persistence.issue_reset_token(
             email, token, dt.datetime.now(dt.timezone.utc) + RESET_TTL,
@@ -319,13 +349,14 @@ async def request_reset(
 async def reset_password(
     payload: ResetPayload, request: Request, response: Response,
     persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+    runtime: AuthRuntime = Depends(identity_auth_runtime_dependency),
 ):
-    th = hash_token(payload.token)
-    ip_key = rate_limit.bucket_key("auth:reset-submit:ip", rate_limit.client_ip(request))
+    th = runtime.hash_token(payload.token)
+    ip_key = rate_limit.bucket_key("auth:reset-submit:ip", _client_ip(request))
     token_key = rate_limit.bucket_key("auth:reset-submit:token", th)
     await _consume_or_429(persistence, ip_key, _reset_submit_ip_limit(), request, "reset-submit:ip")
     await _consume_or_429(persistence, token_key, _reset_submit_token_limit(), request, "reset-submit:token")
-    if not await persistence.reset_password(th, hash_password(payload.password)):
+    if not await persistence.reset_password(th, runtime.hash_password(payload.password)):
         _log_auth_event("failure", request, "reset-submit")
         raise HTTPException(status_code=400, detail="This reset link is invalid or expired.")
     clear_session_cookie(response)
@@ -336,8 +367,9 @@ async def reset_password(
 async def verify_email_confirm(
     payload: VerifyPayload,
     persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+    runtime: AuthRuntime = Depends(identity_auth_runtime_dependency),
 ):
-    th = hash_token(payload.token)
+    th = runtime.hash_token(payload.token)
     if not await persistence.confirm_verification(th):
         raise HTTPException(status_code=400, detail="This verification link is invalid or expired.")
     return {"status": "ok"}
@@ -346,18 +378,21 @@ async def verify_email_confirm(
 # ── OAuth ─────────────────────────────────────────────────────────────────
 
 @router.get("/providers")
-async def providers():
+async def providers(runtime: AuthRuntime = Depends(identity_auth_runtime_dependency)):
     """Which OAuth buttons the login UI should show."""
-    return {"providers": oauth.configured_providers()}
+    return {"providers": runtime.configured_providers()}
 
 
 @router.get("/oauth/{provider}/start")
-async def oauth_start(provider: str):
-    if not oauth.is_configured(provider):
+async def oauth_start(
+    provider: str,
+    runtime: AuthRuntime = Depends(identity_auth_runtime_dependency),
+):
+    if not runtime.is_provider_configured(provider):
         raise HTTPException(status_code=404, detail="Provider not configured.")
-    nonce = new_token(16)
-    state = sign(stamped(f"{provider}:{nonce}"))
-    resp = RedirectResponse(url=oauth.authorize_url(provider, nonce), status_code=302)
+    nonce = runtime.new_token(16)
+    state = runtime.sign(runtime.stamped(f"{provider}:{nonce}"))
+    resp = RedirectResponse(url=runtime.authorize_url(provider, nonce), status_code=302)
     resp.set_cookie(
         OAUTH_STATE_COOKIE, state, max_age=OAUTH_STATE_TTL,
         httponly=True, secure=settings.COOKIE_SECURE, samesite="lax", path="/",
@@ -370,18 +405,19 @@ async def oauth_callback(
     provider: str, request: Request, code: str | None = None,
     state: str | None = None,
     persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+    runtime: AuthRuntime = Depends(identity_auth_runtime_dependency),
 ):
-    if not oauth.is_configured(provider):
+    if not runtime.is_provider_configured(provider):
         raise HTTPException(status_code=404, detail="Provider not configured.")
     cookie = request.cookies.get(OAUTH_STATE_COOKIE)
-    expected = unsign(cookie, max_age=OAUTH_STATE_TTL) if cookie else None
+    expected = runtime.unsign(cookie, max_age=OAUTH_STATE_TTL) if cookie else None
     # expected looks like "<provider>:<nonce>:<ts>"; match provider + the nonce echoed in `state`.
     if not code or not state or expected is None or not expected.startswith(f"{provider}:") \
             or expected.split(":")[1] != state:
         return RedirectResponse(url="/login?error=oauth", status_code=303)
 
     try:
-        identity = await oauth.exchange_code(provider, code)
+        identity = await runtime.exchange_code(provider, code)
     except Exception as e:
         logger.warning("OAuth exchange failed for %s: %s", provider, e)
         return RedirectResponse(url="/login?error=oauth", status_code=303)
@@ -392,5 +428,5 @@ async def oauth_callback(
 
     resp = RedirectResponse(url="/", status_code=303)
     resp.delete_cookie(OAUTH_STATE_COOKIE, path="/")
-    set_session_cookie(resp, session)
+    set_session_cookie(resp, session, runtime.new_token())
     return resp

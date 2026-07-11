@@ -19,6 +19,29 @@ class PostgresOperationalProjectionRepository:
     def __init__(self, pool):
         self._pool = pool
 
+    async def generic_activity(self, user_id, active_only, active, limit):
+        conditions, arguments = [], []
+        if user_id is not None:
+            arguments.append(user_id); conditions.append(f"j.user_id=${len(arguments)}")
+        if active_only:
+            arguments.append(list(active)); conditions.append(f"j.status=ANY(${len(arguments)}::text[])")
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        arguments.append(limit)
+        async with self._pool.acquire() as connection:
+            return await connection.fetch(
+                f"""
+                SELECT j.*,r.id AS current_run_id,
+                  r.plugin_version AS current_plugin_version
+                FROM jobs j
+                LEFT JOIN LATERAL (
+                  SELECT id,plugin_version FROM ai_execution_runs
+                  WHERE job_id=j.id ORDER BY created_at DESC LIMIT 1
+                ) r ON TRUE
+                {where}
+                ORDER BY j.created_at DESC LIMIT ${len(arguments)};
+                """, *arguments,
+            )
+
     async def import_activity(self, user_id, active_only, terminal, limit):
         conditions, arguments = [], []
         if user_id is not None:

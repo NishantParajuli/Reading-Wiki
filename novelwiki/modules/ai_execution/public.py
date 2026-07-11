@@ -17,13 +17,6 @@ class VisionGateway(Protocol):
     async def inspect(self, images: list[bytes], prompt: str) -> object: ...
 
 
-async def capability_for_user(user_id: int) -> dict:
-    """Compatibility owner API; Bootstrap replaces this with an injected port later."""
-    from .adapters.outbound.policy import capability_for_user as implementation
-
-    return await implementation(user_id)
-
-
 # Provider and dedicated-run primitives are owner APIs used by composition bridges.
 from .adapters.outbound.providers import (  # noqa: E402
     BudgetExhausted,

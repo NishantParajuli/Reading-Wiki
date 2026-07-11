@@ -2,10 +2,31 @@ import logging
 
 import typer
 
-from novelwiki.modules.acquisition.adapters.inbound.cli import app as acquisition_cli
-from novelwiki.modules.codex.adapters.inbound.cli import app as codex_cli
-from novelwiki.modules.translation.adapters.inbound.cli import app as translation_cli
+from novelwiki.modules.acquisition.adapters.inbound.cli import (
+    app as acquisition_cli,
+    configure_cli as configure_acquisition_cli,
+)
+from novelwiki.modules.codex.adapters.inbound.cli import (
+    app as codex_cli,
+    configure_commands as configure_codex_commands,
+)
+from novelwiki.modules.translation.adapters.inbound.cli import (
+    app as translation_cli,
+    configure_commands as configure_translation_commands,
+)
 from novelwiki.platform.cli import app as platform_cli
+from novelwiki.bootstrap.feature_cli import (
+    build_codex_commands,
+    build_translation_commands,
+)
+from novelwiki.bootstrap.acquisition_cli import (
+    build_acquisition_commands,
+    run_standalone_import_worker,
+)
+
+configure_acquisition_cli(build_acquisition_commands, run_standalone_import_worker)
+configure_codex_commands(build_codex_commands)
+configure_translation_commands(build_translation_commands)
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 

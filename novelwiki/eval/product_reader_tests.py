@@ -121,6 +121,25 @@ async def test_home_continue_reading_excludes_unreadable(db):
 
 
 @pytest.mark.asyncio
+async def test_home_rewrites_persisted_cover_url(db):
+    pool, reader, other = db["pool"], db["reader"], db["other"]
+    novel_id = await _mk_novel(
+        pool, owner_id=other["id"], visibility="public", title="Covered"
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE novels SET cover_url=$2 WHERE id=$1;",
+            novel_id, f"/assets/{novel_id}/cover.webp",
+        )
+    await _set_progress(pool, reader["id"], novel_id, 1, 1)
+
+    home = await prod.api_home(user=reader)
+
+    row = next(item for item in home["continue_reading"] if item["id"] == novel_id)
+    assert row["cover_url"] == f"/api/assets/novels/{novel_id}/cover.webp"
+
+
+@pytest.mark.asyncio
 async def test_home_continue_listening_needs_audio(db):
     pool, reader, other = db["pool"], db["reader"], db["other"]
     quiet = await _mk_novel(pool, owner_id=other["id"], title="Quiet")

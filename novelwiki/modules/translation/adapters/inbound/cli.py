@@ -4,9 +4,17 @@ from novelwiki.platform.cli_runtime import run_cli
 
 app = typer.Typer()
 
+_command_factory = None
+
+
+def configure_commands(factory) -> None:
+    global _command_factory
+    _command_factory = factory
+
 def _commands():
-    from novelwiki.bootstrap.feature_cli import build_translation_commands
-    return build_translation_commands()
+    if _command_factory is None:
+        raise RuntimeError("Translation CLI commands were not wired by the composition root")
+    return _command_factory()
 
 @app.command()
 def translate(
@@ -27,5 +35,4 @@ def translate(
         typer.echo("Translating raw chapters (on-demand glossary-consistent)...")
         typer.echo(typer.style(f"✔ Translated {count} chapters.", fg=typer.colors.GREEN, bold=True))
     run_cli(run())
-
 

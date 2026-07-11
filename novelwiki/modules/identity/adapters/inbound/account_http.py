@@ -5,14 +5,16 @@ import os
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from novelwiki.modules.identity.adapters.inbound.dependencies import current_user
+from novelwiki.modules.identity.adapters.inbound.dependencies import (
+    ai_capability_dependency,
+    avatar_storage_dependency,
+    current_user,
+)
 
 from novelwiki.modules.identity.adapters.inbound.presentation import self_user_with_capabilities
 from novelwiki.kernel.errors import Conflict, ValidationFailed
-from novelwiki.platform.config import settings
 
 from ...application import AccountService, QuotaService
-from ..outbound.avatars import AvatarFilesystem
 from ..principals import principal_from_user
 
 router = APIRouter()
@@ -47,6 +49,7 @@ async def api_update_me(
     payload: ProfileUpdate,
     user: dict = Depends(current_user),
     service: AccountService = Depends(account_service_dependency),
+    capability_for_user=Depends(ai_capability_dependency),
 ):
     """Update the signed-in account's profile (display name, bio, username) and synced
     reader prefs. `prefs` is shallow-merged into the existing JSON so a partial update
@@ -57,7 +60,7 @@ async def api_update_me(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Conflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return await self_user_with_capabilities(updated)
+    return await self_user_with_capabilities(updated, capability_for_user)
 
 
 @router.post("/me/avatar")
@@ -65,6 +68,7 @@ async def api_upload_avatar(
     file: UploadFile = File(...),
     user: dict = Depends(current_user),
     service: AccountService = Depends(account_service_dependency),
+    storage=Depends(avatar_storage_dependency),
 ):
     """Upload (replace) the account avatar. Stored under ASSET_DIR/_users/<id>/ and served
     by the narrowed public /assets/_users mount; the DB keeps the relative path."""
@@ -81,6 +85,6 @@ async def api_upload_avatar(
             raise HTTPException(status_code=413, detail="Avatar must be under 5 MB.")
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    relative = AvatarFilesystem(settings.ASSET_DIR).save(int(user["id"]), bytes(data), extension or "png")
+    relative = storage.save(int(user["id"]), bytes(data), extension or "png")
     await service.set_avatar(int(user["id"]), relative)
     return {"avatar_path": relative, "avatar_url": "/assets/" + relative}

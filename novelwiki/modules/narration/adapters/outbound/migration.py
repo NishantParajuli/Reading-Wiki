@@ -3,9 +3,6 @@ from __future__ import annotations
 import os
 
 from novelwiki.modules.identity.public import Principal
-from novelwiki.modules.narration.adapters.inbound import worker as tts_worker
-from novelwiki.modules.narration.adapters.outbound.chapter_text import resolve_chapter_text
-from novelwiki.modules.narration.adapters.outbound.coverage import shared_audio_coverage
 
 
 class ReadingChapterTextAdapter:
@@ -121,11 +118,14 @@ class PostgresNarrationQueries:
 
 
 class PostgresNarrationJobs:
+    def __init__(self, worker_runtime):
+        self._worker = worker_runtime
+
     async def find_audio(
         self, novel_id: int, chapter: float, voice: str,
         content_version: int, user_id: int | None,
     ) -> dict | None:
-        return await tts_worker.find_audio(
+        return await self._worker.find_audio(
             novel_id, chapter, voice, content_version, user_id
         )
 
@@ -133,21 +133,21 @@ class PostgresNarrationJobs:
         self, novel_id: int, chapter: float, voice: str,
         content_version: int, user_id: int | None,
     ) -> dict | None:
-        return await tts_worker.find_active_chapter_job(
+        return await self._worker.find_active_chapter_job(
             novel_id, chapter, voice, content_version, user_id, include_force=True,
         )
 
     async def find_active_book_job(self, novel_id: int, voice: str) -> dict | None:
-        return await tts_worker.find_active_book_job(novel_id, voice)
+        return await self._worker.find_active_book_job(novel_id, voice)
 
     def chapter_options(
         self, novel_id: int, chapter: float, voice: str,
         content_version: int, user_id: int | None, force: bool,
     ) -> dict:
-        options = tts_worker.chapter_job_options(
+        options = self._worker.chapter_job_options(
             chapter, content_version, user_id, force=force,
         )
-        options["dedupe_key"] = tts_worker.chapter_dedupe_key(
+        options["dedupe_key"] = self._worker.chapter_dedupe_key(
             novel_id, chapter, voice, content_version, user_id, force=force,
         )
         return options
@@ -155,25 +155,25 @@ class PostgresNarrationJobs:
     async def create_job(
         self, novel_id: int, user_id: int, scope: str, voice: str, options: dict
     ) -> int:
-        return await tts_worker.create_job(
+        return await self._worker.create_job(
             novel_id, user_id, scope, voice, options=options,
         )
 
     async def get_job(self, job_id: int) -> dict | None:
-        return await tts_worker.get_job(job_id)
+        return await self._worker.get_job(job_id)
 
     async def cancel_job(self, job_id: int) -> None:
-        await tts_worker.cancel_job(job_id)
+        await self._worker.cancel_job(job_id)
 
     async def lookup_for_reader(
         self, novel_id: int, chapter: float, voice: str, user_id: int
     ) -> dict | None:
-        return await tts_worker.lookup_for_reader(
+        return await self._worker.lookup_for_reader(
             novel_id, chapter, voice, {"id": user_id},
         )
 
     def absolute_audio_path(self, relative_path: str) -> str:
-        return tts_worker.audio_abs(relative_path)
+        return self._worker.audio_abs(relative_path)
 
 
 class NarrationSidecar:

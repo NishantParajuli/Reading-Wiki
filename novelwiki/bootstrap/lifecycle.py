@@ -106,7 +106,29 @@ def build_application_lifecycle() -> ApplicationLifecycle:
         await stop_worker()
 
     def start_tts_worker():
-        from novelwiki.modules.narration.adapters.inbound.worker import start_worker
+        from types import SimpleNamespace
+
+        from novelwiki.modules.identity.adapters.outbound import quota_compat
+        from novelwiki.modules.narration.adapters.inbound.worker import (
+            configure_worker_runtime,
+            start_worker,
+        )
+        from novelwiki.modules.narration.adapters.outbound import sidecar
+        from novelwiki.bootstrap.narration_worker import build_narration_worker_state
+        from novelwiki.bootstrap.reading_migration import build_reading_narration_gateway
+
+        async def resolve_chapter_text(novel_id, number, user):
+            gateway = await build_reading_narration_gateway()
+            return await gateway.resolve_narration_text(
+                novel_id, number, int(user["id"]) if isinstance(user, dict) else None
+            )
+
+        configure_worker_runtime(SimpleNamespace(
+            quota=quota_compat,
+            resolve_chapter_text=resolve_chapter_text,
+            tts_client=sidecar,
+            worker_state_factory=build_narration_worker_state,
+        ))
         start_worker()
 
     async def stop_tts_worker():
@@ -114,7 +136,23 @@ def build_application_lifecycle() -> ApplicationLifecycle:
         await stop_worker()
 
     def start_jobs_worker():
-        from novelwiki.modules.work.adapters.inbound.worker import start_worker
+        from types import SimpleNamespace
+
+        from novelwiki.bootstrap.work_worker import build_worker_state_service
+        from novelwiki.bootstrap.workers import build_api_worker_registry
+        from novelwiki.modules.work.adapters.inbound.worker import (
+            configure_worker_runtime,
+            start_worker,
+        )
+        from novelwiki.modules.work.adapters.outbound import postgres
+        from novelwiki.modules.work.adapters.outbound.claims import claim_next
+
+        configure_worker_runtime(SimpleNamespace(
+            claim_next=claim_next,
+            registry_factory=build_api_worker_registry,
+            service=postgres,
+            worker_state_factory=build_worker_state_service,
+        ))
         start_worker()
 
     async def stop_jobs_worker():

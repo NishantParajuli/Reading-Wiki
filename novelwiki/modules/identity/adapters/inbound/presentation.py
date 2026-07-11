@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 
 from novelwiki.platform.config import settings
 
@@ -53,10 +54,10 @@ def self_user(user: dict) -> dict:
     }
 
 
-async def self_user_with_capabilities(user: dict) -> dict:
-    # Compatibility until the AI capability projection is injected by Bootstrap.
-    from novelwiki.modules.ai_execution.public import capability_for_user
-
+async def self_user_with_capabilities(
+    user: dict,
+    capability_for_user: Callable[[int], Awaitable[dict]],
+) -> dict:
     result = self_user(user)
     result["ai_backends"] = await capability_for_user(int(user["id"]))
     return result

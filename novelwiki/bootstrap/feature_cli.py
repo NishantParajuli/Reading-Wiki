@@ -4,8 +4,11 @@ from __future__ import annotations
 
 def build_codex_commands():
     from novelwiki.modules.codex.application.commands import CodexCommands
-    from novelwiki.modules.codex.public import (
-        chunk_all_chapters, embed_missing_chunks, extract_all_chapters, get_bm25_manager,
+    from novelwiki.modules.codex.adapters.outbound.ingest.chunk import chunk_all_chapters
+    from novelwiki.modules.codex.adapters.outbound.ingest.embed import embed_missing_chunks
+    from novelwiki.modules.codex.adapters.outbound.ingest.extract import extract_all_chapters
+    from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import (
+        get_bm25_manager,
     )
     from novelwiki.bootstrap.cli_services import merge_codex_entities
 

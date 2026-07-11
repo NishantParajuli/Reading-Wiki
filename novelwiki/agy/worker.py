@@ -7,15 +7,24 @@ import logging
 import sys
 
 from novelwiki.modules.ai_execution.adapters.inbound import worker as _implementation
+from novelwiki.bootstrap.ai_execution_worker import build_agy_worker_runtime
+
+_implementation.configure_worker_runtime(build_agy_worker_runtime())
 
 
 async def main() -> None:
+    from novelwiki.bootstrap.ai_execution_worker import build_agy_catalog_access
+    from novelwiki.bootstrap.work_worker import build_worker_runtime
+    from novelwiki.modules.work.adapters.inbound.worker import configure_worker_runtime
     from novelwiki.platform.database import close_db_pool, init_db_pool
 
     logging.basicConfig(level=logging.INFO)
+    configure_worker_runtime(build_worker_runtime())
     await init_db_pool()
     try:
-        await _implementation.worker_loop()
+        await _implementation.worker_loop(
+            catalog_access=await build_agy_catalog_access()
+        )
     finally:
         await close_db_pool()
 

@@ -28,6 +28,10 @@ class ScannedPdfError(RuntimeError):
     pass
 
 
+class UnsafeSourceError(RuntimeError):
+    pass
+
+
 class AcquisitionCommands:
     def __init__(self, gateway: AcquisitionCommandGateway):
         self._gateway = gateway

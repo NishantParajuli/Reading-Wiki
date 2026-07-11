@@ -2,34 +2,12 @@
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
-from dataclasses import dataclass
 
-from fastapi import Request
-
-
-@dataclass(frozen=True)
-class RateLimit:
-    limit: int
-    window_seconds: int
-
-
-class RateLimitExceeded(Exception):
-    def __init__(self, retry_after: int):
-        super().__init__("rate limit exceeded")
-        self.retry_after = max(1, retry_after)
-
-
-def bucket_key(scope: str, value: str | None) -> str:
-    normalized = (value or "").strip().lower()
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    return f"{scope}:{digest}"
-
-
-def client_ip(request: Request) -> str:
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+from novelwiki.modules.identity.application.rate_limits import (
+    RateLimit,
+    RateLimitExceeded,
+    bucket_key,
+)
 
 
 def _retry_after(reset_at: dt.datetime) -> int:

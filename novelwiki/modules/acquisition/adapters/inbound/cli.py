@@ -9,10 +9,20 @@ from novelwiki.platform.cli_runtime import run_cli
 
 app = typer.Typer()
 
+_command_factory = None
+_standalone_worker = None
+
+
+def configure_cli(command_factory, standalone_worker) -> None:
+    global _command_factory, _standalone_worker
+    _command_factory = command_factory
+    _standalone_worker = standalone_worker
+
 
 def _commands():
-    from novelwiki.bootstrap.acquisition_cli import build_acquisition_commands
-    return build_acquisition_commands()
+    if _command_factory is None:
+        raise RuntimeError("Acquisition CLI commands were not wired by the composition root")
+    return _command_factory()
 
 
 @app.command()
@@ -33,8 +43,8 @@ def add_novel(
                 start_url=start_url, is_raw=is_raw, chapter_offset=chapter_offset,
             )
         except Exception as exc:
-            from novelwiki.modules.acquisition.adapters.outbound.scraper.safe_fetch import SafeFetchError
-            if not isinstance(exc, SafeFetchError):
+            from novelwiki.modules.acquisition.application.commands import UnsafeSourceError
+            if not isinstance(exc, UnsafeSourceError):
                 raise
             typer.secho(f"Unsafe source URL: {exc}", fg=typer.colors.RED)
             raise typer.Exit(1)
@@ -180,8 +190,9 @@ def import_series(
 def import_worker():
     """Runs the durable import worker as a standalone process (parse/OCR/commit jobs from the
     DB queue). Use this to split the worker off the web image; Ctrl-C stops it cleanly."""
-    from novelwiki.bootstrap.acquisition_cli import run_standalone_import_worker
+    if _standalone_worker is None:
+        raise RuntimeError("Acquisition standalone worker was not wired")
     try:
-        run_cli(run_standalone_import_worker(typer.echo))
+        run_cli(_standalone_worker(typer.echo))
     except KeyboardInterrupt:
         typer.echo("Stopped.")
