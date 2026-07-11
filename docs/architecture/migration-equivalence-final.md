@@ -26,8 +26,8 @@ and frontend route/module-endpoint inventories.
 
 ## Local release evidence
 
-- Backend with disposable PostgreSQL/pgvector: 511 passed.
-- Architecture/contracts/unit gate: 299 passed.
+- Backend with disposable PostgreSQL/pgvector: 513 passed.
+- Architecture/contracts/unit gate: 301 passed.
 - Python compilation: passed.
 - Contract snapshot verification: passed.
 - Frontend Vitest: 19 passed.

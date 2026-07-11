@@ -241,8 +241,6 @@
   "plugin_files": {
     "README.md": "25163a26818ec5a79d6e16c6ac487daffdb7ec82601fd06c94fad0ffbf5be4d2",
     "hooks.json": "991a2b8708cdf876eb2ad86c2dc6087a23ca894be996bf56be4c28b3990c211a",
-    "hooks/__pycache__/tool_gate.cpython-312.pyc": "0271a7f07398a59d552e50f75206ca2331260304f68104b563f44a1c59480070",
-    "hooks/__pycache__/validate_stop.cpython-312.pyc": "1ee59dab5db5ce1c77bbbec3bcd727e58012a0d57aba5ad348fa41370e0df3cb",
     "hooks/tool_gate.py": "8d5a268ecfdb0a8fe3dbbe362bb2cc04058676603f577d96a5851db6e6d710e6",
     "hooks/validate_stop.py": "ae7a30ca9fdb1daa463c7e51fe5e734ad9a6dd345b061065c8ef49672161b007",
     "plugin.json": "28787c9b572e654ec6a3ccb64148484b2679c40317e447b841a2f6f4bbd28ab8",

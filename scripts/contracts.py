@@ -73,10 +73,21 @@ def _contracts() -> dict[str, str]:
         command.name or command.callback.__name__.replace("_", "-")
         for command in cli_app.registered_commands
     ]
+    def render_help(args: list[str]) -> str:
+        # Typer passes terminal_width to Click, while Rich also consults COLUMNS
+        # directly when it creates its console. Pin both inputs.
+        return runner.invoke(
+            cli_app, args, color=False, terminal_width=80,
+            env={"COLUMNS": "80"},
+        ).stdout
+
     cli_help = {
-        "main": runner.invoke(cli_app, ["--help"], color=False).stdout,
+        # Rich otherwise inherits COLUMNS from the host terminal.  GitHub Actions
+        # and local shells commonly report different widths, which changes wrapping
+        # despite the command contract being identical.
+        "main": render_help(["--help"]),
         "commands": {
-            name: runner.invoke(cli_app, [name, "--help"], color=False).stdout
+            name: render_help([name, "--help"])
             for name in command_order
         },
         "order": command_order,
@@ -84,7 +95,10 @@ def _contracts() -> dict[str, str]:
     plugin_root = ROOT / "novelwiki" / "agy" / "plugin" / "novelwiki-ai"
     plugin_hashes = {
         str(path.relative_to(plugin_root)): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(plugin_root.rglob("*")) if path.is_file()
+        for path in sorted(plugin_root.rglob("*"))
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix not in {".pyc", ".pyo"}
     }
     agy_contracts = {
         "input_manifest_schema": InputManifest.model_json_schema(),
