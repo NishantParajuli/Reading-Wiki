@@ -34,3 +34,7 @@ data/agy-jobs/
 
 # Documentation
 README.md
+
+# Frontend build artifacts (dist is built in the node stage and copied in)
+novelwiki/frontend/node_modules/
+novelwiki/frontend/dist/

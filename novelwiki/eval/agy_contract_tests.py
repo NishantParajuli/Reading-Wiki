@@ -103,3 +103,41 @@ def test_plugin_stop_hook_requires_the_complete_output_manifest_contract(tmp_pat
     }
     manifest_path.write_text(json.dumps(complete))
     assert hook(str(tmp_path)) is None
+
+
+def test_plugin_stop_hook_enforces_codex_source_snapshot_identity(tmp_path):
+    (tmp_path / "input").mkdir()
+    (tmp_path / "output").mkdir()
+    expected_source_hash = "a" * 64
+    transport_file_hash = "b" * 64
+    (tmp_path / "input" / "manifest.json").write_text(json.dumps({
+        "run_id": "run-codex", "workload": "codex_extract", "chapter_ceiling": 2.0,
+    }))
+    (tmp_path / "input" / "schema.json").write_text(json.dumps({
+        "source_sha256": expected_source_hash,
+    }))
+    extraction_path = tmp_path / "output" / "extraction.json"
+    manifest_path = tmp_path / "output" / "manifest.json"
+
+    def write_output(chapter, source_hash):
+        content = json.dumps({"chapter": chapter, "source_sha256": source_hash}).encode()
+        extraction_path.write_bytes(content)
+        manifest_path.write_text(json.dumps({
+            "schema_version": "1.0", "run_id": "run-codex", "workload": "codex_extract",
+            "status": "complete", "artifacts": [{
+                "path": "extraction.json", "sha256": hashlib.sha256(content).hexdigest(),
+                "bytes": len(content), "media_type": "application/json",
+                "role": "codex_extraction",
+            }], "warnings": [], "completed_at": datetime.now(UTC).isoformat(),
+            "failure_reason": None,
+        }))
+
+    hook = runpy.run_path(str(PLUGIN_SOURCE / "hooks" / "validate_stop.py"))["validate"]
+    write_output(3.0, transport_file_hash)
+    assert "chapter_ceiling" in hook(str(tmp_path))
+    write_output(2.0, transport_file_hash)
+    error = hook(str(tmp_path))
+    assert "input/schema.json source_sha256" in error
+    assert "chapter.md artifact hash" in error
+    write_output(2.0, expected_source_hash)
+    assert hook(str(tmp_path)) is None

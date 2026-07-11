@@ -39,6 +39,7 @@ def validate(root):
         return "the final manifest failure_reason field is invalid"
     if manifest.get("status") != "complete" or not isinstance(manifest.get("artifacts"), list):
         return "the final manifest is not complete"
+    artifacts_by_role = {}
     for ref in manifest["artifacts"]:
         if not isinstance(ref, dict) or set(ref) != {"path", "sha256", "bytes", "media_type", "role"}:
             return "an artifact reference has missing or extra fields"
@@ -61,6 +62,27 @@ def validate(root):
             data = handle.read()
         if len(data) != ref.get("bytes") or hashlib.sha256(data).hexdigest() != ref.get("sha256"):
             return "a listed artifact size or hash is wrong"
+        artifacts_by_role.setdefault(ref["role"], []).append(path)
+    if input_manifest.get("workload") in {"codex_extract", "codex_verify"}:
+        extraction_paths = artifacts_by_role.get("codex_extraction", [])
+        if len(extraction_paths) != 1:
+            return "codex output must list exactly one codex_extraction artifact"
+        schema_path = os.path.join(root, "input", "schema.json")
+        if not os.path.isfile(schema_path) or os.path.islink(schema_path):
+            return "input/schema.json is missing or unsafe"
+        with open(schema_path, "r", encoding="utf-8") as handle:
+            schema = json.load(handle)
+        with open(extraction_paths[0], "r", encoding="utf-8") as handle:
+            extraction = json.load(handle)
+        if not isinstance(extraction, dict):
+            return "the codex extraction must be a JSON object"
+        if extraction.get("chapter") != input_manifest.get("chapter_ceiling"):
+            return "codex chapter must copy input/manifest.json chapter_ceiling exactly"
+        if extraction.get("source_sha256") != schema.get("source_sha256"):
+            return (
+                "codex source_sha256 must copy input/schema.json source_sha256 exactly; "
+                "do not use the chapter.md artifact hash from input/manifest.json"
+            )
     return None
 
 

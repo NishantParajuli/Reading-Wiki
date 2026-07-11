@@ -131,12 +131,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# The SPA is a precompiled Vite bundle served same-origin: no CDN scripts, no
+# eval (Babel Standalone is gone), fonts self-hosted. 'unsafe-inline' remains
+# only for the tiny theme-bootstrap script in index.html and inline styles.
 _CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; "
-    "script-src-elem 'self' 'unsafe-inline' https://unpkg.com; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "font-src 'self' data:; "
     "img-src 'self' data: https:; "
     "connect-src 'self'; "
     "object-src 'none'; "
@@ -253,25 +255,37 @@ try:
 except Exception as e:
     logger.warning(f"Could not mount public avatar assets folder: {e}")
 
-# Serve the UI static files (index.html at root).
+# Serve the built SPA (Vite output in frontend/dist).
 # IMPORTANT: a Mount at "/" matches every path, so it MUST be registered AFTER
 # the API router, /health, and /assets/_users, otherwise it shadows them.
 #
-# The SPA ships unbundled .jsx/.js/.css under stable filenames with no content
-# hashes, and index.html references them without a ?v= query. Under the default
-# StaticFiles headers (ETag/Last-Modified but no Cache-Control) browsers apply
-# heuristic caching and may keep a stale api.js across a deploy while loading a
-# fresh app.jsx — e.g. an old api.js without `auth` against an app.jsx that calls
-# window.API.auth.me(), which throws and blanks the page. `no-cache` keeps the
-# files cacheable but forces an ETag revalidation on every load: unchanged files
-# still 304 (cheap), and a redeploy is picked up immediately.
-class RevalidatingStaticFiles(StaticFiles):
-    def file_response(self, *args, **kwargs):
-        response = super().file_response(*args, **kwargs)
-        response.headers["Cache-Control"] = "no-cache"
+# Cache policy: Vite emits content-hashed filenames under /assets/, so those are
+# immutable (max-age=1y); index.html (and the handful of unhashed public files:
+# favicon, manifest) revalidate on every load so a deploy is picked up
+# immediately. Unknown extension-less paths fall back to index.html so
+# BrowserRouter deep links (/n/12/read/512) survive a hard refresh.
+class SpaStaticFiles(StaticFiles):
+    def file_response(self, full_path, *args, **kwargs):
+        response = super().file_response(full_path, *args, **kwargs)
+        if "/assets/" in str(full_path).replace("\\", "/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
+    async def get_response(self, path: str, scope):
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as e:
+            # SPA fallback: route-shaped paths (no file extension) get index.html;
+            # genuinely missing files still 404.
+            last = path.rsplit("/", 1)[-1]
+            if e.status_code == 404 and "." not in last:
+                return await super().get_response("index.html", scope)
+            raise
+
 try:
-    app.mount("/", RevalidatingStaticFiles(directory="novelwiki/frontend", html=True), name="frontend")
+    app.mount("/", SpaStaticFiles(directory="novelwiki/frontend/dist", html=True), name="frontend")
 except Exception as e:
-    logger.warning(f"Could not mount static frontend folder: {e}")
+    logger.warning(f"Could not mount static frontend folder (run `npm run build` in novelwiki/frontend): {e}")

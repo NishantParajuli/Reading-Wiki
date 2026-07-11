@@ -237,7 +237,12 @@ async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source
                      workspace_relpath=workspace_relpath(root), started_at=datetime.now(UTC))
     try:
         result = await run_agy(
-            root, prompt="Run novelwiki-codex-verify for input/manifest.json. Return a corrected complete extraction and summary with only supplied chunk provenance; write manifest.json last.",
+            root, prompt=(
+                "Run novelwiki-codex-verify for input/manifest.json. Copy chapter from "
+                "chapter_ceiling and source_sha256 exactly from input/schema.json (never use "
+                "the chapter.md artifact hash). Return a corrected complete extraction and "
+                "summary with only supplied chunk provenance; write manifest.json last."
+            ),
             model=settings.AGY_MODEL_CODEX,
             cancel_check=lambda: service.is_canceled(int(job["id"])),
             on_spawn=lambda pgid, started: update_run(run_id, process_group_id=pgid, process_started_at=started),
@@ -400,7 +405,12 @@ async def _extract_chapter(job: dict, chapter_number: float, preflight: Prefligh
     try:
         result = await run_agy(
             root,
-            prompt="Run novelwiki-codex-extract for input/manifest.json. Enforce the chapter ceiling and supplied chunk provenance. Write only contracted output and manifest.json last.",
+            prompt=(
+                "Run novelwiki-codex-extract for input/manifest.json. Copy chapter from "
+                "chapter_ceiling and source_sha256 exactly from input/schema.json (never use "
+                "the chapter.md artifact hash). Enforce supplied chunk provenance. Write only "
+                "contracted output and manifest.json last."
+            ),
             model=settings.AGY_MODEL_CODEX,
             cancel_check=lambda: service.is_canceled(int(job["id"])),
             on_spawn=lambda pgid, started: update_run(run_id, process_group_id=pgid, process_started_at=started),

@@ -157,29 +157,29 @@ async def test_discover_filters(db):
         await conn.execute("UPDATE sources SET last_scraped_at = now() WHERE novel_id = $1;", en_codex)
 
     # Baseline: all three public novels, never the private one.
-    base = await routes.api_discover(user=reader)
+    base = (await routes.api_discover(user=reader))["items"]
     base_ids = {n["id"] for n in base}
     assert {en_codex, ja_raw, tagged} <= base_ids
     assert private_other not in base_ids
 
     # Language filter.
-    ja = await routes.api_discover(user=reader, language="ja")
+    ja = (await routes.api_discover(user=reader, language="ja"))["items"]
     assert {n["id"] for n in ja} == {ja_raw}
 
     # has_codex filter.
-    codex = await routes.api_discover(user=reader, has_codex=True)
+    codex = (await routes.api_discover(user=reader, has_codex=True))["items"]
     assert {n["id"] for n in codex} == {en_codex}
 
     # Tag filter.
-    fant = await routes.api_discover(user=reader, tag="fantasy")
+    fant = (await routes.api_discover(user=reader, tag="fantasy"))["items"]
     assert {n["id"] for n in fant} == {tagged}
 
     # Translation filter: 'raws' selects raw-only sources.
-    raws = await routes.api_discover(user=reader, translation="raws")
+    raws = (await routes.api_discover(user=reader, translation="raws"))["items"]
     assert {n["id"] for n in raws} == {ja_raw}
 
     # Freshness filter: only novels with a recently scraped source.
-    fresh = await routes.api_discover(user=reader, freshness="fresh_7d")
+    fresh = (await routes.api_discover(user=reader, freshness="fresh_7d"))["items"]
     assert {n["id"] for n in fresh} == {en_codex}
 
     # Provenance-ish fields are present.
@@ -202,7 +202,7 @@ async def test_discover_has_audio_requires_current_shared_audio(db):
             "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
             "VALUES ($1, 1, 'narrator', 1, 'old.opus', NULL);", stale)
 
-    audio = await routes.api_discover(user=reader, has_audio=True)
+    audio = (await routes.api_discover(user=reader, has_audio=True))["items"]
     ids = {n["id"] for n in audio}
     assert current in ids
     assert stale not in ids and quiet not in ids

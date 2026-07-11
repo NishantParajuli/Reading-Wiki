@@ -242,12 +242,16 @@ async def api_home(user: dict = Depends(current_user)):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         # Continue reading: novels the reader has started, that they can still read. Each row
-        # carries whether shared narration audio exists so the UI can also offer "continue listening".
+        # carries whether shared narration audio exists so the UI can also offer "continue listening",
+        # plus the resume chapter's title, when they last read, and how many chapters arrived since.
         cont_rows = await conn.fetch(
             """
-            SELECT n.id, n.title, n.cover_url, n.visibility, n.owner_id,
+            SELECT n.id, n.title, n.author, n.cover_url, n.visibility, n.owner_id,
+                   le.shelf AS shelf,
                    p.last_chapter, p.max_chapter_read, p.scroll_pct, p.updated_at,
                    (SELECT MAX(number) FROM chapters c WHERE c.novel_id = n.id) AS max_chapter,
+                   (SELECT c.title FROM chapters c
+                     WHERE c.novel_id = n.id AND c.number = p.last_chapter LIMIT 1) AS resume_chapter_title,
                    (SELECT COUNT(DISTINCT a.chapter)
                       FROM chapter_audio a
                       JOIN chapters c
@@ -259,6 +263,7 @@ async def api_home(user: dict = Depends(current_user)):
                        AND (c.kind IS NULL OR c.kind = 'chapter')) AS audio_chapters
             FROM reading_progress p
             JOIN novels n ON n.id = p.novel_id
+            LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
             WHERE p.user_id = $1
               AND p.last_chapter IS NOT NULL
               AND (n.visibility IN ('global','public') OR n.owner_id = $1 OR $2)
@@ -268,12 +273,42 @@ async def api_home(user: dict = Depends(current_user)):
             user["id"], admin,
         )
 
+        # Library novels whose source grew past the reader's progress ("New for you").
+        updated_rows = await conn.fetch(
+            """
+            SELECT n.id, n.title, n.author, n.cover_url,
+                   p.max_chapter_read,
+                   (SELECT MAX(number) FROM chapters c WHERE c.novel_id = n.id) AS max_chapter,
+                   (SELECT COUNT(*) FROM chapters c
+                     WHERE c.novel_id = n.id AND c.number > p.max_chapter_read
+                       AND (c.kind IS NULL OR c.kind = 'chapter')) AS new_chapters,
+                   (SELECT MAX(s.last_scraped_at) FROM sources s WHERE s.novel_id = n.id) AS source_updated_at
+            FROM reading_progress p
+            JOIN novels n ON n.id = p.novel_id
+            LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
+            WHERE p.user_id = $1
+              AND p.max_chapter_read IS NOT NULL
+              AND (le.id IS NOT NULL OR n.owner_id = $1)
+              AND (n.visibility IN ('global','public') OR n.owner_id = $1 OR $2)
+              AND EXISTS (SELECT 1 FROM chapters c
+                           WHERE c.novel_id = n.id AND c.number > p.max_chapter_read)
+            ORDER BY source_updated_at DESC NULLS LAST, n.id DESC
+            LIMIT 8;
+            """,
+            user["id"], admin,
+        )
+
         # Newest shared novels the reader doesn't already own (a lightweight discover teaser).
         newest_rows = await conn.fetch(
             """
-            SELECT n.id, n.title, n.author, n.cover_url, n.visibility,
+            SELECT n.id, n.title, n.author, n.cover_url, n.visibility, n.codex_enabled,
                    u.username AS owner_username,
-                   (SELECT COUNT(*) FROM chapters c WHERE c.novel_id = n.id) AS chapter_count
+                   (SELECT COUNT(*) FROM chapters c WHERE c.novel_id = n.id) AS chapter_count,
+                   EXISTS (SELECT 1 FROM chapter_audio a
+                            JOIN chapters c ON c.novel_id = a.novel_id
+                             AND c.number = a.chapter AND c.content_version = a.content_version
+                           WHERE a.novel_id = n.id AND a.user_id IS NULL
+                             AND (c.kind IS NULL OR c.kind = 'chapter')) AS has_audio
             FROM novels n
             LEFT JOIN users u ON u.id = n.owner_id
             WHERE n.visibility IN ('global','public')
@@ -290,20 +325,43 @@ async def api_home(user: dict = Depends(current_user)):
         pct = 0
         if max_ch and max_ch > 0 and read is not None:
             pct = round(min(100.0, (read / max_ch) * 100))
+        new_chapters = 0
+        if max_ch is not None and read is not None:
+            new_chapters = max(0, int(round(max_ch - read)))
         return {
             "id": int(r["id"]),
             "title": r["title"],
+            "author": r["author"],
+            "shelf": r["shelf"],
             "cover_url": _rewrite(r["cover_url"], int(r["id"])),
             "visibility": r["visibility"],
             "last_chapter": float(r["last_chapter"]) if r["last_chapter"] is not None else None,
+            "resume_chapter_title": r["resume_chapter_title"],
+            "last_read_at": r["updated_at"].isoformat() if r["updated_at"] else None,
             "max_chapter_read": read,
             "scroll_pct": float(r["scroll_pct"]) if r["scroll_pct"] is not None else 0,
             "max_chapter": max_ch,
             "pct_read": pct,
+            "new_chapters": new_chapters,
             "audio_chapters": int(r["audio_chapters"] or 0),
         }
 
     continue_reading = [_cont(r) for r in cont_rows]
+
+    updated_in_library = [
+        {
+            "id": int(r["id"]),
+            "title": r["title"],
+            "author": r["author"],
+            "cover_url": _rewrite(r["cover_url"], int(r["id"])),
+            "max_chapter_read": float(r["max_chapter_read"]) if r["max_chapter_read"] is not None else None,
+            "max_chapter": float(r["max_chapter"]) if r["max_chapter"] is not None else None,
+            "new_chapters": int(r["new_chapters"] or 0),
+            "source_updated_at": r["source_updated_at"].isoformat() if r["source_updated_at"] else None,
+        }
+        for r in updated_rows
+        if int(r["new_chapters"] or 0) > 0
+    ]
     # "Continue listening" is the subset with shared narration available — honest given we don't
     # track a separate audio playback position, but we do know where they're reading and what's narrated.
     continue_listening = [c for c in continue_reading if c["audio_chapters"] > 0]
@@ -314,13 +372,15 @@ async def api_home(user: dict = Depends(current_user)):
     newest = [
         {"id": int(r["id"]), "title": r["title"], "author": r["author"],
          "cover_url": _rewrite(r["cover_url"], int(r["id"])), "visibility": r["visibility"],
-         "owner_username": r["owner_username"], "chapter_count": int(r["chapter_count"] or 0)}
+         "owner_username": r["owner_username"], "chapter_count": int(r["chapter_count"] or 0),
+         "has_codex": bool(r["codex_enabled"]), "has_audio": bool(r["has_audio"])}
         for r in newest_rows
     ]
 
     return {
         "continue_reading": continue_reading,
         "continue_listening": continue_listening,
+        "updated_in_library": updated_in_library,
         "active_jobs": activity,
         "recent_imports": recent_imports,
         "newest": newest,

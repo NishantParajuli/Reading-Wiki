@@ -1,0 +1,13 @@
+{
+  "name": "Tideglass",
+  "short_name": "Tideglass",
+  "description": "Your novels — translated, narrated, spoiler-safe.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f1e8",
+  "theme_color": "#f5f1e8",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

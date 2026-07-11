@@ -1,3 +1,11 @@
+# --- Stage 0: Build the frontend bundle ---
+FROM node:20-slim AS frontend
+WORKDIR /fe
+COPY novelwiki/frontend/package.json novelwiki/frontend/package-lock.json ./
+RUN npm ci
+COPY novelwiki/frontend/ ./
+RUN npm run build
+
 # --- Stage 1: Build the virtual environment ---
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
@@ -35,6 +43,9 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/novelwiki /app/novelwiki
 COPY --from=builder --chown=app:app /app/main.py /app/main.py
 COPY --from=builder --chown=app:app /app/pyproject.toml /app/pyproject.toml
+
+# The compiled SPA replaces whatever source tree was copied above
+COPY --from=frontend --chown=app:app /fe/dist /app/novelwiki/frontend/dist
 
 # Create the data directory for BM25 indexes and scraped data
 RUN mkdir -p /app/data && chown -R app:app /app/data

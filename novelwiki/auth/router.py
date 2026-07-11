@@ -102,7 +102,7 @@ def _verify_link(token: str) -> str:
 
 
 def _reset_link(token: str) -> str:
-    return f"{settings.PUBLIC_BASE_URL}/#/reset?token={token}"
+    return f"{settings.PUBLIC_BASE_URL}/reset?token={token}"
 
 
 def _limit(limit: int, window_seconds: int) -> rate_limit.RateLimit:
@@ -293,7 +293,7 @@ async def verify_email(token: str):
             """,
             th,
         )
-    dest = f"/#/verify?token={token}" if valid else "/#/verify-failed"
+    dest = f"/verify?token={token}" if valid else "/verify-failed"
     return RedirectResponse(url=dest, status_code=303)
 
 
@@ -396,13 +396,13 @@ async def oauth_callback(provider: str, request: Request, code: str | None = Non
     # expected looks like "<provider>:<nonce>:<ts>"; match provider + the nonce echoed in `state`.
     if not code or not state or expected is None or not expected.startswith(f"{provider}:") \
             or expected.split(":")[1] != state:
-        return RedirectResponse(url="/#/login?error=oauth", status_code=303)
+        return RedirectResponse(url="/login?error=oauth", status_code=303)
 
     try:
         identity = await oauth.exchange_code(provider, code)
     except Exception as e:
         logger.warning("OAuth exchange failed for %s: %s", provider, e)
-        return RedirectResponse(url="/#/login?error=oauth", status_code=303)
+        return RedirectResponse(url="/login?error=oauth", status_code=303)
 
     pool = await get_db_pool()
     async with pool.acquire() as conn:

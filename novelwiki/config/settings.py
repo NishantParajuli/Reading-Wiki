@@ -170,8 +170,8 @@ class Settings(BaseSettings):
     AGY_SUCCESS_RETENTION_HOURS: int = 24
     AGY_FAILURE_RETENTION_HOURS: int = 168
     AGY_FALLBACK_TO_API_DEFAULT: bool = False
-    AGY_PLUGIN_VERSION: str = "1.0.1"
-    AGY_PLUGIN_SHA256: str = "150a6f9174bcda5a45a71e46ceb509e2210379be6dcfa65485173989f4111953"
+    AGY_PLUGIN_VERSION: str = "1.0.2"
+    AGY_PLUGIN_SHA256: str = "a37107520e1cf6d9c8cc6957712ccc950bf2f3ff94becd45b2f81211b73296bb"
     # Worker health is considered stale after this interval for /auth/me and admin UI.
     AGY_WORKER_HEALTH_TTL_SECONDS: int = 90
 

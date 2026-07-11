@@ -1,0 +1,126 @@
+/* ============================================================
+   Tideglass design tokens v2 — warm paper, honey accent, literary serif.
+   Every visual decision in the app derives from this file.
+   ============================================================ */
+
+:root {
+  /* type */
+  --serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --sans: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+  --mono: "Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* modular type scale — the only allowed font sizes */
+  --text-xs: 0.75rem;    /* 12 — chips, eyebrows */
+  --text-sm: 0.8125rem;  /* 13 — secondary meta */
+  --text-md: 0.9375rem;  /* 15 — body UI */
+  --text-lg: 1.0625rem;  /* 17 — card titles */
+  --text-xl: 1.375rem;   /* 22 — section headings (serif) */
+  --text-2xl: 1.75rem;   /* 28 — page titles (serif) */
+  --text-3xl: clamp(2rem, 4vw, 2.625rem); /* hero (serif) */
+
+  /* accent — honey by default; hue is a real user setting (Account → Appearance) */
+  --accent-h: 64;
+  --accent: oklch(0.74 0.13 var(--accent-h));
+  --accent-soft: oklch(0.74 0.13 var(--accent-h) / 0.14);
+  --accent-ink: oklch(0.45 0.12 var(--accent-h));
+  --on-accent: oklch(0.99 0.01 90);
+
+  /* status — complete set (light values; dark overrides below) */
+  --ok: oklch(0.62 0.11 155);
+  --ok-soft: oklch(0.72 0.09 155 / 0.16);
+  --warn: oklch(0.62 0.13 75);
+  --warn-soft: oklch(0.78 0.12 75 / 0.18);
+  --danger: oklch(0.55 0.16 25);
+  --danger-soft: oklch(0.62 0.15 25 / 0.14);
+  --info: oklch(0.56 0.1 250);
+  --info-soft: oklch(0.65 0.09 250 / 0.14);
+
+  /* sage stays an alias of ok for the codex "revealed / safe" semantics */
+  --sage: var(--ok);
+  --sage-soft: var(--ok-soft);
+
+  /* spacing */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
+
+  /* radius */
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 24px;
+  --radius-full: 999px;
+
+  /* elevation */
+  --shadow-1: 0 1px 2px oklch(0.3 0.03 70 / 0.06), 0 2px 8px oklch(0.3 0.03 70 / 0.05);
+  --shadow-2: 0 4px 14px oklch(0.3 0.03 70 / 0.09), 0 12px 36px oklch(0.3 0.03 70 / 0.08);
+  --shadow-pop: 0 12px 40px oklch(0.25 0.03 70 / 0.18);
+  --shadow-inset: inset 0 1px 3px oklch(0.3 0.03 70 / 0.12);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.22, 0.8, 0.3, 1);
+  --dur-1: 120ms;  /* hovers, presses */
+  --dur-2: 200ms;  /* popovers, tabs */
+  --dur-3: 320ms;  /* drawers, modals, page fades */
+
+  /* focus ring */
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+
+  --maxw: 1120px;
+  --sidebar-w: 76px;
+  --sidebar-w-open: 232px;
+}
+
+/* ---- light (warm paper) ---- */
+[data-theme="light"] {
+  --bg: oklch(0.968 0.012 84);
+  --bg-2: oklch(0.945 0.014 82);
+  --surface: oklch(0.995 0.006 86);
+  --surface-2: oklch(0.978 0.009 84);
+  --ink: oklch(0.285 0.022 60);
+  --ink-2: oklch(0.44 0.022 64);
+  --muted: oklch(0.55 0.02 68);
+  --faint: oklch(0.7 0.014 72);
+  --border: oklch(0.9 0.015 80);
+  --border-2: oklch(0.85 0.018 78);
+  --redact: oklch(0.88 0.015 80);
+  color-scheme: light;
+}
+
+/* ---- dark (warm night) ---- */
+[data-theme="dark"] {
+  --bg: oklch(0.195 0.012 62);
+  --bg-2: oklch(0.165 0.012 62);
+  --surface: oklch(0.238 0.014 62);
+  --surface-2: oklch(0.272 0.015 63);
+  --ink: oklch(0.93 0.012 84);
+  --ink-2: oklch(0.8 0.014 80);
+  --muted: oklch(0.7 0.016 76);
+  --faint: oklch(0.52 0.016 70);
+  --border: oklch(0.32 0.015 66);
+  --border-2: oklch(0.4 0.018 68);
+  --redact: oklch(0.34 0.014 66);
+  --accent: oklch(0.8 0.12 var(--accent-h));
+  --accent-soft: oklch(0.8 0.12 var(--accent-h) / 0.18);
+  --accent-ink: oklch(0.84 0.11 var(--accent-h));
+  --on-accent: oklch(0.2 0.02 70);
+  --ok: oklch(0.75 0.1 155);
+  --ok-soft: oklch(0.75 0.1 155 / 0.2);
+  --warn: oklch(0.78 0.12 75);
+  --warn-soft: oklch(0.78 0.12 75 / 0.2);
+  --danger: oklch(0.7 0.15 25);
+  --danger-soft: oklch(0.7 0.15 25 / 0.18);
+  --info: oklch(0.72 0.09 250);
+  --info-soft: oklch(0.72 0.09 250 / 0.18);
+  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.2), 0 2px 10px oklch(0 0 0 / 0.22);
+  --shadow-2: 0 6px 20px oklch(0 0 0 / 0.3), 0 18px 48px oklch(0 0 0 / 0.32);
+  --shadow-pop: 0 16px 50px oklch(0 0 0 / 0.5);
+  --shadow-inset: inset 0 1px 3px oklch(0 0 0 / 0.35);
+  color-scheme: dark;
+}
+
+/* entity-type hues (codex) */
+.t-character { --tc: oklch(0.74 0.12 64); }
+.t-location  { --tc: oklch(0.72 0.09 195); }
+.t-faction   { --tc: oklch(0.7 0.11 25); }
+.t-item      { --tc: oklch(0.66 0.13 300); }
+.t-concept   { --tc: oklch(0.66 0.11 250); }
+.t-organization { --tc: oklch(0.7 0.1 140); }

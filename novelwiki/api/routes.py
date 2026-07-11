@@ -279,15 +279,16 @@ async def api_list_novels(user: dict = Depends(current_user)):
                    n.status_tags AS status_tags,
                    COUNT(c.number) AS chapter_count,
                    MIN(c.number) AS min_chapter, MAX(c.number) AS max_chapter,
-                   p.last_chapter, p.max_chapter_read,
+                   p.last_chapter, p.max_chapter_read, p.updated_at AS last_read_at,
                    (SELECT bool_or(s.is_raw)     FROM sources s WHERE s.novel_id = n.id) AS has_raw,
-                   (SELECT bool_or(NOT s.is_raw)  FROM sources s WHERE s.novel_id = n.id) AS has_eng
+                   (SELECT bool_or(NOT s.is_raw)  FROM sources s WHERE s.novel_id = n.id) AS has_eng,
+                   (SELECT MAX(s.last_scraped_at) FROM sources s WHERE s.novel_id = n.id) AS source_updated_at
             FROM novels n
             LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
             LEFT JOIN reading_progress p ON p.novel_id = n.id AND p.user_id = $1
             LEFT JOIN chapters c ON c.novel_id = n.id
             WHERE le.id IS NOT NULL OR n.owner_id = $1
-            GROUP BY n.id, le.shelf, p.last_chapter, p.max_chapter_read
+            GROUP BY n.id, le.shelf, p.last_chapter, p.max_chapter_read, p.updated_at
             ORDER BY n.updated_at DESC NULLS LAST, n.id DESC;
             """,
             user["id"],
@@ -311,6 +312,13 @@ async def api_list_novels(user: dict = Depends(current_user)):
             "max_chapter": float(r["max_chapter"]) if r["max_chapter"] is not None else None,
             "last_chapter": float(r["last_chapter"]) if r["last_chapter"] is not None else None,
             "max_chapter_read": float(r["max_chapter_read"]) if r["max_chapter_read"] is not None else None,
+            # Sort keys for the Library ("Recently read" / "Recently updated") + "n new" chips.
+            "last_read_at": r["last_read_at"].isoformat() if r["last_read_at"] else None,
+            "source_updated_at": r["source_updated_at"].isoformat() if r["source_updated_at"] else None,
+            "new_chapters": (
+                max(0, int(round(float(r["max_chapter"]) - float(r["max_chapter_read"]))))
+                if r["max_chapter"] is not None and r["max_chapter_read"] is not None else 0
+            ),
         }
         for r in rows
     ]
@@ -589,11 +597,12 @@ async def api_discover(user: dict = Depends(current_user), q: str | None = None,
                        language: str | None = None, tag: str | None = None,
                        translation: str | None = None, has_codex: bool | None = None,
                        has_audio: bool | None = None, freshness: str | None = None,
-                       sort: str = "recent"):
+                       sort: str = "recent", offset: int = 0, limit: int = 60):
     """Browse the shared library — Global + Public novels the caller hasn't added yet — with
     optional filters. `translation` is the derived translation_type (translated|raws|raws+translated);
     `tag` matches any of a novel's owner-curated status tags, and `freshness` is fresh_7d |
-    fresh_30d | stale_30d | never_scraped. `sort` is recent | fresh | title."""
+    fresh_30d | stale_30d | never_scraped. `sort` is recent | fresh | title. Paginated via
+    offset/limit (max 100); returns ``{items, total, offset, limit}``."""
     # Reusable per-novel derivation subqueries (kept out of the GROUP BY, evaluated per row).
     has_raw_sq = "EXISTS (SELECT 1 FROM sources s WHERE s.novel_id = n.id AND s.is_raw)"
     has_eng_sq = "EXISTS (SELECT 1 FROM sources s WHERE s.novel_id = n.id AND NOT s.is_raw)"
@@ -648,24 +657,33 @@ async def api_discover(user: dict = Depends(current_user), q: str | None = None,
         "recent": "(n.visibility = 'global') DESC, n.updated_at DESC NULLS LAST, n.id DESC",
     }.get(sort, "(n.visibility = 'global') DESC, n.updated_at DESC NULLS LAST, n.id DESC")
 
+    offset = max(0, int(offset))
+    limit = max(1, min(int(limit), 100))
+    args.append(limit)
+    limit_p = f"${len(args)}"
+    args.append(offset)
+    offset_p = f"${len(args)}"
+
     sql = f"""
         SELECT n.id, n.title, n.author, n.cover_url, n.description, n.visibility,
                n.original_language, n.codex_enabled, n.status_tags,
                u.username AS owner_username,
                (SELECT COUNT(*) FROM chapters c WHERE c.novel_id = n.id) AS chapter_count,
                {has_raw_sq} AS has_raw, {has_eng_sq} AS has_eng, {has_audio_sq} AS has_audio,
-               {freshness_sq} AS last_scraped_at
+               {freshness_sq} AS last_scraped_at,
+               COUNT(*) OVER () AS total_count
         FROM novels n
         LEFT JOIN users u ON u.id = n.owner_id
         LEFT JOIN library_entries le ON le.novel_id = n.id AND le.user_id = $1
         WHERE {' AND '.join(conds)}
         ORDER BY {order}
-        LIMIT 200;
+        LIMIT {limit_p} OFFSET {offset_p};
     """
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, *args)
-    return [
+    total = int(rows[0]["total_count"]) if rows else 0
+    items = [
         {"id": int(r["id"]), "title": r["title"], "author": r["author"],
          "cover_url": _rewrite_asset_url(r["cover_url"], int(r["id"])),
          "description": r["description"], "visibility": r["visibility"], "owner_username": r["owner_username"],
@@ -676,6 +694,7 @@ async def api_discover(user: dict = Depends(current_user), q: str | None = None,
          "chapter_count": int(r["chapter_count"] or 0)}
         for r in rows
     ]
+    return {"items": items, "total": total, "offset": offset, "limit": limit}
 
 
 @router.post("/novels/{novel_id}/library")
@@ -955,7 +974,7 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT c.number, c.title, c.content, c.raw_html, c.content_version,
+            SELECT c.number, c.title, c.content, c.raw_html, c.content_version, c.word_count,
                    (c.original_text IS NOT NULL) AS has_original,
                    c.language, c.is_translated, c.translation_status,
                    s.adapter, COALESCE(s.is_raw, FALSE) AS source_is_raw
@@ -966,14 +985,19 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
         )
         if not row:
             raise HTTPException(status_code=404, detail="Chapter not found.")
-        prev_num = await conn.fetchval(
-            "SELECT number FROM chapters WHERE novel_id = $1 AND number < $2 ORDER BY number DESC LIMIT 1;",
+        prev_row = await conn.fetchrow(
+            "SELECT number, title FROM chapters WHERE novel_id = $1 AND number < $2 ORDER BY number DESC LIMIT 1;",
             novel_id, number,
         )
-        next_num = await conn.fetchval(
-            "SELECT number FROM chapters WHERE novel_id = $1 AND number > $2 ORDER BY number ASC LIMIT 1;",
+        # Adjacent titles + whether the next chapter is still raw feed the reader's
+        # end-of-chapter card ("Next: Chapter 513 — Title" / "Translate & continue").
+        next_row = await conn.fetchrow(
+            "SELECT number, title, (content IS NULL AND original_text IS NOT NULL) AS is_raw "
+            "FROM chapters WHERE novel_id = $1 AND number > $2 ORDER BY number ASC LIMIT 1;",
             novel_id, number,
         )
+        prev_num = prev_row["number"] if prev_row else None
+        next_num = next_row["number"] if next_row else None
         overlay = None
         if active_user is not None:
             overlay = await conn.fetchrow(
@@ -1040,8 +1064,12 @@ async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTask
         "language": row["language"],
         "is_translated": is_translated,
         "translation_status": status,
+        "word_count": int(row["word_count"]) if row["word_count"] is not None else None,
         "prev": float(prev_num) if prev_num is not None else None,
         "next": float(next_num) if next_num is not None else None,
+        "prev_title": prev_row["title"] if prev_row else None,
+        "next_title": next_row["title"] if next_row else None,
+        "next_is_raw": bool(next_row["is_raw"]) if next_row else False,
         # Overlay / contribute-back context for the reader's editor + conflict UI.
         "content_version": base_version,
         "has_original": bool(row["has_original"]),

@@ -225,7 +225,7 @@ async def test_verify_get_does_not_consume_token_and_post_consumes_once(auth_db)
         )
 
     assert preview.status_code == 303
-    assert preview.headers["location"] == f"/#/verify?token={raw_token}"
+    assert preview.headers["location"] == f"/verify?token={raw_token}"
     assert after_get["email_verified"] is False
     assert after_get["used_at"] is None
 
