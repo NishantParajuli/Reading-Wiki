@@ -1,0 +1,597 @@
+[
+  {
+    "method": "GET",
+    "name": "api_activity",
+    "path": "/api/activity"
+  },
+  {
+    "method": "GET",
+    "name": "api_adapters",
+    "path": "/api/adapters"
+  },
+  {
+    "method": "GET",
+    "name": "admin_agy_health",
+    "path": "/api/admin/ai/agy/health"
+  },
+  {
+    "method": "POST",
+    "name": "admin_retry_waiting_agy",
+    "path": "/api/admin/ai/agy/retry-waiting"
+  },
+  {
+    "method": "POST",
+    "name": "admin_agy_smoke_test",
+    "path": "/api/admin/ai/agy/smoke-test"
+  },
+  {
+    "method": "GET",
+    "name": "admin_global_novels",
+    "path": "/api/admin/global-novels"
+  },
+  {
+    "method": "GET",
+    "name": "admin_list_novels",
+    "path": "/api/admin/novels"
+  },
+  {
+    "method": "GET",
+    "name": "admin_usage",
+    "path": "/api/admin/usage"
+  },
+  {
+    "method": "GET",
+    "name": "admin_list_users",
+    "path": "/api/admin/users"
+  },
+  {
+    "method": "DELETE",
+    "name": "admin_delete_user",
+    "path": "/api/admin/users/{user_id}"
+  },
+  {
+    "method": "PATCH",
+    "name": "admin_update_user",
+    "path": "/api/admin/users/{user_id}"
+  },
+  {
+    "method": "DELETE",
+    "name": "admin_delete_ai_backend_policy",
+    "path": "/api/admin/users/{user_id}/ai-backend-policy"
+  },
+  {
+    "method": "GET",
+    "name": "admin_get_ai_backend_policy",
+    "path": "/api/admin/users/{user_id}/ai-backend-policy"
+  },
+  {
+    "method": "PUT",
+    "name": "admin_put_ai_backend_policy",
+    "path": "/api/admin/users/{user_id}/ai-backend-policy"
+  },
+  {
+    "method": "GET",
+    "name": "api_import_job_asset",
+    "path": "/api/assets/import-jobs/{job_id}/{filename}"
+  },
+  {
+    "method": "GET",
+    "name": "api_novel_asset",
+    "path": "/api/assets/novels/{novel_id}/{filename}"
+  },
+  {
+    "method": "POST",
+    "name": "change_password",
+    "path": "/api/auth/change-password"
+  },
+  {
+    "method": "GET",
+    "name": "oauth_links",
+    "path": "/api/auth/links"
+  },
+  {
+    "method": "POST",
+    "name": "login",
+    "path": "/api/auth/login"
+  },
+  {
+    "method": "POST",
+    "name": "logout",
+    "path": "/api/auth/logout"
+  },
+  {
+    "method": "GET",
+    "name": "me",
+    "path": "/api/auth/me"
+  },
+  {
+    "method": "GET",
+    "name": "oauth_callback",
+    "path": "/api/auth/oauth/{provider}/callback"
+  },
+  {
+    "method": "GET",
+    "name": "oauth_start",
+    "path": "/api/auth/oauth/{provider}/start"
+  },
+  {
+    "method": "GET",
+    "name": "providers",
+    "path": "/api/auth/providers"
+  },
+  {
+    "method": "POST",
+    "name": "register",
+    "path": "/api/auth/register"
+  },
+  {
+    "method": "POST",
+    "name": "request_reset",
+    "path": "/api/auth/request-reset"
+  },
+  {
+    "method": "POST",
+    "name": "reset_password",
+    "path": "/api/auth/reset"
+  },
+  {
+    "method": "GET",
+    "name": "verify_email",
+    "path": "/api/auth/verify"
+  },
+  {
+    "method": "POST",
+    "name": "verify_email_confirm",
+    "path": "/api/auth/verify"
+  },
+  {
+    "method": "GET",
+    "name": "api_discover",
+    "path": "/api/discover"
+  },
+  {
+    "method": "GET",
+    "name": "api_home",
+    "path": "/api/home"
+  },
+  {
+    "method": "POST",
+    "name": "api_import_batch",
+    "path": "/api/import/batch"
+  },
+  {
+    "method": "POST",
+    "name": "api_import_commit_series",
+    "path": "/api/import/commit-series"
+  },
+  {
+    "method": "GET",
+    "name": "api_import_jobs",
+    "path": "/api/import/jobs"
+  },
+  {
+    "method": "DELETE",
+    "name": "api_import_delete",
+    "path": "/api/import/jobs/{job_id}"
+  },
+  {
+    "method": "GET",
+    "name": "api_import_job",
+    "path": "/api/import/jobs/{job_id}"
+  },
+  {
+    "method": "POST",
+    "name": "api_import_cancel",
+    "path": "/api/import/jobs/{job_id}/cancel"
+  },
+  {
+    "method": "POST",
+    "name": "api_import_commit",
+    "path": "/api/import/jobs/{job_id}/commit"
+  },
+  {
+    "method": "POST",
+    "name": "api_import_confirm_ocr",
+    "path": "/api/import/jobs/{job_id}/confirm-ocr"
+  },
+  {
+    "method": "PUT",
+    "name": "api_import_update_plan",
+    "path": "/api/import/jobs/{job_id}/plan"
+  },
+  {
+    "method": "POST",
+    "name": "api_import_scan_incoming",
+    "path": "/api/import/scan-incoming"
+  },
+  {
+    "method": "POST",
+    "name": "api_import_upload",
+    "path": "/api/import/upload"
+  },
+  {
+    "method": "POST",
+    "name": "api_import_upload_init",
+    "path": "/api/import/upload/init"
+  },
+  {
+    "method": "PUT",
+    "name": "api_import_upload_chunk",
+    "path": "/api/import/upload/{job_id}/chunk"
+  },
+  {
+    "method": "POST",
+    "name": "api_import_upload_complete",
+    "path": "/api/import/upload/{job_id}/complete"
+  },
+  {
+    "method": "GET",
+    "name": "api_import_upload_status",
+    "path": "/api/import/upload/{job_id}/status"
+  },
+  {
+    "method": "GET",
+    "name": "api_list_jobs",
+    "path": "/api/jobs"
+  },
+  {
+    "method": "GET",
+    "name": "api_get_job",
+    "path": "/api/jobs/{job_id}"
+  },
+  {
+    "method": "POST",
+    "name": "api_cancel_job",
+    "path": "/api/jobs/{job_id}/cancel"
+  },
+  {
+    "method": "PATCH",
+    "name": "api_update_me",
+    "path": "/api/me"
+  },
+  {
+    "method": "POST",
+    "name": "api_upload_avatar",
+    "path": "/api/me/avatar"
+  },
+  {
+    "method": "GET",
+    "name": "api_my_usage",
+    "path": "/api/me/usage"
+  },
+  {
+    "method": "GET",
+    "name": "api_list_novels",
+    "path": "/api/novels"
+  },
+  {
+    "method": "POST",
+    "name": "api_create_novel",
+    "path": "/api/novels"
+  },
+  {
+    "method": "DELETE",
+    "name": "api_delete_novel",
+    "path": "/api/novels/{novel_id}"
+  },
+  {
+    "method": "GET",
+    "name": "api_get_novel",
+    "path": "/api/novels/{novel_id}"
+  },
+  {
+    "method": "PATCH",
+    "name": "api_update_novel",
+    "path": "/api/novels/{novel_id}"
+  },
+  {
+    "method": "POST",
+    "name": "ask_question",
+    "path": "/api/novels/{novel_id}/ask"
+  },
+  {
+    "method": "GET",
+    "name": "api_novel_audio_chapters",
+    "path": "/api/novels/{novel_id}/audio/chapters"
+  },
+  {
+    "method": "GET",
+    "name": "api_novel_audio_coverage",
+    "path": "/api/novels/{novel_id}/audio/coverage"
+  },
+  {
+    "method": "POST",
+    "name": "api_generate_book_audio",
+    "path": "/api/novels/{novel_id}/audiobook"
+  },
+  {
+    "method": "GET",
+    "name": "api_book_audio_status",
+    "path": "/api/novels/{novel_id}/audiobook/status"
+  },
+  {
+    "method": "GET",
+    "name": "api_list_bookmarks",
+    "path": "/api/novels/{novel_id}/bookmarks"
+  },
+  {
+    "method": "POST",
+    "name": "api_add_bookmark",
+    "path": "/api/novels/{novel_id}/bookmarks"
+  },
+  {
+    "method": "DELETE",
+    "name": "api_delete_bookmark",
+    "path": "/api/novels/{novel_id}/bookmarks/{bookmark_id}"
+  },
+  {
+    "method": "GET",
+    "name": "api_get_chapter",
+    "path": "/api/novels/{novel_id}/chapter/{number}"
+  },
+  {
+    "method": "POST",
+    "name": "api_generate_chapter_audio",
+    "path": "/api/novels/{novel_id}/chapter/{number}/audio"
+  },
+  {
+    "method": "GET",
+    "name": "api_get_chapter_audio",
+    "path": "/api/novels/{novel_id}/chapter/{number}/audio.opus"
+  },
+  {
+    "method": "GET",
+    "name": "api_chapter_audio_status",
+    "path": "/api/novels/{novel_id}/chapter/{number}/audio/status"
+  },
+  {
+    "method": "PUT",
+    "name": "api_edit_base_content",
+    "path": "/api/novels/{novel_id}/chapter/{number}/content"
+  },
+  {
+    "method": "POST",
+    "name": "api_contribute",
+    "path": "/api/novels/{novel_id}/chapter/{number}/contribute"
+  },
+  {
+    "method": "DELETE",
+    "name": "api_delete_overlay",
+    "path": "/api/novels/{novel_id}/chapter/{number}/overlay"
+  },
+  {
+    "method": "PUT",
+    "name": "api_save_overlay",
+    "path": "/api/novels/{novel_id}/chapter/{number}/overlay"
+  },
+  {
+    "method": "POST",
+    "name": "api_resolve_overlay",
+    "path": "/api/novels/{novel_id}/chapter/{number}/resolve"
+  },
+  {
+    "method": "POST",
+    "name": "api_self_translate",
+    "path": "/api/novels/{novel_id}/chapter/{number}/self-translate"
+  },
+  {
+    "method": "GET",
+    "name": "api_list_chapters",
+    "path": "/api/novels/{novel_id}/chapters"
+  },
+  {
+    "method": "POST",
+    "name": "api_codex_build",
+    "path": "/api/novels/{novel_id}/codex/build"
+  },
+  {
+    "method": "GET",
+    "name": "api_list_contributions",
+    "path": "/api/novels/{novel_id}/contributions"
+  },
+  {
+    "method": "POST",
+    "name": "api_accept_contribution",
+    "path": "/api/novels/{novel_id}/contributions/{contribution_id}/accept"
+  },
+  {
+    "method": "POST",
+    "name": "api_reject_contribution",
+    "path": "/api/novels/{novel_id}/contributions/{contribution_id}/reject"
+  },
+  {
+    "method": "GET",
+    "name": "api_cost_estimate",
+    "path": "/api/novels/{novel_id}/cost-estimate"
+  },
+  {
+    "method": "POST",
+    "name": "api_upload_novel_cover",
+    "path": "/api/novels/{novel_id}/cover"
+  },
+  {
+    "method": "GET",
+    "name": "api_list_entities",
+    "path": "/api/novels/{novel_id}/entities"
+  },
+  {
+    "method": "GET",
+    "name": "api_resolve_entity",
+    "path": "/api/novels/{novel_id}/entity/resolve"
+  },
+  {
+    "method": "GET",
+    "name": "api_get_entity_profile",
+    "path": "/api/novels/{novel_id}/entity/{entity_id}"
+  },
+  {
+    "method": "GET",
+    "name": "api_get_identities",
+    "path": "/api/novels/{novel_id}/entity/{entity_id}/identities"
+  },
+  {
+    "method": "GET",
+    "name": "api_get_relationships",
+    "path": "/api/novels/{novel_id}/entity/{entity_id}/relationships"
+  },
+  {
+    "method": "GET",
+    "name": "api_get_timeline",
+    "path": "/api/novels/{novel_id}/entity/{entity_id}/timeline"
+  },
+  {
+    "method": "GET",
+    "name": "api_list_glossary",
+    "path": "/api/novels/{novel_id}/glossary"
+  },
+  {
+    "method": "PUT",
+    "name": "api_upsert_glossary",
+    "path": "/api/novels/{novel_id}/glossary"
+  },
+  {
+    "method": "POST",
+    "name": "api_seed_glossary",
+    "path": "/api/novels/{novel_id}/glossary/seed"
+  },
+  {
+    "method": "DELETE",
+    "name": "api_delete_glossary",
+    "path": "/api/novels/{novel_id}/glossary/{term_id}"
+  },
+  {
+    "method": "GET",
+    "name": "api_novel_health",
+    "path": "/api/novels/{novel_id}/health"
+  },
+  {
+    "method": "DELETE",
+    "name": "api_remove_from_library",
+    "path": "/api/novels/{novel_id}/library"
+  },
+  {
+    "method": "POST",
+    "name": "api_add_to_library",
+    "path": "/api/novels/{novel_id}/library"
+  },
+  {
+    "method": "POST",
+    "name": "trigger_merge",
+    "path": "/api/novels/{novel_id}/merge-entities"
+  },
+  {
+    "method": "GET",
+    "name": "api_meta_chapters",
+    "path": "/api/novels/{novel_id}/meta"
+  },
+  {
+    "method": "GET",
+    "name": "api_get_progress",
+    "path": "/api/novels/{novel_id}/progress"
+  },
+  {
+    "method": "PUT",
+    "name": "api_set_progress",
+    "path": "/api/novels/{novel_id}/progress"
+  },
+  {
+    "method": "POST",
+    "name": "api_recap",
+    "path": "/api/novels/{novel_id}/recap"
+  },
+  {
+    "method": "POST",
+    "name": "api_scrape",
+    "path": "/api/novels/{novel_id}/scrape"
+  },
+  {
+    "method": "POST",
+    "name": "api_add_source",
+    "path": "/api/novels/{novel_id}/sources"
+  },
+  {
+    "method": "PATCH",
+    "name": "api_update_source",
+    "path": "/api/novels/{novel_id}/sources/{source_id}"
+  },
+  {
+    "method": "GET",
+    "name": "api_meta_stats",
+    "path": "/api/novels/{novel_id}/stats"
+  },
+  {
+    "method": "GET",
+    "name": "api_list_tag_suggestions",
+    "path": "/api/novels/{novel_id}/tag-suggestions"
+  },
+  {
+    "method": "POST",
+    "name": "api_suggest_tags",
+    "path": "/api/novels/{novel_id}/tag-suggestions"
+  },
+  {
+    "method": "POST",
+    "name": "api_accept_tag_suggestion",
+    "path": "/api/novels/{novel_id}/tag-suggestions/{suggestion_id}/accept"
+  },
+  {
+    "method": "POST",
+    "name": "api_reject_tag_suggestion",
+    "path": "/api/novels/{novel_id}/tag-suggestions/{suggestion_id}/reject"
+  },
+  {
+    "method": "POST",
+    "name": "api_translate",
+    "path": "/api/novels/{novel_id}/translate"
+  },
+  {
+    "method": "PATCH",
+    "name": "api_set_visibility",
+    "path": "/api/novels/{novel_id}/visibility"
+  },
+  {
+    "method": "GET",
+    "name": "api_tts_job",
+    "path": "/api/tts/jobs/{job_id}"
+  },
+  {
+    "method": "POST",
+    "name": "api_cancel_tts_job",
+    "path": "/api/tts/jobs/{job_id}/cancel"
+  },
+  {
+    "method": "GET",
+    "name": "api_tts_voices",
+    "path": "/api/tts/voices"
+  },
+  {
+    "method": "GET",
+    "name": "api_user_profile",
+    "path": "/api/users/{username}"
+  },
+  {
+    "method": "GET",
+    "name": "swagger_ui_html",
+    "path": "/docs"
+  },
+  {
+    "method": "GET",
+    "name": "swagger_ui_redirect",
+    "path": "/docs/oauth2-redirect"
+  },
+  {
+    "method": "GET",
+    "name": "health_check",
+    "path": "/health"
+  },
+  {
+    "method": "GET",
+    "name": "openapi",
+    "path": "/openapi.json"
+  },
+  {
+    "method": "GET",
+    "name": "redoc_html",
+    "path": "/redoc"
+  }
+]

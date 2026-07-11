@@ -1,0 +1,15 @@
+[
+  "add-novel",
+  "chunk",
+  "embed",
+  "extract",
+  "import",
+  "import-batch",
+  "import-series",
+  "import-worker",
+  "merge",
+  "rebuild-bm25",
+  "reset-db",
+  "scrape",
+  "translate"
+]

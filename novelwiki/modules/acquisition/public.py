@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class AcquisitionApi(Protocol):
+    async def list_cleanup_targets(self, novel_id: int) -> tuple[str, ...]: ...
+    async def cancel_import(self, job_id: int, user_id: int) -> None: ...

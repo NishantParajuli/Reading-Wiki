@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class TranslationApi(Protocol):
+    async def translate_chapter(self, novel_id: int, chapter: float, user_id: int) -> object: ...
+    async def translate_raw_text(self, text: str, novel_id: int | None = None) -> str: ...

@@ -1,0 +1,57 @@
+{
+  "generic": {
+    "active": [
+      "queued",
+      "running",
+      "waiting_provider"
+    ],
+    "kinds": [
+      "scrape",
+      "codex_build",
+      "translate",
+      "agy_smoke"
+    ],
+    "terminal": [
+      "done",
+      "failed",
+      "canceled"
+    ],
+    "trigger": [
+      "queued"
+    ]
+  },
+  "import": {
+    "marker_resume": [
+      {
+        "markers": [
+          "parsing",
+          "segmenting"
+        ],
+        "resume": "uploaded"
+      },
+      {
+        "markers": [
+          "ocr_running"
+        ],
+        "resume": "ocr_pending"
+      },
+      {
+        "markers": [
+          "commit_running"
+        ],
+        "resume": "committing"
+      }
+    ],
+    "trigger": [
+      "uploaded",
+      "ocr_pending",
+      "committing"
+    ]
+  },
+  "tts": {
+    "active": [
+      "generating",
+      "queued"
+    ]
+  }
+}

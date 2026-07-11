@@ -17,6 +17,7 @@ never connected to during tests.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import re
 import uuid
@@ -27,6 +28,39 @@ import pytest
 
 import novelwiki.db.connection as db_connection
 from novelwiki.config.settings import settings
+
+_CONNECT_TIMEOUT_SECONDS = 5.0
+
+
+def _redacted_target(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.hostname or "<unknown-host>"
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"{host}{port}/{parsed.path.lstrip('/') or '<unknown-db>'}"
+
+
+async def _connect(url: str):
+    host = urlparse(url).hostname or ""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        if host == "host.docker.internal":
+            hosts_file = open("/etc/hosts", encoding="utf-8").read()
+            if host not in hosts_file:
+                raise RuntimeError(
+                    "The test database host 'host.docker.internal' is not resolvable from the host "
+                    "test process. Set TEST_DATABASE_URL and TEST_DB_SUPERUSER_URL with a numeric "
+                    "or locally resolvable host (usually 127.0.0.1)."
+                )
+    try:
+        return await asyncpg.connect(url, timeout=_CONNECT_TIMEOUT_SECONDS)
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not connect to the disposable-test PostgreSQL target "
+            f"{_redacted_target(url)} within {_CONNECT_TIMEOUT_SECONDS:g}s. "
+            "Set TEST_DATABASE_URL and TEST_DB_SUPERUSER_URL to a PostgreSQL + pgvector "
+            "instance dedicated to tests. Credentials have been redacted."
+        ) from exc
 
 
 def _dbname(url: str) -> str:
@@ -51,7 +85,7 @@ def _dummy_db_name(base_name: str) -> str:
 async def _create_test_db(test_url: str) -> None:
     """Create a disposable test database and apply the full schema to it."""
     test_name = _dbname(test_url)
-    admin = await asyncpg.connect(settings.DB_SUPERUSER_URL)
+    admin = await _connect(settings.DB_SUPERUSER_URL)
     try:
         await admin.execute(f"CREATE DATABASE {_quote_ident(test_name)};")
     finally:
@@ -63,7 +97,7 @@ async def _create_test_db(test_url: str) -> None:
     if settings.EMBED_DIM <= 2000:
         queries.append("CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);")
         queries.append("CREATE INDEX IF NOT EXISTS entities_name_emb ON entities USING hnsw (name_embedding vector_cosine_ops);")
-    conn = await asyncpg.connect(test_url)
+    conn = await _connect(test_url)
     try:
         for q in queries:
             await conn.execute(q)
@@ -79,7 +113,7 @@ async def _drop_test_db(test_name: str) -> None:
         except Exception:
             db_connection._pool = None
 
-        admin = await asyncpg.connect(settings.DB_SUPERUSER_URL)
+        admin = await _connect(settings.DB_SUPERUSER_URL)
         try:
             await admin.execute(
                 """
@@ -104,16 +138,16 @@ def _route_eval_to_test_db():
     force-dropped at teardown so repeated test runs do not leave schema/data bloat in the
     local Docker Postgres container.
     """
-    prod_url = settings.DATABASE_URL
+    original_database_url = settings.DATABASE_URL
+    prod_url = os.getenv("TEST_DATABASE_URL", original_database_url)
+    superuser_url = os.getenv("TEST_DB_SUPERUSER_URL", settings.DB_SUPERUSER_URL)
+    original_superuser_url = settings.DB_SUPERUSER_URL
+    settings.DB_SUPERUSER_URL = superuser_url
     prod_name = _dbname(prod_url)
     test_name = _dummy_db_name(prod_name)
     test_url = _with_dbname(prod_url, test_name)
 
-    try:
-        asyncio.run(_create_test_db(test_url))
-    except Exception:
-        asyncio.run(_drop_test_db(test_name))
-        raise
+    asyncio.run(_create_test_db(test_url))
 
     # Repoint settings + drop any pool so the lazy `get_db_pool()` rebuilds on the test DB.
     settings.DATABASE_URL = test_url
@@ -133,5 +167,6 @@ def _route_eval_to_test_db():
         try:
             asyncio.run(_drop_test_db(test_name))
         finally:
-            settings.DATABASE_URL = prod_url
+            settings.DATABASE_URL = original_database_url
+            settings.DB_SUPERUSER_URL = original_superuser_url
             db_connection._pool = None

@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class NarrationApi(Protocol):
+    async def schedule_chapter(self, novel_id: int, chapter: float, user_id: int, voice: str) -> int: ...
+    async def cancel(self, job_id: int, user_id: int) -> None: ...

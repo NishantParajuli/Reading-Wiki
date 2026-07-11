@@ -1,0 +1,1 @@
+"""Narration adapters."""

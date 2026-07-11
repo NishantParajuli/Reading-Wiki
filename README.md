@@ -107,6 +107,14 @@ haven't read, and recaps are cached per `(novel, ceiling)`.
 
 ## 🏛 Architecture overview
 
+The backend is a modular monolith: one deployable FastAPI process and one PostgreSQL database,
+with business ownership divided among Identity, Catalog, Reading, Acquisition, Translation,
+Codex, Narration, Work, AI Execution, and Experience. Each module exposes a small `public.py`
+contract; HTTP/CLI/worker adapters call application use cases, while PostgreSQL, filesystem,
+provider, and sidecar details live behind outbound adapters. Atomic cross-module operations are
+named workflows coordinated by the composition root. See
+[`docs/architecture/module-ownership.md`](docs/architecture/module-ownership.md).
+
 ```
    webnovel site ─► Scraper (adapter per site) ─┐
    EPUB / PDF ────► Importer (parse · OCR · ────┤─► chapters (global numbering;
@@ -152,8 +160,8 @@ haven't read, and recaps are cached per `(novel, ceiling)`.
 - **TTS:** OmniVoice voice-cloning in a GPU sidecar; stored as Opus via `ffmpeg`
 - **Scraping:** `curl-cffi` (TLS-fingerprint-resistant fetch) + `selectolax` / `lxml`, `json-repair`
 - **File import:** `ebooklib` (EPUB), `pymupdf` (PDF), `nh3` (HTML sanitize), `pillow`, `ftfy`
-- **Frontend:** React 18 (production UMD builds) with in-browser Babel JSX — **no build step**,
-  served as static files by FastAPI
+- **Frontend:** React 18 + TanStack Query, built by Vite 6 and served as same-origin static files
+  by FastAPI
 - **Packaging:** `uv` (with `pyproject.toml` + `uv.lock`)
 
 ---
@@ -400,14 +408,14 @@ Schema is defined in [novelwiki/db/schema.py](novelwiki/db/schema.py):
 
 - **Accounts:** `users`, `oauth_accounts`, `sessions`, `email_tokens`, `auth_rate_limits`,
   `quota_usage`, `provider_budget`
-- **Library:** `novels` (with `owner_id` / `visibility` / `contribution_policy` / `series`),
-  `library_entries` (per-user shelf + tags), `sources`, `reading_progress` (per-user), `bookmarks`
+- **Catalog:** `novels` (with `owner_id` / `visibility` / `contribution_policy` / `series`),
+  `library_entries` (per-user shelf + tags), `tag_suggestions`
+- **Acquisition:** `sources`, `import_jobs`, `assets` (content-addressed images on disk)
 - **Reading:** `chapters` (PK `(novel_id, number)`; `content` = readable text, `original_text` =
   source language, `raw_html` = sanitized rich HTML for imports, `content_version` anchors overlays;
-  `kind` / `part_label` for import structure)
-- **Translation:** `translation_glossary`, `chapter_overlays` (per-user override), `contributions`
-  (contribute-back), `tag_suggestions`
-- **Import:** `import_jobs`, `assets` (content-addressed images on disk)
+  `kind` / `part_label` for import structure), `reading_progress`, `bookmarks`, `chapter_overlays`,
+  `contributions`
+- **Translation:** `translation_glossary`
 - **Audiobook:** `tts_jobs`, `chapter_audio` (shared base + per-user audio cache)
 - **Codex:** `chunks` (+`embedding`), `entities`, `entity_descriptions`, `entity_aliases`,
   `identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state`, `wiki_cache`,
@@ -418,23 +426,33 @@ Schema is defined in [novelwiki/db/schema.py](novelwiki/db/schema.py):
 Imported covers/illustrations/page scans are stored on disk but served through authenticated
 `/api/assets/novels/...` and `/api/assets/import-jobs/...` routes. Only user avatars remain on the
 narrow public `/assets/_users/...` mount. SVG imports are rejected, and the app sets baseline
-`nosniff`, frame, referrer, and CSP headers; the CSP still allows `unpkg.com`, inline scripts, and
-eval while the frontend uses in-browser Babel.
+`nosniff`, frame, referrer, and CSP headers. The SPA is precompiled, uses self-hosted fonts, and
+does not require CDN scripts or runtime `eval`.
 
 ---
 
 ## 🧪 Testing
 
-Spoiler boundaries, import pipelines, and the multi-user layer are verified with `pytest`:
+Spoiler boundaries, import pipelines, module boundaries, and the multi-user layer are verified
+with `pytest`. The launcher maps the configured Docker database hostname for host-side execution:
 
 ```bash
-uv run pytest                    # runs novelwiki/eval/*_tests.py (see pyproject.toml)
+uv run python scripts/test_backend.py
+uv run pytest -q tests           # architecture/contracts only; no database required
 # or target a suite directly, e.g.:
 uv run pytest novelwiki/eval/spoiler_tests.py
 uv run pytest novelwiki/eval/import_tests.py novelwiki/eval/multiuser_regression_tests.py
 ```
 
 > The suites isolate themselves to disposable test databases — they never touch your real DB.
+
+Frontend compatibility tests and the production build run with:
+
+```bash
+cd novelwiki/frontend
+npm test
+npm run build
+```
 
 ---
 

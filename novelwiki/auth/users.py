@@ -1,8 +1,8 @@
 """User serialization, quota resolution, and username helpers."""
 import json
-import re
 
 from novelwiki.config.settings import settings
+from novelwiki.modules.identity.domain.policies import normalize_username, valid_username
 
 
 def _prefs(raw) -> dict:
@@ -73,18 +73,6 @@ def public_user(user: dict) -> dict:
         "avatar_url": avatar_url(user),
         "created_at": user["created_at"].isoformat() if user.get("created_at") else None,
     }
-
-
-_USERNAME_RE = re.compile(r"[^a-z0-9_]+")
-
-
-def normalize_username(raw: str) -> str:
-    s = _USERNAME_RE.sub("_", (raw or "").strip().lower()).strip("_")
-    return (s or "user")[:24]
-
-
-def valid_username(name: str) -> bool:
-    return bool(re.fullmatch(r"[a-z0-9_]{3,24}", name or ""))
 
 
 async def unique_username(conn, base: str) -> str:

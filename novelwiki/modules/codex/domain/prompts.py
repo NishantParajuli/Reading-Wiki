@@ -1,0 +1,279 @@
+# Skeletons and prompt templates for DeepSeek Flash and Pro
+
+# ── Extraction Prompt (Flash) ──
+EXTRACTION_SYSTEM = """You extract structured knowledge from ONE chapter of a novel.
+You only know what has happened up to and including this chapter.
+Record facts/relationships/events as they are true or revealed in THIS chapter.
+Do not speculate about the future. Do not include anything not supported by the provided text.
+
+WHAT COUNTS AS AN ENTITY — be strict; quality over quantity. Only create a mention for a
+specific, named, story-persistent entity that the narrative will plausibly refer back to:
+- character: a NAMED individual (a real proper name, not a role). A distinctly named group that
+  acts as a single agent may count, but a generic group does not.
+- location: a PROPER place name — a named city, realm, region, or named building/landmark.
+- faction / organization: a NAMED group, sect, clan, guild, company, or institution.
+- item: a UNIQUELY NAMED object or artifact of ongoing significance (e.g. a named weapon or relic).
+- concept: a PROPER-NOUN, recurring in-world thing — a named power system, named technique/skill,
+  named realm/rank-by-name, named law, or named in-world work — treated as a named thing.
+
+DO NOT create entities (omit them entirely — do not even list them as mentions) for:
+- generic or common nouns and unnamed roles: "civilians", "the medical team", "the crowd",
+  "guards", "students", "the council" (unless it has a real proper name).
+- rank / grade / class / tier labels: "S-rank", "B-rank", "A-class", "Forbidden-class", "Golden Word".
+- ordinary objects, scene props, materials, substances, or body parts: "a chair", "black water",
+  "crow feathers", "a transport chair", "the core".
+- abstract mechanics, effects, or status phrases described in lowercase, and real-world / meta terms:
+  "law backlash", "forum feedback", "the comic", "surveillance", "the system message".
+- descriptive phrases that are not true proper names, even when capitalized by translation
+  (e.g. "Temporary Evacuation Platform", "Surveillance Room Above the Station").
+When unsure whether something is a real, named, recurring entity, OMIT it. A chapter usually has only
+a handful of genuine entities — prefer missing a borderline one over inventing noise.
+
+The chapter text is split into numbered passages, each prefixed with a marker like
+`[chunk 1234]`. For every fact, relationship, and event you MUST list the
+`source_chunk_ids` — the marker id(s) of the passage(s) that directly support it.
+Use only ids that actually appear in the provided markers.
+
+Output a strict JSON matching this schema:
+{
+  "mentions": [
+    {"surface_form": "string", "entity_ref": "string", "type": "character|location|faction|item|concept|organization", "description": "one short clause describing who/what this is, as known in THIS chapter"}
+  ],
+  "facts": [
+    {"entity_ref": "string", "fact_type": "trait|status|backstory|action|location|possession|belief", "content": "string", "source_chunk_ids": [1234]}
+  ],
+  "relationships": [
+    {"source_ref": "string", "target_ref": "string", "relation_type": "mentor|ally|enemy|family|romantic|rival", "directed": true, "content": "string", "source_chunk_ids": [1234]}
+  ],
+  "events": [
+    {"description": "string", "participant_refs": ["string"], "location_ref": "string", "significance": "string", "source_chunk_ids": [1234]}
+  ],
+  "identity_reveals": [
+    {"persona_ref": "string", "true_entity_ref": "string", "note": "string"}
+  ],
+  "new_aliases": [
+    {"entity_ref": "string", "alias": "string", "is_reveal": true}
+  ]
+}
+
+- entity_ref / source_ref / target_ref / participant_refs MUST refer to the canonical name of the entity as identified in the text, AND must be one of the significant named entities defined above — never a generic noun, rank label, or scene prop. If a fact/event has no qualifying named entity, omit it rather than inventing one.
+- For events, set `location_ref` only when the location is a real named place; otherwise leave it out.
+- `description` on a mention should be a brief, neutral identifier (e.g. "a young swordsman from the northern clan"). Keep it to what is known in this chapter.
+- If a person/thing was known by a mask/pseudonym, and they are revealed in this chapter to be someone else, record that reveal in `identity_reveals` and mark their alias as `is_reveal: true`.
+"""
+
+# NOTE: ordering matters for prompt caching. The roster is append-only across
+# chapters, so leading the message with the (large, stable) roster lets the
+# provider cache the system+roster prefix; the volatile running summary and the
+# chapter text follow so the cache hit survives chapter-to-chapter.
+EXTRACTION_USER = """Active Roster of Known Entities (all first revealed in chapters before this one):
+{roster}
+
+Running Story Summary so far:
+{running_summary}
+
+--- CHAPTER {chapter_number} ---
+Title: {chapter_title}
+Passages (each starts with its [chunk <id>] marker):
+{chapter_text}
+
+Extract structured JSON strictly based on the schema and instructions. For every
+fact/relationship/event include the supporting `source_chunk_ids` using the marker
+ids above. Do not include markdown code block formatting (like ```json), just raw JSON.
+"""
+
+# ── Extraction Verification / Second Pass (Flash) ──
+# Re-reads the chapter against a first-pass extraction and returns ONLY the items
+# the first pass missed or got wrong, in the exact same schema. Returned items are
+# merged back and run through the same resolution/insertion path.
+EXTRACTION_VERIFY_SYSTEM = """You are an extraction auditor for a single novel chapter.
+You are given the full chapter text (with [chunk <id>] markers) and a FIRST-PASS extraction in JSON.
+Your job: find what the first pass MISSED or got WRONG, using ONLY this chapter's text.
+Pay special attention to:
+- identity reveals (a masked/pseudonymous persona shown to be a known entity),
+- relationships and events between characters,
+- new aliases/titles introduced here,
+- facts clearly stated but not captured.
+
+Output STRICT JSON in the SAME schema as the first pass, but containing ONLY the
+additional or corrected items (do NOT repeat items the first pass already captured
+correctly). If nothing was missed, return every list empty. Every fact/relationship/
+event MUST include `source_chunk_ids` drawn from the markers actually present in the text.
+Apply the SAME strict entity criteria as the first pass: only significant, NAMED, recurring
+entities (characters, named places, named factions/orgs, uniquely named items, proper-noun
+concepts). Do NOT add generic nouns, unnamed roles, rank/class labels, scene props, materials,
+or meta terms — when unsure, leave it out.
+Do not anticipate future chapters. Do not invent anything unsupported by the text.
+Output the same top-level keys: mentions, facts, relationships, events, identity_reveals, new_aliases.
+"""
+
+EXTRACTION_VERIFY_USER = """--- CHAPTER {chapter_number} ---
+Title: {chapter_title}
+Passages (each starts with its [chunk <id>] marker):
+{chapter_text}
+
+--- FIRST-PASS EXTRACTION (JSON) ---
+{first_pass_json}
+
+Return raw JSON (no markdown fences) with ONLY the missed/corrected items.
+"""
+
+# ── Entity Disambiguation (Flash) ──
+DISAMBIGUATION_SYSTEM = """Given this entity mention in context and these candidate entities, decide if it refers to one of the candidates or is a NEW entity.
+Use only the provided context (chapter <= N).
+Output a JSON matching the schema:
+{
+  "match_id": int_or_string,  // The numeric ID of the matching candidate, or "NEW"
+  "confidence": float,        // Between 0.0 and 1.0
+  "reason": "string"
+}
+"""
+
+DISAMBIGUATION_USER = """Mention Surface Form: {mention}
+Entity Type: {entity_type}
+Chapter: {chapter}
+Local Context: "... {context} ..."
+
+Candidates:
+{candidates_list}
+
+Select the matching candidate ID or output "NEW" in JSON format.
+"""
+
+# ── Distill/Digest (Flash) ──
+DISTILL_SYSTEM = """You are given raw retrieved passages/records (all from chapters <= {chapter_ceiling}) and a user question.
+Produce a compact, faithful digest of only the parts relevant to the question.
+Preserve provenance: include short verbatim quotes (<= 15 words) and explicitly cite the chapter number and chunk_id for each point.
+Do not add any knowledge from outside the provided material. If nothing is relevant, say so.
+"""
+
+DISTILL_USER = """User Question: {question}
+
+Retrieved Passages:
+{passages}
+
+Produce a compact, cited digest of relevant facts.
+"""
+
+# ── Plan/Decide Next (Pro) ──
+PLAN_SYSTEM = """You are the orchestrator of a spoiler-safe webnovel wiki.
+The reader is at chapter {chapter_ceiling}. You have no knowledge of this novel beyond what tools return, and all tool results are strictly bounded to chapters <= {chapter_ceiling}.
+Decide which tools to call to answer the user's question.
+You see only compressed, cited digests of prior tool results.
+Your tools:
+1. resolve_entity(name) -> candidate entities (id, canonical_name, type)
+2. get_entity_profile(entity_id) -> facts + aliases (folded personas)
+3. hybrid_search(query, k) -> passages (chunk ids)
+4. get_relationships(entity_id, other_id) -> relationship edges
+5. get_timeline(entity_id) -> chronological facts + events
+6. get_chunk(chunk_id) -> verbatim passage drill-down
+7. list_entities(type, name_query) -> browse known entities
+
+(chapter_ceiling is injected automatically; never pass it yourself.)
+
+Output a JSON array of tool calls, e.g.:
+[
+  {{"tool": "resolve_entity", "args": {{"name": "..."}}}},
+  {{"tool": "hybrid_search", "args": {{"query": "..."}}}}
+]
+If you have gathered sufficient information, output exactly "DONE".
+"""
+
+# ── Synthesis (Pro) ──
+SYNTHESIS_SYSTEM = """Write the answer to the user's question using ONLY the cited evidence digests below (all from chapters <= {chapter_ceiling}).
+You have no independent knowledge of this story - if a claim is not in the evidence, do not state it.
+Represent what the reader knows at chapter {chapter_ceiling}, including beliefs the story may later overturn.
+
+CITATION FORMAT (mandatory, machine-parsed — follow EXACTLY):
+- Every factual claim must end with one or more inline citations in square brackets.
+- Each citation is the source KEYWORD, then its numeric id, then the chapter, like:
+  [Chunk 14, Chapter 5]   [Fact 29, Chapter 3]   [Event 7, Chapter 3]   [Rel 4, Chapter 2]
+- The first token inside the bracket MUST be one of: Chunk, Fact, Event, Rel — spelled out in full,
+  immediately followed by the id number from the digest (the value labelled `id` / `chunk_id`).
+- DO NOT write the chapter first, and DO NOT abbreviate. Never write forms like `[Ch.5, id 14]`,
+  `[id 14]`, `(Chapter 5)`, or `(Ch 5)`. Those will not be recognized.
+- If a digest point gives a `chunk_id`, cite it as `[Chunk <chunk_id>, Chapter <n>]`.
+"""
+
+SYNTHESIS_USER = """User Question: {question}
+
+Cited Digests of Evidence:
+{digests}
+
+Write a comprehensive, cited, and grounded answer.
+"""
+
+# ── Verification (Flash) ──
+VERIFY_SYSTEM = """Check the draft answer against the provided cited evidence.
+For each sentence, verify if it is supported by a citation in the provided evidence (all from chapters <= {chapter_ceiling}).
+Flag any sentence that:
+(a) lacks support or citation,
+(b) appears to use knowledge not present in the evidence (possible spoiler/hallucination).
+
+Output a JSON:
+{{
+  "unsupported": true_or_false,
+  "flags": [
+    {{"sentence": "string", "reason": "string", "action": "strike|modify"}}
+  ]
+}}
+"""
+
+VERIFY_USER = """Draft Answer:
+{draft}
+
+Evidence:
+{evidence}
+
+Verify and output the JSON response.
+"""
+
+# ── Repair (Pro) ──
+REPAIR_SYSTEM = """You revise a draft answer so that EVERY remaining claim is supported
+by the cited evidence (all from chapters <= {chapter_ceiling}).
+A verification pass flagged some sentences as unsupported or as possible spoilers/hallucinations.
+Rewrite the answer to remove or correct exactly those flagged claims, keeping everything that is
+supported and preserving the inline citations. Do not introduce any new facts. If removing the
+flagged claims leaves nothing substantive, say what little is supported, or that the answer is not
+available in the read chapters. Output only the corrected answer in Markdown.
+"""
+
+REPAIR_USER = """User Question: {question}
+
+Cited Evidence Digests:
+{digests}
+
+Flagged (unsupported / possible-spoiler) sentences to remove or correct:
+{flags}
+
+Current Draft:
+{draft}
+
+Rewrite the answer, dropping/correcting the flagged claims while keeping supported, cited content.
+"""
+
+# ── Wiki Profile Synthesis (Pro) ──
+WIKI_PROFILE_SYNTHESIS_SYSTEM = """You are the compiler of a spoiler-safe webnovel wiki.
+Your task is to synthesize a cohesive, comprehensive, and beautifully structured Markdown profile page for a lore entity.
+The reader is at chapter {chapter_ceiling}. You must ONLY use the provided facts, aliases, and relationship descriptions.
+
+Strict Invariants:
+1. Never include any facts or developments revealed in any chapter > {chapter_ceiling}.
+2. Do not speculate about the future.
+3. Every factual claim must be grounded in the provided facts, and you should cite the chapter number inline (e.g. (Ch 3.0)).
+4. Structure the profile with a brief summary, aliases, facts grouped by type, and key relationships.
+"""
+
+WIKI_PROFILE_SYNTHESIS_USER = """Entity: {canonical_name} ({type})
+Current Chapter Ceiling: {chapter_ceiling}
+
+Known Aliases: {aliases}
+Recorded Facts:
+{facts}
+
+Relationships:
+{relationships}
+
+Write a beautiful, well-structured Markdown wiki entry for {canonical_name}.
+"""
+

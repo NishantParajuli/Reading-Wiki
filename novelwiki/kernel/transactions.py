@@ -1,0 +1,28 @@
+"""Opaque transaction contracts used by modules and workflow coordinators."""
+
+from __future__ import annotations
+
+from types import TracebackType
+from typing import Protocol, Self, TypeVar
+
+T = TypeVar("T")
+
+
+class TransactionContext(Protocol):
+    """Marker protocol; deliberately exposes no database connection."""
+
+    def bind(self, capability: type[T]) -> T:
+        """Return a transaction-bound public module capability."""
+
+
+class UnitOfWork(Protocol):
+    transaction: TransactionContext
+
+    async def __aenter__(self) -> Self: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...

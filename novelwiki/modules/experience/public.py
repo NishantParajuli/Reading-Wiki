@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class ExperienceQueries(Protocol):
+    async def home(self, user_id: int) -> dict: ...
+    async def activity(self, user_id: int, *, active_only: bool, limit: int) -> list[dict]: ...

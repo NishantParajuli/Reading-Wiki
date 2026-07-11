@@ -4,10 +4,18 @@ Visibility tiers: private (owner only) · public (any logged-in user) · global
 (admin-curated shared library). `user` may be None for unauthenticated callers.
 """
 from dataclasses import dataclass
+from dataclasses import asdict
 
 from fastapi import HTTPException
 
 from novelwiki.db.connection import get_db_pool
+from novelwiki.kernel.errors import Forbidden, NotFound
+from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
+from novelwiki.modules.catalog.application import CatalogAccessService
+from novelwiki.modules.catalog.domain.policies import can_edit as _can_edit
+from novelwiki.modules.catalog.domain.policies import can_read as _can_read
+from novelwiki.modules.catalog.public import NovelAccess
+from novelwiki.modules.identity.public import Principal
 
 
 @dataclass(frozen=True)
@@ -23,55 +31,72 @@ class CodexCeiling:
 
 
 def is_admin(user: dict | None) -> bool:
-    return isinstance(user, dict) and user.get("role") == "admin"
+    return isinstance(user, dict) and Principal.from_user(user).is_admin
+
+
+def _principal(user: dict | None) -> Principal | None:
+    return Principal.from_user(user) if isinstance(user, dict) else None
+
+
+def _novel_access(novel: dict) -> NovelAccess:
+    return NovelAccess(
+        novel_id=int(novel.get("novel_id", novel.get("id"))),
+        owner_id=int(novel["owner_id"]) if novel.get("owner_id") is not None else None,
+        visibility=novel.get("visibility") or "private",
+        contribution_policy=novel.get("contribution_policy"),
+        title=novel.get("title"),
+        description=novel.get("description"),
+    )
 
 
 def can_read(novel: dict, user: dict | None) -> bool:
-    if novel is None:
-        return False
-    if novel.get("visibility") in ("global", "public"):
-        return True
-    if isinstance(user, dict) and (novel.get("owner_id") == user["id"] or is_admin(user)):
-        return True
-    return False
+    return novel is not None and _can_read(_novel_access(novel), _principal(user))
 
 
 def can_edit(novel: dict, user: dict | None) -> bool:
     """Edit base content/metadata/sources. Owner or admin only."""
-    if novel is None or not isinstance(user, dict):
-        return False
-    return novel.get("owner_id") == user["id"] or is_admin(user)
+    return novel is not None and _can_edit(_novel_access(novel), _principal(user))
 
 
 async def fetch_novel(novel_id: int) -> dict | None:
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, owner_id, visibility, contribution_policy, title, description FROM novels WHERE id = $1;",
-            novel_id,
-        )
-    return dict(row) if row else None
+        novel = await PostgresCatalogRepository(conn).get_access(novel_id)
+    if novel is None:
+        return None
+    result = asdict(novel)
+    result["id"] = result.pop("novel_id")
+    return result
 
 
 async def require_readable(novel_id: int, user: dict | None) -> dict:
-    novel = await fetch_novel(novel_id)
-    if novel is None:
-        raise HTTPException(status_code=404, detail="Novel not found.")
-    if not can_read(novel, user):
-        # 404 (not 403) so we don't leak the existence of private novels.
-        raise HTTPException(status_code=404, detail="Novel not found.")
-    return novel
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        try:
+            novel = await CatalogAccessService(
+                PostgresCatalogRepository(conn)
+            ).require_readable(novel_id, _principal(user))
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = asdict(novel)
+    result["id"] = result.pop("novel_id")
+    return result
 
 
 async def require_editable(novel_id: int, user: dict | None) -> dict:
-    novel = await fetch_novel(novel_id)
-    if novel is None:
-        raise HTTPException(status_code=404, detail="Novel not found.")
-    if not can_read(novel, user):
-        raise HTTPException(status_code=404, detail="Novel not found.")
-    if not can_edit(novel, user):
-        raise HTTPException(status_code=403, detail="You don't have permission to edit this novel.")
-    return novel
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        try:
+            novel = await CatalogAccessService(
+                PostgresCatalogRepository(conn)
+            ).require_editable(novel_id, _principal(user))
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Forbidden as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+    result = asdict(novel)
+    result["id"] = result.pop("novel_id")
+    return result
 
 
 async def require_effective_ceiling(
@@ -85,46 +110,35 @@ async def require_effective_ceiling(
     above the highest chapter the server has actually served to this user. With no
     trusted progress yet, the first chapter is visible.
     """
-    novel = await require_readable(novel_id, user)
-    user_id = user.get("id") if isinstance(user, dict) else None
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        span = await conn.fetchrow(
-            "SELECT COUNT(*) AS count, MIN(number) AS min_chapter, MAX(number) AS max_chapter "
-            "FROM chapters WHERE novel_id = $1;",
-            novel_id,
+        from novelwiki.modules.reading.adapters.outbound.postgres import (
+            PostgresReadingRepository,
         )
-        progress_ceiling = None
-        if user_id is not None:
-            progress_ceiling = await conn.fetchval(
-                """
-                SELECT max_chapter_read
-                FROM reading_progress
-                WHERE novel_id = $1 AND user_id = $2;
-                """,
-                novel_id, user_id,
+        from novelwiki.modules.reading.application import ReadingService
+
+        try:
+            result = await ReadingService(
+                PostgresReadingRepository(conn),
+                CatalogAccessService(PostgresCatalogRepository(conn)),
+            ).effective_ceiling(
+                novel_id,
+                _principal(user),
+                requested_ceiling,
             )
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    chapter_count = int(span["count"] or 0) if span else 0
-    if chapter_count == 0 or span["min_chapter"] is None or span["max_chapter"] is None:
-        raise HTTPException(status_code=404, detail="No chapters found.")
-
-    min_chapter = float(span["min_chapter"])
-    max_chapter = float(span["max_chapter"])
-    trusted = float(progress_ceiling) if progress_ceiling is not None else min_chapter
-    allowed = max(min_chapter, min(max_chapter, trusted))
-
-    requested = float(requested_ceiling) if requested_ceiling is not None else None
-    effective = allowed if requested is None else max(min_chapter, min(requested, allowed))
-    clamped = requested is not None and effective != requested
+    novel = asdict(result.novel)
+    novel["id"] = novel.pop("novel_id")
 
     return CodexCeiling(
         novel=novel,
-        chapter_count=chapter_count,
-        min_chapter=min_chapter,
-        max_chapter=max_chapter,
-        requested_ceiling=requested,
-        allowed_ceiling=allowed,
-        effective_ceiling=effective,
-        clamped=clamped,
+        chapter_count=result.chapter_count,
+        min_chapter=result.min_chapter,
+        max_chapter=result.max_chapter,
+        requested_ceiling=result.requested_ceiling,
+        allowed_ceiling=result.allowed_ceiling,
+        effective_ceiling=result.effective_ceiling,
+        clamped=result.clamped,
     )

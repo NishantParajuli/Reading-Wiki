@@ -6,73 +6,28 @@
    for this reader. The browser may request a lower ceiling, but the backend
    clamps it to trusted read progress before any retrieval or synthesis happens.
    ============================================================ */
-const API_BASE = "/api";
-const CSRF_COOKIE = "tg_csrf";
-const CSRF_HEADER = "X-Tideglass-CSRF";
-const REQUEST_HEADER = "X-Tideglass-Request";
-const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+import {
+  API_BASE,
+  delJSON,
+  getJSON,
+  mutationHeaders,
+  postJSON,
+  postMultipart,
+  putJSON,
+  req,
+  setUnauthorizedHandler,
+} from "../shared/api/http.js";
+import { authApi, identityApi } from "../modules/identity/api.js";
+import { catalogApi } from "../modules/catalog/api.js";
+import { readingApi } from "../modules/reading/api.js";
+import { workApi } from "../modules/work/api.js";
+import { translationApi } from "../modules/translation/api.js";
+import { experienceApi } from "../modules/experience/api.js";
+import { narrationApi } from "../modules/narration/api.js";
+import { acquisitionApi } from "../modules/acquisition/api.js";
+import { codexApi } from "../modules/codex/api.js";
 
-// Set by the app root: called when a non-auth request 401s mid-session so the UI can re-gate.
-let onUnauthorized = null;
-export function setUnauthorizedHandler(fn) { onUnauthorized = fn; }
-
-function readCookie(name) {
-  const parts = (document.cookie || "").split(";").map((p) => p.trim());
-  const prefix = `${name}=`;
-  for (const part of parts) {
-    if (part.startsWith(prefix)) return decodeURIComponent(part.slice(prefix.length));
-  }
-  return "";
-}
-
-function mutationHeaders(headers) {
-  const h = headers || {};
-  h[REQUEST_HEADER] = "1";
-  const csrf = readCookie(CSRF_COOKIE);
-  if (csrf) h[CSRF_HEADER] = csrf;
-  return h;
-}
-
-async function req(method, url, body) {
-  const opts = { method, credentials: "include", headers: { Accept: "application/json" } };
-  if (!SAFE_METHODS.has(method.toUpperCase())) mutationHeaders(opts.headers);
-  if (body !== undefined) {
-    opts.headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(body || {});
-  }
-  const res = await fetch(url, opts);
-  if (!res.ok) {
-    if (res.status === 401 && url.indexOf("/auth/") === -1 && onUnauthorized) {
-      try { onUnauthorized(); } catch (e) { /* re-gate is best-effort */ }
-    }
-    let detail = `${res.status} ${res.statusText}`;
-    try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) { /* non-JSON error body */ }
-    const err = new Error(detail);
-    err.status = res.status;
-    throw err;
-  }
-  if (res.status === 204) return null;
-  return res.json();
-}
-const getJSON = (url) => req("GET", url);
-const postJSON = (url, body) => req("POST", url, body || {});
-const putJSON = (url, body) => req("PUT", url, body);
-const delJSON = (url) => req("DELETE", url);
-
-async function postMultipart(url, fd) {
-  const res = await fetch(url, {
-    method: "POST",
-    credentials: "include",
-    headers: mutationHeaders(),
-    body: fd,
-  });
-  if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
-    try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (e) { /* ignore */ }
-    const err = new Error(detail); err.status = res.status; throw err;
-  }
-  return res.json();
-}
+export { setUnauthorizedHandler };
 
 const TYPE_PORTRAIT = {
   character: "PORTRAIT", location: "PLACE", faction: "EMBLEM",
@@ -365,5 +320,21 @@ export const API = {
     return r;
   },
 };
+
+// Compatibility facade: callers migrate module by module while runtime ownership already
+// resolves to each feature's API surface. Remove the duplicate legacy definitions last.
+Object.assign(API.auth, authApi);
+Object.assign(
+  API,
+  identityApi,
+  catalogApi,
+  readingApi,
+  workApi,
+  translationApi,
+  acquisitionApi,
+  codexApi,
+  narrationApi,
+  experienceApi,
+);
 
 export default API;
