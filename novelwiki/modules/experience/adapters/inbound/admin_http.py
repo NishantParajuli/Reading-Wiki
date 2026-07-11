@@ -19,10 +19,11 @@ from pydantic import BaseModel, Field
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
 from novelwiki.auth.deps import require_admin
-from novelwiki.auth.sessions import revoke_user_sessions
 from novelwiki import audit
 from novelwiki.ai_backend import policy as backend_policy
 from novelwiki.jobs import service as jobs_service
+from novelwiki.kernel.errors import InvalidOperation, NotFound, ValidationFailed
+from novelwiki.modules.identity.public import IdentityAdminApi, Principal
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,6 +31,20 @@ router = APIRouter()
 USER_STATUSES = {"active", "suspended", "banned"}
 USER_ROLES = {"user", "admin"}
 _QUOTA_COLS = ("quota_translated_chapters", "quota_ocr_pages", "quota_codex_builds", "quota_tts_chapters")
+
+
+async def identity_admin_service_dependency() -> IdentityAdminApi:
+    raise RuntimeError("IdentityAdminService was not wired by the composition root")
+
+
+def _raise_identity_admin_error(exc: Exception) -> None:
+    if isinstance(exc, NotFound):
+        status = 404
+    elif isinstance(exc, InvalidOperation):
+        status = 400
+    else:
+        status = 422
+    raise HTTPException(status_code=status, detail=str(exc)) from exc
 
 
 def _period() -> dt.date:
@@ -133,49 +148,23 @@ async def admin_list_users(q: str | None = None, admin: dict = Depends(require_a
 
 
 @router.patch("/users/{user_id}")
-async def admin_update_user(user_id: int, payload: AdminUserUpdate, admin: dict = Depends(require_admin)):
+async def admin_update_user(
+    user_id: int,
+    payload: AdminUserUpdate,
+    admin: dict = Depends(require_admin),
+    service: IdentityAdminApi = Depends(identity_admin_service_dependency),
+):
     """Change a user's status, role, or per-user quota overrides. A null quota value resets
     that meter to the settings default. You can't suspend/ban or demote yourself."""
-    fields = payload.model_dump(exclude_unset=True)
-    if not fields:
-        return {"status": "noop"}
-    if "status" in fields and fields["status"] not in USER_STATUSES:
-        raise HTTPException(status_code=422, detail=f"status must be one of {sorted(USER_STATUSES)}.")
-    if "role" in fields and fields["role"] not in USER_ROLES:
-        raise HTTPException(status_code=422, detail=f"role must be one of {sorted(USER_ROLES)}.")
-    if user_id == admin["id"] and (
-        ("status" in fields and fields["status"] != "active") or fields.get("role") == "user"
-    ):
-        raise HTTPException(status_code=400, detail="You can't suspend or demote your own admin account.")
-
-    sets, args = [], []
-    for key in ("status", "role", *_QUOTA_COLS):
-        if key in fields:
-            args.append(fields[key])
-            sets.append(f"{key} = ${len(args)}")
-    if not sets:
-        return {"status": "noop"}
-
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        target = await conn.fetchrow("SELECT id, role FROM users WHERE id = $1;", user_id)
-        if target is None:
-            raise HTTPException(status_code=404, detail="User not found.")
-        # Don't strip the last admin.
-        if target["role"] == "admin" and fields.get("role") == "user":
-            others = await conn.fetchval("SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> $1;", user_id)
-            if not others:
-                raise HTTPException(status_code=400, detail="This is the only admin — promote someone else first.")
-        args.append(user_id)
-        await conn.execute(
-            f"UPDATE users SET {', '.join(sets)}, updated_at = now() WHERE id = ${len(args)};", *args,
+    try:
+        status = await service.update_user(
+            user_id,
+            payload.model_dump(exclude_unset=True),
+            Principal.from_user(admin),
         )
-        # Suspending/banning takes effect now: kill their sessions.
-        if fields.get("status") in ("suspended", "banned"):
-            await revoke_user_sessions(conn, user_id)
-    if fields.get("status") in ("suspended", "banned"):
-        await backend_policy.cancel_revoked_jobs(user_id, None)
-    return {"status": "success"}
+    except (NotFound, InvalidOperation, ValidationFailed) as exc:
+        _raise_identity_admin_error(exc)
+    return {"status": status}
 
 
 def _policy_view(row: dict | None, user_id: int) -> dict:
@@ -294,21 +283,17 @@ async def admin_agy_smoke_test(admin: dict = Depends(require_admin)):
 
 
 @router.delete("/users/{user_id}")
-async def admin_delete_user(user_id: int, admin: dict = Depends(require_admin)):
+async def admin_delete_user(
+    user_id: int,
+    admin: dict = Depends(require_admin),
+    service: IdentityAdminApi = Depends(identity_admin_service_dependency),
+):
     """Delete a user and cascade their personal data. Their owned novels are kept (owner_id
     is set NULL by the FK). Guards against deleting yourself or the last admin."""
-    if user_id == admin["id"]:
-        raise HTTPException(status_code=400, detail="You can't delete your own account here.")
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        target = await conn.fetchrow("SELECT id, role FROM users WHERE id = $1;", user_id)
-        if target is None:
-            raise HTTPException(status_code=404, detail="User not found.")
-        if target["role"] == "admin":
-            others = await conn.fetchval("SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> $1;", user_id)
-            if not others:
-                raise HTTPException(status_code=400, detail="Can't delete the only admin.")
-        await conn.execute("DELETE FROM users WHERE id = $1;", user_id)
+    try:
+        await service.delete_user(user_id, Principal.from_user(admin))
+    except (NotFound, InvalidOperation, ValidationFailed) as exc:
+        _raise_identity_admin_error(exc)
     return {"status": "success"}
 
 

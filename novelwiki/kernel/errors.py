@@ -21,6 +21,12 @@ class ValidationFailed(ApplicationError):
     pass
 
 
+class InvalidOperation(ApplicationError):
+    """A valid request that is disallowed by the current operation context (HTTP 400)."""
+
+    pass
+
+
 class QuotaExceeded(ApplicationError):
     pass
 

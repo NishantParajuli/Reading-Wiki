@@ -12,28 +12,26 @@ import logging
 
 import re
 
-import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
 from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
 from novelwiki.auth import oauth, rate_limit
 from novelwiki.auth.deps import current_user
 from novelwiki.auth.email import send_verification_email, send_reset_email
 from novelwiki.auth.passwords import hash_password, verify_password
-from novelwiki.auth.sessions import (
-    create_session, revoke_session, revoke_user_sessions,
-    set_session_cookie, clear_session_cookie,
-)
+from novelwiki.auth.sessions import set_session_cookie, clear_session_cookie
 from novelwiki.auth.tokens import new_token, hash_token, sign, unsign, stamped
-from novelwiki.auth.users import (
-    self_user_with_capabilities, valid_username, normalize_username, unique_username,
-)
+from novelwiki.auth.users import self_user_with_capabilities, valid_username, normalize_username
+from novelwiki.modules.identity.application.ports import AuthPersistence, DuplicateRegistration
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def identity_auth_persistence_dependency() -> AuthPersistence:
+    raise RuntimeError("Identity auth persistence is not configured")
 
 OAUTH_STATE_COOKIE = "tg_oauth"
 OAUTH_STATE_TTL = 600          # 10 minutes to complete the round trip
@@ -88,15 +86,6 @@ class ChangePasswordPayload(BaseModel):
 
 # ── helpers ───────────────────────────────────────────────────────────────
 
-async def _issue_email_token(conn, user_id: int, kind: str, ttl: dt.timedelta) -> str:
-    raw = new_token()
-    await conn.execute(
-        "INSERT INTO email_tokens (user_id, kind, token_hash, expires_at) VALUES ($1, $2, $3, $4);",
-        user_id, kind, hash_token(raw), dt.datetime.now(dt.timezone.utc) + ttl,
-    )
-    return raw
-
-
 def _verify_link(token: str) -> str:
     return f"{settings.PUBLIC_BASE_URL}/api/auth/verify?token={token}"
 
@@ -149,25 +138,34 @@ def _log_auth_event(event: str, request: Request, scope: str) -> None:
     logger.warning("auth.%s ip=%s scope=%s", event, rate_limit.client_ip(request), scope)
 
 
-async def _ensure_or_429(conn, key: str, limit: rate_limit.RateLimit, request: Request, scope: str) -> None:
+async def _ensure_or_429(
+    persistence: AuthPersistence, key: str, limit: rate_limit.RateLimit,
+    request: Request, scope: str,
+) -> None:
     try:
-        await rate_limit.ensure_allowed(conn, key, limit)
+        await persistence.ensure_rate(key, limit)
     except rate_limit.RateLimitExceeded as exc:
         _log_auth_event("throttle", request, scope)
         _rate_limited(exc)
 
 
-async def _consume_or_429(conn, key: str, limit: rate_limit.RateLimit, request: Request, scope: str) -> None:
+async def _consume_or_429(
+    persistence: AuthPersistence, key: str, limit: rate_limit.RateLimit,
+    request: Request, scope: str,
+) -> None:
     try:
-        await rate_limit.consume(conn, key, limit)
+        await persistence.consume_rate(key, limit)
     except rate_limit.RateLimitExceeded as exc:
         _log_auth_event("throttle", request, scope)
         _rate_limited(exc)
 
 
-async def _consume_silent(conn, key: str, limit: rate_limit.RateLimit, request: Request, scope: str) -> bool:
+async def _consume_silent(
+    persistence: AuthPersistence, key: str, limit: rate_limit.RateLimit,
+    request: Request, scope: str,
+) -> bool:
     try:
-        await rate_limit.consume(conn, key, limit)
+        await persistence.consume_rate(key, limit)
         return True
     except rate_limit.RateLimitExceeded:
         _log_auth_event("throttle", request, scope)
@@ -177,70 +175,65 @@ async def _consume_silent(conn, key: str, limit: rate_limit.RateLimit, request: 
 # ── email + password ──────────────────────────────────────────────────────
 
 @router.post("/register")
-async def register(payload: RegisterPayload, request: Request, response: Response):
+async def register(
+    payload: RegisterPayload, request: Request, response: Response,
+    persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+):
     email = payload.email.lower()
     username = normalize_username(payload.username)
     if not valid_username(username):
         raise HTTPException(status_code=422, detail="Username must be 3–24 chars: a–z, 0–9, underscore.")
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        ip_key = rate_limit.bucket_key("auth:register:ip", rate_limit.client_ip(request))
-        await _consume_or_429(conn, ip_key, _register_ip_limit(), request, "register:ip")
-        pw_hash = hash_password(payload.password)
-        try:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO users (email, username, password_hash, display_name)
-                VALUES ($1, $2, $3, $4) RETURNING *;
-                """,
-                email, username, pw_hash, username,
-            )
-        except asyncpg.UniqueViolationError as e:
-            field = "email" if "email" in str(e).lower() else "username"
-            raise HTTPException(status_code=409, detail=f"That {field} is already taken.")
-        token = await _issue_email_token(conn, row["id"], "verify", VERIFY_TTL)
-        session = await create_session(conn, row["id"], request.headers.get("user-agent"))
+    ip_key = rate_limit.bucket_key("auth:register:ip", rate_limit.client_ip(request))
+    await _consume_or_429(persistence, ip_key, _register_ip_limit(), request, "register:ip")
+    token = new_token()
+    try:
+        row, session = await persistence.register_user(
+            email, username, hash_password(payload.password), token,
+            dt.datetime.now(dt.timezone.utc) + VERIFY_TTL,
+            request.headers.get("user-agent"),
+        )
+    except DuplicateRegistration as exc:
+        raise HTTPException(status_code=409, detail=f"That {exc.field} is already taken.")
     await send_verification_email(email, _verify_link(token))
     set_session_cookie(response, session)
     return await self_user_with_capabilities(dict(row))
 
 
 @router.post("/login")
-async def login(payload: LoginPayload, request: Request, response: Response):
+async def login(
+    payload: LoginPayload, request: Request, response: Response,
+    persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+):
     ident = payload.identifier.strip()
     ident_key = ident.lower()
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        ip_key = rate_limit.bucket_key("auth:login:ip", rate_limit.client_ip(request))
-        account_key = rate_limit.bucket_key("auth:login:account", ident_key)
-        await _ensure_or_429(conn, ip_key, _login_ip_limit(), request, "login:ip")
-        await _ensure_or_429(conn, account_key, _login_account_limit(), request, "login:account")
-        row = await conn.fetchrow(
-            "SELECT * FROM users WHERE email = $1 OR username = $2;",
-            ident_key, ident_key,
-        )
-        if row is None or not row["password_hash"] or not verify_password(row["password_hash"], payload.password):
-            await _consume_or_429(conn, ip_key, _login_ip_limit(), request, "login:ip")
-            await _consume_or_429(conn, account_key, _login_account_limit(), request, "login:account")
-            _log_auth_event("failure", request, "login")
-            raise HTTPException(status_code=401, detail="Invalid credentials.")
-        if row["status"] != "active":
-            _log_auth_event("failure", request, "login:status")
-            raise HTTPException(status_code=403, detail="This account is suspended.")
-        await rate_limit.clear(conn, ip_key)
-        await rate_limit.clear(conn, account_key)
-        session = await create_session(conn, row["id"], request.headers.get("user-agent"))
+    ip_key = rate_limit.bucket_key("auth:login:ip", rate_limit.client_ip(request))
+    account_key = rate_limit.bucket_key("auth:login:account", ident_key)
+    await _ensure_or_429(persistence, ip_key, _login_ip_limit(), request, "login:ip")
+    await _ensure_or_429(persistence, account_key, _login_account_limit(), request, "login:account")
+    row = await persistence.find_login_user(ident_key)
+    if row is None or not row["password_hash"] or not verify_password(row["password_hash"], payload.password):
+        await _consume_or_429(persistence, ip_key, _login_ip_limit(), request, "login:ip")
+        await _consume_or_429(persistence, account_key, _login_account_limit(), request, "login:account")
+        _log_auth_event("failure", request, "login")
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    if row["status"] != "active":
+        _log_auth_event("failure", request, "login:status")
+        raise HTTPException(status_code=403, detail="This account is suspended.")
+    await persistence.clear_rate(ip_key)
+    await persistence.clear_rate(account_key)
+    session = await persistence.create_user_session(row["id"], request.headers.get("user-agent"))
     set_session_cookie(response, session)
     return await self_user_with_capabilities(dict(row))
 
 
 @router.post("/logout")
-async def logout(request: Request, response: Response):
+async def logout(
+    request: Request, response: Response,
+    persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+):
     token = request.cookies.get(settings.SESSION_COOKIE)
     if token:
-        pool = await get_db_pool()
-        async with pool.acquire() as conn:
-            await revoke_session(conn, token)
+        await persistence.revoke_session(token)
     clear_session_cookie(response)
     return {"status": "ok"}
 
@@ -251,19 +244,19 @@ async def me(user: dict = Depends(current_user)):
 
 
 @router.get("/links")
-async def oauth_links(user: dict = Depends(current_user)):
+async def oauth_links(
+    user: dict = Depends(current_user),
+    persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+):
     """Which OAuth providers are linked to the signed-in account (account panel)."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT provider FROM oauth_accounts WHERE user_id = $1 ORDER BY provider;", user["id"],
-        )
-    return {"linked": [r["provider"] for r in rows], "has_password": bool(user.get("password_hash"))}
+    linked = await persistence.linked_providers(user["id"])
+    return {"linked": linked, "has_password": bool(user.get("password_hash"))}
 
 
 @router.post("/change-password")
 async def change_password(payload: ChangePasswordPayload, request: Request, response: Response,
-                          user: dict = Depends(current_user)):
+                          user: dict = Depends(current_user),
+                          persistence: AuthPersistence = Depends(identity_auth_persistence_dependency)):
     """Set or change the account password. If one is already set, the current one must match.
     Succeeds for OAuth-only users (no current password) so they can add password login.
     All other sessions are revoked; this device gets a fresh session so it stays signed in."""
@@ -271,48 +264,48 @@ async def change_password(payload: ChangePasswordPayload, request: Request, resp
         if not payload.current_password or not verify_password(user["password_hash"], payload.current_password):
             raise HTTPException(status_code=403, detail="Current password is incorrect.")
     new_hash = hash_password(payload.new_password)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2;", new_hash, user["id"])
-        await revoke_user_sessions(conn, user["id"])
-        session = await create_session(conn, user["id"], request.headers.get("user-agent"))
+    session = await persistence.change_password(
+        user["id"], new_hash, request.headers.get("user-agent"),
+    )
     set_session_cookie(response, session)
     return {"status": "ok"}
 
 
 @router.get("/verify")
-async def verify_email(token: str):
+async def verify_email(
+    token: str,
+    persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+):
     th = hash_token(token)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        valid = await conn.fetchval(
-            """
-            SELECT 1
-            FROM email_tokens
-            WHERE token_hash = $1 AND kind = 'verify' AND used_at IS NULL AND expires_at > now();
-            """,
-            th,
-        )
+    valid = await persistence.verification_token_valid(th)
     dest = f"/verify?token={token}" if valid else "/verify-failed"
     return RedirectResponse(url=dest, status_code=303)
 
 
 @router.post("/request-reset")
-async def request_reset(payload: ResetRequestPayload, request: Request):
+async def request_reset(
+    payload: ResetRequestPayload, request: Request,
+    persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+):
     email = payload.email.lower()
     should_issue = True
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        ip_key = rate_limit.bucket_key("auth:reset-request:ip", rate_limit.client_ip(request))
-        email_key = rate_limit.bucket_key("auth:reset-request:email", email)
-        should_issue = await _consume_silent(conn, ip_key, _reset_request_ip_limit(), request, "reset-request:ip")
-        should_issue = (
-            await _consume_silent(conn, email_key, _reset_request_email_limit(), request, "reset-request:email")
-        ) and should_issue
-        row = await conn.fetchrow("SELECT id FROM users WHERE email = $1;", email) if should_issue else None
-        token = None
-        if row is not None:
-            token = await _issue_email_token(conn, row["id"], "reset", RESET_TTL)
+    ip_key = rate_limit.bucket_key("auth:reset-request:ip", rate_limit.client_ip(request))
+    email_key = rate_limit.bucket_key("auth:reset-request:email", email)
+    should_issue = await _consume_silent(
+        persistence, ip_key, _reset_request_ip_limit(), request, "reset-request:ip",
+    )
+    should_issue = (
+        await _consume_silent(
+            persistence, email_key, _reset_request_email_limit(), request, "reset-request:email",
+        )
+    ) and should_issue
+    token = new_token() if should_issue else None
+    if token is not None:
+        issued = await persistence.issue_reset_token(
+            email, token, dt.datetime.now(dt.timezone.utc) + RESET_TTL,
+        )
+        if not issued:
+            token = None
     if token is not None:
         await send_reset_email(email, _reset_link(token))
     # Don't reveal whether the email exists.
@@ -320,48 +313,30 @@ async def request_reset(payload: ResetRequestPayload, request: Request):
 
 
 @router.post("/reset")
-async def reset_password(payload: ResetPayload, request: Request, response: Response):
+async def reset_password(
+    payload: ResetPayload, request: Request, response: Response,
+    persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+):
     th = hash_token(payload.token)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        ip_key = rate_limit.bucket_key("auth:reset-submit:ip", rate_limit.client_ip(request))
-        token_key = rate_limit.bucket_key("auth:reset-submit:token", th)
-        await _consume_or_429(conn, ip_key, _reset_submit_ip_limit(), request, "reset-submit:ip")
-        await _consume_or_429(conn, token_key, _reset_submit_token_limit(), request, "reset-submit:token")
-        row = await conn.fetchrow(
-            """
-            UPDATE email_tokens SET used_at = now()
-            WHERE token_hash = $1 AND kind = 'reset' AND used_at IS NULL AND expires_at > now()
-            RETURNING user_id;
-            """,
-            th,
-        )
-        if row is None:
-            _log_auth_event("failure", request, "reset-submit")
-            raise HTTPException(status_code=400, detail="This reset link is invalid or expired.")
-        pw_hash = hash_password(payload.password)
-        await conn.execute("UPDATE users SET password_hash = $1 WHERE id = $2;", pw_hash, row["user_id"])
-        await revoke_user_sessions(conn, row["user_id"])   # force re-login everywhere
+    ip_key = rate_limit.bucket_key("auth:reset-submit:ip", rate_limit.client_ip(request))
+    token_key = rate_limit.bucket_key("auth:reset-submit:token", th)
+    await _consume_or_429(persistence, ip_key, _reset_submit_ip_limit(), request, "reset-submit:ip")
+    await _consume_or_429(persistence, token_key, _reset_submit_token_limit(), request, "reset-submit:token")
+    if not await persistence.reset_password(th, hash_password(payload.password)):
+        _log_auth_event("failure", request, "reset-submit")
+        raise HTTPException(status_code=400, detail="This reset link is invalid or expired.")
     clear_session_cookie(response)
     return {"status": "ok"}
 
 
 @router.post("/verify")
-async def verify_email_confirm(payload: VerifyPayload):
+async def verify_email_confirm(
+    payload: VerifyPayload,
+    persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+):
     th = hash_token(payload.token)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            UPDATE email_tokens SET used_at = now()
-            WHERE token_hash = $1 AND kind = 'verify' AND used_at IS NULL AND expires_at > now()
-            RETURNING user_id;
-            """,
-            th,
-        )
-        if row is None:
-            raise HTTPException(status_code=400, detail="This verification link is invalid or expired.")
-        await conn.execute("UPDATE users SET email_verified = TRUE WHERE id = $1;", row["user_id"])
+    if not await persistence.confirm_verification(th):
+        raise HTTPException(status_code=400, detail="This verification link is invalid or expired.")
     return {"status": "ok"}
 
 
@@ -388,7 +363,11 @@ async def oauth_start(provider: str):
 
 
 @router.get("/oauth/{provider}/callback")
-async def oauth_callback(provider: str, request: Request, code: str | None = None, state: str | None = None):
+async def oauth_callback(
+    provider: str, request: Request, code: str | None = None,
+    state: str | None = None,
+    persistence: AuthPersistence = Depends(identity_auth_persistence_dependency),
+):
     if not oauth.is_configured(provider):
         raise HTTPException(status_code=404, detail="Provider not configured.")
     cookie = request.cookies.get(OAUTH_STATE_COOKIE)
@@ -404,57 +383,11 @@ async def oauth_callback(provider: str, request: Request, code: str | None = Non
         logger.warning("OAuth exchange failed for %s: %s", provider, e)
         return RedirectResponse(url="/login?error=oauth", status_code=303)
 
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            user = await _find_or_create_oauth_user(conn, provider, identity)
-            session = await create_session(conn, user["id"], request.headers.get("user-agent"))
+    user, session = await persistence.oauth_login(
+        provider, identity, request.headers.get("user-agent"),
+    )
 
     resp = RedirectResponse(url="/", status_code=303)
     resp.delete_cookie(OAUTH_STATE_COOKIE, path="/")
     set_session_cookie(resp, session)
     return resp
-
-
-async def _find_or_create_oauth_user(conn, provider: str, identity: dict) -> dict:
-    pid = identity["provider_account_id"]
-    # 1. Existing link?
-    linked = await conn.fetchrow(
-        """
-        SELECT u.* FROM oauth_accounts oa JOIN users u ON u.id = oa.user_id
-        WHERE oa.provider = $1 AND oa.provider_account_id = $2;
-        """,
-        provider, pid,
-    )
-    if linked is not None:
-        return dict(linked)
-
-    email = identity.get("email")
-    email_verified = bool(identity.get("email_verified"))
-    # 2. Link to an existing account only when the provider verified the email.
-    if email and email_verified:
-        existing = await conn.fetchrow("SELECT * FROM users WHERE email = $1;", email)
-        if existing is not None:
-            await conn.execute(
-                "INSERT INTO oauth_accounts (user_id, provider, provider_account_id) VALUES ($1, $2, $3) "
-                "ON CONFLICT DO NOTHING;",
-                existing["id"], provider, pid,
-            )
-            return dict(existing)
-
-    # 3. Brand-new user. OAuth email is trusted as verified when the provider says so.
-    base = identity.get("name") or (email.split("@")[0] if email else provider + "_user")
-    username = await unique_username(conn, base)
-    placeholder_email = email if email_verified else f"{username}@{provider}.oauth.local"
-    new = await conn.fetchrow(
-        """
-        INSERT INTO users (email, username, display_name, email_verified, password_hash)
-        VALUES ($1, $2, $3, $4, NULL) RETURNING *;
-        """,
-        placeholder_email, username, identity.get("name") or username, email_verified,
-    )
-    await conn.execute(
-        "INSERT INTO oauth_accounts (user_id, provider, provider_account_id) VALUES ($1, $2, $3);",
-        new["id"], provider, pid,
-    )
-    return dict(new)

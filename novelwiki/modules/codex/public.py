@@ -22,3 +22,25 @@ class EstablishedTerm:
 
 class EstablishedTermsApi(Protocol):
     async def list_established_terms(self, novel_id: int) -> list[EstablishedTerm]: ...
+
+
+class GetCodexMeta(Protocol):
+    async def meta(self, novel_id: int, principal: object) -> dict: ...
+
+
+class Ask(Protocol):
+    async def ask(
+        self, novel_id: int, question: str, ceiling: ChapterCeiling
+    ) -> dict: ...
+
+
+class ResolveEntity(Protocol):
+    async def resolve_entity(
+        self, novel_id: int, name: str, ceiling: ChapterCeiling
+    ) -> list[dict]: ...
+
+
+class MergeEntities(Protocol):
+    async def merge_entities(
+        self, novel_id: int, keep_id: int, drop_id: int, principal: object
+    ) -> dict: ...

@@ -4,7 +4,7 @@ from typing import Protocol
 
 from novelwiki.modules.identity.public import Principal
 
-from .dto import Bookmark, Progress
+from .dto import ChapterListItem, ChapterSnapshot, Contribution, Bookmark, Progress
 
 
 class CatalogReadAccess(Protocol):
@@ -22,3 +22,24 @@ class ReadingRepository(Protocol):
     async def delete_bookmark(self, novel_id: int, user_id: int, bookmark_id: int) -> None: ...
     async def chapter_span(self, novel_id: int) -> tuple[int, float | None, float | None]: ...
     async def trusted_ceiling(self, novel_id: int, user_id: int) -> float | None: ...
+
+
+class ChapterTranslationPort(Protocol):
+    async def translate_chapter(
+        self, novel_id: int, number: float, principal: Principal | None
+    ) -> dict: ...
+
+    async def translate_raw_chapter(
+        self, novel_id: int, number: float
+    ) -> str | None: ...
+
+    async def prefetch(
+        self, novel_id: int, after_number: float, count: int,
+        principal: Principal | None,
+    ) -> None: ...
+
+
+class SelfTranslationQuotaPort(Protocol):
+    async def check_and_reserve(
+        self, principal: Principal, kind: str, units: int = 1
+    ) -> None: ...

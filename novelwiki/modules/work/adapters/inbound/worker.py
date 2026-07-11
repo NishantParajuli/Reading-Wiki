@@ -27,9 +27,9 @@ from datetime import timedelta
 
 from novelwiki import audit, quota
 from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
 from novelwiki.jobs import service
 from novelwiki.jobs.claims import claim_next
+from novelwiki.modules.work.application import WorkerStateService
 
 logger = logging.getLogger(__name__)
 
@@ -42,17 +42,18 @@ _last_maintenance = 0.0
 
 _worker_task: asyncio.Task | None = None
 _stop = asyncio.Event()
+async def _worker_state() -> WorkerStateService:
+    from novelwiki.bootstrap.work_worker import build_worker_state_service
+
+    # Pool ownership belongs to Platform and test/application lifecycles may replace
+    # it. Rebuild this lightweight facade so it always points at the active pool.
+    return await build_worker_state_service()
 
 
 # ── User + cancellation helpers ──────────────────────────────────────────────
 
 async def _load_user(user_id: int | None) -> dict | None:
-    if user_id is None:
-        return None
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM users WHERE id = $1;", user_id)
-    return dict(row) if row else None
+    return await (await _worker_state()).load_user(user_id)
 
 
 class _Canceled(Exception):
@@ -127,20 +128,9 @@ async def _handle_codex(job: dict) -> dict:
 
 
 async def _pending_translations(novel_id: int, frm, to, force: bool) -> list[float]:
-    conds = ["novel_id = $1", "original_text IS NOT NULL"]
-    args: list = [novel_id]
-    if not force:
-        conds.append("content IS NULL")
-    if frm is not None:
-        args.append(frm); conds.append(f"number >= ${len(args)}")
-    if to is not None:
-        args.append(to); conds.append(f"number <= ${len(args)}")
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            f"SELECT number FROM chapters WHERE {' AND '.join(conds)} ORDER BY number ASC;", *args
-        )
-    return [float(r["number"]) for r in rows]
+    return await (await _worker_state()).pending_translations(
+        novel_id, frm, to, force
+    )
 
 
 async def _handle_translate(job: dict) -> dict:
@@ -201,14 +191,7 @@ async def _claim_next() -> dict | None:
 
 
 async def _renew_lease(job_id: int, token: str | None) -> None:
-    if not token:
-        return
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE jobs SET claimed_at = now() WHERE id = $1 AND claim_token = $2 AND status = 'running';",
-            job_id, token,
-        )
+    await (await _worker_state()).renew_lease(job_id, token)
 
 
 async def _heartbeat(job_id: int, token: str | None, stop: asyncio.Event) -> None:
@@ -230,70 +213,30 @@ async def _recover_stale_leases() -> None:
     safe: a live worker heartbeats its claim, so a job it is actively processing never looks reclaimable.
     A reclaimed job is retried while attempts remain, else failed once and quota-finalized."""
     lease = timedelta(seconds=settings.JOB_LEASE_TIMEOUT_SECONDS)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT id, attempts, max_attempts, cancel_requested_at FROM jobs "
-            "WHERE status = 'running' AND (claimed_at IS NULL OR claimed_at < now() - $1::interval);",
-            lease,
-        )
-    for r in rows:
-        job_id = int(r["id"])
-        if r["cancel_requested_at"] is not None:
-            async with pool.acquire() as conn:
-                changed = await conn.fetchrow(
-                    """
-                    UPDATE jobs SET status='canceled',stage='canceled (worker lost after request)',
-                      claim_token=NULL,claimed_at=NULL,updated_at=now()
-                    WHERE id=$1 AND status='running' AND cancel_requested_at IS NOT NULL
-                      AND (claimed_at IS NULL OR claimed_at < now()-$2::interval)
-                    RETURNING id;
-                    """,
-                    job_id, lease,
-                )
-            if changed:
-                await service.finalize(job_id, success=False)
-                await audit.record("job.canceled", data={"job_id": job_id, "reason": "lease_expired_after_cancel"})
-            continue
-        if int(r["attempts"]) >= int(r["max_attempts"]):
-            # Terminally fail (guarded on status='running' so a racing live claim wins).
-            async with pool.acquire() as conn:
-                changed = await conn.fetchrow(
-                    "UPDATE jobs SET status='failed', stage='failed (worker lost)', "
-                    "error=COALESCE(error, 'Worker lost the job before it finished (lease expired).'), "
-                    "claim_token=NULL, claimed_at=NULL, updated_at=now() "
-                    "WHERE id=$1 AND status='running' AND (claimed_at IS NULL OR claimed_at < now() - $2::interval) "
-                    "RETURNING id;",
-                    job_id, lease,
-                )
-            if changed:
-                logger.warning(f"Job {job_id} failed after lease expiry (attempts exhausted).")
-                await service.finalize(job_id, success=False)
-                await audit.record("job.failed", data={"job_id": job_id, "reason": "lease_expired"})
+    recoveries = await (await _worker_state()).recover_stale_leases(lease)
+    for recovery in recoveries:
+        job_id = recovery.job_id
+        if recovery.action == "canceled":
+            await service.finalize(job_id, success=False)
+            await audit.record(
+                "job.canceled",
+                data={"job_id": job_id, "reason": "lease_expired_after_cancel"},
+            )
+        elif recovery.action == "failed":
+            logger.warning(
+                f"Job {job_id} failed after lease expiry (attempts exhausted)."
+            )
+            await service.finalize(job_id, success=False)
+            await audit.record(
+                "job.failed", data={"job_id": job_id, "reason": "lease_expired"}
+            )
         else:
-            async with pool.acquire() as conn:
-                changed = await conn.fetchrow(
-                    "UPDATE jobs SET status='queued', stage='requeued (lease expired)', "
-                    "claim_token=NULL, claimed_at=NULL, updated_at=now() "
-                    "WHERE id=$1 AND status='running' AND (claimed_at IS NULL OR claimed_at < now() - $2::interval) "
-                    "RETURNING id;",
-                    job_id, lease,
-                )
-            if changed:
-                logger.info(f"Recovered orphaned job {job_id} → queued (lease expired).")
+            logger.info(f"Recovered orphaned job {job_id} → queued (lease expired).")
 
 
 async def _release_due_provider_waits() -> None:
     """A provider-wait row has no lease; make due rows claimable again."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            UPDATE jobs SET status='queued', stage='queued after provider wait',
-              not_before=NULL, updated_at=now()
-            WHERE status='waiting_provider' AND not_before IS NOT NULL AND not_before <= now();
-            """
-        )
+    await (await _worker_state()).release_due_provider_waits()
 
 
 async def _run_maintenance(force: bool = False) -> None:

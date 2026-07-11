@@ -7,7 +7,6 @@ this worker and never receives AGY credentials.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import uuid
@@ -25,7 +24,7 @@ from novelwiki.ai_backend.policy import get_policy, model_for, reauthorize_job
 from novelwiki.ai_backend.types import ExecutionBackend, Workload
 from novelwiki.auth.access import can_edit, fetch_novel
 from novelwiki.config.settings import settings
-from novelwiki.db.connection import close_db_pool, get_db_pool, init_db_pool
+from novelwiki.db.connection import close_db_pool, init_db_pool
 from novelwiki.jobs import service
 from novelwiki.jobs.claims import claim_next
 from novelwiki.jobs.worker import _heartbeat, _recover_stale_leases, _release_due_provider_waits
@@ -35,34 +34,27 @@ WORKER_ID = f"agy-{os.getpid()}-{uuid.uuid4().hex[:12]}"
 ADVISORY_LOCK_KEY = "novelwiki-agy-subscription-v1"
 
 
+async def _worker_state():
+    from novelwiki.bootstrap.ai_execution_worker import build_agy_worker_state_service
+    return await build_agy_worker_state_service()
+
+
 async def _load_user(user_id: int | None) -> dict | None:
-    if user_id is None:
-        return None
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM users WHERE id=$1;", user_id)
-    return dict(row) if row else None
+    return await (await _worker_state()).load_user(user_id)
 
 
 async def _write_heartbeat(status: str, preflight: PreflightResult | None, **details) -> None:
     if preflight is not None:
         details = {**details, "configured_models_present": preflight.healthy,
                    "models": list(preflight.models), "preflight_error_code": preflight.error_code}
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO ai_worker_heartbeats
-              (worker_id,backend,status,version,plugin_version,plugin_sha256,details,heartbeat_at,started_at)
-            VALUES ($1,'agy',$2,$3,$4,$5,$6,now(),now())
-            ON CONFLICT (worker_id) DO UPDATE SET status=EXCLUDED.status,
-              version=EXCLUDED.version,plugin_version=EXCLUDED.plugin_version,
-              plugin_sha256=EXCLUDED.plugin_sha256,details=EXCLUDED.details,heartbeat_at=now();
-            """,
-            WORKER_ID, status, preflight.version if preflight else None,
-            settings.AGY_PLUGIN_VERSION, preflight.plugin_sha256 if preflight else None,
-            json.dumps(details),
-        )
+    await (await _worker_state()).write_heartbeat(
+        worker_id=WORKER_ID,
+        status=status,
+        version=preflight.version if preflight else None,
+        plugin_version=settings.AGY_PLUGIN_VERSION,
+        plugin_sha256=preflight.plugin_sha256 if preflight else None,
+        details=details,
+    )
 
 
 async def _heartbeat_loop(stop: asyncio.Event, state: dict) -> None:
@@ -80,15 +72,8 @@ async def _heartbeat_loop(stop: asyncio.Event, state: dict) -> None:
 
 async def _reap_orphans() -> None:
     """Kill verified stale process groups before any new subscription work starts."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id,job_id,workload,status,workspace_relpath,process_group_id,process_started_at
-            FROM ai_execution_runs
-            WHERE backend='agy' AND status IN ('preparing','running','validating');
-            """
-        )
+    state = await _worker_state()
+    rows = await state.orphan_runs()
     for row in rows:
         pgid, started = row["process_group_id"], row["process_started_at"]
         if pgid and process_identity_matches(int(pgid), started):
@@ -100,23 +85,9 @@ async def _reap_orphans() -> None:
         resumable = bool(row["status"] == "validating" and (workspace / "output" / "manifest.json").is_file())
         if resumable:
             continue
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE ai_execution_runs SET status='worker_lost',failure_code='worker_lost',
-                  error_summary='Worker exited before a complete artifact was ready.',finished_at=now()
-                WHERE id=$1 AND status IN ('preparing','running','validating');
-                """,
-                run_id,
-            )
-            if row["workload"] == "translate_batch":
-                await conn.execute(
-                    """
-                    UPDATE chapters SET translation_status='failed',translation_run_id=NULL
-                    WHERE translation_run_id=$1 AND translation_status='translating';
-                    """,
-                    run_id,
-                )
+        await state.mark_orphan_lost(
+            run_id, row["workload"] == "translate_batch"
+        )
 
 
 async def _reauthorize(job: dict) -> tuple[bool, str, dict | None]:
@@ -134,15 +105,7 @@ async def _reauthorize(job: dict) -> tuple[bool, str, dict | None]:
     policy = await get_policy(int(user["id"]))
     if not policy:
         return False, "grant_revoked", user
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        active = int(await conn.fetchval(
-            """
-            SELECT count(*) FROM jobs WHERE user_id=$1 AND execution_backend='agy'
-              AND status IN ('queued','running','waiting_provider');
-            """,
-            user["id"],
-        ) or 0)
+    active = await (await _worker_state()).active_job_count(int(user["id"]))
     if active > int(policy.get("max_concurrent_agy_jobs") or 1):
         return False, "user_concurrency_exceeded", user
     return True, reason, user
@@ -188,19 +151,10 @@ async def _fallback_to_api(job: dict, exc: Exception) -> bool:
         model = model_for(Workload.TRANSLATE_BATCH, ExecutionBackend.API)
     else:
         model = model_for(Workload.CODEX_EXTRACT, ExecutionBackend.API)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        changed = await conn.fetchrow(
-            """
-            UPDATE jobs SET execution_backend='api',backend_fallback_from='agy',backend_model=$2,
-              backend_fallback_allowed=FALSE,status='queued',stage='AGY failed; switching to API',
-              attempts=0,max_attempts=$3,error=$4,claim_token=NULL,claimed_at=NULL,
-              not_before=NULL,cancel_requested_at=NULL,updated_at=now()
-            WHERE id=$1 AND status='running' RETURNING id;
-            """,
-            int(job["id"]), model, settings.JOB_MAX_ATTEMPTS,
-            safe_error_summary(exc),
-        )
+    changed = await (await _worker_state()).fallback_to_api(
+        int(job["id"]), model, settings.JOB_MAX_ATTEMPTS,
+        safe_error_summary(exc),
+    )
     if changed:
         await audit.record("agy.run.fallback_to_api", user_id=job.get("user_id"), novel_id=job.get("novel_id"),
                            data={"job_id": int(job["id"]), "failure_code": getattr(exc, "code", "unknown")})
@@ -272,10 +226,9 @@ async def worker_loop(poll_interval: float = 2.0, stop: asyncio.Event | None = N
     stop = stop or asyncio.Event()
     state = {"status": "starting", "preflight": None, "job_id": None, "error": None}
     hb = asyncio.create_task(_heartbeat_loop(stop, state))
-    pool = await get_db_pool()
-    lock_conn = await pool.acquire()
+    worker_state = await _worker_state()
     try:
-        locked = await lock_conn.fetchval("SELECT pg_try_advisory_lock(hashtext($1));", ADVISORY_LOCK_KEY)
+        locked = await worker_state.acquire_subscription_lock(ADVISORY_LOCK_KEY)
         if not locked:
             state.update(status="standby", error="another AGY worker holds the subscription lock")
             await _write_heartbeat("standby", None, error=state["error"])
@@ -319,10 +272,9 @@ async def worker_loop(poll_interval: float = 2.0, stop: asyncio.Event | None = N
             await _process(job, preflight, state)
     finally:
         try:
-            await lock_conn.execute("SELECT pg_advisory_unlock(hashtext($1));", ADVISORY_LOCK_KEY)
+            await worker_state.release_subscription_lock(ADVISORY_LOCK_KEY)
         except Exception:
             pass
-        await pool.release(lock_conn)
         stop.set()
         try:
             await hb

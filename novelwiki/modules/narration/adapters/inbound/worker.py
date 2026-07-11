@@ -21,14 +21,12 @@ skipped chapter costs nothing, and exhausting quota mid-batch stops the job grac
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 import json
 import logging
 import os
 from pathlib import Path
 
 from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
 from novelwiki import quota
 from novelwiki.tts import tts_client, textprep
 from novelwiki.tts.chapter_text import resolve_chapter_text
@@ -44,6 +42,11 @@ _stop = asyncio.Event()
 # One GPU behind the TTS sidecar → never run two narrations at once (the worker is already
 # sequential, but this also guards a future standalone worker process).
 _TTS_LOCK = asyncio.Lock()
+
+
+async def _worker_state():
+    from novelwiki.bootstrap.narration_worker import build_narration_worker_state
+    return await build_narration_worker_state()
 
 
 # ── Row (de)serialization ────────────────────────────────────────────────────
@@ -108,40 +111,13 @@ def chapter_job_options(number, content_version: int, target_user_id: int | None
 async def create_job(novel_id: int, user_id: int | None, scope: str, voice_id: str,
                      options: dict | None = None) -> int:
     opts = dict(options or {})
-    dedupe_key = str(opts.get("dedupe_key") or "").strip()
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            if dedupe_key:
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2));",
-                    "tts_job_dedupe", dedupe_key,
-                )
-                existing = await conn.fetchval(
-                    """
-                    SELECT id FROM tts_jobs
-                    WHERE status = ANY($1::text[])
-                      AND options->>'dedupe_key' = $2
-                    ORDER BY created_at ASC
-                    LIMIT 1;
-                    """,
-                    list(ACTIVE_STATUSES), dedupe_key,
-                )
-                if existing is not None:
-                    return int(existing)
-            return int(await conn.fetchval(
-                """
-                INSERT INTO tts_jobs (novel_id, user_id, scope, voice_id, options, status, stage)
-                VALUES ($1, $2, $3, $4, $5, 'queued', 'queued') RETURNING id;
-                """,
-                novel_id, user_id, scope, voice_id, json.dumps(opts),
-            ))
+    return await (await _worker_state()).create_job(
+        novel_id, user_id, scope, voice_id, opts, ACTIVE_STATUSES,
+    )
 
 
 async def get_job(job_id: int) -> dict | None:
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM tts_jobs WHERE id = $1;", job_id)
+    row = await (await _worker_state()).get_job(job_id)
     return _row_to_job(row) if row else None
 
 
@@ -149,69 +125,26 @@ async def find_active_chapter_job(novel_id: int, number, voice_id: str, version:
                                   user_id: int | None, include_force: bool = True) -> dict | None:
     """Return an in-flight one-chapter job for this exact audio cache target, if any."""
     chapter = _numstr(number)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        args = [list(ACTIVE_STATUSES), novel_id, voice_id, chapter, str(int(version))]
-        user_cond = "options->>'target_user_id' IS NULL"
-        if user_id is not None:
-            args.append(str(int(user_id)))
-            user_cond = f"options->>'target_user_id' = ${len(args)}"
-        force_cond = ""
-        if not include_force:
-            force_cond = "AND COALESCE((options->>'force')::boolean, false) = false"
-        row = await conn.fetchrow(
-            f"""
-            SELECT * FROM tts_jobs
-            WHERE status = ANY($1::text[])
-              AND novel_id = $2
-              AND voice_id = $3
-              AND scope = 'chapter'
-              AND options->>'target_kind' = 'chapter_audio'
-              AND options->>'target_chapter' = $4
-              AND options->>'target_content_version' = $5
-              AND {user_cond}
-              {force_cond}
-            ORDER BY created_at ASC
-            LIMIT 1;
-            """,
-            *args,
-        )
+    row = await (await _worker_state()).active_chapter_job(
+        active_statuses=ACTIVE_STATUSES, novel_id=novel_id, voice_id=voice_id,
+        chapter=chapter, version=version, user_id=user_id,
+        include_force=include_force,
+    )
     return _row_to_job(row) if row else None
 
 
 async def find_active_book_job(novel_id: int, voice_id: str) -> dict | None:
     """Return the active whole-book batch for a novel/voice, if one is already running."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT * FROM tts_jobs
-            WHERE status = ANY($1::text[])
-              AND novel_id = $2
-              AND voice_id = $3
-              AND scope = 'book'
-            ORDER BY created_at ASC
-            LIMIT 1;
-            """,
-            list(ACTIVE_STATUSES), novel_id, voice_id,
-        )
+    row = await (await _worker_state()).active_book_job(
+        novel_id, voice_id, ACTIVE_STATUSES,
+    )
     return _row_to_job(row) if row else None
 
 
 async def update_job(job_id: int, **fields) -> None:
     if not fields:
         return
-    sets, args = [], []
-    for k, v in fields.items():
-        args.append(json.dumps(v) if k in _JSON_FIELDS and v is not None else v)
-        sets.append(f"{k} = ${len(args)}")
-    args.append(job_id)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            f"UPDATE tts_jobs SET {', '.join(sets)}, updated_at = now() WHERE id = ${len(args)};",
-            *args,
-        )
+    await (await _worker_state()).update_job(job_id, fields)
 
 
 async def fail_job(job_id: int, error: str) -> None:
@@ -222,29 +155,16 @@ async def fail_job(job_id: int, error: str) -> None:
 async def cancel_job(job_id: int) -> None:
     """Request cancellation. A queued job is never claimed; an in-flight job stops at the next
     cancellation check. Terminal jobs are left as-is."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE tts_jobs SET status='canceled', stage='canceled', updated_at=now() "
-            "WHERE id = $1 AND status IN ('queued','generating');",
-            job_id,
-        )
+    await (await _worker_state()).cancel_job(job_id)
 
 
 async def _is_canceled(job_id: int) -> bool:
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        st = await conn.fetchval("SELECT status FROM tts_jobs WHERE id = $1;", job_id)
+    st = await (await _worker_state()).status(job_id)
     return st == "canceled"
 
 
 async def _load_user(user_id: int | None) -> dict | None:
-    if user_id is None:
-        return None
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM users WHERE id = $1;", user_id)
-    return dict(row) if row else None
+    return await (await _worker_state()).load_user(user_id)
 
 
 # ── Audio cache (chapter_audio) ──────────────────────────────────────────────
@@ -268,20 +188,10 @@ def audio_abs(rel: str) -> Path:
 
 async def find_audio(novel_id: int, number, voice_id: str, version: int, user_id: int | None) -> dict | None:
     """Exact-match cache lookup for one (novel, chapter, voice, version, owner) audio row."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        if user_id is None:
-            row = await conn.fetchrow(
-                "SELECT * FROM chapter_audio WHERE novel_id=$1 AND chapter=$2 AND voice_id=$3 "
-                "AND content_version=$4 AND user_id IS NULL;",
-                novel_id, number, voice_id, version,
-            )
-        else:
-            row = await conn.fetchrow(
-                "SELECT * FROM chapter_audio WHERE novel_id=$1 AND chapter=$2 AND voice_id=$3 "
-                "AND content_version=$4 AND user_id=$5;",
-                novel_id, number, voice_id, version, user_id,
-            )
+    row = await (await _worker_state()).find_audio(
+        novel_id=novel_id, number=number, voice_id=voice_id,
+        version=version, user_id=user_id,
+    )
     return dict(row) if row else None
 
 
@@ -296,50 +206,30 @@ async def lookup_for_reader(novel_id: int, number: float, voice_id: str, user: d
 
 
 async def _upsert_audio(novel_id, number, user_id, voice_id, language, version, rel, duration, nbytes) -> None:
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        # ON CONFLICT targets the matching partial unique index (base vs per-user).
-        if user_id is None:
-            await conn.execute(
-                """
-                INSERT INTO chapter_audio
-                  (novel_id, chapter, user_id, voice_id, language, content_version, audio_path, duration_seconds, file_bytes)
-                VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8)
-                ON CONFLICT (novel_id, chapter, voice_id, content_version) WHERE user_id IS NULL
-                DO UPDATE SET audio_path=EXCLUDED.audio_path, duration_seconds=EXCLUDED.duration_seconds,
-                              file_bytes=EXCLUDED.file_bytes, language=EXCLUDED.language, created_at=now();
-                """,
-                novel_id, number, voice_id, language, version, rel, int(duration), int(nbytes),
-            )
-        else:
-            await conn.execute(
-                """
-                INSERT INTO chapter_audio
-                  (novel_id, chapter, user_id, voice_id, language, content_version, audio_path, duration_seconds, file_bytes)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-                ON CONFLICT (novel_id, chapter, voice_id, content_version, user_id) WHERE user_id IS NOT NULL
-                DO UPDATE SET audio_path=EXCLUDED.audio_path, duration_seconds=EXCLUDED.duration_seconds,
-                              file_bytes=EXCLUDED.file_bytes, language=EXCLUDED.language, created_at=now();
-                """,
-                novel_id, number, user_id, voice_id, language, version, rel, int(duration), int(nbytes),
-            )
+    await (await _worker_state()).upsert_audio(
+        novel_id=novel_id, number=number, user_id=user_id, voice_id=voice_id,
+        language=language, version=version, rel=rel, duration=duration,
+        nbytes=nbytes,
+    )
 
 
 # ── Generation ───────────────────────────────────────────────────────────────
 
-@asynccontextmanager
-async def _target_lock(key: str):
+def _target_lock(key: str):
     """Cross-process lock for one chapter-audio target."""
-    pool = await get_db_pool()
-    conn = await pool.acquire()
-    try:
-        await conn.execute("SELECT pg_advisory_lock(hashtext($1), hashtext($2));", "tts_audio", key)
-        yield
-    finally:
-        try:
-            await conn.execute("SELECT pg_advisory_unlock(hashtext($1), hashtext($2));", "tts_audio", key)
-        finally:
-            await pool.release(conn)
+    return _DeferredTargetLock(key)
+
+
+class _DeferredTargetLock:
+    def __init__(self, key: str):
+        self._key = key
+
+    async def __aenter__(self):
+        self._lock = (await _worker_state()).target_lock(self._key)
+        return await self._lock.__aenter__()
+
+    async def __aexit__(self, *args):
+        return await self._lock.__aexit__(*args)
 
 
 async def _generate_chapter(job: dict, user: dict, number) -> str:
@@ -483,33 +373,13 @@ async def _run(job: dict, user: dict) -> None:
 async def _requeue_interrupted() -> None:
     """A restart can kill the worker mid-job: `generating` → `queued` so it re-runs (already
     finished chapters are skipped via the chapter_audio cache)."""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        n = await conn.execute(
-            "UPDATE tts_jobs SET status='queued', stage='requeued after restart' WHERE status='generating';"
-        )
+    n = await (await _worker_state()).requeue_interrupted()
     if n and not n.endswith(" 0"):
         logger.info(f"Requeued interrupted TTS jobs: {n}.")
 
 
 async def _claim_next() -> dict | None:
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            UPDATE tts_jobs j
-            SET status = 'generating', stage = 'claimed', updated_at = now()
-            WHERE j.id = (
-                SELECT id FROM tts_jobs
-                WHERE status = ANY($1::text[])
-                ORDER BY updated_at ASC
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-            )
-            RETURNING j.*;
-            """,
-            list(TRIGGER_STATUSES),
-        )
+    row = await (await _worker_state()).claim_next(TRIGGER_STATUSES)
     return _row_to_job(row) if row else None
 
 

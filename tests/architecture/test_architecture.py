@@ -88,10 +88,13 @@ def test_completed_modules_have_no_legacy_http_handlers():
     from novelwiki.bootstrap.legacy_http import OWNERS
 
     assert OWNERS["catalog"] == frozenset()
+    assert OWNERS["reading"] == frozenset()
+    assert OWNERS["acquisition"] == frozenset()
     assert OWNERS["translation"] == frozenset()
+    assert OWNERS["codex"] == frozenset()
     assert OWNERS["experience"] == frozenset()
     # This ratchet makes handler extraction monotonic. Lower it as each slice lands.
-    assert sum(len(names) for names in OWNERS.values()) <= 42
+    assert sum(len(names) for names in OWNERS.values()) == 0
 
 
 @pytest.mark.parametrize(
@@ -101,6 +104,10 @@ def test_completed_modules_have_no_legacy_http_handlers():
         Path("translation/adapters/inbound/http.py"),
         Path("acquisition/adapters/inbound/http.py"),
         Path("experience/adapters/inbound/projections_http.py"),
+        Path("reading/adapters/inbound/http.py"),
+        Path("codex/adapters/inbound/http.py"),
+        Path("identity/adapters/inbound/http.py"),
+        Path("narration/adapters/inbound/http.py"),
     ],
 )
 def test_migrated_http_adapters_contain_no_sql_or_pool_access(relative: Path):
@@ -115,6 +122,29 @@ def test_migrated_http_adapters_contain_no_sql_or_pool_access(relative: Path):
         and node.func.attr in forbidden_methods
     ]
     assert not calls, f"{relative}: database calls in inbound adapter: {calls}"
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        Path("work/adapters/inbound/worker.py"),
+        Path("ai_execution/adapters/inbound/worker.py"),
+        Path("narration/adapters/inbound/worker.py"),
+    ],
+)
+def test_migrated_workers_contain_no_sql_or_pool_access(relative: Path):
+    source = (MODULE_ROOT / relative).read_text(encoding="utf-8")
+    assert "get_db_pool" not in source
+    tree = ast.parse(source)
+    forbidden_methods = {"execute", "executemany", "fetch", "fetchrow", "fetchval"}
+    calls = [
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in forbidden_methods
+    ]
+    assert not calls, f"database calls in inbound worker {relative}: {calls}"
 
 
 def test_named_workflow_coordinators_are_infrastructure_free():
@@ -161,3 +191,22 @@ def test_experience_projection_registry_is_explicit_and_read_only():
     source = path.read_text(encoding="utf-8")
     writes = re.findall(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\b", source, re.IGNORECASE)
     assert not writes, f"Experience projection registry contains write SQL: {writes}"
+
+
+def test_platform_web_lifespan_delegates_to_lifecycle_registry():
+    source = (ROOT / "novelwiki/platform/web/app.py").read_text(encoding="utf-8")
+    lifespan_source = source[source.index("async def lifespan"):source.index("app = FastAPI")]
+    assert "build_application_lifecycle" in lifespan_source
+    assert ".execute(" not in lifespan_source
+    assert "start_worker" not in lifespan_source
+
+
+def test_experience_admin_adapter_contains_no_write_sql():
+    path = MODULE_ROOT / "experience/adapters/inbound/admin_http.py"
+    source = path.read_text(encoding="utf-8")
+    writes = re.findall(
+        r"\b(?:INSERT\s+INTO|UPDATE\s+[a-z_]|DELETE\s+FROM)\b",
+        source,
+        re.IGNORECASE,
+    )
+    assert not writes, f"Experience admin adapter contains write SQL: {writes}"

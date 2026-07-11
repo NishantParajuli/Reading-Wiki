@@ -7,8 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from novelwiki.platform.config import settings
-from novelwiki.platform.database import init_db_pool, close_db_pool
-from novelwiki.db.schema import init_database
+from novelwiki.platform.database import init_db_pool
 from novelwiki.auth.sessions import set_csrf_cookie
 
 logging.basicConfig(level=logging.INFO)
@@ -16,100 +15,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Startup Phase ──
-    logger.info("Ensuring database schema exists...")
+    from novelwiki.bootstrap.lifecycle import build_application_lifecycle
+
+    lifecycle = build_application_lifecycle()
+    await lifecycle.start()
     try:
-        await init_database()
-    except Exception as e:
-        logger.warning(f"Schema init at startup failed (continuing): {e}")
-
-    logger.info("Initializing database connection pool...")
-    pool = await init_db_pool()
-
-    try:
-        from novelwiki.auth import rate_limit as auth_rate_limit
-        async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM sessions WHERE expires_at <= now();")
-            await conn.execute("DELETE FROM email_tokens WHERE used_at IS NOT NULL OR expires_at <= now();")
-            await auth_rate_limit.cleanup(conn)
-    except Exception as e:
-        logger.warning(f"Auth cleanup at startup failed (continuing): {e}")
-
-    # Multi-user: bootstrap the admin + reassign any pre-existing single-user data to the
-    # shared Global library. Idempotent — a no-op once the DB is already multi-user.
-    try:
-        from novelwiki.db.migrate_multiuser import maybe_migrate
-        await maybe_migrate()
-    except Exception as e:
-        logger.error(f"Multi-user migration at startup failed: {e}")
-        raise
-
-    # BM25 indexes are per-novel and lazy: each novel's index is built/loaded on its
-    # first codex query, so there's nothing to preload here.
-
-    # The import worker is a single durable, DB-polled background task: it advances
-    # EPUB/PDF ingestion jobs (parse → segment → commit) and resumes ones a restart
-    # interrupted. It only touches its own tables, so a failure here can't break reading.
-    try:
-        from novelwiki.importer.jobs import start_worker
-        start_worker()
-    except Exception as e:
-        logger.warning(f"Could not start the import worker (continuing): {e}")
-
-    # The TTS worker is a second durable, DB-polled background task: it advances audiobook
-    # narration jobs (resolve text → narrate via the GPU sidecar → cache Opus) and resumes
-    # ones a restart interrupted. Like the import worker it only touches its own tables.
-    try:
-        from novelwiki.tts.worker import start_worker as start_tts_worker
-        start_tts_worker()
-    except Exception as e:
-        logger.warning(f"Could not start the TTS worker (continuing): {e}")
-
-    # The generic jobs worker is a third durable, DB-polled task: it advances scrape / codex-build
-    # / translation jobs that used to run in fire-and-forget BackgroundTasks (and would be lost on
-    # a deploy after quota was reserved). It reserves/refunds quota explicitly and retries failures.
-    try:
-        from novelwiki.jobs.worker import start_worker as start_jobs_worker
-        start_jobs_worker()
-    except Exception as e:
-        logger.warning(f"Could not start the jobs worker (continuing): {e}")
-
-    # AGY is intentionally NOT started by the web lifespan. Warn clearly when the
-    # rollout switch is on but the separately authenticated host worker is absent.
-    if settings.AGY_ENABLED:
-        try:
-            from novelwiki.ai_backend.policy import worker_available
-            if not await worker_available():
-                logger.warning(
-                    "AGY_ENABLED is true, but no recent healthy dedicated AGY worker heartbeat exists. "
-                    "AGY jobs may remain queued until the host worker recovers."
-                )
-        except Exception as e:
-            logger.warning(f"Could not check dedicated AGY worker health: {e}")
-
-    yield
-
-    # ── Shutdown Phase ──
-    try:
-        from novelwiki.importer.jobs import stop_worker
-        await stop_worker()
-    except Exception as e:
-        logger.warning(f"Error stopping import worker: {e}")
-
-    try:
-        from novelwiki.tts.worker import stop_worker as stop_tts_worker
-        await stop_tts_worker()
-    except Exception as e:
-        logger.warning(f"Error stopping TTS worker: {e}")
-
-    try:
-        from novelwiki.jobs.worker import stop_worker as stop_jobs_worker
-        await stop_jobs_worker()
-    except Exception as e:
-        logger.warning(f"Error stopping jobs worker: {e}")
-
-    logger.info("Closing database connection pool...")
-    await close_db_pool()
+        yield
+    finally:
+        await lifecycle.stop()
 
 app = FastAPI(
     title="Novel Reading Platform",
@@ -225,7 +138,10 @@ async def security_headers(request, call_next):
 # /api requires a logged-in user via a router-level dependency. Handlers that need the
 # user object additionally declare `Depends(current_user)` — FastAPI caches it per request.
 from fastapi import Depends
-from novelwiki.modules.identity.adapters.inbound.http import router as auth_router
+from novelwiki.modules.identity.adapters.inbound.http import (
+    identity_auth_persistence_dependency,
+    router as auth_router,
+)
 from novelwiki.auth.deps import current_user, require_admin
 from novelwiki.modules.identity.adapters.inbound.dependencies import (
     identity_session_service_dependency,
@@ -235,10 +151,18 @@ from novelwiki.modules.identity.adapters.inbound.account_http import (
     quota_service_dependency,
     router as identity_account_router,
 )
-from novelwiki.modules.experience.adapters.inbound.admin_http import router as admin_router
-from novelwiki.modules.narration.adapters.inbound.http import router as tts_router
+from novelwiki.modules.experience.adapters.inbound.admin_http import (
+    identity_admin_service_dependency,
+    router as admin_router,
+)
+from novelwiki.modules.narration.adapters.inbound.http import (
+    narration_principal_factory_dependency,
+    narration_service_dependency,
+    router as tts_router,
+)
 from novelwiki.modules.experience.adapters.inbound.http import router as product_router
 from novelwiki.modules.reading.adapters.inbound.http import (
+    reading_migration_service_dependency,
     reading_service_dependency,
     router as reading_router,
 )
@@ -248,27 +172,17 @@ from novelwiki.modules.catalog.adapters.inbound.http import (
     catalog_service_dependency,
     router as catalog_router,
 )
-from novelwiki.modules.identity.adapters.inbound.legacy_http import (
-    router as legacy_identity_router,
-)
-from novelwiki.modules.catalog.adapters.inbound.legacy_http import (
-    router as legacy_catalog_router,
-)
-from novelwiki.modules.reading.adapters.inbound.legacy_http import (
-    router as legacy_reading_router,
-)
-from novelwiki.modules.acquisition.adapters.inbound.legacy_http import (
-    router as legacy_acquisition_router,
-)
 from novelwiki.modules.acquisition.adapters.inbound.http import (
+    acquisition_principal_factory_dependency,
+    acquisition_service_dependency,
     adapter_catalog_dependency,
+    import_service_dependency,
     router as acquisition_router,
 )
-from novelwiki.modules.translation.adapters.inbound.legacy_http import (
-    router as legacy_translation_router,
-)
-from novelwiki.modules.codex.adapters.inbound.legacy_http import (
-    router as legacy_codex_router,
+from novelwiki.modules.codex.adapters.inbound.http import (
+    codex_migration_service_dependency,
+    codex_principal_factory_dependency,
+    router as codex_router,
 )
 from novelwiki.modules.translation.adapters.inbound.http import (
     glossary_service_dependency,
@@ -276,31 +190,17 @@ from novelwiki.modules.translation.adapters.inbound.http import (
     router as translation_router,
     translation_scheduling_service_dependency,
 )
-from novelwiki.modules.experience.adapters.inbound.legacy_http import (
-    router as legacy_experience_router,
-)
 from novelwiki.modules.experience.adapters.inbound.projections_http import (
     experience_projection_service_dependency,
     router as experience_projection_router,
 )
 app.include_router(auth_router, prefix="/api/auth")
-for module_router in (
-    legacy_experience_router,
-    legacy_catalog_router,
-    legacy_identity_router,
-    legacy_acquisition_router,
-    legacy_reading_router,
-    legacy_translation_router,
-    legacy_codex_router,
-):
-    app.include_router(
-        module_router, prefix="/api", dependencies=[Depends(current_user)]
-    )
 app.include_router(reading_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(work_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(catalog_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(acquisition_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(experience_projection_router, prefix="/api", dependencies=[Depends(current_user)])
+app.include_router(codex_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(translation_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(identity_account_router, prefix="/api", dependencies=[Depends(current_user)])
 # Audiobook TTS endpoints (same auth model as the main router).
@@ -326,6 +226,17 @@ async def _reading_service():
 
 
 app.dependency_overrides[reading_service_dependency] = _reading_service
+
+
+async def _reading_migration_service():
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+
+    return await build_reading_migration_service()
+
+
+app.dependency_overrides[
+    reading_migration_service_dependency
+] = _reading_migration_service
 
 
 async def _catalog_service():
@@ -389,6 +300,58 @@ async def _adapter_catalog_query():
 app.dependency_overrides[adapter_catalog_dependency] = _adapter_catalog_query
 
 
+async def _acquisition_service():
+    from novelwiki.bootstrap.acquisition_routes import build_acquisition_service
+
+    return await build_acquisition_service()
+
+
+app.dependency_overrides[acquisition_service_dependency] = _acquisition_service
+
+
+async def _import_service():
+    from novelwiki.bootstrap.acquisition_routes import build_import_service
+    return await build_import_service()
+
+
+async def _acquisition_principal_factory():
+    from novelwiki.bootstrap.acquisition_routes import (
+        build_acquisition_principal_factory,
+    )
+    return build_acquisition_principal_factory()
+
+
+app.dependency_overrides[import_service_dependency] = _import_service
+app.dependency_overrides[
+    acquisition_principal_factory_dependency
+] = _acquisition_principal_factory
+
+
+async def _codex_migration_service():
+    from novelwiki.bootstrap.codex_migration import build_codex_migration_service
+
+    return await build_codex_migration_service()
+
+
+async def _codex_principal_factory():
+    from novelwiki.bootstrap.codex_migration import build_codex_principal_factory
+
+    return await build_codex_principal_factory()
+
+
+app.dependency_overrides[codex_migration_service_dependency] = _codex_migration_service
+app.dependency_overrides[codex_principal_factory_dependency] = _codex_principal_factory
+
+
+async def _identity_admin_service():
+    from novelwiki.bootstrap.identity_admin import build_identity_admin_service
+
+    return await build_identity_admin_service()
+
+
+app.dependency_overrides[identity_admin_service_dependency] = _identity_admin_service
+
+
 async def _experience_projection_service():
     from novelwiki.bootstrap.experience import build_experience_projection_service
 
@@ -439,6 +402,36 @@ async def _account_service():
 
 
 app.dependency_overrides[account_service_dependency] = _account_service
+
+
+async def _identity_auth_persistence():
+    from novelwiki.modules.identity.adapters.outbound.postgres_auth import (
+        PostgresAuthPersistence,
+    )
+
+    pool = await init_db_pool()
+    return PostgresAuthPersistence(pool)
+
+
+app.dependency_overrides[
+    identity_auth_persistence_dependency
+] = _identity_auth_persistence
+
+
+async def _narration_service():
+    from novelwiki.bootstrap.narration import build_narration_service
+    return await build_narration_service()
+
+
+async def _narration_principal_factory():
+    from novelwiki.bootstrap.narration import build_narration_principal_factory
+    return build_narration_principal_factory()
+
+
+app.dependency_overrides[narration_service_dependency] = _narration_service
+app.dependency_overrides[
+    narration_principal_factory_dependency
+] = _narration_principal_factory
 
 @app.get("/health")
 async def health_check():

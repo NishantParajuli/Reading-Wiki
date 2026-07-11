@@ -417,66 +417,30 @@ async def api_user_profile(username: str, user: dict = Depends(current_user)):
     )
 
 
-@router.post("/novels/{novel_id}/sources")
 async def api_add_source(novel_id: int, payload: SourceCreate, user: dict = Depends(current_user)):
-    await require_editable(novel_id, user)
-    start_url = await _validated_scraper_start_url(payload.start_url)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        source_id = await conn.fetchval(
-            """
-            INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw, chapter_offset, label)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
-            """,
-            novel_id, payload.adapter, start_url, json.dumps(payload.config or {}),
-            payload.language, payload.is_raw, payload.chapter_offset, payload.label,
-        )
-    return {"id": int(source_id)}
+    from novelwiki.bootstrap.acquisition_routes import build_acquisition_service
+    from novelwiki.modules.acquisition.adapters.inbound.http import api_add_source as handler
+
+    return await handler(
+        novel_id, payload, user=user, service=await build_acquisition_service()
+    )
 
 
-@router.patch("/novels/{novel_id}/sources/{source_id}")
 async def api_update_source(novel_id: int, source_id: int, payload: SourceUpdate, user: dict = Depends(current_user)):
     """Edits an existing source. Changing `chapter_offset` also renumbers that source's
     already-scraped chapters onto the new global numbering (e.g. set -1 when a raw source
     is one chapter ahead of the translation), so the fix is immediate — no re-scrape."""
-    await require_editable(novel_id, user)
-    fields = payload.model_dump(exclude_unset=True)
-    if not fields:
-        return {"status": "noop"}
-    if "start_url" in fields and fields["start_url"] is not None:
-        fields["start_url"] = await _validated_scraper_start_url(fields["start_url"])
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        owner = await conn.fetchval(
-            "SELECT id FROM sources WHERE id = $1 AND novel_id = $2;", source_id, novel_id,
-        )
-        if not owner:
-            raise HTTPException(status_code=404, detail="Source not found.")
-        renumbered = 0
-        try:
-            async with conn.transaction():
-                if "chapter_offset" in fields:
-                    renumbered = await set_source_offset(conn, source_id, fields.pop("chapter_offset"))
-                if fields:
-                    sets, args = [], []
-                    for k, v in fields.items():
-                        args.append(v)
-                        sets.append(f"{k} = ${len(args)}")
-                    args.append(source_id)
-                    await conn.execute(
-                        f"UPDATE sources SET {', '.join(sets)} WHERE id = ${len(args)};", *args,
-                    )
-        except ValueError as e:
-            raise HTTPException(status_code=409, detail=str(e))
-        except Exception as e:
-            # e.g. the renumber would collide with another source's chapter numbers
-            raise HTTPException(status_code=409, detail=f"Could not update source: {e}")
-    return {"status": "success", "renumbered": renumbered}
+    from novelwiki.bootstrap.acquisition_routes import build_acquisition_service
+    from novelwiki.modules.acquisition.adapters.inbound.http import api_update_source as handler
+
+    return await handler(
+        novel_id, source_id, payload, user=user,
+        service=await build_acquisition_service(),
+    )
 
 
 # ── Chapters / Reader ─────────────────────────────────────────────────────
 
-@router.get("/novels/{novel_id}/chapters")
 async def api_list_chapters(novel_id: int, user: dict = Depends(current_user)):
     """The table of contents for the reader."""
     await require_readable(novel_id, user)
@@ -509,7 +473,6 @@ async def api_list_chapters(novel_id: int, user: dict = Depends(current_user)):
     ]
 
 
-@router.get("/novels/{novel_id}/chapter/{number}")
 async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTasks, user: dict = Depends(current_user)):
     """Returns one chapter's readable content for the reader, plus prev/next numbers.
     Raw chapters are translated on demand here (and the next few are prefetched in the
@@ -682,7 +645,6 @@ async def _write_base_content(conn, novel_id: int, number: float, content: str,
     return int(new_version)
 
 
-@router.put("/novels/{novel_id}/chapter/{number}/content")
 async def api_edit_base_content(novel_id: int, number: float, payload: OverlayUpdate, user: dict = Depends(current_user)):
     """Owner/admin: edit the shared base translation directly. Bumps the content version, so
     other readers' overlays of this chapter become conflicts they can resolve."""
@@ -698,7 +660,6 @@ async def api_edit_base_content(novel_id: int, number: float, payload: OverlayUp
     return {"status": "success", "content_version": version}
 
 
-@router.put("/novels/{novel_id}/chapter/{number}/overlay")
 async def api_save_overlay(novel_id: int, number: float, payload: OverlayUpdate, user: dict = Depends(current_user)):
     """Save the reader's personal translation override for this chapter, forked from the
     current base version. Replaces any existing overlay and clears its conflict flag."""
@@ -722,7 +683,6 @@ async def api_save_overlay(novel_id: int, number: float, payload: OverlayUpdate,
     return {"status": "success"}
 
 
-@router.delete("/novels/{novel_id}/chapter/{number}/overlay")
 async def api_delete_overlay(novel_id: int, number: float, user: dict = Depends(current_user)):
     """Drop the reader's overlay for this chapter and fall back to the shared base."""
     await require_readable(novel_id, user)
@@ -735,7 +695,6 @@ async def api_delete_overlay(novel_id: int, number: float, user: dict = Depends(
     return {"status": "success"}
 
 
-@router.post("/novels/{novel_id}/chapter/{number}/self-translate")
 async def api_self_translate(novel_id: int, number: float, user: dict = Depends(current_user)):
     """Translate a raw chapter into the reader's own overlay (counts against their monthly
     translated-chapters quota). Only applies to chapters that have source-language text."""
@@ -767,7 +726,6 @@ async def api_self_translate(novel_id: int, number: float, user: dict = Depends(
     return {"status": "success", "content": translation}
 
 
-@router.post("/novels/{novel_id}/chapter/{number}/resolve")
 async def api_resolve_overlay(novel_id: int, number: float, payload: ResolveOverlay, user: dict = Depends(current_user)):
     """Resolve a base-vs-overlay conflict: keep the base (drop the overlay), keep mine
     (re-anchor the overlay to the current base), or save a merged result."""
@@ -807,7 +765,6 @@ async def api_resolve_overlay(novel_id: int, number: float, payload: ResolveOver
     return {"status": "success"}
 
 
-@router.post("/novels/{novel_id}/chapter/{number}/contribute")
 async def api_contribute(novel_id: int, number: float, user: dict = Depends(current_user)):
     """Offer the reader's overlay back to the novel owner. With contribution_policy='auto'
     and no conflict (the base hasn't moved since the overlay forked) it merges into the base
@@ -841,7 +798,6 @@ async def api_contribute(novel_id: int, number: float, user: dict = Depends(curr
     return {"status": "auto_merged" if auto else "pending", "id": int(cid)}
 
 
-@router.get("/novels/{novel_id}/contributions")
 async def api_list_contributions(novel_id: int, status: str = "pending", user: dict = Depends(current_user)):
     """Owner/admin inbox of contribute-back offers (defaults to pending)."""
     await require_editable(novel_id, user)
@@ -873,7 +829,6 @@ async def api_list_contributions(novel_id: int, status: str = "pending", user: d
     ]
 
 
-@router.post("/novels/{novel_id}/contributions/{contribution_id}/accept")
 async def api_accept_contribution(
     novel_id: int,
     contribution_id: int,
@@ -912,7 +867,6 @@ async def api_accept_contribution(
     return {"status": "accepted"}
 
 
-@router.post("/novels/{novel_id}/contributions/{contribution_id}/reject")
 async def api_reject_contribution(novel_id: int, contribution_id: int, user: dict = Depends(current_user)):
     """Owner/admin: decline a pending contribution (the contributor keeps their overlay)."""
     await require_editable(novel_id, user)
@@ -1057,35 +1011,16 @@ async def api_delete_bookmark(novel_id: int, bookmark_id: int, user: dict):
 
 # ── Scraping ──────────────────────────────────────────────────────────────
 
-@router.post("/novels/{novel_id}/scrape")
 async def api_scrape(novel_id: int, payload: ScrapeTrigger, user: dict = Depends(current_user)):
     """Schedules a durable scrape job (survives restarts). Targets one source if source_id is
     given, else every source of the novel. Repeated clicks for the same target dedupe onto the
     already-active job rather than piling up duplicate work."""
-    await require_editable(novel_id, user)
-    quota.require_spend_allowed(user)
-    pool = await get_db_pool()
-    if payload.source_id is not None:
-        async with pool.acquire() as conn:
-            source = await conn.fetchrow(
-                "SELECT id FROM sources WHERE id = $1 AND novel_id = $2;",
-                payload.source_id, novel_id,
-            )
-        if not source:
-            raise HTTPException(status_code=404, detail="Source not found.")
-        idem = (
-            f"scrape:novel{novel_id}:source{payload.source_id}:"
-            f"force{int(payload.force)}:max{payload.max_chapters}"
-        )
-    else:
-        idem = f"scrape:novel{novel_id}:all:force{int(payload.force)}:max{payload.max_chapters}"
-    job_id, created = await jobs_service.create_job(
-        "scrape", novel_id=novel_id, user_id=user["id"],
-        options={"source_id": payload.source_id, "force": payload.force, "max_chapters": payload.max_chapters},
-        idempotency_key=idem,
+    from novelwiki.bootstrap.acquisition_routes import build_acquisition_service
+    from novelwiki.modules.acquisition.adapters.inbound.http import api_scrape as handler
+
+    return await handler(
+        novel_id, payload, user=user, service=await build_acquisition_service()
     )
-    msg = "Scrape job scheduled." if created else "A scrape for this target is already running."
-    return {"status": "success", "message": msg, "job_id": job_id, "deduped": not created}
 
 
 # ── Translation + glossary ────────────────────────────────────────────────
@@ -1142,7 +1077,6 @@ async def api_delete_glossary(novel_id: int, term_id: int, user: dict = Depends(
 
 # ── Codex: meta / stats ───────────────────────────────────────────────────
 
-@router.get("/novels/{novel_id}/meta")
 async def api_meta_chapters(novel_id: int, user: dict = Depends(current_user)):
     """Chapter span + display title/blurb so the codex ceiling control can be bounded."""
     ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=None)
@@ -1158,7 +1092,6 @@ async def api_meta_chapters(novel_id: int, user: dict = Depends(current_user)):
     }
 
 
-@router.get("/novels/{novel_id}/stats")
 async def api_meta_stats(novel_id: int, ceiling: float, user: dict = Depends(current_user)):
     """Spoiler-safe aggregate stats for the codex home surface (all bounded by ceiling)."""
     ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
@@ -1215,7 +1148,6 @@ async def api_meta_stats(novel_id: int, ceiling: float, user: dict = Depends(cur
 
 # ── Codex: structured wiki ────────────────────────────────────────────────
 
-@router.get("/novels/{novel_id}/entities")
 async def api_list_entities(
     novel_id: int,
     ceiling: float,
@@ -1236,7 +1168,6 @@ async def api_list_entities(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/novels/{novel_id}/entity/resolve")
 async def api_resolve_entity(novel_id: int, name: str, ceiling: float, user: dict = Depends(current_user)):
     ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
     try:
@@ -1246,7 +1177,6 @@ async def api_resolve_entity(novel_id: int, name: str, ceiling: float, user: dic
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/novels/{novel_id}/entity/{entity_id}")
 async def api_get_entity_profile(
     novel_id: int,
     entity_id: int,
@@ -1326,7 +1256,6 @@ async def api_get_entity_profile(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/novels/{novel_id}/entity/{entity_id}/relationships")
 async def api_get_relationships(
     novel_id: int,
     entity_id: int,
@@ -1347,7 +1276,6 @@ async def api_get_relationships(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/novels/{novel_id}/entity/{entity_id}/timeline")
 async def api_get_timeline(novel_id: int, entity_id: int, ceiling: float, user: dict = Depends(current_user)):
     ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
     try:
@@ -1361,7 +1289,6 @@ async def api_get_timeline(novel_id: int, entity_id: int, ceiling: float, user: 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/novels/{novel_id}/entity/{entity_id}/identities")
 async def api_get_identities(novel_id: int, entity_id: int, ceiling: float, user: dict = Depends(current_user)):
     ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=ceiling)
     try:
@@ -1377,7 +1304,6 @@ async def api_get_identities(novel_id: int, entity_id: int, ceiling: float, user
 
 # ── Codex: Q&A + build ────────────────────────────────────────────────────
 
-@router.post("/novels/{novel_id}/ask", response_model=AskResponse)
 async def ask_question(novel_id: int, req: AskRequest, user: dict = Depends(current_user)):
     """Agentic spoiler-safe Q&A scoped to one novel.
 
@@ -1434,7 +1360,6 @@ async def ask_question(novel_id: int, req: AskRequest, user: dict = Depends(curr
         raise HTTPException(status_code=502, detail="The AI service failed to answer. Please try again.")
 
 
-@router.post("/novels/{novel_id}/codex/build")
 async def api_codex_build(novel_id: int, payload: CodexBuild, user: dict = Depends(current_user)):
     """Schedule a durable codex build (chunk → embed → extract → rebuild BM25) that survives
     restarts. Repeated clicks for the same range dedupe onto the active job so the expensive
@@ -1492,7 +1417,6 @@ from novelwiki.modules.work.adapters.inbound.http import (
 )
 
 
-@router.post("/novels/{novel_id}/merge-entities")
 async def trigger_merge(novel_id: int, payload: MergePayload, user: dict = Depends(current_user)):
     await require_editable(novel_id, user)
     try:
@@ -1632,42 +1556,26 @@ def _asset_file_response(path: Path, mime: str | None) -> FileResponse:
     )
 
 
-@router.get("/assets/novels/{novel_id}/{filename}")
 async def api_novel_asset(novel_id: int, filename: str, user: dict = Depends(current_user)):
     """Serve a committed imported image only if the caller can read the novel."""
-    from novelwiki.importer import storage as import_storage
-    await require_readable(novel_id, user)
-    sha, _ext, safe_name = _safe_asset_filename(filename)
-    rel = import_storage.asset_rel(novel_id, sha, safe_name.rsplit(".", 1)[1])
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        asset = await conn.fetchrow(
-            "SELECT path, mime FROM assets WHERE novel_id = $1 AND sha256 = $2 AND path = $3;",
-            novel_id, sha, rel,
-        )
-    if not asset:
-        raise HTTPException(status_code=404, detail="Asset not found.")
-    root = import_storage.asset_file_path(novel_id, "__root__").parent
-    path = _safe_child_path(root, import_storage.asset_file_path(novel_id, safe_name))
-    return _asset_file_response(path, asset["mime"])
+    from novelwiki.bootstrap.acquisition_routes import build_acquisition_service
+    from novelwiki.modules.acquisition.adapters.inbound.http import api_novel_asset as handler
+
+    return await handler(
+        novel_id, filename, user=user, service=await build_acquisition_service()
+    )
 
 
-@router.get("/assets/import-jobs/{job_id}/{filename}")
 async def api_import_job_asset(job_id: int, filename: str, user: dict = Depends(current_user)):
     """Serve a staged import preview image only to the job owner or an admin."""
-    from novelwiki.importer import storage as import_storage
-    job = await _require_own_job(job_id, user)
-    sha, _ext, safe_name = _safe_asset_filename(filename)
-    meta = job.get("detected_meta") or {}
-    cover_sha = (meta.get("cover_sha") or "").lower()
-    if cover_sha and cover_sha != sha:
-        raise HTTPException(status_code=404, detail="Asset not found.")
-    root = import_storage.staged_asset_file_path(job_id, "__root__").parent
-    path = _safe_child_path(root, import_storage.staged_asset_file_path(job_id, safe_name))
-    return _asset_file_response(path, import_storage.mime_from_ext(safe_name.rsplit(".", 1)[1]))
+    from novelwiki.bootstrap.acquisition_routes import build_acquisition_service
+    from novelwiki.modules.acquisition.adapters.inbound.http import api_import_job_asset as handler
+
+    return await handler(
+        job_id, filename, user=user, service=await build_acquisition_service()
+    )
 
 
-@router.post("/import/upload")
 async def api_import_upload(file: UploadFile = File(...), user: dict = Depends(current_user)):
     """Accept an uploaded EPUB, stash it under a fresh job id, and queue it for parsing."""
     from novelwiki.importer import jobs as import_jobs
@@ -1755,7 +1663,6 @@ async def _enqueue_batch(files, *, auto_commit: bool, group_series: bool, user_i
     return batch_id, queued
 
 
-@router.post("/import/scan-incoming")
 async def api_import_scan_incoming(user: dict = Depends(require_admin)):
     """Enqueue any EPUB/PDF dropped into IMPORT_INCOMING_DIR (the watched-folder path for big
     files that bypass the multipart upload cap). Non-recursive, manual review per book."""
@@ -1764,7 +1671,6 @@ async def api_import_scan_incoming(user: dict = Depends(require_admin)):
     return {"queued": queued, "count": len(queued)}
 
 
-@router.post("/import/batch")
 async def api_import_batch(payload: ImportBatch, user: dict = Depends(require_admin)):
     """Bulk-import a folder (e.g. a Calibre library). Recurses by default, can auto-commit
     each book without review, and can group EPUB volumes of one series into a single novel."""
@@ -1784,7 +1690,6 @@ async def api_import_batch(payload: ImportBatch, user: dict = Depends(require_ad
 # dropped connection just resumes from GET .../status. The job stays 'receiving' (not a
 # worker trigger) until complete flips it to 'uploaded'.
 
-@router.post("/import/upload/init")
 async def api_import_upload_init(payload: ImportInit, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
@@ -1812,7 +1717,6 @@ async def api_import_upload_init(payload: ImportInit, user: dict = Depends(curre
     return {"id": job_id, "offset": 0, "format": fmt}
 
 
-@router.get("/import/upload/{job_id}/status")
 async def api_import_upload_status(job_id: int, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
@@ -1823,7 +1727,6 @@ async def api_import_upload_status(job_id: int, user: dict = Depends(current_use
             "size": up.get("size", 0), "complete": job["status"] != "receiving"}
 
 
-@router.put("/import/upload/{job_id}/chunk")
 async def api_import_upload_chunk(job_id: int, request: Request, user: dict = Depends(current_user)):
     """Append one chunk at the byte offset given in the `Upload-Offset` header.
 
@@ -1873,7 +1776,6 @@ async def api_import_upload_chunk(job_id: int, request: Request, user: dict = De
     return {"offset": new_offset}
 
 
-@router.post("/import/upload/{job_id}/complete")
 async def api_import_upload_complete(job_id: int, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     from novelwiki.importer import storage as import_storage
@@ -1900,7 +1802,6 @@ async def api_import_upload_complete(job_id: int, user: dict = Depends(current_u
     return {"id": job_id, "status": "uploaded", "format": job["format"], "duplicate_of": duplicate_of}
 
 
-@router.post("/import/commit-series")
 async def api_import_commit_series(payload: CommitSeries, user: dict = Depends(current_user)):
     """Fold several parsed jobs into one multi-volume novel (ordered by series index)."""
     from novelwiki.importer import commit as import_commit
@@ -1917,7 +1818,6 @@ async def api_import_commit_series(payload: CommitSeries, user: dict = Depends(c
     return result
 
 
-@router.get("/import/jobs")
 async def api_import_jobs(user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     # Admins see every job; everyone else only their own uploads.
@@ -1925,13 +1825,11 @@ async def api_import_jobs(user: dict = Depends(current_user)):
     return [_job_view(j) for j in await import_jobs.list_jobs(user_id=scope)]
 
 
-@router.get("/import/jobs/{job_id}")
 async def api_import_job(job_id: int, user: dict = Depends(current_user)):
     job = await _require_own_job(job_id, user)
     return _job_view(job)
 
 
-@router.put("/import/jobs/{job_id}/plan")
 async def api_import_update_plan(job_id: int, payload: PlanUpdate, user: dict = Depends(current_user)):
     """Replace the editable segmentation plan (merge/split/rename/include/number/kind are
     all client-side edits that produce a new plan). Block ranges are validated against the
@@ -1961,7 +1859,6 @@ async def api_import_update_plan(job_id: int, payload: PlanUpdate, user: dict = 
     return {"status": "success"}
 
 
-@router.post("/import/jobs/{job_id}/commit")
 async def api_import_commit(job_id: int, payload: ImportCommit, user: dict = Depends(current_user)):
     """Hand the job to the worker for commit: stamp the target into options and flip the
     status to 'committing'. The worker writes chapters via the scraper persist path."""
@@ -2004,7 +1901,6 @@ async def api_import_commit(job_id: int, payload: ImportCommit, user: dict = Dep
     return {"status": "committing"}
 
 
-@router.post("/import/jobs/{job_id}/confirm-ocr")
 async def api_import_confirm_ocr(job_id: int, payload: OcrConfirm, user: dict = Depends(current_user)):
     """Approve the (expensive) OCR run for a scanned PDF: the job leaves the confirm gate and
     the worker starts reading pages (sidecar + Gemini escalation, budget-guarded)."""
@@ -2024,7 +1920,6 @@ async def api_import_confirm_ocr(job_id: int, payload: OcrConfirm, user: dict = 
     return {"status": "ocr_pending"}
 
 
-@router.post("/import/jobs/{job_id}/cancel")
 async def api_import_cancel(job_id: int, user: dict = Depends(current_user)):
     from novelwiki.importer import jobs as import_jobs
     await _require_own_job(job_id, user)
@@ -2032,7 +1927,6 @@ async def api_import_cancel(job_id: int, user: dict = Depends(current_user)):
     return {"status": "canceled"}
 
 
-@router.delete("/import/jobs/{job_id}")
 async def api_import_delete(job_id: int, user: dict = Depends(current_user)):
     """Delete a job row and free its scratch dir + staged assets."""
     from novelwiki.importer import storage as import_storage
@@ -2042,3 +1936,231 @@ async def api_import_delete(job_id: int, user: dict = Depends(current_user)):
         await conn.execute("DELETE FROM import_jobs WHERE id = $1;", job_id)
     import_storage.cleanup_job(job_id)
     return {"status": "success"}
+
+
+# Reading compatibility callables. The legacy SQL bodies above are intentionally unreachable;
+# direct imports now exercise the same application services as the native HTTP router.
+async def api_list_chapters(novel_id: int, user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_list_chapters as handler
+    return await handler(novel_id, user=user, service=await build_reading_migration_service())
+
+
+async def api_get_chapter(novel_id: int, number: float, bg_tasks: BackgroundTasks,
+                          user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_get_chapter as handler
+    return await handler(
+        novel_id, number, bg_tasks, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+async def api_edit_base_content(novel_id: int, number: float, payload: OverlayUpdate,
+                                user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_edit_base_content as handler
+    return await handler(
+        novel_id, number, payload, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+async def api_save_overlay(novel_id: int, number: float, payload: OverlayUpdate,
+                           user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_save_overlay as handler
+    return await handler(
+        novel_id, number, payload, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+async def api_delete_overlay(novel_id: int, number: float,
+                             user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_delete_overlay as handler
+    return await handler(
+        novel_id, number, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+async def api_self_translate(novel_id: int, number: float,
+                             user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_self_translate as handler
+    return await handler(
+        novel_id, number, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+async def api_resolve_overlay(novel_id: int, number: float, payload: ResolveOverlay,
+                              user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_resolve_overlay as handler
+    return await handler(
+        novel_id, number, payload, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+async def api_contribute(novel_id: int, number: float,
+                         user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_contribute as handler
+    return await handler(
+        novel_id, number, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+async def api_list_contributions(novel_id: int, status: str = "pending",
+                                 user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_list_contributions as handler
+    return await handler(
+        novel_id, status, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+async def api_accept_contribution(novel_id: int, contribution_id: int,
+                                  payload: ContributionAccept | None = None,
+                                  user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_accept_contribution as handler
+    return await handler(
+        novel_id, contribution_id, payload, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+async def api_reject_contribution(novel_id: int, contribution_id: int,
+                                  user: dict = Depends(current_user)):
+    from novelwiki.bootstrap.reading_migration import build_reading_migration_service
+    from novelwiki.modules.reading.adapters.inbound.http import api_reject_contribution as handler
+    return await handler(
+        novel_id, contribution_id, user=user,
+        service=await build_reading_migration_service(),
+    )
+
+
+# Codex compatibility callables; direct imports share the native application boundary.
+async def _codex_compat():
+    from novelwiki.bootstrap.codex_migration import (
+        build_codex_migration_service,
+        codex_principal_from_user,
+    )
+    return await build_codex_migration_service(), codex_principal_from_user
+
+
+async def api_meta_chapters(novel_id: int, user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import api_meta_chapters as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, user=user, service=service, principal_factory=principal_factory
+    )
+
+
+async def api_meta_stats(novel_id: int, ceiling: float,
+                         user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import api_meta_stats as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, ceiling, user=user, service=service,
+        principal_factory=principal_factory,
+    )
+
+
+async def api_list_entities(novel_id: int, ceiling: float, type: str | None = None,
+                            q: str | None = None,
+                            user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import api_list_entities as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, ceiling, type, q, user=user, service=service,
+        principal_factory=principal_factory,
+    )
+
+
+async def api_resolve_entity(novel_id: int, name: str, ceiling: float,
+                             user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import api_resolve_entity as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, name, ceiling, user=user, service=service,
+        principal_factory=principal_factory,
+    )
+
+
+async def api_get_entity_profile(novel_id: int, entity_id: int, ceiling: float,
+                                 user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import api_get_entity_profile as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, entity_id, ceiling, user=user, service=service,
+        principal_factory=principal_factory,
+    )
+
+
+async def api_get_relationships(novel_id: int, entity_id: int, ceiling: float,
+                                other_id: int | None = None,
+                                user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import api_get_relationships as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, entity_id, ceiling, other_id, user=user, service=service,
+        principal_factory=principal_factory,
+    )
+
+
+async def api_get_timeline(novel_id: int, entity_id: int, ceiling: float,
+                           user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import api_get_timeline as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, entity_id, ceiling, user=user, service=service,
+        principal_factory=principal_factory,
+    )
+
+
+async def api_get_identities(novel_id: int, entity_id: int, ceiling: float,
+                             user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import api_get_identities as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, entity_id, ceiling, user=user, service=service,
+        principal_factory=principal_factory,
+    )
+
+
+async def _ask_question_migrated_compat(novel_id: int, req: AskRequest,
+                                        user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import ask_question as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, req, user=user, service=service,
+        principal_factory=principal_factory,
+    )
+
+
+async def api_codex_build(novel_id: int, payload: CodexBuild,
+                          user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import api_codex_build as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, payload, user=user, service=service,
+        principal_factory=principal_factory,
+    )
+
+
+async def trigger_merge(novel_id: int, payload: MergePayload,
+                        user: dict = Depends(current_user)):
+    from novelwiki.modules.codex.adapters.inbound.http import trigger_merge as handler
+    service, principal_factory = await _codex_compat()
+    return await handler(
+        novel_id, payload, user=user, service=service,
+        principal_factory=principal_factory,
+    )
