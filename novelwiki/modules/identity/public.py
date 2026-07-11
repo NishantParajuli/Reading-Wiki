@@ -17,13 +17,23 @@ class Principal:
         return self.role == "admin"
 
     @classmethod
-    def from_user(cls, user: Mapping[str, object]) -> "Principal":
+    def from_user(
+        cls,
+        user: Mapping[str, object],
+        quota_defaults: Mapping[str, int] | None = None,
+    ) -> "Principal":
+        quota_limits = dict(user.get("quota_limits") or {})
+        if quota_defaults is not None:
+            for kind, default in quota_defaults.items():
+                column = f"quota_{kind}"
+                value = user.get(column)
+                quota_limits[kind] = int(default if value is None else value)
         return cls(
             user_id=int(user["id"]),
             role=str(user.get("role") or "user"),
             status=str(user.get("status") or "active"),
             email_verified=bool(user.get("email_verified")),
-            quota_limits=dict(user.get("quota_limits") or {}),
+            quota_limits=quota_limits,
         )
 
 
@@ -36,3 +46,14 @@ class QuotaApi(Protocol):
     async def check_available(self, principal: Principal, kind: str, units: int = 1) -> None: ...
     async def reserve(self, principal: Principal, kind: str, units: int = 1) -> bool: ...
     async def refund(self, user_id: int, kind: str, units: int = 1) -> int: ...
+
+
+@dataclass(frozen=True)
+class UserLabel:
+    user_id: int
+    username: str
+    display_name: str
+
+
+class UserDirectoryApi(Protocol):
+    async def labels(self, user_ids: set[int]) -> dict[int, UserLabel]: ...

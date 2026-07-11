@@ -254,10 +254,12 @@ class AskResponse(BaseModel):
 
 # ── Adapters ──────────────────────────────────────────────────────────────
 
-@router.get("/adapters")
 async def api_adapters():
     """The scraping techniques available for the Add-Source dropdown."""
-    return list_adapters()
+    from novelwiki.bootstrap.acquisition import build_adapter_catalog_query
+    from novelwiki.modules.acquisition.adapters.inbound.http import api_adapters as handler
+
+    return await handler(build_adapter_catalog_query())
 
 
 # ── Library / Novels ──────────────────────────────────────────────────────
@@ -322,42 +324,14 @@ async def api_list_novels(user: dict = Depends(current_user)):
     ]
 
 
-@router.post("/novels")
 async def api_create_novel(payload: NovelCreate, user: dict = Depends(current_user)):
     """Create a novel (owned by the caller, private by default) and optionally its first source."""
-    source_start_url = None
-    if payload.source:
-        source_start_url = await _validated_scraper_start_url(payload.source.start_url)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            novel_id = await conn.fetchval(
-                """
-                INSERT INTO novels (title, author, description, cover_url, original_language, codex_enabled,
-                                    owner_id, visibility)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, 'private') RETURNING id;
-                """,
-                payload.title, payload.author, payload.description, payload.cover_url,
-                payload.original_language, payload.codex_enabled, user["id"],
-            )
-            # The owner's novel shows up in their library immediately.
-            await conn.execute(
-                "INSERT INTO library_entries (user_id, novel_id) VALUES ($1, $2) "
-                "ON CONFLICT (user_id, novel_id) DO NOTHING;",
-                user["id"], novel_id,
-            )
-            source_id = None
-            if payload.source:
-                s = payload.source
-                source_id = await conn.fetchval(
-                    """
-                    INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw, chapter_offset, label)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;
-                    """,
-                    novel_id, s.adapter, source_start_url, json.dumps(s.config or {}),
-                    s.language, s.is_raw, s.chapter_offset, s.label,
-                )
-    return {"id": int(novel_id), "source_id": int(source_id) if source_id else None}
+    from novelwiki.bootstrap.catalog import build_catalog_migration_service
+    from novelwiki.modules.catalog.adapters.inbound.http import api_create_novel as handler
+
+    return await handler(
+        payload, user=user, service=await build_catalog_migration_service()
+    )
 
 
 @router.get("/novels/{novel_id}")
@@ -479,45 +453,23 @@ async def api_update_novel(novel_id: int, payload: NovelUpdate, user: dict):
     return {"status": status}
 
 
-@router.post("/novels/{novel_id}/cover")
 async def api_upload_novel_cover(novel_id: int, file: UploadFile = File(...), user: dict = Depends(current_user)):
     """Upload a cover image and return an authenticated novel asset URL."""
-    await require_editable(novel_id, user)
-    from novelwiki.importer import storage as import_storage
+    from novelwiki.bootstrap.catalog import build_catalog_migration_service
+    from novelwiki.modules.catalog.adapters.inbound.http import api_upload_novel_cover as handler
 
-    ext = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
-    if ext == "svg" or (file.content_type or "").lower().split(";", 1)[0].strip() == "image/svg+xml":
-        raise HTTPException(status_code=400, detail="SVG covers are not supported.")
-    data = await _read_upload_file_limited(file, 10 * 1024 * 1024, "Cover image must be under 10 MB.")
-    if not data:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        try:
-            asset = await import_storage.save_novel_asset(conn, novel_id, data, file.content_type, "cover")
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-    return {"cover_url": asset["url"], "asset": asset}
+    return await handler(
+        novel_id, file, user=user, service=await build_catalog_migration_service()
+    )
 
 
-@router.delete("/novels/{novel_id}")
 async def api_delete_novel(novel_id: int, user: dict = Depends(current_user)):
-    await require_editable(novel_id, user)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        # Collect the novel's import scratch dirs before the cascade nulls the references,
-        # so we can free those on-disk files too (they aren't FK-cascaded).
-        job_ids = [int(r["id"]) for r in await conn.fetch(
-            "SELECT id FROM import_jobs WHERE novel_id = $1;", novel_id
-        )]
-        await conn.execute("DELETE FROM novels WHERE id = $1;", novel_id)
-    # The assets/import_jobs rows cascade with the novel, but the files on disk do not.
-    from novelwiki.importer.storage import cleanup_novel_assets, cleanup_job
-    cleanup_novel_assets(novel_id)
-    for jid in job_ids:
-        cleanup_job(jid)
-    return {"status": "success"}
+    from novelwiki.bootstrap.catalog import build_catalog_migration_service
+    from novelwiki.modules.catalog.adapters.inbound.http import api_delete_novel as handler
+
+    return await handler(
+        novel_id, user=user, service=await build_catalog_migration_service()
+    )
 
 
 # ── Visibility, discovery & personal library ────────────────────────────────
@@ -1274,98 +1226,46 @@ async def api_reject_contribution(novel_id: int, contribution_id: int, user: dic
 # Status tags are owner/admin-controlled. A reader of a shared (public/global) novel can
 # propose a tag set; the owner/admin accepts (applies it) or rejects it.
 
-@router.post("/novels/{novel_id}/tag-suggestions")
 async def api_suggest_tags(novel_id: int, payload: TagSuggestion, user: dict = Depends(current_user)):
     """A reader proposes a status-tag set for a shared novel they can see but can't edit."""
-    novel = await require_readable(novel_id, user)
-    if novel["owner_id"] == user["id"] or user.get("role") == "admin":
-        raise HTTPException(status_code=400, detail="You can edit this novel's tags directly.")
-    if novel["visibility"] not in ("public", "global"):
-        raise HTTPException(status_code=403, detail="Tags can only be suggested on shared novels.")
-    tags = _clean_status_tags(payload.tags)
-    note = (payload.note or "").strip() or None
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        sid = await conn.fetchval(
-            """
-            INSERT INTO tag_suggestions (novel_id, from_user_id, tags, note)
-            VALUES ($1, $2, $3, $4) RETURNING id;
-            """,
-            novel_id, user["id"], tags, note,
-        )
-    return {"status": "pending", "id": int(sid)}
+    from novelwiki.bootstrap.catalog import build_catalog_migration_service
+    from novelwiki.modules.catalog.adapters.inbound.http import api_suggest_tags as handler
+
+    return await handler(
+        novel_id, payload, user=user, service=await build_catalog_migration_service()
+    )
 
 
-@router.get("/novels/{novel_id}/tag-suggestions")
 async def api_list_tag_suggestions(novel_id: int, status: str = "pending", user: dict = Depends(current_user)):
     """Owner/admin inbox of tag-suggestion proposals (defaults to pending)."""
-    await require_editable(novel_id, user)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT t.id, t.tags, t.note, t.status, t.created_at,
-                   u.username AS from_username, u.display_name AS from_display_name
-            FROM tag_suggestions t
-            JOIN users u ON u.id = t.from_user_id
-            WHERE t.novel_id = $1 AND ($2 = 'all' OR t.status = $2)
-            ORDER BY t.created_at DESC LIMIT 200;
-            """,
-            novel_id, status,
-        )
-    return [
-        {
-            "id": int(r["id"]), "tags": list(r["tags"] or []), "note": r["note"],
-            "status": r["status"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-            "from_username": r["from_username"],
-            "from_display_name": r["from_display_name"] or r["from_username"],
-        }
-        for r in rows
-    ]
+    from novelwiki.bootstrap.catalog import build_catalog_migration_service
+    from novelwiki.modules.catalog.adapters.inbound.http import api_list_tag_suggestions as handler
+
+    return await handler(
+        novel_id, status, user=user, service=await build_catalog_migration_service()
+    )
 
 
-@router.post("/novels/{novel_id}/tag-suggestions/{suggestion_id}/accept")
 async def api_accept_tag_suggestion(novel_id: int, suggestion_id: int, user: dict = Depends(current_user)):
     """Owner/admin: apply a suggested tag set to the novel and mark the suggestion accepted."""
-    await require_editable(novel_id, user)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        s = await conn.fetchrow(
-            "SELECT id, tags, status FROM tag_suggestions WHERE id = $1 AND novel_id = $2;",
-            suggestion_id, novel_id,
-        )
-        if s is None:
-            raise HTTPException(status_code=404, detail="Tag suggestion not found.")
-        if s["status"] != "pending":
-            raise HTTPException(status_code=409, detail=f"Suggestion is already '{s['status']}'.")
-        tags = _clean_status_tags(list(s["tags"] or []))
-        async with conn.transaction():
-            await conn.execute(
-                "UPDATE novels SET status_tags = $2, updated_at = now() WHERE id = $1;",
-                novel_id, tags,
-            )
-            await conn.execute(
-                "UPDATE tag_suggestions SET status = 'accepted', reviewed_by = $2, reviewed_at = now() WHERE id = $1;",
-                suggestion_id, user["id"],
-            )
-    return {"status": "accepted", "tags": tags}
+    from novelwiki.bootstrap.catalog import build_catalog_migration_service
+    from novelwiki.modules.catalog.adapters.inbound.http import api_accept_tag_suggestion as handler
+
+    return await handler(
+        novel_id, suggestion_id, user=user,
+        service=await build_catalog_migration_service(),
+    )
 
 
-@router.post("/novels/{novel_id}/tag-suggestions/{suggestion_id}/reject")
 async def api_reject_tag_suggestion(novel_id: int, suggestion_id: int, user: dict = Depends(current_user)):
     """Owner/admin: decline a tag suggestion."""
-    await require_editable(novel_id, user)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        updated = await conn.fetchval(
-            "UPDATE tag_suggestions SET status = 'rejected', reviewed_by = $3, reviewed_at = now() "
-            "WHERE id = $1 AND novel_id = $2 AND status = 'pending' RETURNING id;",
-            suggestion_id, novel_id, user["id"],
-        )
-    if updated is None:
-        raise HTTPException(status_code=404, detail="No pending tag suggestion with that id.")
-    return {"status": "rejected"}
+    from novelwiki.bootstrap.catalog import build_catalog_migration_service
+    from novelwiki.modules.catalog.adapters.inbound.http import api_reject_tag_suggestion as handler
+
+    return await handler(
+        novel_id, suggestion_id, user=user,
+        service=await build_catalog_migration_service(),
+    )
 
 
 # Compatibility callables for tests/scripts that imported the old private route module.
@@ -1484,129 +1384,54 @@ async def api_scrape(novel_id: int, payload: ScrapeTrigger, user: dict = Depends
 
 # ── Translation + glossary ────────────────────────────────────────────────
 
-@router.post("/novels/{novel_id}/translate")
 async def api_translate(novel_id: int, payload: TranslateTrigger, user: dict = Depends(current_user)):
     """Schedule a durable translation batch over a chapter range (manual batch; reading itself
     uses on-demand + prefetch). The worker computes the pending chapters at execution time,
     meters each against the caller's monthly quota as it translates, and stops gracefully on
     quota exhaustion. Optionally seeds the glossary from the codex first."""
-    # Spend on the shared base is owner/admin only (per-user self-translation is Phase 5).
-    await require_editable(novel_id, user)
-    idem = (
-        f"translate:novel{novel_id}:{payload.from_chapter}:{payload.to_chapter}:"
-        f"{int(payload.force)}:seed{int(payload.seed_from_codex)}"
+    from novelwiki.bootstrap.translation import build_translation_scheduling_service
+    from novelwiki.modules.identity.adapters.principals import principal_from_user
+    from novelwiki.modules.translation.adapters.inbound.http import api_translate as handler
+
+    return await handler(
+        novel_id, payload, user=user,
+        service=await build_translation_scheduling_service(),
+        principal_factory=principal_from_user,
     )
-    existing = await jobs_service.find_active("translate", idem)
-    if existing is not None:
-        view = jobs_service.job_view(existing)
-        return {"status": "success", "message": "A translation for this range is already running.",
-                "job_id": int(existing["id"]), "deduped": True,
-                "chapters": int((existing.get("progress") or {}).get("total") or 0),
-                "execution_backend": view["execution_backend"], "model": view["backend_model"],
-                "backend_reason": "already_active"}
-
-    decision = await resolve_backend(user, Workload.TRANSLATE_BATCH, payload.ai_backend)
-    # Preflight the caller's quota against the chapters this run would translate,
-    # so an over-quota request fails fast with a 429 instead of scheduling a doomed job.
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        pending = await conn.fetchval(
-            """
-            SELECT COUNT(*) FROM chapters
-            WHERE novel_id = $1 AND original_text IS NOT NULL
-              AND ($4 OR content IS NULL)
-              AND ($2::numeric IS NULL OR number >= $2)
-              AND ($3::numeric IS NULL OR number <= $3);
-            """,
-            novel_id, payload.from_chapter, payload.to_chapter, payload.force,
-        )
-    pending = int(pending or 0)
-    if decision.resolved.value == "agy":
-        # Subscription work must not start only to discover product quota is gone.
-        await quota.check_and_reserve(user, "translated_chapters", pending)
-    else:
-        await quota.check_available(user, "translated_chapters", pending)
-    try:
-        job_id, created = await jobs_service.create_job(
-            "translate", novel_id=novel_id, user_id=user["id"],
-            options={"from_chapter": payload.from_chapter, "to_chapter": payload.to_chapter,
-                     "force": payload.force, "seed_from_codex": payload.seed_from_codex},
-            idempotency_key=idem,
-            quota_kind="translated_chapters" if decision.resolved.value == "agy" else None,
-            quota_reserved=pending if decision.resolved.value == "agy" else 0,
-            max_attempts=settings.AGY_MAX_ATTEMPTS if decision.resolved.value == "agy" else None,
-            **decision.as_job_fields(),
-        )
-    except (jobs_service.ActiveJobLimitError, jobs_service.BackendPolicyChangedError) as exc:
-        if decision.resolved.value == "agy" and pending:
-            await quota.refund(user["id"], "translated_chapters", pending)
-        status = 429 if isinstance(exc, jobs_service.ActiveJobLimitError) else 409
-        raise HTTPException(status_code=status, detail=str(exc))
-    if not created and decision.resolved.value == "agy" and pending:
-        await quota.refund(user["id"], "translated_chapters", pending)
-    msg = "Translation job scheduled." if created else "A translation for this range is already running."
-    return {"status": "success", "message": msg, "job_id": job_id,
-            "deduped": not created, "chapters": pending,
-            "execution_backend": decision.resolved.value, "model": decision.model,
-            "backend_reason": decision.reason}
 
 
-@router.post("/novels/{novel_id}/glossary/seed")
 async def api_seed_glossary(novel_id: int, user: dict = Depends(current_user)):
     """Seed the glossary's English spellings from the established codex entities."""
-    await require_editable(novel_id, user)
-    n = await seed_glossary_from_entities(novel_id)
-    return {"status": "success", "seeded": n}
+    from novelwiki.bootstrap.translation import build_glossary_service
+    from novelwiki.modules.translation.adapters.inbound.http import api_seed_glossary as handler
+
+    return await handler(novel_id, user=user, service=await build_glossary_service())
 
 
-@router.get("/novels/{novel_id}/glossary")
 async def api_list_glossary(novel_id: int, user: dict = Depends(current_user)):
-    await require_readable(novel_id, user)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, source_term, translation, term_type, notes, locked
-            FROM translation_glossary WHERE novel_id = $1
-            ORDER BY locked DESC, term_type NULLS LAST, source_term ASC;
-            """,
-            novel_id,
-        )
-    return [
-        {"id": int(r["id"]), "source_term": r["source_term"], "translation": r["translation"],
-         "term_type": r["term_type"], "notes": r["notes"], "locked": r["locked"]}
-        for r in rows
-    ]
+    from novelwiki.bootstrap.translation import build_glossary_service
+    from novelwiki.modules.translation.adapters.inbound.http import api_list_glossary as handler
+
+    return await handler(novel_id, user=user, service=await build_glossary_service())
 
 
-@router.put("/novels/{novel_id}/glossary")
 async def api_upsert_glossary(novel_id: int, payload: GlossaryUpsert, user: dict = Depends(current_user)):
     """Add or update a glossary term (manual edits win and are typically locked)."""
-    await require_editable(novel_id, user)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        gid = await conn.fetchval(
-            """
-            INSERT INTO translation_glossary (novel_id, source_term, translation, term_type, notes, locked)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (novel_id, source_term) DO UPDATE
-            SET translation = EXCLUDED.translation, term_type = EXCLUDED.term_type,
-                notes = EXCLUDED.notes, locked = EXCLUDED.locked
-            RETURNING id;
-            """,
-            novel_id, payload.source_term.strip(), payload.translation.strip(),
-            payload.term_type, payload.notes, payload.locked,
-        )
-    return {"id": int(gid)}
+    from novelwiki.bootstrap.translation import build_glossary_service
+    from novelwiki.modules.translation.adapters.inbound.http import api_upsert_glossary as handler
+
+    return await handler(
+        novel_id, payload, user=user, service=await build_glossary_service()
+    )
 
 
-@router.delete("/novels/{novel_id}/glossary/{term_id}")
 async def api_delete_glossary(novel_id: int, term_id: int, user: dict = Depends(current_user)):
-    await require_editable(novel_id, user)
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM translation_glossary WHERE id = $1 AND novel_id = $2;", term_id, novel_id)
-    return {"status": "success"}
+    from novelwiki.bootstrap.translation import build_glossary_service
+    from novelwiki.modules.translation.adapters.inbound.http import api_delete_glossary as handler
+
+    return await handler(
+        novel_id, term_id, user=user, service=await build_glossary_service()
+    )
 
 
 # ── Codex: meta / stats ───────────────────────────────────────────────────

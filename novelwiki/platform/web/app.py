@@ -244,6 +244,7 @@ from novelwiki.modules.reading.adapters.inbound.http import (
 )
 from novelwiki.modules.work.adapters.inbound.http import router as work_router
 from novelwiki.modules.catalog.adapters.inbound.http import (
+    catalog_migration_service_dependency,
     catalog_service_dependency,
     router as catalog_router,
 )
@@ -259,11 +260,21 @@ from novelwiki.modules.reading.adapters.inbound.legacy_http import (
 from novelwiki.modules.acquisition.adapters.inbound.legacy_http import (
     router as legacy_acquisition_router,
 )
+from novelwiki.modules.acquisition.adapters.inbound.http import (
+    adapter_catalog_dependency,
+    router as acquisition_router,
+)
 from novelwiki.modules.translation.adapters.inbound.legacy_http import (
     router as legacy_translation_router,
 )
 from novelwiki.modules.codex.adapters.inbound.legacy_http import (
     router as legacy_codex_router,
+)
+from novelwiki.modules.translation.adapters.inbound.http import (
+    glossary_service_dependency,
+    principal_factory_dependency,
+    router as translation_router,
+    translation_scheduling_service_dependency,
 )
 from novelwiki.modules.experience.adapters.inbound.legacy_http import (
     router as legacy_experience_router,
@@ -284,6 +295,8 @@ for module_router in (
 app.include_router(reading_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(work_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(catalog_router, prefix="/api", dependencies=[Depends(current_user)])
+app.include_router(acquisition_router, prefix="/api", dependencies=[Depends(current_user)])
+app.include_router(translation_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(identity_account_router, prefix="/api", dependencies=[Depends(current_user)])
 # Audiobook TTS endpoints (same auth model as the main router).
 app.include_router(tts_router, prefix="/api", dependencies=[Depends(current_user)])
@@ -320,6 +333,55 @@ async def _catalog_service():
 
 
 app.dependency_overrides[catalog_service_dependency] = _catalog_service
+
+
+async def _catalog_migration_service():
+    from novelwiki.bootstrap.catalog import build_catalog_migration_service
+
+    return await build_catalog_migration_service()
+
+
+app.dependency_overrides[
+    catalog_migration_service_dependency
+] = _catalog_migration_service
+
+
+async def _glossary_service():
+    from novelwiki.bootstrap.translation import build_glossary_service
+
+    return await build_glossary_service()
+
+
+app.dependency_overrides[glossary_service_dependency] = _glossary_service
+
+
+async def _translation_scheduling_service():
+    from novelwiki.bootstrap.translation import build_translation_scheduling_service
+
+    return await build_translation_scheduling_service()
+
+
+app.dependency_overrides[
+    translation_scheduling_service_dependency
+] = _translation_scheduling_service
+
+
+async def _principal_factory():
+    from novelwiki.modules.identity.adapters.principals import principal_from_user
+
+    return principal_from_user
+
+
+app.dependency_overrides[principal_factory_dependency] = _principal_factory
+
+
+async def _adapter_catalog_query():
+    from novelwiki.bootstrap.acquisition import build_adapter_catalog_query
+
+    return build_adapter_catalog_query()
+
+
+app.dependency_overrides[adapter_catalog_dependency] = _adapter_catalog_query
 
 
 async def _identity_session_service():

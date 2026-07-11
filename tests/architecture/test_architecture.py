@@ -81,3 +81,54 @@ def test_stable_api_routes_module_is_only_a_compatibility_alias():
     source = (ROOT / "novelwiki/api/routes.py").read_text(encoding="utf-8")
     assert "@router." not in source
     assert "novelwiki.legacy.routes" in source
+
+
+def test_completed_catalog_and_translation_modules_have_no_legacy_http_handlers():
+    from novelwiki.bootstrap.legacy_http import OWNERS
+
+    assert OWNERS["catalog"] == frozenset()
+    assert OWNERS["translation"] == frozenset()
+    # This ratchet makes handler extraction monotonic. Lower it as each slice lands.
+    assert sum(len(names) for names in OWNERS.values()) <= 46
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        Path("catalog/adapters/inbound/http.py"),
+        Path("translation/adapters/inbound/http.py"),
+        Path("acquisition/adapters/inbound/http.py"),
+    ],
+)
+def test_migrated_http_adapters_contain_no_sql_or_pool_access(relative: Path):
+    source = (MODULE_ROOT / relative).read_text(encoding="utf-8")
+    assert "get_db_pool" not in source
+    tree = ast.parse(source)
+    forbidden_methods = {"execute", "executemany", "fetch", "fetchrow", "fetchval"}
+    calls = [
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and node.func.attr in forbidden_methods
+    ]
+    assert not calls, f"{relative}: database calls in inbound adapter: {calls}"
+
+
+def test_named_workflow_coordinators_are_infrastructure_free():
+    workflow_root = ROOT / "novelwiki" / "workflows"
+    forbidden_imports = (
+        "fastapi", "typer", "asyncpg", "novelwiki.platform",
+        "novelwiki.db", "novelwiki.config",
+    )
+    violations: list[str] = []
+    for path in _python_files(workflow_root):
+        source = path.read_text(encoding="utf-8")
+        for imported in _imports(path):
+            if imported.startswith(forbidden_imports):
+                violations.append(f"{path.name} imports {imported}")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in {"execute", "fetch", "fetchrow", "fetchval"}:
+                    violations.append(f"{path.name} calls {node.func.attr}")
+    assert not violations, "\n".join(violations)

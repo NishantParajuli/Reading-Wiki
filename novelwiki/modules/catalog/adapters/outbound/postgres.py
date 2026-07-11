@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...public import NovelAccess
+from ...public import NovelAccess, NovelDraft, TagSuggestionRecord
 
 
 class PostgresCatalogRepository:
@@ -90,3 +90,76 @@ class PostgresCatalogRepository:
             f"WHERE id = ${len(arguments)};",
             *arguments,
         )
+
+    async def create_novel(self, draft: NovelDraft, owner_id: int) -> int:
+        return int(await self._connection.fetchval(
+            """
+            INSERT INTO novels (title, author, description, cover_url, original_language,
+                                codex_enabled, owner_id, visibility)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'private') RETURNING id;
+            """,
+            draft.title, draft.author, draft.description, draft.cover_url,
+            draft.original_language, draft.codex_enabled, owner_id,
+        ))
+
+    async def delete_novel(self, novel_id: int) -> None:
+        await self._connection.execute("DELETE FROM novels WHERE id = $1;", novel_id)
+
+    async def create_tag_suggestion(
+        self, novel_id: int, from_user_id: int, tags: list[str], note: str | None
+    ) -> int:
+        return int(await self._connection.fetchval(
+            """
+            INSERT INTO tag_suggestions (novel_id, from_user_id, tags, note)
+            VALUES ($1, $2, $3, $4) RETURNING id;
+            """,
+            novel_id, from_user_id, tags, note,
+        ))
+
+    async def list_tag_suggestions(
+        self, novel_id: int, status: str
+    ) -> list[TagSuggestionRecord]:
+        rows = await self._connection.fetch(
+            """
+            SELECT id, from_user_id, tags, note, status, created_at
+            FROM tag_suggestions
+            WHERE novel_id = $1 AND ($2 = 'all' OR status = $2)
+            ORDER BY created_at DESC LIMIT 200;
+            """,
+            novel_id, status,
+        )
+        return [
+            TagSuggestionRecord(
+                id=int(row["id"]), from_user_id=int(row["from_user_id"]),
+                tags=tuple(row["tags"] or ()), note=row["note"],
+                status=row["status"], created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    async def get_tag_suggestion(
+        self, novel_id: int, suggestion_id: int
+    ) -> tuple[list[str], str] | None:
+        row = await self._connection.fetchrow(
+            "SELECT tags, status FROM tag_suggestions WHERE id = $1 AND novel_id = $2;",
+            suggestion_id, novel_id,
+        )
+        if row is None:
+            return None
+        return list(row["tags"] or []), str(row["status"])
+
+    async def apply_tags(self, novel_id: int, tags: list[str]) -> None:
+        await self._connection.execute(
+            "UPDATE novels SET status_tags = $2, updated_at = now() WHERE id = $1;",
+            novel_id, tags,
+        )
+
+    async def review_tag_suggestion(
+        self, suggestion_id: int, status: str, reviewed_by: int
+    ) -> bool:
+        updated = await self._connection.fetchval(
+            "UPDATE tag_suggestions SET status = $2, reviewed_by = $3, reviewed_at = now() "
+            "WHERE id = $1 AND status = 'pending' RETURNING id;",
+            suggestion_id, status, reviewed_by,
+        )
+        return updated is not None
