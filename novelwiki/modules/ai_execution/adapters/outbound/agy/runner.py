@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from novelwiki.agy.errors import AgyCanceled, AgyError, classify_failure
-from novelwiki.config.settings import settings
+from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import AgyCanceled, AgyError, classify_failure
+from novelwiki.platform.config import settings
 
 
 CancelCheck = Callable[[], Awaitable[bool]]

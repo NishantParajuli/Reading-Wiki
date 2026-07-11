@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 async def execute_scrape_job(job: dict, context) -> dict:
-    from novelwiki.scraper.runner import scrape_novel, scrape_source
+    from novelwiki.modules.acquisition.adapters.outbound.scraper.runner import scrape_novel, scrape_source
 
     job_id = int(job["id"])
     novel_id = int(job["novel_id"])

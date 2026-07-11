@@ -2,8 +2,8 @@ from __future__ import annotations
 
 
 async def build_narration_service():
-    from novelwiki.config.settings import settings
-    from novelwiki.db.connection import get_db_pool
+    from novelwiki.platform.config import settings
+    from novelwiki.platform.database import get_db_pool
     from novelwiki.modules.identity.adapters.outbound.postgres_quota import (
         PostgresQuotaRepository,
     )

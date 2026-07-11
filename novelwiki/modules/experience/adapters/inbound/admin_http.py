@@ -20,11 +20,11 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from novelwiki.config.settings import settings
-from novelwiki.auth.deps import require_admin
-from novelwiki import audit
-from novelwiki.ai_backend import policy as backend_policy
-from novelwiki.jobs import service as jobs_service
+from novelwiki.platform.config import settings
+from novelwiki.platform.auth import require_admin
+from novelwiki.platform.observability import audit
+import novelwiki.modules.ai_execution.public as backend_policy
+from novelwiki.modules.work.public import service as jobs_service
 from novelwiki.kernel.errors import InvalidOperation, NotFound, ValidationFailed
 from novelwiki.modules.identity.public import IdentityAdminApi, Principal
 

@@ -21,10 +21,10 @@ import contextlib
 
 from fastapi import HTTPException
 
-from novelwiki import quota
-from novelwiki.auth import rate_limit
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
+import novelwiki.modules.identity.public as quota
+from novelwiki.platform.auth import rate_limit
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool
 
 
 def require_ask_spend_allowed(user: dict) -> None:

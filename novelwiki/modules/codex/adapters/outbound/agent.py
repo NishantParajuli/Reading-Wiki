@@ -2,14 +2,14 @@ import re
 import json
 import hashlib
 import logging
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
-from novelwiki.agent.llm_client import call_chat_completion
-from novelwiki.retrieval.tools import (
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool
+from novelwiki.modules.ai_execution.public import call_chat_completion
+from novelwiki.modules.codex.adapters.outbound.retrieval.tools import (
     hybrid_search, rerank, get_chunk, resolve_entity,
     get_entity_profile, get_relationships, get_timeline, list_entities
 )
-from novelwiki.agent.prompts import (
+from novelwiki.modules.codex.domain.prompts import (
     PLAN_SYSTEM, DISTILL_SYSTEM, DISTILL_USER,
     SYNTHESIS_SYSTEM, SYNTHESIS_USER, VERIFY_SYSTEM, VERIFY_USER,
     REPAIR_SYSTEM, REPAIR_USER

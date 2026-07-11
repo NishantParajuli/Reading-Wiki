@@ -1,4 +1,4 @@
-# Modular-monolith migration completion report
+# Modular-monolith migration finalization status
 
 The target remains one FastAPI/React deployable and one PostgreSQL database. Runtime ownership is
 now divided among ten business modules plus Platform; no service split or topology change was made.
@@ -9,13 +9,17 @@ now divided among ten business modules plus Platform; no service split or topolo
 - Module SQL literals are checked for both cross-owner reads and writes.
 - All inbound HTTP and worker adapters are database-free.
 - The executable module graph is acyclic and cross-module Python imports target `public.py`.
-- Six named workflows coordinate atomic cross-owner operations with transaction-bound APIs.
+- Cross-owner job/quota finalization uses transaction-bound owner APIs in one named
+  Unit of Work. Initial AI scheduling intentionally retains guarded compensation as
+  recorded in ADR 003 and is not described as crash-atomic.
 - Experience registers every approved composite read, including operational/admin and job+AI-run
   views, and contains no write SQL.
 - Work and AI workers dispatch through composition-owned registries; feature handlers live with
-  Acquisition, Translation, and Codex.
-- The CLI entrypoint is composition only; feature Typer adapters reuse the same application and
-  owner services and retain the command snapshot.
+  Acquisition, Translation, and Codex. Acquisition and Narration inbound workers still contain
+  substantial state-machine orchestration and require a further application-service extraction.
+- The CLI entrypoint is composition-only and resource lifecycle is Platform-owned, with an exact
+  baseline help snapshot. Acquisition's Typer adapter still contains import pipeline orchestration
+  that must move behind application commands.
 - The 2,166-line legacy router, per-module legacy HTTP bridges, and frontend global API facade are
   deleted. `novelwiki.api.routes` is a SQL-free stable direct-call wrapper only; FastAPI mounts
   native module routers.
@@ -24,7 +28,7 @@ now divided among ten business modules plus Platform; no service split or topolo
 
 ## Automated release gates
 
-GitHub Actions runs pgvector-backed backend tests, architecture checks, compile checks, query-plan
+The GitHub Actions workflow defines pgvector-backed backend tests, architecture checks, compile checks, query-plan
 budgets, contract snapshots, Docker Compose validation, frontend unit tests, production build, and
 the ten-path Chromium suite. The committed OpenAPI, route, CLI, schema, and job-state snapshots
 remain the compatibility authority.
@@ -33,6 +37,9 @@ Performance is ratcheted through `performance-baseline.json`: Library composite 
 Import, and Narration `SKIP LOCKED` claim plans must remain inside reviewed PostgreSQL total-cost
 budgets. The budgets intentionally include environment headroom and require an explained review to
 change.
+
+The final local working tree must be committed and pushed before its remote Actions run can be
+observed; local verification evidence is recorded in `migration-equivalence-final.md`.
 
 ## Release boundary
 

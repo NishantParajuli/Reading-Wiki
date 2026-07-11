@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 
 from novelwiki.modules.identity.public import Principal
-from novelwiki.tts import worker as tts_worker
-from novelwiki.tts.chapter_text import resolve_chapter_text
-from novelwiki.tts.coverage import shared_audio_coverage
+from novelwiki.modules.narration.adapters.inbound import worker as tts_worker
+from novelwiki.modules.narration.adapters.outbound.chapter_text import resolve_chapter_text
+from novelwiki.modules.narration.adapters.outbound.coverage import shared_audio_coverage
 
 
 class ReadingChapterTextAdapter:

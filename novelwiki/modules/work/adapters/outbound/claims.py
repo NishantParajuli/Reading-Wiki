@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from novelwiki.db.connection import get_db_pool
-from novelwiki.jobs import service
+from novelwiki.platform.database import get_db_pool
+from novelwiki.modules.work.adapters.outbound import postgres as service
 
 
 async def claim_next(

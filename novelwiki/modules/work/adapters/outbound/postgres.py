@@ -26,9 +26,18 @@ from __future__ import annotations
 import json
 import logging
 
-from novelwiki import audit, quota
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
+from novelwiki.platform.observability import audit
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool
+from novelwiki.modules.identity.public import (
+    IdentityQuotaTransactionApi,
+    quota_transaction_factory,
+)
+from novelwiki.modules.work.public import WorkQuotaFinalizationTransactionApi
+from novelwiki.platform.database import AsyncpgUnitOfWork
+from novelwiki.workflows.finalize_job_quota import finalize_job_quota
+
+from .transactions import PostgresWorkQuotaFinalizationTransactionService
 
 logger = logging.getLogger(__name__)
 
@@ -450,33 +459,24 @@ async def finalize(job_id: int, *, success: bool) -> None:
     """Settle a terminal job's quota exactly once (guarded by ``quota_finalized``). On success the
     reservation is treated as consumed; otherwise the unconsumed remainder is refunded."""
     pool = await get_db_pool()
-    refunded = 0
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
-                UPDATE jobs SET
-                  quota_finalized = TRUE,
-                  quota_consumed  = CASE
-                    WHEN $2 AND NOT (execution_backend='agy' AND kind='translate') THEN quota_reserved
-                    ELSE quota_consumed END,
-                  updated_at = now()
-                WHERE id = $1 AND quota_finalized = FALSE
-                RETURNING user_id, novel_id, quota_kind, quota_reserved, quota_consumed;
-                """,
-                job_id, success,
-            )
-            if row is not None:
-                kind = row["quota_kind"]
-                refund_n = max(0, int(row["quota_reserved"] or 0) - int(row["quota_consumed"] or 0))
-                if kind and refund_n > 0 and row["user_id"] is not None:
-                    refunded = await quota.refund(
-                        int(row["user_id"]), kind, refund_n, conn=conn
-                    )
-    if row is None:
+    factories = {
+        WorkQuotaFinalizationTransactionApi: PostgresWorkQuotaFinalizationTransactionService,
+        IdentityQuotaTransactionApi: quota_transaction_factory,
+    }
+    settlement, refunded = await finalize_job_quota(
+        lambda: AsyncpgUnitOfWork(pool, factories), job_id, success
+    )
+    if settlement is None:
         return  # already finalized
     if refunded:
-        kind = row["quota_kind"]
-        logger.info(f"Job {job_id}: refunded {refunded} {kind} unit(s) to user {row['user_id']}.")
-        await audit.record("quota.refund", user_id=int(row["user_id"]), novel_id=row["novel_id"],
-                           data={"job_id": job_id, "kind": kind, "units": refunded})
+        kind = settlement.quota_kind
+        logger.info(
+            "Job %s: refunded %s %s unit(s) to user %s.",
+            job_id, refunded, kind, settlement.user_id,
+        )
+        await audit.record(
+            "quota.refund",
+            user_id=settlement.user_id,
+            novel_id=settlement.novel_id,
+            data={"job_id": job_id, "kind": kind, "units": refunded},
+        )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-async def build_codex_migration_service():
+async def build_codex_migration_service(agent_gateway=None):
     from novelwiki.modules.codex.adapters.outbound.agent_bridge import (
         CodexAgentGateway,
     )
@@ -45,7 +45,7 @@ async def build_codex_migration_service():
                     ).enable_codex(novel_id)
     queries = CodexQueryService(
         ReadingCeilingGateway(pool), PostgresCodexQueries(pool),
-        CodexAgentGateway(), AiCostGateway(),
+        agent_gateway or CodexAgentGateway(), AiCostGateway(),
         ask_max_query_chars=settings.ASK_MAX_QUERY_CHARS,
         ask_requires_verified=settings.ASK_REQUIRE_VERIFIED,
         profile_requires_verified=settings.ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED,

@@ -23,9 +23,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:8001",
-      "/assets/_users": "http://localhost:8001",
-      "/health": "http://localhost:8001",
+      "/api": process.env.VITE_API_PROXY || "http://localhost:8001",
+      "/assets/_users": process.env.VITE_API_PROXY || "http://localhost:8001",
+      "/health": process.env.VITE_API_PROXY || "http://localhost:8001",
     },
   },
 });

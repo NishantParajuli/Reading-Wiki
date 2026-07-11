@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncpg
 
-from novelwiki.auth import rate_limit
-from novelwiki.auth.sessions import create_session, revoke_session, revoke_user_sessions
-from novelwiki.auth.tokens import hash_token
-from novelwiki.auth.users import unique_username
+from novelwiki.modules.identity.adapters.outbound import rate_limit
+from novelwiki.modules.identity.adapters.outbound.postgres_sessions import (
+    create_session, revoke_session, revoke_user_sessions,
+)
+from novelwiki.modules.identity.adapters.outbound.postgres_users import unique_username
+from novelwiki.modules.identity.adapters.outbound.tokens import hash_token
 from novelwiki.modules.identity.application.ports import DuplicateRegistration
 
 

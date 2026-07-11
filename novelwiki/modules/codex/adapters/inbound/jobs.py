@@ -2,10 +2,10 @@ from __future__ import annotations
 
 
 async def execute_codex_job(job: dict, context) -> dict:
-    from novelwiki.ingest.chunk import chunk_all_chapters
-    from novelwiki.ingest.embed import embed_missing_chunks
-    from novelwiki.ingest.extract import extract_all_chapters
-    from novelwiki.retrieval.bm25 import get_bm25_manager
+    from novelwiki.modules.codex.adapters.outbound.ingest.chunk import chunk_all_chapters
+    from novelwiki.modules.codex.adapters.outbound.ingest.embed import embed_missing_chunks
+    from novelwiki.modules.codex.adapters.outbound.ingest.extract import extract_all_chapters
+    from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
 
     job_id, novel_id = int(job["id"]), int(job["novel_id"])
     options = job.get("options") or {}
@@ -31,9 +31,9 @@ async def execute_codex_job(job: dict, context) -> dict:
 
 
 async def execute_agy_codex_job(job: dict, preflight, context) -> dict:
-    from novelwiki.ingest.chunk import chunk_all_chapters
-    from novelwiki.ingest.embed import embed_missing_chunks
-    from novelwiki.retrieval.bm25 import get_bm25_manager
+    from novelwiki.modules.codex.adapters.outbound.ingest.chunk import chunk_all_chapters
+    from novelwiki.modules.codex.adapters.outbound.ingest.embed import embed_missing_chunks
+    from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
 
     options = job.get("options") or {}
     job_id, novel_id = int(job["id"]), int(job["novel_id"])

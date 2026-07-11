@@ -1,5 +1,5 @@
 import logging
-from novelwiki.config.settings import settings
+from novelwiki.platform.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

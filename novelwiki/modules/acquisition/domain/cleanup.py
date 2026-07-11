@@ -147,7 +147,7 @@ def strip_running_headers(document: Document) -> None:
 
 
 def _clean_pdf_document(document: Document) -> Document:
-    from novelwiki.importer.ir import Block, PARAGRAPH
+    from novelwiki.modules.acquisition.domain.document import Block, PARAGRAPH
     strip_running_headers(document)
     kept = []
     for b in document.blocks:

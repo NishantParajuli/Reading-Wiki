@@ -5,7 +5,7 @@ import os
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from novelwiki.auth.deps import current_user
+from novelwiki.platform.auth import current_user
 from novelwiki.kernel.errors import Conflict, Forbidden, NotFound, ValidationFailed
 from novelwiki.modules.acquisition.public import SourceDraft
 from novelwiki.modules.catalog.public import NovelDraft

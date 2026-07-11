@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 async def build_identity_admin_service():
-    from novelwiki.ai_backend.policy import cancel_revoked_jobs
+    from novelwiki.modules.ai_execution.adapters.outbound.policy import cancel_revoked_jobs
     from novelwiki.modules.identity.adapters.outbound.postgres_admin import (
         PostgresIdentityAdminTransactionService,
     )

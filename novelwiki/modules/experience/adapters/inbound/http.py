@@ -26,29 +26,24 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from novelwiki import ai_limits, quota
-from novelwiki.agent.orchestrator import (
-    answer_question, build_citations, compute_query_hash, get_cached_answer,
-)
-from novelwiki.auth.access import can_edit, is_admin, require_readable, require_effective_ceiling
-from novelwiki.auth.deps import current_user
-from novelwiki.config.settings import settings
-from novelwiki.jobs import service as jobs_service
-from novelwiki.retrieval.bm25 import get_bm25_manager
-from novelwiki.tts.coverage import shared_audio_coverage
+import novelwiki.modules.identity.public as quota
+from novelwiki.modules.catalog.public import can_edit, is_admin, require_readable
+from novelwiki.platform.auth import current_user
+from novelwiki.platform.config import settings
+from novelwiki.modules.work.public import service as jobs_service
+from novelwiki.modules.codex.public import CodexRecapApi
+from novelwiki.modules.identity.public import Principal
+from novelwiki.modules.narration.public import shared_audio_coverage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# The recap is a canonical, user-independent question so its cached answer keys on
-# (novel_id, hash(RECAP_QUESTION), effective_ceiling) — one cached recap per ceiling, shared by
-# every reader at that ceiling (no per-user notes/overlays are included today).
-RECAP_QUESTION = (
-    "Write a concise, spoiler-safe recap of the story so far: the main characters and their "
-    "current situations, the key factions or places, and the most important events up to this "
-    "point. Keep it to a few short paragraphs. Ground every claim in the retrieved evidence and "
-    "cite it inline."
-)
+async def codex_recap_service_dependency() -> CodexRecapApi:
+    raise RuntimeError("CodexRecapService was not wired by the composition root")
+
+
+async def codex_recap_principal_factory_dependency():
+    raise RuntimeError("Codex recap principal factory was not wired by the composition root")
 
 # Terminal states per job system (everything else counts as "active / in progress").
 _IMPORT_TERMINAL = {"committed", "failed", "canceled"}
@@ -293,10 +288,10 @@ async def api_home(user: dict = Depends(current_user)):
 
 
 async def _recent_imports(user: dict, *, limit: int) -> list[dict]:
-    from novelwiki.importer import jobs as import_jobs
+    from novelwiki.modules.acquisition.public import list_import_jobs
     import os
     scope = None if is_admin(user) else user["id"]
-    rows = await import_jobs.list_jobs(user_id=scope, limit=limit)
+    rows = await list_import_jobs(user_id=scope, limit=limit)
     return [
         {
             "id": int(j["id"]),
@@ -444,7 +439,7 @@ async def api_cost_estimate(novel_id: int, action: str,
 
 
 def _quota_limit(user: dict, kind: str) -> int:
-    from novelwiki.auth.users import quota_limits
+    from novelwiki.modules.identity.public import quota_limits
     return quota_limits(user)[kind]
 
 
@@ -455,7 +450,13 @@ class RecapRequest(BaseModel):
 
 
 @router.post("/novels/{novel_id}/recap")
-async def api_recap(novel_id: int, req: RecapRequest, user: dict = Depends(current_user)):
+async def api_recap(
+    novel_id: int,
+    req: RecapRequest,
+    user: dict = Depends(current_user),
+    service: CodexRecapApi = Depends(codex_recap_service_dependency),
+    principal_factory=Depends(codex_recap_principal_factory_dependency),
+):
     """Spoiler-safe "story so far" recap, bounded by the same trusted effective ceiling as codex/ask.
 
     It is a canonical question run through the agentic Q&A orchestrator, so it inherits the read-side
@@ -463,34 +464,9 @@ async def api_recap(novel_id: int, req: RecapRequest, user: dict = Depends(curre
     cached recap for this (novel, ceiling) is served free; a cache miss must clear the gates first.
     The model is never given evidence above the effective ceiling, so it cannot recap unread chapters.
     """
-    ceiling_info = await require_effective_ceiling(novel_id, user, requested_ceiling=req.ceiling)
-    ceiling = ceiling_info.effective_ceiling
-
-    def _resp(answer: str, citations: list[dict]) -> dict:
-        return {
-            "answer": answer,
-            "citations": citations,
-            "requested_ceiling": ceiling_info.requested_ceiling,
-            "allowed_ceiling": ceiling_info.allowed_ceiling,
-            "effective_ceiling": ceiling_info.effective_ceiling,
-            "ceiling_clamped": ceiling_info.clamped,
-        }
-
-    # Cache fast path — free, bypasses every cost gate (mirrors /ask).
-    query_hash = compute_query_hash(RECAP_QUESTION)
-    cached = await get_cached_answer(novel_id, query_hash, ceiling)
-    if cached:
-        citations = await build_citations(novel_id, cached["answer_md"], ceiling)
-        return _resp(cached["answer_md"], citations)
-
-    if settings.ASK_REQUIRE_VERIFIED:
-        quota.require_spend_allowed(user)   # 403 unless verified/admin
     try:
-        async with ai_limits.concurrency_slot(user, "recap"):
-            await ai_limits.consume_ask_rate(user, "recap")
-            await get_bm25_manager(novel_id).ensure_loaded()
-            result = await answer_question(novel_id, RECAP_QUESTION, ceiling)
-        return _resp(result["answer"], result["citations"])
+        principal: Principal = principal_factory(user)
+        return await service.recap(novel_id, req.ceiling, principal)
     except HTTPException:
         raise
     except Exception as e:

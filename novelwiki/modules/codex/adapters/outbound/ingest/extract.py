@@ -6,12 +6,12 @@ import hashlib
 import uuid
 from collections.abc import Awaitable, Callable
 
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool, close_db_pool
-from novelwiki.db.queries import clear_caches
-from novelwiki.agent.llm_client import call_chat_completion
-from novelwiki.ingest.link import create_entity, resolve_entity
-from novelwiki.agent.prompts import (
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool, close_db_pool
+from novelwiki.modules.codex.adapters.outbound.cache import clear_caches
+from novelwiki.modules.ai_execution.public import call_chat_completion
+from novelwiki.modules.codex.adapters.outbound.ingest.link import create_entity, resolve_entity
+from novelwiki.modules.codex.domain.prompts import (
     EXTRACTION_SYSTEM,
     EXTRACTION_USER,
     EXTRACTION_VERIFY_SYSTEM,

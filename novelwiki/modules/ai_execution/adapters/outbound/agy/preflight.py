@@ -8,11 +8,11 @@ import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from novelwiki.agy import PLUGIN_SOURCE
-from novelwiki.agy.errors import AgyPreflightError
-from novelwiki.agy.runner import child_environment
-from novelwiki.agy.workspace import tree_sha256, validate_work_root
-from novelwiki.config.settings import settings
+from novelwiki.modules.ai_execution.adapters.outbound.agy import PLUGIN_SOURCE
+from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import AgyPreflightError
+from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import child_environment
+from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import tree_sha256, validate_work_root
+from novelwiki.platform.config import settings
 
 
 @dataclass(frozen=True)

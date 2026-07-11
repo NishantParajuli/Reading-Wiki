@@ -1,6 +1,6 @@
 """Stable direct-call exports backed exclusively by native module adapters.
 
-FastAPI registers the native routers in ``platform.web.app``. This module remains only for
+FastAPI registers the native routers in ``bootstrap.web``. This module remains only for
 older Python callers and evaluation fixtures; it contains no route registry, SQL, or workflow.
 """
 from __future__ import annotations
@@ -8,9 +8,8 @@ from __future__ import annotations
 import inspect
 from functools import wraps
 
-from novelwiki import quota
-from novelwiki.agent.orchestrator import answer_question
-from novelwiki.retrieval.bm25 import get_bm25_manager
+import novelwiki.modules.identity.public as quota
+from novelwiki.modules.codex.public import answer_question, get_bm25_manager
 
 from novelwiki.modules.acquisition.adapters.inbound import http as acquisition
 from novelwiki.modules.catalog.adapters.inbound import http as catalog
@@ -120,21 +119,21 @@ async def _invoke(handler, *args, **kwargs):
         from novelwiki.bootstrap.codex_migration import (
             build_codex_migration_service, codex_principal_from_user,
         )
-        service = await build_codex_migration_service()
+        agent = None
         if name == "ask_question":
-            base = service.queries._agent
+            from novelwiki.modules.codex.adapters.outbound.agent_bridge import (
+                CodexAgentGateway,
+            )
 
-            class DirectCallAgent:
-                def __getattr__(self, attribute):
-                    return getattr(base, attribute)
-
+            class DirectCallAgent(CodexAgentGateway):
                 async def ensure_index(self, novel_id):
                     await get_bm25_manager(novel_id).ensure_loaded()
 
                 async def answer(self, novel_id, question, ceiling):
                     return await answer_question(novel_id, question, ceiling.value)
 
-            service.queries._agent = DirectCallAgent()
+            agent = DirectCallAgent()
+        service = await build_codex_migration_service(agent)
         kwargs.setdefault("service", service)
         kwargs.setdefault("principal_factory", codex_principal_from_user)
     elif module == experience.__name__ and "service" in parameters:

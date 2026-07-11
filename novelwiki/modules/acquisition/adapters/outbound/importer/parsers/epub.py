@@ -18,8 +18,8 @@ from urllib.parse import unquote
 
 from lxml import etree, html as lxml_html
 
-from novelwiki.importer import storage
-from novelwiki.importer.ir import (
+from novelwiki.modules.acquisition.adapters.outbound.importer import storage
+from novelwiki.modules.acquisition.domain.document import (
     Block, Document, HEADING, PARAGRAPH, IMAGE, SCENE_BREAK, CAPTION,
 )
 

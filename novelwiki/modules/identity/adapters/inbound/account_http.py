@@ -5,9 +5,9 @@ import os
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from novelwiki.auth.deps import current_user
+from novelwiki.modules.identity.adapters.inbound.dependencies import current_user
 
-from novelwiki.auth.users import self_user_with_capabilities
+from novelwiki.modules.identity.adapters.inbound.presentation import self_user_with_capabilities
 from novelwiki.kernel.errors import Conflict, ValidationFailed
 from novelwiki.platform.config import settings
 

@@ -18,7 +18,7 @@ import logging
 
 import httpx
 
-from novelwiki.config.settings import settings
+from novelwiki.platform.config import settings
 
 logger = logging.getLogger(__name__)
 

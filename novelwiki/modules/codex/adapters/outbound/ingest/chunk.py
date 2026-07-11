@@ -4,8 +4,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 import tiktoken
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool, close_db_pool
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool, close_db_pool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from novelwiki.auth.deps import current_user
+from novelwiki.platform.auth import current_user
 from novelwiki.kernel.errors import Conflict, Forbidden, InvalidOperation, NotFound
 from novelwiki.modules.identity.public import Principal
 from novelwiki.modules.narration.application import (

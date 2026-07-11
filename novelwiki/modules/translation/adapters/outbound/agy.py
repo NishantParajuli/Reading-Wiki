@@ -8,23 +8,23 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from novelwiki.agy.contracts import InputManifest, TranslationMeta
-from novelwiki.agy.errors import AgyCanceled, AgyValidationError, is_database_error, safe_error_summary
-from novelwiki.agy.preflight import PreflightResult
-from novelwiki.agy.runner import run_agy
-from novelwiki.agy.runs import create_run, update_run, workspace_relpath
-from novelwiki.agy.validators import load_json, read_text_artifact, validate_output_manifest
-from novelwiki.agy.workspace import (
+from novelwiki.modules.ai_execution.public import InputManifest, TranslationMeta
+from novelwiki.modules.ai_execution.public import AgyCanceled, AgyValidationError, is_database_error, safe_error_summary
+from novelwiki.modules.ai_execution.public import PreflightResult
+from novelwiki.modules.ai_execution.public import run_agy
+from novelwiki.modules.ai_execution.public import create_run, update_run, workspace_relpath
+from novelwiki.modules.ai_execution.public import load_json, read_text_artifact, validate_output_manifest
+from novelwiki.modules.ai_execution.public import (
     add_input,
     create_run_workspace,
     seal_inputs,
     sha256_file,
     write_json,
 )
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
-from novelwiki.jobs import service
-from novelwiki.translate.translate import (
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool
+from novelwiki.modules.work.public import service
+from novelwiki.modules.translation.adapters.outbound.runtime import (
     commit_translation,
     reset_staged_translations,
     stage_translation_batch,
@@ -315,7 +315,7 @@ async def execute_translation_job(job: dict, preflight: PreflightResult) -> dict
     job_id, novel_id = int(job["id"]), int(job["novel_id"])
     opts = job.get("options") or {}
     if opts.get("seed_from_codex"):
-        from novelwiki.translate.translate import seed_glossary_from_entities
+        from novelwiki.modules.translation.adapters.outbound.runtime import seed_glossary_from_entities
         await service.update_job(job_id, stage="seeding glossary")
         await seed_glossary_from_entities(novel_id)
     resumed = await _resume_ready_commits(job)

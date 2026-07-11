@@ -189,12 +189,18 @@ def test_experience_projection_registry_is_explicit_and_read_only():
     assert not writes, f"Experience projection registry contains write SQL: {writes}"
 
 
-def test_platform_web_lifespan_delegates_to_lifecycle_registry():
-    source = (ROOT / "novelwiki/platform/web/app.py").read_text(encoding="utf-8")
+def test_bootstrap_web_lifespan_delegates_to_lifecycle_registry():
+    source = (ROOT / "novelwiki/bootstrap/web.py").read_text(encoding="utf-8")
     lifespan_source = source[source.index("async def lifespan"):source.index("app = FastAPI")]
     assert "build_application_lifecycle" in lifespan_source
     assert ".execute(" not in lifespan_source
     assert "start_worker" not in lifespan_source
+
+
+def test_platform_web_is_a_passive_stable_entrypoint():
+    source = (ROOT / "novelwiki/platform/web/app.py").read_text(encoding="utf-8")
+    assert "from novelwiki.bootstrap.web import app" in source
+    assert "novelwiki.modules" not in source
 
 
 def test_experience_admin_adapter_contains_no_write_sql():
@@ -246,3 +252,13 @@ def test_frontend_feature_boundaries_and_screen_limits():
 def test_every_module_inbound_adapter_is_database_free():
     from novelwiki.platform.architecture.checks import inbound_database_violations
     assert inbound_database_violations(ROOT) == []
+
+
+def test_no_module_uses_a_legacy_facade_as_an_internal_api():
+    from novelwiki.platform.architecture.checks import legacy_facade_import_violations
+    assert legacy_facade_import_violations(ROOT) == []
+
+
+def test_cross_module_imports_use_public_contracts():
+    from novelwiki.platform.architecture.checks import cross_module_import_violations
+    assert cross_module_import_violations(ROOT) == []

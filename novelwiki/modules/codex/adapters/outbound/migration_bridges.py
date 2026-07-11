@@ -39,7 +39,7 @@ class ReadingCeilingGateway:
     async def resolve(
         self, novel_id: int, principal: Principal, requested: float | None
     ) -> CeilingContext:
-        from novelwiki.auth.access import require_effective_ceiling
+        from novelwiki.modules.reading.public import require_effective_ceiling
         try:
             result = await require_effective_ceiling(
                 novel_id, _user(principal), requested_ceiling=requested
@@ -69,7 +69,7 @@ class ReadingCeilingGateway:
 
 class AiCostGateway:
     def require_spend_allowed(self, principal: Principal) -> None:
-        from novelwiki import quota
+        import novelwiki.modules.identity.public as quota
         try:
             quota.require_spend_allowed(_user(principal))
         except HTTPException as exc:
@@ -77,7 +77,7 @@ class AiCostGateway:
 
     @contextlib.asynccontextmanager
     async def concurrency_slot(self, principal: Principal, kind: str):
-        from novelwiki import ai_limits
+        import novelwiki.modules.ai_execution.public as ai_limits
         try:
             async with ai_limits.concurrency_slot(_user(principal), kind):
                 yield
@@ -85,7 +85,7 @@ class AiCostGateway:
             raise _convert_http(exc) from exc
 
     async def consume_rate(self, principal: Principal, kind: str) -> None:
-        from novelwiki import ai_limits
+        import novelwiki.modules.ai_execution.public as ai_limits
         try:
             await ai_limits.consume_ask_rate(_user(principal), kind)
         except HTTPException as exc:
@@ -94,8 +94,7 @@ class AiCostGateway:
 
 class BackendResolutionBridge:
     async def resolve(self, principal: Principal, requested: str) -> BackendDecision:
-        from novelwiki.ai_backend.policy import resolve_backend
-        from novelwiki.ai_backend.types import Workload
+        from novelwiki.modules.ai_execution.public import Workload, resolve_backend
         try:
             decision = await resolve_backend(
                 _user(principal), Workload.CODEX_EXTRACT, requested
@@ -113,7 +112,7 @@ class BackendResolutionBridge:
 
 class CodexWorkBridge:
     async def find_active(self, idempotency_key: str) -> ActiveCodexJob | None:
-        from novelwiki.jobs import service
+        from novelwiki.modules.work.public import service
         job = await service.find_active("codex_build", idempotency_key)
         if job is None:
             return None
@@ -129,7 +128,7 @@ class CodexWorkBridge:
         idempotency_key: str, decision: BackendDecision,
         max_attempts: int | None,
     ) -> tuple[int, bool]:
-        from novelwiki.jobs import service
+        from novelwiki.modules.work.public import service
         try:
             return await service.create_job(
                 "codex_build", novel_id=novel_id, user_id=user_id,

@@ -26,10 +26,11 @@ import logging
 import os
 from pathlib import Path
 
-from novelwiki.config.settings import settings
-from novelwiki import quota
-from novelwiki.tts import tts_client, textprep
-from novelwiki.tts.chapter_text import resolve_chapter_text
+from novelwiki.platform.config import settings
+import novelwiki.modules.identity.public as quota
+from novelwiki.modules.narration.adapters.outbound import sidecar as tts_client
+from novelwiki.modules.narration.domain import textprep
+from novelwiki.modules.narration.adapters.outbound.chapter_text import resolve_chapter_text
 
 logger = logging.getLogger(__name__)
 

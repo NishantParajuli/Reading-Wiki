@@ -19,8 +19,8 @@ import json
 import logging
 import re
 
-from novelwiki.config.settings import settings
-from novelwiki.importer.ir import Document, HEADING, PARAGRAPH, TEXT_KINDS
+from novelwiki.platform.config import settings
+from novelwiki.modules.acquisition.domain.document import Document, HEADING, PARAGRAPH, TEXT_KINDS
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +323,7 @@ async def _refine_batch(batch: list[dict], by_id: dict, book_title: str) -> None
         for s in batch
     ]
     try:
-        from novelwiki.agent.llm_client import call_llm
+        from novelwiki.modules.ai_execution.public import call_llm
         from json_repair import repair_json
         messages = [
             {"role": "system", "content": _REFINE_SYSTEM},

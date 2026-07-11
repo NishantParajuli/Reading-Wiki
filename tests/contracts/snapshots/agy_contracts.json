@@ -1,0 +1,263 @@
+{
+  "input_manifest_schema": {
+    "$defs": {
+      "ArtifactRef": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "media_type": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "role": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Role",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "bytes",
+          "media_type",
+          "role"
+        ],
+        "title": "ArtifactRef",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "chapter_ceiling": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Chapter Ceiling"
+      },
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "inputs": {
+        "items": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "title": "Inputs",
+        "type": "array"
+      },
+      "job_id": {
+        "title": "Job Id",
+        "type": "integer"
+      },
+      "limits": {
+        "additionalProperties": true,
+        "title": "Limits",
+        "type": "object"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "novel_ref": {
+        "title": "Novel Ref",
+        "type": "string"
+      },
+      "output_dir": {
+        "const": "../output",
+        "default": "../output",
+        "title": "Output Dir",
+        "type": "string"
+      },
+      "plugin_version": {
+        "title": "Plugin Version",
+        "type": "string"
+      },
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "schema_version": {
+        "const": "1.0",
+        "default": "1.0",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "workload": {
+        "title": "Workload",
+        "type": "string"
+      }
+    },
+    "required": [
+      "run_id",
+      "job_id",
+      "workload",
+      "plugin_version",
+      "model",
+      "novel_ref",
+      "inputs",
+      "created_at"
+    ],
+    "title": "InputManifest",
+    "type": "object"
+  },
+  "output_manifest_schema": {
+    "$defs": {
+      "ArtifactRef": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "media_type": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "role": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Role",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "bytes",
+          "media_type",
+          "role"
+        ],
+        "title": "ArtifactRef",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "artifacts": {
+        "items": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "title": "Artifacts",
+        "type": "array"
+      },
+      "completed_at": {
+        "format": "date-time",
+        "title": "Completed At",
+        "type": "string"
+      },
+      "failure_reason": {
+        "anyOf": [
+          {
+            "maxLength": 500,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Failure Reason"
+      },
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "schema_version": {
+        "const": "1.0",
+        "default": "1.0",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "complete",
+          "failed"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 100,
+        "title": "Warnings",
+        "type": "array"
+      },
+      "workload": {
+        "title": "Workload",
+        "type": "string"
+      }
+    },
+    "required": [
+      "run_id",
+      "workload",
+      "status",
+      "artifacts",
+      "completed_at"
+    ],
+    "title": "OutputManifest",
+    "type": "object"
+  },
+  "plugin_files": {
+    "README.md": "25163a26818ec5a79d6e16c6ac487daffdb7ec82601fd06c94fad0ffbf5be4d2",
+    "hooks.json": "991a2b8708cdf876eb2ad86c2dc6087a23ca894be996bf56be4c28b3990c211a",
+    "hooks/__pycache__/tool_gate.cpython-312.pyc": "0271a7f07398a59d552e50f75206ca2331260304f68104b563f44a1c59480070",
+    "hooks/__pycache__/validate_stop.cpython-312.pyc": "1ee59dab5db5ce1c77bbbec3bcd727e58012a0d57aba5ad348fa41370e0df3cb",
+    "hooks/tool_gate.py": "8d5a268ecfdb0a8fe3dbbe362bb2cc04058676603f577d96a5851db6e6d710e6",
+    "hooks/validate_stop.py": "ae7a30ca9fdb1daa463c7e51fe5e734ad9a6dd345b061065c8ef49672161b007",
+    "plugin.json": "28787c9b572e654ec6a3ccb64148484b2679c40317e447b841a2f6f4bbd28ab8",
+    "rules/00-data-is-untrusted.md": "43189f18e18ad33324fc39db5d7afc158d1ce9309c2575629a0ec1cdb3fe3548",
+    "rules/10-output-contract.md": "9f4ac5a40a518b4571d832ac1c11e884336b4060adaf47279aa1a6b3e6901276",
+    "rules/20-spoiler-boundary.md": "80f93c0b82b81cdbad89e9fa801c6ec633fd0f0ddff8ffc760154018f2d2e935",
+    "rules/30-literary-translation.md": "a7a934f649815fcc9f890a8222785836e3f5610519c98189a0836a5ccc483180",
+    "rules/40-codex-provenance.md": "7efd7cab26e3b372da64b16d7022e3a790a9745a751afa71bf48709c01fdd18a",
+    "shared/contracts/codex-extraction.schema.json": "ad350d17f9b51cb7ca2f6862bc4db2bf9b308cf6bd8f4d466013d02a5612382d",
+    "shared/contracts/disambiguation.schema.json": "3153d4760bac2bf47c0ed695858cc2501017f827357d8dfcb8d027df98b119e6",
+    "shared/contracts/translation-manifest.schema.json": "c111ad3cdffa9d9fb817148961ef931300e055ee3a73009a63d360260c6bcb15",
+    "skills/novelwiki-codex-extract/SKILL.md": "13bfbd2f1029eb79d8ad7f085569ec62da25cd58b8dd8448f7d2995605978f09",
+    "skills/novelwiki-codex-verify/SKILL.md": "b7c68b8ab557dbecb8d5fa4a7a5862be5fa5e08b36bcb3b13cd7fb5f29ee8b71",
+    "skills/novelwiki-disambiguate/SKILL.md": "17dad557be82304de7bd7afa0fadbb84aca92f792c651e4140eb85811f837d1e",
+    "skills/novelwiki-smoke/SKILL.md": "bac604264573c7941ff014f781899fea2a3ce12037e34aed262e33cd44ce0d06",
+    "skills/novelwiki-translate/SKILL.md": "906ad894574d91ff168842297303ac8a5c650d9f2620be3c56b6665b6cef57ab"
+  }
+}

@@ -15,10 +15,10 @@ from __future__ import annotations
 import json
 import logging
 
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
-from novelwiki.importer import storage
-from novelwiki.importer.render import render_segment
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool
+from novelwiki.modules.acquisition.adapters.outbound.importer import storage
+from novelwiki.modules.acquisition.application.render import render_segment
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,7 @@ async def _write_segments(apis, job_id: int, blocks: list, meta: dict,
                           offset: float, cover_pending: str | None, *,
                           force_part_label: str | None = None,
                           sequential: bool = False) -> tuple[int, float, float]:
-    from novelwiki.scraper.adapters import ChapterData
+    from novelwiki.modules.acquisition.adapters.outbound.scraper.adapters import ChapterData
 
     if sequential:
         for index, segment in enumerate(included, start=1):
@@ -320,7 +320,7 @@ async def commit_series(job_ids: list[int]) -> dict:
     series index, each volume becomes its own source, chapters are stacked into a single
     continuous global sequence, and every volume is grouped under its own ``part_label`` in
     the reader's TOC. The cover + book metadata come from the first volume."""
-    from novelwiki.importer import jobs as jobs_mod
+    from novelwiki.modules.acquisition.adapters.inbound import worker as jobs_mod
 
     loaded = []
     for jid in job_ids:
@@ -418,7 +418,7 @@ async def _schedule_codex(novel_id: int, frm: float, to: float, user_id: int | N
     later offset change won't be blocked). Replaces the old fire-and-forget task: the codex-build
     quota reserved by ``_reserve_auto_codex`` is now recorded on the job and refunded by the worker
     if the build fails, and the work survives a restart instead of being silently lost."""
-    from novelwiki.jobs import service as jobs_service
+    from novelwiki.modules.work.public import service as jobs_service
     try:
         _job_id, created = await jobs_service.create_job(
             "codex_build", novel_id=novel_id, user_id=user_id,
@@ -426,12 +426,12 @@ async def _schedule_codex(novel_id: int, frm: float, to: float, user_id: int | N
             quota_kind="codex_builds", quota_reserved=(1 if user_id is not None else 0),
         )
         if not created and user_id is not None:
-            from novelwiki import quota
+            import novelwiki.modules.identity.public as quota
             await quota.refund(user_id, "codex_builds", 1)
         logger.info(f"Scheduled durable codex build over imported chapters {frm}–{to} of novel {novel_id}.")
     except Exception as e:
         if user_id is not None:
-            from novelwiki import quota
+            import novelwiki.modules.identity.public as quota
             try:
                 await quota.refund(user_id, "codex_builds", 1)
             except Exception as refund_error:

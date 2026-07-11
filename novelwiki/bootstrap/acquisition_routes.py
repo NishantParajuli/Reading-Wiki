@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 async def build_acquisition_service():
-    from novelwiki.jobs import service as jobs_service
+    from novelwiki.modules.work.public import service as jobs_service
     from novelwiki.modules.acquisition.adapters.outbound.assets import (
         AcquisitionAssetFilesystem,
     )
@@ -88,7 +88,7 @@ def build_acquisition_routes():
 
 
 async def build_import_service():
-    from novelwiki.config.settings import settings
+    from novelwiki.platform.config import settings
     from novelwiki.modules.acquisition.adapters.outbound.import_gateway import (
         ImportRuntimeGateway,
     )
@@ -199,7 +199,7 @@ async def reserve_auto_codex(user_id: int) -> bool:
         PostgresIdentityWorkerLookup,
     )
     from novelwiki.platform.database import init_db_pool
-    from novelwiki import quota
+    import novelwiki.modules.identity.public as quota
 
     user = await PostgresIdentityWorkerLookup(await init_db_pool()).load_user(user_id)
     return bool(user and await quota.try_reserve(user, "codex_builds", 1))

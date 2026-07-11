@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from novelwiki.auth.deps import current_user
-from novelwiki.jobs import service
+from novelwiki.platform.auth import current_user
+from novelwiki.modules.work.adapters.outbound import postgres as service
 
 router = APIRouter()
 

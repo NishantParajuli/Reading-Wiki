@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from novelwiki.auth.deps import current_user
+from novelwiki.platform.auth import current_user
 from collections.abc import Callable
 from typing import Literal
 

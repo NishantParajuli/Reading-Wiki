@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from curl_cffi.requests import AsyncSession
 
-from novelwiki.config.settings import settings
+from novelwiki.platform.config import settings
 
 logger = logging.getLogger(__name__)
 

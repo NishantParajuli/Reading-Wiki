@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from novelwiki.auth.deps import current_user
+from novelwiki.platform.auth import current_user
 from novelwiki.kernel.errors import (
     Conflict, Forbidden, NotFound, ProviderUnavailable, QuotaExceeded,
     ValidationFailed,

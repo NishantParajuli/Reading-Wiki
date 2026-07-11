@@ -10,8 +10,7 @@ from ...application.ports import ActiveTranslationJob, BackendDecision
 
 class BackendResolutionBridge:
     async def resolve(self, principal: Principal, requested: str) -> BackendDecision:
-        from novelwiki.ai_backend.policy import resolve_backend
-        from novelwiki.ai_backend.types import Workload
+        from novelwiki.modules.ai_execution.public import Workload, resolve_backend
         try:
             decision = await resolve_backend(
                 {"id": principal.user_id, "status": principal.status},
@@ -34,7 +33,7 @@ class BackendResolutionBridge:
 
 class TranslationWorkBridge:
     async def find_active(self, idempotency_key: str) -> ActiveTranslationJob | None:
-        from novelwiki.jobs import service
+        from novelwiki.modules.work.public import service
         job = await service.find_active("translate", idempotency_key)
         if job is None:
             return None
@@ -51,7 +50,7 @@ class TranslationWorkBridge:
         idempotency_key: str, decision: BackendDecision,
         quota_reserved: int, max_attempts: int | None,
     ) -> tuple[int, bool]:
-        from novelwiki.jobs import service
+        from novelwiki.modules.work.public import service
         try:
             return await service.create_job(
                 "translate", novel_id=novel_id, user_id=user_id,

@@ -98,33 +98,33 @@ def build_application_lifecycle() -> ApplicationLifecycle:
         await maybe_migrate()
 
     def start_import_worker():
-        from novelwiki.importer.jobs import start_worker
+        from novelwiki.modules.acquisition.adapters.inbound.worker import start_worker
         start_worker()
 
     async def stop_import_worker():
-        from novelwiki.importer.jobs import stop_worker
+        from novelwiki.modules.acquisition.adapters.inbound.worker import stop_worker
         await stop_worker()
 
     def start_tts_worker():
-        from novelwiki.tts.worker import start_worker
+        from novelwiki.modules.narration.adapters.inbound.worker import start_worker
         start_worker()
 
     async def stop_tts_worker():
-        from novelwiki.tts.worker import stop_worker
+        from novelwiki.modules.narration.adapters.inbound.worker import stop_worker
         await stop_worker()
 
     def start_jobs_worker():
-        from novelwiki.jobs.worker import start_worker
+        from novelwiki.modules.work.adapters.inbound.worker import start_worker
         start_worker()
 
     async def stop_jobs_worker():
-        from novelwiki.jobs.worker import stop_worker
+        from novelwiki.modules.work.adapters.inbound.worker import stop_worker
         await stop_worker()
 
     async def check_agy_worker():
         if not settings.AGY_ENABLED:
             return
-        from novelwiki.ai_backend.policy import worker_available
+        from novelwiki.modules.ai_execution.adapters.outbound.policy import worker_available
         if not await worker_available():
             logger.warning(
                 "AGY_ENABLED is true, but no recent healthy dedicated AGY worker heartbeat "

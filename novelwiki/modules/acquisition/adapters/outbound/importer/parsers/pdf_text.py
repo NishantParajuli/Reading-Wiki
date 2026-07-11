@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import logging
 
-from novelwiki.importer import storage
-from novelwiki.importer.ir import (
+from novelwiki.modules.acquisition.adapters.outbound.importer import storage
+from novelwiki.modules.acquisition.domain.document import (
     Block, Document, HEADING, PARAGRAPH, IMAGE, SCENE_BREAK,
 )
-from novelwiki.importer.parsers.epub import _SCENE_RE, _sniff_mime, _image_size
+from novelwiki.modules.acquisition.adapters.outbound.importer.parsers.epub import _SCENE_RE, _sniff_mime, _image_size
 
 logger = logging.getLogger(__name__)
 

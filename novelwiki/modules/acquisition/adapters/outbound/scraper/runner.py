@@ -3,10 +3,10 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from curl_cffi.requests import AsyncSession
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool, close_db_pool
-from novelwiki.scraper.adapters import get_adapter, ScrapeContext, PremiumReached, HEADERS
-from novelwiki.scraper.safe_fetch import SafeFetchError, host_from_url, parse_allowed_hosts
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool, close_db_pool
+from novelwiki.modules.acquisition.adapters.outbound.scraper.adapters import get_adapter, ScrapeContext, PremiumReached, HEADERS
+from novelwiki.modules.acquisition.adapters.outbound.scraper.safe_fetch import SafeFetchError, host_from_url, parse_allowed_hosts
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -166,7 +166,7 @@ async def scrape_novel(
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        print("Usage: python -m novelwiki.scraper.runner <source_id> [--force] [--max <max_chapters>]")
+        print("Usage: python -m novelwiki.modules.acquisition.adapters.outbound.scraper.runner <source_id> [--force] [--max <max_chapters>]")
         sys.exit(1)
 
     source_id = int(sys.argv[1])

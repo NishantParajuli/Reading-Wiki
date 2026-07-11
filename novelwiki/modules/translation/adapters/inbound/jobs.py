@@ -2,8 +2,8 @@ from __future__ import annotations
 
 
 async def execute_translation_job(job: dict, context) -> dict:
-    from novelwiki import quota
-    from novelwiki.translate.translate import seed_glossary_from_entities, translate_chapter
+    import novelwiki.modules.identity.public as quota
+    from novelwiki.modules.translation.adapters.outbound.runtime import seed_glossary_from_entities, translate_chapter
 
     job_id, novel_id = int(job["id"]), int(job["novel_id"])
     options = job.get("options") or {}

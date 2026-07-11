@@ -19,8 +19,8 @@ import logging
 import shutil
 from pathlib import Path
 
-from novelwiki.config.settings import settings
-from novelwiki.importer.ir import Document
+from novelwiki.platform.config import settings
+from novelwiki.modules.acquisition.domain.document import Document
 
 logger = logging.getLogger(__name__)
 

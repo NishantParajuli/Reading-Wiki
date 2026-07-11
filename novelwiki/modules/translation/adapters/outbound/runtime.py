@@ -14,10 +14,10 @@ import asyncio
 import hashlib
 import logging
 import uuid
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
-from novelwiki.agent.llm_client import call_chat_completion
-from novelwiki.translate.prompts import TRANSLATE_SYSTEM, TRANSLATE_USER
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool
+from novelwiki.modules.ai_execution.public import call_chat_completion
+from novelwiki.modules.translation.domain.prompts import TRANSLATE_SYSTEM, TRANSLATE_USER
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -230,7 +230,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
         if ch["translation_status"] == "translating" or ch["translation_run_id"] is not None:
             return {"status": "translating", "content": ch["content"]}
         if meter_user is not None:
-            from novelwiki import quota
+            import novelwiki.modules.identity.public as quota
             if not await quota.try_reserve(meter_user, "translated_chapters", 1):
                 return {"status": "quota_exceeded", "content": ch["content"]}
             charged_user_id = int(meter_user["id"])
@@ -260,7 +260,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
             logger.error(f"Translation failed for novel {novel_id} ch {number}: {e}")
             await reading.mark_translation_failed(novel_id, number)
             if charged_user_id is not None:
-                from novelwiki import quota
+                import novelwiki.modules.identity.public as quota
                 refunded = await quota.refund(charged_user_id, "translated_chapters", 1)
                 if refunded:
                     logger.info(
@@ -282,7 +282,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
             logger.warning(f"Translation commit lost race for novel {novel_id} ch {number}: {e}")
             await reading.mark_translation_failed(novel_id, number, only_unowned=True)
             if charged_user_id is not None:
-                from novelwiki import quota
+                import novelwiki.modules.identity.public as quota
                 await quota.refund(charged_user_id, "translated_chapters", 1)
             return {"status": "failed", "content": None}
         logger.info(f"Translated novel {novel_id} ch {number} ({len(translation.split())} words, +{len(new_terms)} glossary terms).")

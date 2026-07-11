@@ -19,7 +19,7 @@ import logging
 
 import httpx
 
-from novelwiki.config.settings import settings
+from novelwiki.platform.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ _GEMINI_OCR_PROMPT = (
 async def gemini_ocr(images: list[bytes], lang: str = "en") -> list[dict]:
     """Escalate poorly-read pages to Gemini vision. Charges the daily budget (may raise
     BudgetExhausted, which the worker treats as a pause). Returns one page-result per image."""
-    from novelwiki.agent.llm_client import call_vision_completion
+    from novelwiki.modules.ai_execution.public import call_vision_completion
     from json_repair import repair_json
 
     content = [{"type": "text", "text": _GEMINI_OCR_PROMPT}]

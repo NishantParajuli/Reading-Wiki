@@ -11,7 +11,7 @@ import hmac
 import secrets
 import time
 
-from novelwiki.config.settings import settings
+from novelwiki.platform.config import settings
 
 
 def new_token(nbytes: int = 32) -> str:

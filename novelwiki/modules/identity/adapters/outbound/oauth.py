@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from novelwiki.config.settings import settings
+from novelwiki.platform.config import settings
 
 PROVIDERS = {
     "google": {

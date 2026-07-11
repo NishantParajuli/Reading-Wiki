@@ -5,7 +5,7 @@ import re
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
-from novelwiki.auth.deps import current_user
+from novelwiki.platform.auth import current_user
 from novelwiki.kernel.errors import (
     Conflict,
     Forbidden,

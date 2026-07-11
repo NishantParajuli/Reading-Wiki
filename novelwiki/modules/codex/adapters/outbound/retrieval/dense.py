@@ -1,6 +1,6 @@
 import logging
-from novelwiki.agent.llm_client import get_embedding
-from novelwiki.db.connection import get_db_pool
+from novelwiki.modules.ai_execution.public import get_embedding
+from novelwiki.platform.database import get_db_pool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

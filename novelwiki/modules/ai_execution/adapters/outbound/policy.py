@@ -10,8 +10,8 @@ from datetime import timedelta
 
 from fastapi import HTTPException
 
-from novelwiki import audit
-from novelwiki.ai_backend.types import (
+from novelwiki.platform.observability import audit
+from novelwiki.modules.ai_execution.domain.backend import (
     IMPLEMENTED_AGY_WORKLOADS,
     BackendDecision,
     ExecutionBackend,
@@ -19,8 +19,8 @@ from novelwiki.ai_backend.types import (
     Workload,
     workload_for_job_kind,
 )
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool
 
 
 def _requested(value: str | RequestedBackend) -> RequestedBackend:
@@ -239,7 +239,7 @@ async def delete_policy(user_id: int, admin_id: int) -> bool:
 
 
 async def cancel_revoked_jobs(user_id: int, removed_workloads: set[str] | None) -> int:
-    from novelwiki.jobs import service
+    from novelwiki.modules.work.public import service
 
     kinds = []
     if removed_workloads is None or Workload.TRANSLATE_BATCH.value in removed_workloads:

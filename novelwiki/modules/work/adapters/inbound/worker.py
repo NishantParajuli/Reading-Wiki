@@ -25,10 +25,10 @@ import time
 import uuid
 from datetime import timedelta
 
-from novelwiki import audit
-from novelwiki.config.settings import settings
-from novelwiki.jobs import service
-from novelwiki.jobs.claims import claim_next
+from novelwiki.platform.observability import audit
+from novelwiki.platform.config import settings
+from novelwiki.modules.work.adapters.outbound import postgres as service
+from novelwiki.modules.work.adapters.outbound.claims import claim_next
 from novelwiki.modules.work.application import WorkerStateService
 
 logger = logging.getLogger(__name__)

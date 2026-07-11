@@ -3,7 +3,7 @@ import logging
 import asyncio
 import math
 from openai import AsyncOpenAI
-from novelwiki.config.settings import settings
+from novelwiki.platform.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -152,7 +152,7 @@ async def _charge_gemini_budget() -> int:
     """Atomically increments today's Gemini usage and returns the new total. Raises
     BudgetExhausted (and refunds the increment) once over GEMINI_DAILY_BUDGET, so the
     cap survives restarts. Lazily imported pool to avoid a circular import at module load."""
-    from novelwiki.db.connection import get_db_pool
+    from novelwiki.platform.database import get_db_pool
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         used = await conn.fetchval(
@@ -174,7 +174,7 @@ async def _charge_gemini_budget() -> int:
 
 
 async def gemini_budget_remaining(daily_budget: int) -> int:
-    from novelwiki.db.connection import get_db_pool
+    from novelwiki.platform.database import get_db_pool
     pool = await get_db_pool()
     async with pool.acquire() as connection:
         used = await connection.fetchval(

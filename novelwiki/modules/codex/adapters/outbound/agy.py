@@ -8,23 +8,23 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from novelwiki import audit as audit_log
-from novelwiki.agy.contracts import DisambiguationPayload, ExtractionPayload, InputManifest
-from novelwiki.agy.errors import AgyCanceled, AgyValidationError, is_database_error, safe_error_summary
-from novelwiki.agy.preflight import PreflightResult
-from novelwiki.agy.runner import run_agy
-from novelwiki.agy.runs import create_run, update_run, workspace_relpath
-from novelwiki.agy.validators import load_json, read_text_artifact, validate_output_manifest
-from novelwiki.agy.workspace import add_input, create_run_workspace, seal_inputs, sha256_file, write_json
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
-from novelwiki.ingest.extract import (
+from novelwiki.platform.observability import audit as audit_log
+from novelwiki.modules.ai_execution.public import DisambiguationPayload, ExtractionPayload, InputManifest
+from novelwiki.modules.ai_execution.public import AgyCanceled, AgyValidationError, is_database_error, safe_error_summary
+from novelwiki.modules.ai_execution.public import PreflightResult
+from novelwiki.modules.ai_execution.public import run_agy
+from novelwiki.modules.ai_execution.public import create_run, update_run, workspace_relpath
+from novelwiki.modules.ai_execution.public import load_json, read_text_artifact, validate_output_manifest
+from novelwiki.modules.ai_execution.public import add_input, create_run_workspace, seal_inputs, sha256_file, write_json
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool
+from novelwiki.modules.codex.adapters.outbound.ingest.extract import (
     chapter_source_sha256,
     commit_extraction_proposal,
     get_running_summary,
 )
-from novelwiki.ingest.link import find_resolution_candidates
-from novelwiki.jobs import service
+from novelwiki.modules.codex.adapters.outbound.ingest.link import find_resolution_candidates
+from novelwiki.modules.work.public import service
 
 
 ENTITY_TYPES = {"character", "location", "faction", "item", "concept", "organization"}

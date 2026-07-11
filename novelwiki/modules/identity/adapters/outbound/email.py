@@ -8,7 +8,7 @@ from email.message import EmailMessage
 
 import aiosmtplib
 
-from novelwiki.config.settings import settings
+from novelwiki.platform.config import settings
 
 logger = logging.getLogger(__name__)
 

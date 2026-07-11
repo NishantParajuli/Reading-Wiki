@@ -1,0 +1,101 @@
+{
+  "module_endpoints": {
+    "modules/acquisition/api.js": [
+      "/api/adapters",
+      "/api/import/batch",
+      "/api/import/commit-series",
+      "/api/import/jobs",
+      "/api/import/jobs/{}",
+      "/api/import/jobs/{}/cancel",
+      "/api/import/jobs/{}/commit",
+      "/api/import/jobs/{}/confirm-ocr",
+      "/api/import/jobs/{}/plan",
+      "/api/import/scan-incoming",
+      "/api/import/upload",
+      "/api/import/upload/init",
+      "/api/import/upload/{}/chunk",
+      "/api/import/upload/{}/complete",
+      "/api/novels/{}"
+    ],
+    "modules/admin/api.js": [
+      "/api/admin/ai/agy/health",
+      "/api/admin/ai/agy/retry-waiting",
+      "/api/admin/ai/agy/smoke-test",
+      "/api/admin/global-novels",
+      "/api/admin/novels${query ? ",
+      "/api/admin/usage",
+      "/api/admin/users${q ? ",
+      "/api/admin/users/{}",
+      "/api/admin/users/{}/ai-backend-policy"
+    ],
+    "modules/catalog/api.js": [
+      "/api/novels",
+      "/api/novels/{}"
+    ],
+    "modules/codex/api.js": [
+      "/api/novels/{}"
+    ],
+    "modules/experience/api.js": [
+      "/api/activity${query ? ",
+      "/api/discover${query ? ",
+      "/api/home",
+      "/api/novels/{}"
+    ],
+    "modules/identity/api.js": [
+      "/api/auth/change-password",
+      "/api/auth/links",
+      "/api/auth/login",
+      "/api/auth/logout",
+      "/api/auth/me",
+      "/api/auth/oauth/{}/start",
+      "/api/auth/providers",
+      "/api/auth/register",
+      "/api/auth/request-reset",
+      "/api/auth/reset",
+      "/api/auth/verify",
+      "/api/me",
+      "/api/me/avatar",
+      "/api/me/usage",
+      "/api/users/{}"
+    ],
+    "modules/narration/api.js": [
+      "/api/novels/{}",
+      "/api/tts/jobs/{}",
+      "/api/tts/jobs/{}/cancel",
+      "/api/tts/voices"
+    ],
+    "modules/reading/api.js": [
+      "/api/novels/{}"
+    ],
+    "modules/translation/api.js": [
+      "/api/novels/{}"
+    ],
+    "modules/work/api.js": [
+      "/api/jobs${query ? ",
+      "/api/jobs/{}",
+      "/api/jobs/{}/cancel"
+    ]
+  },
+  "routes": [
+    "*",
+    "/",
+    "/account",
+    "/account/:section",
+    "/admin",
+    "/admin/:tab",
+    "/discover",
+    "/import",
+    "/jobs",
+    "/library",
+    "/login",
+    "/n/:novelId",
+    "/n/:novelId/read/:number",
+    "/register",
+    "/u/:username",
+    "ask",
+    "chapters",
+    "codex",
+    "codex/e/:entityId",
+    "manage"
+  ]
+}

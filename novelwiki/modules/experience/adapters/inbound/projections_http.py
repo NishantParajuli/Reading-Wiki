@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from novelwiki.auth.deps import current_user
+from novelwiki.platform.auth import current_user
 from novelwiki.kernel.errors import Forbidden, NotFound
 from novelwiki.modules.identity.public import Principal
 

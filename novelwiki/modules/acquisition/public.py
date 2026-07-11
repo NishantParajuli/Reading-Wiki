@@ -60,3 +60,15 @@ class AcquisitionCleanupApi(Protocol):
 class AcquisitionApi(Protocol):
     async def list_cleanup_targets(self, novel_id: int) -> tuple[str, ...]: ...
     async def cancel_import(self, job_id: int, user_id: int) -> None: ...
+
+
+async def cancel_import_job(job_id: int, user_id: int) -> bool:
+    from .adapters.inbound.worker import cancel_job
+
+    return await cancel_job(job_id, user_id)
+
+
+async def list_import_jobs(**filters) -> list[dict]:
+    from .adapters.inbound.worker import list_jobs
+
+    return await list_jobs(**filters)

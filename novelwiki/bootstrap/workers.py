@@ -40,14 +40,14 @@ def build_api_worker_registry() -> WorkerRegistry:
 
 
 def build_agy_worker_registry() -> WorkerRegistry:
-    from novelwiki.agy.translation import execute_translation_job
+    from novelwiki.modules.translation.adapters.outbound.agy import execute_translation_job
     from novelwiki.modules.codex.adapters.inbound.jobs import execute_agy_codex_job
 
     async def translation(job, preflight, _context):
         return await execute_translation_job(job, preflight)
 
     async def smoke(job, _preflight, _context):
-        from novelwiki.agy.smoke import run_smoke_test
+        from novelwiki.modules.ai_execution.adapters.outbound.agy.smoke import run_smoke_test
         return await run_smoke_test(int(job["id"]))
 
     registry = WorkerRegistry()

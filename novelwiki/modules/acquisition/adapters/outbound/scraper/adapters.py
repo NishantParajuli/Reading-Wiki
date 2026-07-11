@@ -8,8 +8,8 @@ from urllib.parse import urljoin
 import lxml.html
 from curl_cffi.requests import AsyncSession
 from selectolax.parser import HTMLParser
-from novelwiki.config.settings import settings
-from novelwiki.scraper.safe_fetch import (
+from novelwiki.platform.config import settings
+from novelwiki.modules.acquisition.adapters.outbound.scraper.safe_fetch import (
     FetchHTTPError,
     SafeFetchError,
     describe_url,

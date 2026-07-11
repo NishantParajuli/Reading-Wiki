@@ -21,7 +21,7 @@ async def import_worker_owner_can_spend(user_id: int) -> bool:
         PostgresIdentityWorkerLookup,
     )
     from novelwiki.platform.database import init_db_pool
-    from novelwiki import quota
+    import novelwiki.modules.identity.public as quota
     user = await PostgresIdentityWorkerLookup(await init_db_pool()).load_user(user_id)
     return bool(user and quota.spend_allowed(user))
 

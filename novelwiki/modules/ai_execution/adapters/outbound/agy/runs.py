@@ -4,8 +4,8 @@ import json
 import uuid
 from pathlib import Path
 
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import get_db_pool
+from novelwiki.platform.config import settings
+from novelwiki.platform.database import get_db_pool
 
 
 async def create_run(

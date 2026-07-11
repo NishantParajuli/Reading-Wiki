@@ -47,7 +47,7 @@ async def identity_user_exists(user_id: int) -> bool:
 
 
 async def ai_policy_for_user(user_id: int) -> dict | None:
-    from novelwiki.ai_backend.policy import get_policy
+    from novelwiki.modules.ai_execution.adapters.outbound.policy import get_policy
     return await get_policy(user_id)
 
 

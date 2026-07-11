@@ -2,8 +2,8 @@ import asyncio
 
 import typer
 
-from novelwiki.db.connection import close_db_pool
-from novelwiki.translate.translate import translate_range, seed_glossary_from_entities
+from novelwiki.platform.cli_runtime import run_cli
+from novelwiki.modules.translation.adapters.outbound.runtime import translate_range, seed_glossary_from_entities
 
 app = typer.Typer()
 
@@ -23,8 +23,7 @@ def translate(
         typer.echo("Translating raw chapters (on-demand glossary-consistent)...")
         count = await translate_range(novel_id, from_chapter=from_chapter, to_chapter=to_chapter, force=force)
         typer.echo(typer.style(f"✔ Translated {count} chapters.", fg=typer.colors.GREEN, bold=True))
-        await close_db_pool()
-    asyncio.run(run())
+    run_cli(run())
 
 
 

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from novelwiki.agy.contracts import InputManifest
-from novelwiki.agy.preflight import run_preflight
-from novelwiki.agy.errors import safe_error_summary
-from novelwiki.agy.runner import run_agy
-from novelwiki.agy.runs import create_run, update_run, workspace_relpath
-from novelwiki.agy.validators import read_text_artifact, validate_output_manifest
-from novelwiki.agy.workspace import add_input, create_run_workspace, seal_inputs, sha256_file, write_json
-from novelwiki.config.settings import settings
-from novelwiki.jobs import service
+from novelwiki.modules.ai_execution.adapters.outbound.agy.contracts import InputManifest
+from novelwiki.modules.ai_execution.adapters.outbound.agy.preflight import run_preflight
+from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import safe_error_summary
+from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
+from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import create_run, update_run, workspace_relpath
+from novelwiki.modules.ai_execution.adapters.outbound.agy.validators import read_text_artifact, validate_output_manifest
+from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import add_input, create_run_workspace, seal_inputs, sha256_file, write_json
+from novelwiki.platform.config import settings
+from novelwiki.modules.work.public import service
 
 
 async def run_smoke_test(job_id: int) -> dict:

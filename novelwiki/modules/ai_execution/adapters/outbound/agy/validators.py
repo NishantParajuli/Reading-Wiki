@@ -9,10 +9,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from novelwiki.agy.contracts import OutputManifest
-from novelwiki.agy.errors import AgyValidationError
-from novelwiki.agy.workspace import sha256_file, workspace_size
-from novelwiki.config.settings import settings
+from novelwiki.modules.ai_execution.adapters.outbound.agy.contracts import OutputManifest
+from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import AgyValidationError
+from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import sha256_file, workspace_size
+from novelwiki.platform.config import settings
 
 
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")

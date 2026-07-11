@@ -1,9 +1,9 @@
 import logging
-from novelwiki.db.connection import get_db_pool
-from novelwiki.retrieval.bm25 import get_bm25_manager
-from novelwiki.retrieval.dense import dense_search
-from novelwiki.retrieval.fuse import reciprocal_rank_fusion
-from novelwiki.retrieval.rerank import rerank_hits
+from novelwiki.platform.database import get_db_pool
+from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
+from novelwiki.modules.codex.adapters.outbound.retrieval.dense import dense_search
+from novelwiki.modules.codex.adapters.outbound.retrieval.fuse import reciprocal_rank_fusion
+from novelwiki.modules.codex.adapters.outbound.retrieval.rerank import rerank_hits
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

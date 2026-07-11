@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from ...application.quota import QUOTA_KINDS
+from ...application.quota import current_period
 
 
 class PostgresQuotaRepository:
@@ -118,3 +119,17 @@ class PostgresQuotaRepository:
                 give,
             )
             return give
+
+
+class PostgresQuotaTransactionService:
+    """Identity quota capability bound to a composition-owned transaction."""
+
+    def __init__(self, connection: Any):
+        self._repository = PostgresQuotaRepository(connection=connection)
+
+    async def refund(self, user_id: int, kind: str, units: int = 1) -> int:
+        if user_id is None or units <= 0:
+            return 0
+        return await self._repository.refund(
+            user_id, current_period(), kind, units
+        )

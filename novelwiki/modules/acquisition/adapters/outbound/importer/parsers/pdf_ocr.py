@@ -12,10 +12,10 @@ import json
 import logging
 import re
 
-from novelwiki.config.settings import settings
-from novelwiki.importer import storage
-from novelwiki.importer.ir import Block, Document, HEADING, PARAGRAPH
-from novelwiki.importer import ocr_client
+from novelwiki.platform.config import settings
+from novelwiki.modules.acquisition.adapters.outbound.importer import storage
+from novelwiki.modules.acquisition.domain.document import Block, Document, HEADING, PARAGRAPH
+from novelwiki.modules.acquisition.adapters.outbound.importer import ocr_client
 
 logger = logging.getLogger(__name__)
 

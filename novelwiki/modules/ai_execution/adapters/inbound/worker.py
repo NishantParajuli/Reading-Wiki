@@ -13,19 +13,19 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from novelwiki import audit
-from novelwiki.agy.errors import AgyCanceled, AgyError, PROVIDER_WAIT_CODES, safe_error_summary
-from novelwiki.agy.preflight import PreflightResult, run_preflight
-from novelwiki.agy.runner import process_identity_matches, terminate_process_group
-from novelwiki.agy.workspace import cleanup_expired_workspaces, validate_work_root
-from novelwiki.ai_backend.policy import get_policy, model_for, reauthorize_job
-from novelwiki.ai_backend.types import ExecutionBackend, Workload
-from novelwiki.auth.access import can_edit, fetch_novel
-from novelwiki.config.settings import settings
-from novelwiki.db.connection import close_db_pool, init_db_pool
-from novelwiki.jobs import service
-from novelwiki.jobs.claims import claim_next
-from novelwiki.jobs.worker import _heartbeat, _recover_stale_leases, _release_due_provider_waits
+from novelwiki.platform.observability import audit
+from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import AgyCanceled, AgyError, PROVIDER_WAIT_CODES, safe_error_summary
+from novelwiki.modules.ai_execution.adapters.outbound.agy.preflight import PreflightResult, run_preflight
+from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import process_identity_matches, terminate_process_group
+from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import cleanup_expired_workspaces, validate_work_root
+from novelwiki.modules.ai_execution.adapters.outbound.policy import get_policy, model_for, reauthorize_job
+from novelwiki.modules.ai_execution.domain.backend import ExecutionBackend, Workload
+from novelwiki.modules.catalog.public import can_edit, fetch_novel
+from novelwiki.platform.config import settings
+from novelwiki.modules.work.public import service
+from novelwiki.modules.work.public import (
+    _heartbeat, _recover_stale_leases, _release_due_provider_waits, claim_next,
+)
 
 logger = logging.getLogger(__name__)
 WORKER_ID = f"agy-{os.getpid()}-{uuid.uuid4().hex[:12]}"
@@ -128,7 +128,7 @@ class _AgyExecutionContext:
 
 async def execute_codex_job(job: dict, preflight):
     """Stable test/entrypoint seam; feature registration remains in the composition root."""
-    from novelwiki.agy.codex import execute_codex_job as implementation
+    from novelwiki.modules.codex.public import execute_agy_codex_job as implementation
     return await implementation(job, preflight)
 
 
@@ -211,7 +211,6 @@ async def _process(job: dict, preflight: PreflightResult, state: dict) -> None:
         except Exception:
             pass
 
-
 async def worker_loop(poll_interval: float = 2.0, stop: asyncio.Event | None = None) -> None:
     stop = stop or asyncio.Event()
     state = {"status": "starting", "preflight": None, "job_id": None, "error": None}
@@ -270,16 +269,3 @@ async def worker_loop(poll_interval: float = 2.0, stop: asyncio.Event | None = N
             await hb
         except Exception:
             pass
-
-
-async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    await init_db_pool()
-    try:
-        await worker_loop()
-    finally:
-        await close_db_pool()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

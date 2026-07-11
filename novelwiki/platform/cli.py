@@ -1,5 +1,7 @@
 import typer
 
+from novelwiki.platform.cli_runtime import run_cli
+
 app = typer.Typer()
 
 @app.command()
@@ -20,11 +22,9 @@ def reset_db(
         typer.echo(typer.style("✔ All tables dropped successfully.", fg=typer.colors.GREEN, bold=True))
         typer.echo("Re-initializing database schema...")
         typer.echo(typer.style("✔ Database reset and clean schema initialized.", fg=typer.colors.GREEN, bold=True))
-        await close_db_pool()
-        
-    asyncio.run(run())
+
+    run_cli(run())
 
 
 if __name__ == "__main__":
     app()
-

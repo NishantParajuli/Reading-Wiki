@@ -11,6 +11,14 @@ from .ports import (
 )
 
 
+RECAP_QUESTION = (
+    "Write a concise, spoiler-safe recap of the story so far: the main characters and "
+    "their current situations, the key factions or places, and the most important events "
+    "up to this point. Keep it to a few short paragraphs. Ground every claim in the "
+    "retrieved evidence and cite it inline."
+)
+
+
 class CodexQueryService:
     def __init__(
         self, ceiling: CeilingPort, queries: CodexQueryPort,
@@ -173,6 +181,42 @@ class CodexQueryService:
             )
         return response(result)
 
+    async def recap(
+        self, novel_id: int, requested: float | None, principal: Principal
+    ) -> dict:
+        """Canonical spoiler-safe recap with its historical cache/cost ordering."""
+        question = RECAP_QUESTION
+        boundary = await self._ceiling.resolve(novel_id, principal, requested)
+
+        def response(answer: str, citations: list[dict]) -> dict:
+            return {
+                "answer": answer,
+                "citations": citations,
+                "requested_ceiling": boundary.requested_ceiling,
+                "allowed_ceiling": boundary.allowed_ceiling,
+                "effective_ceiling": boundary.ceiling.value,
+                "ceiling_clamped": boundary.clamped,
+            }
+
+        query_hash = self._agent.query_hash(question)
+        cached = await self._agent.cached_answer(
+            novel_id, query_hash, boundary.ceiling
+        )
+        if cached:
+            citations = await self._agent.citations(
+                novel_id, cached["answer_md"], boundary.ceiling
+            )
+            return response(cached["answer_md"], citations)
+        if self._ask_requires_verified:
+            self._costs.require_spend_allowed(principal)
+        async with self._costs.concurrency_slot(principal, "recap"):
+            await self._costs.consume_rate(principal, "recap")
+            await self._agent.ensure_index(novel_id)
+            result = await self._agent.answer(
+                novel_id, question, boundary.ceiling
+            )
+        return response(result["answer"], result["citations"])
+
 
 class CodexCommandService:
     def __init__(
@@ -263,3 +307,8 @@ class CodexMigrationService:
     def __init__(self, queries: CodexQueryService, commands: CodexCommandService):
         self.queries = queries
         self.commands = commands
+
+    async def recap(
+        self, novel_id: int, requested_ceiling: float | None, principal: Principal
+    ) -> dict:
+        return await self.queries.recap(novel_id, requested_ceiling, principal)

@@ -13,5 +13,18 @@ app = typer.Typer(
     help="CLI management engine for the novel reading platform.",
     no_args_is_help=True,
 )
-for feature_cli in (acquisition_cli, codex_cli, translation_cli, platform_cli):
-    app.registered_commands.extend(feature_cli.registered_commands)
+commands = [
+    command
+    for feature_cli in (acquisition_cli, codex_cli, translation_cli, platform_cli)
+    for command in feature_cli.registered_commands
+]
+by_name = {
+    command.name or command.callback.__name__.replace("_", "-"): command
+    for command in commands
+}
+baseline_order = (
+    "add-novel", "scrape", "chunk", "embed", "extract", "translate",
+    "import", "import-batch", "import-series", "import-worker",
+    "rebuild-bm25", "merge", "reset-db",
+)
+app.registered_commands.extend(by_name[name] for name in baseline_order)

@@ -31,8 +31,8 @@ import time
 import uuid
 from datetime import timedelta
 
-from novelwiki.config.settings import settings
-from novelwiki.importer import storage
+from novelwiki.platform.config import settings
+from novelwiki.modules.acquisition.adapters.outbound.importer import storage
 
 logger = logging.getLogger(__name__)
 
@@ -162,11 +162,11 @@ async def _do_parse(job: dict) -> None:
     await update_job(job_id, status="parsing", stage="parsing", error=None)
 
     if fmt == "epub":
-        from novelwiki.importer.parsers import epub as epub_parser
+        from novelwiki.modules.acquisition.adapters.outbound.importer.parsers import epub as epub_parser
         document = epub_parser.parse_epub(job["original_path"], job_id)
         await _finish_parse(job_id, document)
     elif fmt == "pdf":
-        from novelwiki.importer.parsers import pdf_text
+        from novelwiki.modules.acquisition.adapters.outbound.importer.parsers import pdf_text
         document = pdf_text.parse_pdf_text(job["original_path"], job_id)
         if document.meta.get("scanned"):
             await _enter_ocr_confirm(job_id, document, job)
@@ -180,7 +180,8 @@ async def _finish_parse(job_id: int, document) -> None:
     """Shared tail for every parser: cleanup → segment → quality → awaiting_review. Used by
     EPUB, digital PDF, and the post-OCR path. A batch job with ``auto_commit`` is advanced
     straight past review."""
-    from novelwiki.importer import cleanup, segment, quality
+    from novelwiki.modules.acquisition.adapters.outbound.importer import segment
+    from novelwiki.modules.acquisition.domain import cleanup, quality
     await update_job(job_id, stage="cleanup")
     cleanup.clean_document(document)
     storage.save_blocks(job_id, document)
@@ -259,7 +260,7 @@ async def _auto_advance(job_id: int) -> None:
         series = ((s.get("detected_meta") or {}).get("series") or "").strip()
         groups.setdefault(series or f"__single_{s['id']}", []).append(s)
 
-    from novelwiki.importer import commit
+    from novelwiki.modules.acquisition.adapters.outbound.importer import commit
     for key, grp in groups.items():
         ids = [int(s["id"]) for s in grp]
         if key.startswith("__single_") or len(ids) == 1:
@@ -308,7 +309,7 @@ async def _gemini_budget_remaining() -> int:
 async def _enter_ocr_confirm(job_id: int, document, job: dict) -> None:
     """A scanned PDF is expensive, so we estimate the OCR cost and park the job behind a
     confirm gate instead of burning quota unprompted."""
-    from novelwiki.importer.parsers import pdf_ocr
+    from novelwiki.modules.acquisition.adapters.outbound.importer.parsers import pdf_ocr
     options = job.get("options") or {}
     pages = document.meta.get("page_count", 0)
     est = pdf_ocr.estimate_cost(pages, bool(options.get("gemini_first")), await _gemini_budget_remaining())
@@ -328,8 +329,8 @@ async def _do_ocr(job: dict) -> None:
     """ocr_pending → OCR (serialized on the GPU) → finish parse. A budget exhaustion parks
     the job in `ocr_paused`; per-page checkpoints mean it resumes where it left off."""
     job_id = int(job["id"])
-    from novelwiki.importer.parsers import pdf_ocr
-    from novelwiki.agent.llm_client import BudgetExhausted
+    from novelwiki.modules.acquisition.adapters.outbound.importer.parsers import pdf_ocr
+    from novelwiki.modules.ai_execution.public import BudgetExhausted
     options = job.get("options") or {}
 
     async with _OCR_LOCK:
@@ -362,7 +363,7 @@ async def _do_commit(job: dict) -> None:
     gap. The atomic claim also guarantees only one worker is ever in this stage for a job."""
     job_id = int(job["id"])
     await update_job(job_id, stage="committing")
-    from novelwiki.importer import commit
+    from novelwiki.modules.acquisition.adapters.outbound.importer import commit
     result = await commit.commit_job(job)
     logger.info(f"Import job {job_id} committed → novel {result['novel_id']} "
                 f"({result.get('stats', {}).get('chapters_written', 0)} chapters).")

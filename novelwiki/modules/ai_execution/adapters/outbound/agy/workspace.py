@@ -10,9 +10,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from novelwiki.agy import PLUGIN_SOURCE
-from novelwiki.agy.errors import AgyPreflightError
-from novelwiki.config.settings import settings
+from novelwiki.modules.ai_execution.adapters.outbound.agy import PLUGIN_SOURCE
+from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import AgyPreflightError
+from novelwiki.platform.config import settings
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -160,7 +160,7 @@ async def cleanup_expired_workspaces() -> int:
     root = validate_work_root()
     if not root.exists():
         return 0
-    from novelwiki.db.connection import get_db_pool
+    from novelwiki.platform.database import get_db_pool
 
     removed = 0
     pool = await get_db_pool()

@@ -2,12 +2,12 @@ import asyncio
 
 import typer
 
-from novelwiki.db.connection import close_db_pool
-from novelwiki.ingest.chunk import chunk_all_chapters
-from novelwiki.ingest.embed import embed_missing_chunks
-from novelwiki.ingest.extract import extract_all_chapters
-from novelwiki.ingest.link import merge_entities
-from novelwiki.retrieval.bm25 import get_bm25_manager
+from novelwiki.platform.cli_runtime import run_cli
+from novelwiki.modules.codex.adapters.outbound.ingest.chunk import chunk_all_chapters
+from novelwiki.modules.codex.adapters.outbound.ingest.embed import embed_missing_chunks
+from novelwiki.modules.codex.adapters.outbound.ingest.extract import extract_all_chapters
+from novelwiki.modules.codex.adapters.outbound.ingest.link import merge_entities
+from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
 
 app = typer.Typer()
 
@@ -23,8 +23,7 @@ def chunk(
         typer.echo("Running within-chapter text chunker...")
         count = await chunk_all_chapters(novel_id, force=force, from_chapter=from_chapter, to_chapter=to_chapter)
         typer.echo(typer.style(f"✔ Successfully generated {count} overlapping chunks.", fg=typer.colors.GREEN, bold=True))
-        await close_db_pool()
-    asyncio.run(run())
+    run_cli(run())
 
 
 @app.command()
@@ -38,8 +37,7 @@ def embed(
         typer.echo("Running vector embedding pipeline...")
         count = await embed_missing_chunks(novel_id, from_chapter=from_chapter, to_chapter=to_chapter)
         typer.echo(typer.style(f"✔ Successfully embedded {count} chunks.", fg=typer.colors.GREEN, bold=True))
-        await close_db_pool()
-    asyncio.run(run())
+    run_cli(run())
 
 
 @app.command()
@@ -54,8 +52,7 @@ def extract(
         typer.echo("Launching forward-only structured knowledge extraction pass (Flash)...")
         await extract_all_chapters(novel_id, force=force, from_chapter=from_chapter, to_chapter=to_chapter)
         typer.echo(typer.style("✔ Extraction and entity-resolution completed.", fg=typer.colors.GREEN, bold=True))
-        await close_db_pool()
-    asyncio.run(run())
+    run_cli(run())
 
 
 @app.command()
@@ -67,8 +64,7 @@ def rebuild_bm25(
         typer.echo("Building and persisting in-process BM25 lexical search index...")
         await get_bm25_manager(novel_id).rebuild()
         typer.echo(typer.style("✔ BM25 index rebuilt and persisted.", fg=typer.colors.GREEN, bold=True))
-        await close_db_pool()
-    asyncio.run(run())
+    run_cli(run())
 
 
 @app.command()
@@ -82,8 +78,7 @@ def merge(
         from novelwiki.bootstrap.cli_services import merge_codex_entities
         await merge_codex_entities(novel_id, keep_id, drop_id)
         typer.echo(typer.style(f"✔ Entity {drop_id} successfully merged into {keep_id}.", fg=typer.colors.GREEN, bold=True))
-        await close_db_pool()
-    asyncio.run(run())
+    run_cli(run())
 
 
 

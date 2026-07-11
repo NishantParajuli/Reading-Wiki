@@ -24,7 +24,7 @@ import json
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import get_db_pool
 from novelwiki.auth.passwords import hash_password
-from novelwiki.auth.users import unique_username
+from novelwiki.modules.identity.adapters.outbound.postgres_users import unique_username
 
 logger = logging.getLogger(__name__)
 MIGRATION_NAME = "multiuser_v1"

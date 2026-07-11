@@ -1,6 +1,6 @@
 import logging
-from novelwiki.agent.llm_client import rerank_passages
-from novelwiki.config.settings import settings
+from novelwiki.modules.ai_execution.public import rerank_passages
+from novelwiki.platform.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

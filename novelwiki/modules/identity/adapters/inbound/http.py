@@ -16,14 +16,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
-from novelwiki.config.settings import settings
-from novelwiki.auth import oauth, rate_limit
-from novelwiki.auth.deps import current_user
-from novelwiki.auth.email import send_verification_email, send_reset_email
-from novelwiki.auth.passwords import hash_password, verify_password
-from novelwiki.auth.sessions import set_session_cookie, clear_session_cookie
-from novelwiki.auth.tokens import new_token, hash_token, sign, unsign, stamped
-from novelwiki.auth.users import self_user_with_capabilities, valid_username, normalize_username
+from novelwiki.platform.config import settings
+from novelwiki.modules.identity.adapters.outbound import oauth, rate_limit
+from novelwiki.modules.identity.adapters.inbound.dependencies import current_user
+from novelwiki.modules.identity.adapters.outbound.email import send_verification_email, send_reset_email
+from novelwiki.modules.identity.adapters.outbound.passwords import hash_password, verify_password
+from novelwiki.modules.identity.adapters.inbound.cookies import (
+    clear_session_cookie, set_session_cookie,
+)
+from novelwiki.modules.identity.adapters.outbound.tokens import new_token, hash_token, sign, unsign, stamped
+from novelwiki.modules.identity.adapters.inbound.presentation import self_user_with_capabilities
+from novelwiki.modules.identity.domain.policies import normalize_username, valid_username
 from novelwiki.modules.identity.application.ports import AuthPersistence, DuplicateRegistration
 
 logger = logging.getLogger(__name__)
