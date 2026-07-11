@@ -13,10 +13,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 SNAPSHOTS = ROOT / "tests" / "contracts" / "snapshots"
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_BOX_DRAWING = re.compile(r"[\u2500-\u257f]+")
 
 
 def _json(value) -> str:
     return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def _normalize_cli_help(value: str) -> str:
+    """Keep help semantics while discarding terminal-specific presentation.
+
+    Typer delegates layout to Rich, whose output varies with terminal detection,
+    locale and runner capabilities even when ``terminal_width`` is pinned.  ANSI,
+    table borders and line wrapping are not CLI contracts; words, defaults, option
+    spellings and ordering are.
+    """
+    value = _ANSI_ESCAPE.sub("", value)
+    value = _BOX_DRAWING.sub(" ", value)
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def _contracts() -> dict[str, str]:
@@ -76,10 +91,11 @@ def _contracts() -> dict[str, str]:
     def render_help(args: list[str]) -> str:
         # Typer passes terminal_width to Click, while Rich also consults COLUMNS
         # directly when it creates its console. Pin both inputs.
-        return runner.invoke(
+        rendered = runner.invoke(
             cli_app, args, color=False, terminal_width=80,
             env={"COLUMNS": "80"},
         ).stdout
+        return _normalize_cli_help(rendered)
 
     cli_help = {
         # Rich otherwise inherits COLUMNS from the host terminal.  GitHub Actions

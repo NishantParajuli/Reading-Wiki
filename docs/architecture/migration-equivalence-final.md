@@ -17,17 +17,19 @@ normalization used by `scripts/contracts.py` was applied to both applications.
 | Route inventory | `7cb4fd719e5f6a5a6b0bde48b55ae8121ab95d52a5e62e2c3e862907981f8047` |
 | Schema/DDL | `6cc8bf02c4a19399438a1aa9d9dc94a23b318f17cee5b7d81005ddd1d84dc467` |
 
-The main CLI help and every one of the 13 subcommand help surfaces were captured
-with Typer's `CliRunner`; baseline and current normalized output both hash to
-`8d8973da7c1016f7cd17eab448b6c7e519664eb7409753b61c1cd8447500d372`.
+The main CLI help and every one of the 13 subcommand help surfaces are captured
+semantically with Typer's `CliRunner`: ANSI styling, Rich table borders and host-dependent
+line wrapping are discarded, while every word, option, default and command order remains.
+Applying that normalization to the previously approved raw snapshot produces the exact current
+artifact (`db528ae00217ff230a73fec3bfbc2a294865879fe368a69a21b4e14036c1675b`).
 
 The repository now also snapshots CLI help, AGY manifest schemas/plugin file hashes,
 and frontend route/module-endpoint inventories.
 
 ## Local release evidence
 
-- Backend with disposable PostgreSQL/pgvector: 513 passed.
-- Architecture/contracts/unit gate: 301 passed.
+- Backend with disposable PostgreSQL/pgvector: 514 passed.
+- Architecture/contracts/unit gate: 302 passed.
 - Python compilation: passed.
 - Contract snapshot verification: passed.
 - Frontend Vitest: 19 passed.

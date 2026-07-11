@@ -18,7 +18,14 @@ def test_contract_snapshots_match_runtime():
 
 def test_contract_snapshots_ignore_terminal_width():
     root = Path(__file__).resolve().parents[2]
-    environment = {**os.environ, "COLUMNS": "137"}
+    environment = {
+        **os.environ,
+        "COLUMNS": "137",
+        "CI": "true",
+        "GITHUB_ACTIONS": "true",
+        "LANG": "C.UTF-8",
+        "TERM": "dumb",
+    }
     subprocess.run(
         [sys.executable, str(root / "scripts/contracts.py")],
         cwd=root,
@@ -38,3 +45,12 @@ def test_agy_contract_snapshot_contains_source_assets_only():
     assert paths
     assert not any("__pycache__" in path for path in paths)
     assert not any(path.endswith((".pyc", ".pyo")) for path in paths)
+
+
+def test_cli_help_normalization_discards_layout_not_content():
+    from scripts.contracts import _normalize_cli_help
+
+    wide = "╭────╮\n│ --force  Force existing chapters │\n╰────╯"
+    narrow = "\x1b[1m╭──╮\x1b[0m\n│ --force │\n│ Force existing │\n│ chapters │\n╰──╯"
+    assert _normalize_cli_help(wide) == _normalize_cli_help(narrow)
+    assert _normalize_cli_help(wide) == "--force Force existing chapters"
