@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -83,13 +84,14 @@ def test_stable_api_routes_module_is_only_a_compatibility_alias():
     assert "novelwiki.legacy.routes" in source
 
 
-def test_completed_catalog_and_translation_modules_have_no_legacy_http_handlers():
+def test_completed_modules_have_no_legacy_http_handlers():
     from novelwiki.bootstrap.legacy_http import OWNERS
 
     assert OWNERS["catalog"] == frozenset()
     assert OWNERS["translation"] == frozenset()
+    assert OWNERS["experience"] == frozenset()
     # This ratchet makes handler extraction monotonic. Lower it as each slice lands.
-    assert sum(len(names) for names in OWNERS.values()) <= 46
+    assert sum(len(names) for names in OWNERS.values()) <= 42
 
 
 @pytest.mark.parametrize(
@@ -98,6 +100,7 @@ def test_completed_catalog_and_translation_modules_have_no_legacy_http_handlers(
         Path("catalog/adapters/inbound/http.py"),
         Path("translation/adapters/inbound/http.py"),
         Path("acquisition/adapters/inbound/http.py"),
+        Path("experience/adapters/inbound/projections_http.py"),
     ],
 )
 def test_migrated_http_adapters_contain_no_sql_or_pool_access(relative: Path):
@@ -132,3 +135,29 @@ def test_named_workflow_coordinators_are_infrastructure_free():
                 if node.func.attr in {"execute", "fetch", "fetchrow", "fetchval"}:
                     violations.append(f"{path.name} calls {node.func.attr}")
     assert not violations, "\n".join(violations)
+
+
+def test_experience_projection_registry_is_explicit_and_read_only():
+    from novelwiki.modules.experience.adapters.outbound.projections import (
+        PROJECTION_TABLES,
+    )
+
+    assert PROJECTION_TABLES == {
+        "library_cards": frozenset({
+            "novels", "library_entries", "reading_progress", "chapters", "sources",
+        }),
+        "novel_detail": frozenset({
+            "novels", "chapters", "sources", "reading_progress", "library_entries",
+            "chapter_overlays", "import_jobs", "contributions",
+        }),
+        "discover": frozenset({
+            "novels", "users", "library_entries", "chapters", "sources", "chapter_audio",
+        }),
+        "public_profile": frozenset({
+            "users", "library_entries", "novels", "reading_progress", "chapters",
+        }),
+    }
+    path = MODULE_ROOT / "experience/adapters/outbound/projections.py"
+    source = path.read_text(encoding="utf-8")
+    writes = re.findall(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\b", source, re.IGNORECASE)
+    assert not writes, f"Experience projection registry contains write SQL: {writes}"

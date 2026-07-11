@@ -36,9 +36,7 @@ OWNERS: dict[str, frozenset[str]] = {
         "api_get_timeline", "api_get_identities", "ask_question",
         "api_codex_build", "trigger_merge",
     }),
-    "experience": frozenset({
-        "api_list_novels", "api_get_novel", "api_discover", "api_user_profile",
-    }),
+    "experience": frozenset(),
 }
 
 _route_by_name = {route.endpoint.__name__: route for route in legacy_router.routes}

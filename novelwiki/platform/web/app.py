@@ -279,6 +279,10 @@ from novelwiki.modules.translation.adapters.inbound.http import (
 from novelwiki.modules.experience.adapters.inbound.legacy_http import (
     router as legacy_experience_router,
 )
+from novelwiki.modules.experience.adapters.inbound.projections_http import (
+    experience_projection_service_dependency,
+    router as experience_projection_router,
+)
 app.include_router(auth_router, prefix="/api/auth")
 for module_router in (
     legacy_experience_router,
@@ -296,6 +300,7 @@ app.include_router(reading_router, prefix="/api", dependencies=[Depends(current_
 app.include_router(work_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(catalog_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(acquisition_router, prefix="/api", dependencies=[Depends(current_user)])
+app.include_router(experience_projection_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(translation_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(identity_account_router, prefix="/api", dependencies=[Depends(current_user)])
 # Audiobook TTS endpoints (same auth model as the main router).
@@ -382,6 +387,17 @@ async def _adapter_catalog_query():
 
 
 app.dependency_overrides[adapter_catalog_dependency] = _adapter_catalog_query
+
+
+async def _experience_projection_service():
+    from novelwiki.bootstrap.experience import build_experience_projection_service
+
+    return await build_experience_projection_service()
+
+
+app.dependency_overrides[
+    experience_projection_service_dependency
+] = _experience_projection_service
 
 
 async def _identity_session_service():
