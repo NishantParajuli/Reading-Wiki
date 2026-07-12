@@ -9,8 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
-data/
-data/agy-jobs/
+/data/
+/data/agy-jobs/
 
 .env
 
