@@ -10,13 +10,10 @@ from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import create_run
 from novelwiki.modules.ai_execution.adapters.outbound.agy.validators import read_text_artifact, validate_output_manifest
 from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import add_input, create_run_workspace, seal_inputs, sha256_file, write_json
 from novelwiki.platform.config import settings
-from novelwiki.modules.work.public import service
-
-
-async def run_smoke_test(job_id: int) -> dict:
+async def run_smoke_test(job_id: int, work_service) -> dict:
     """Explicit consuming admin smoke test with no novel/user content."""
     preflight = await run_preflight()
-    job = await service.get_job(job_id)
+    job = await work_service.get_job(job_id)
     if not job:
         raise RuntimeError("smoke job no longer exists")
     run_id = await create_run(
@@ -41,7 +38,7 @@ async def run_smoke_test(job_id: int) -> dict:
         result = await run_agy(
             root, prompt="Run novelwiki-smoke for input/manifest.json and write the output manifest last.",
             model=settings.AGY_MODEL_TRANSLATE,
-            cancel_check=lambda: service.is_canceled(job_id),
+            cancel_check=lambda: work_service.is_canceled(job_id),
             on_spawn=lambda pgid, started: update_run(run_id, process_group_id=pgid, process_started_at=started),
         )
         output_manifest, roles = validate_output_manifest(

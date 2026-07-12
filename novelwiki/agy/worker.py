@@ -21,6 +21,8 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     configure_worker_runtime(build_worker_runtime())
     await init_db_pool()
+    from novelwiki.bootstrap.work import wire_work_quota_finalization
+    await wire_work_quota_finalization()
     try:
         await _implementation.worker_loop(
             catalog_access=await build_agy_catalog_access()

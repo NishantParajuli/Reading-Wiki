@@ -98,3 +98,17 @@ class CodexQuotaPort(Protocol):
 class EntityMergePort(Protocol):
     async def merge(self, novel_id: int, keep_id: int, drop_id: int) -> None: ...
 
+
+class CodexReadingPort(Protocol):
+    async def chapter_numbers(
+        self, novel_id: int, from_chapter: float | None = None,
+        to_chapter: float | None = None, include_all: bool = False,
+    ) -> list[float]: ...
+    async def chapter_snapshot(self, novel_id: int, chapter_number: float) -> dict | None: ...
+    async def locked_chapter_snapshot(
+        self, connection: object, novel_id: int, chapter_number: float
+    ) -> dict | None: ...
+
+
+class ResumableAiRunPort(Protocol):
+    async def list(self, job_id: int, workloads: tuple[str, ...]) -> list[dict]: ...

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 
 async def build_acquisition_service():
+    from novelwiki.bootstrap.acquisition_runtime import wire_acquisition_runtime
+    wire_acquisition_runtime()
     from novelwiki.modules.work.adapters.outbound import postgres as jobs_service
     from novelwiki.modules.acquisition.adapters.outbound.assets import (
         AcquisitionAssetFilesystem,
@@ -88,6 +90,8 @@ def build_acquisition_routes():
 
 
 async def build_import_service():
+    from novelwiki.bootstrap.acquisition_runtime import wire_acquisition_runtime
+    wire_acquisition_runtime()
     from novelwiki.platform.config import settings
     from novelwiki.modules.acquisition.adapters.outbound.import_gateway import (
         ImportRuntimeGateway,
@@ -198,8 +202,15 @@ async def reserve_auto_codex(user_id: int) -> bool:
     from novelwiki.modules.identity.adapters.outbound.worker_lookup import (
         PostgresIdentityWorkerLookup,
     )
+    from novelwiki.modules.identity.adapters.outbound.postgres_quota import PostgresQuotaRepository
+    from novelwiki.modules.identity.adapters.principals import principal_from_user
+    from novelwiki.modules.identity.application import QuotaService
     from novelwiki.platform.database import init_db_pool
-    import novelwiki.modules.identity.public as quota
 
-    user = await PostgresIdentityWorkerLookup(await init_db_pool()).load_user(user_id)
-    return bool(user and await quota.try_reserve(user, "codex_builds", 1))
+    pool = await init_db_pool()
+    user = await PostgresIdentityWorkerLookup(pool).load_user(user_id)
+    return bool(
+        user and await QuotaService(PostgresQuotaRepository(pool=pool)).reserve(
+            principal_from_user(user), "codex_builds", 1
+        )
+    )

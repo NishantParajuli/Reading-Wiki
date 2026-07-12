@@ -86,6 +86,8 @@ def build_application_lifecycle() -> ApplicationLifecycle:
     async def initialize_pool():
         logger.info("Initializing database connection pool...")
         pool_holder["pool"] = await init_db_pool()
+        from novelwiki.bootstrap.work import wire_work_quota_finalization
+        await wire_work_quota_finalization()
 
     async def cleanup_identity():
         from novelwiki.modules.identity.adapters.outbound.maintenance import (
@@ -98,6 +100,8 @@ def build_application_lifecycle() -> ApplicationLifecycle:
         await maybe_migrate()
 
     def start_import_worker():
+        from novelwiki.bootstrap.acquisition_runtime import wire_acquisition_runtime
+        wire_acquisition_runtime()
         from novelwiki.modules.acquisition.adapters.inbound.worker import start_worker
         start_worker()
 

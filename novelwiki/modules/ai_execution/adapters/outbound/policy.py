@@ -7,9 +7,9 @@ authorization again immediately before launching the CLI.
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Protocol
 
-from fastapi import HTTPException
-
+from novelwiki.kernel.errors import Forbidden, NotFound, ProviderUnavailable, RateLimited, ValidationFailed
 from novelwiki.platform.observability import audit
 from novelwiki.modules.ai_execution.domain.backend import (
     IMPLEMENTED_AGY_WORKLOADS,
@@ -23,11 +23,32 @@ from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
 
 
+class PolicyDependencies(Protocol):
+    async def active_job_count(self, user_id: int) -> int: ...
+    async def user_exists(self, user_id: int) -> bool: ...
+    async def revoked_job_ids(self, user_id: int, kinds: list[str]) -> list[int]: ...
+    async def cancel_job(self, job_id: int) -> bool: ...
+
+
+_dependencies: PolicyDependencies | None = None
+
+
+def configure_policy_dependencies(dependencies: PolicyDependencies) -> None:
+    global _dependencies
+    _dependencies = dependencies
+
+
+def _deps() -> PolicyDependencies:
+    if _dependencies is None:
+        raise RuntimeError("AI policy dependencies were not wired by the composition root")
+    return _dependencies
+
+
 def _requested(value: str | RequestedBackend) -> RequestedBackend:
     try:
         return value if isinstance(value, RequestedBackend) else RequestedBackend(str(value))
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail="ai_backend must be auto, api, or agy.") from exc
+        raise ValidationFailed("ai_backend must be auto, api, or agy.") from exc
 
 
 def model_for(workload: Workload, backend: ExecutionBackend) -> str | None:
@@ -90,8 +111,7 @@ async def capability_for_user(user_id: int) -> dict:
 
 
 async def _active_agy_count(user_id: int) -> int:
-    from novelwiki.bootstrap.ai_execution_worker import active_agy_job_count
-    return await active_agy_job_count(user_id)
+    return await _deps().active_job_count(user_id)
 
 
 async def resolve_backend(
@@ -109,7 +129,7 @@ async def resolve_backend(
 
     if not settings.AGY_ENABLED:
         if req is RequestedBackend.AGY:
-            raise HTTPException(status_code=503, detail="Antigravity is temporarily unavailable.")
+            raise ProviderUnavailable("Antigravity is temporarily unavailable.")
         return BackendDecision(req, ExecutionBackend.API, workload, "global_disabled", None, False,
                                model_for(workload, ExecutionBackend.API))
 
@@ -122,7 +142,7 @@ async def resolve_backend(
     )
     if not granted:
         if req is RequestedBackend.AGY:
-            raise HTTPException(status_code=403, detail="Antigravity is not enabled for this workload.")
+            raise Forbidden("Antigravity is not enabled for this workload.")
         reason = "workload_unimplemented" if workload not in IMPLEMENTED_AGY_WORKLOADS else "not_granted"
         return BackendDecision(req, ExecutionBackend.API, workload, reason, None, False,
                                model_for(workload, ExecutionBackend.API))
@@ -134,11 +154,11 @@ async def resolve_backend(
                                model_for(workload, ExecutionBackend.API))
 
     if user.get("status", "active") != "active":
-        raise HTTPException(status_code=403, detail="This account cannot schedule AI work.")
+        raise Forbidden("This account cannot schedule AI work.")
     if enforce_concurrency:
         active = await _active_agy_count(int(user["id"]))
         if active >= int(policy.get("max_concurrent_agy_jobs") or 1):
-            raise HTTPException(status_code=429, detail="Your Antigravity queue limit is already in use.")
+            raise RateLimited("Your Antigravity queue limit is already in use.")
 
     return BackendDecision(
         req,
@@ -172,22 +192,21 @@ async def upsert_policy(user_id: int, values: dict, admin_id: int) -> dict:
     workloads = sorted(set(values.get("agy_workloads") or []))
     unknown = set(workloads) - {w.value for w in Workload}
     if unknown:
-        raise HTTPException(status_code=422, detail=f"Unknown AGY workload(s): {', '.join(sorted(unknown))}.")
+        raise ValidationFailed(f"Unknown AGY workload(s): {', '.join(sorted(unknown))}.")
     enabled = bool(values.get("agy_enabled", False))
     default = values.get("default_backend", "api")
     if default not in ("api", "agy") or (default == "agy" and not enabled):
-        raise HTTPException(status_code=422, detail="AGY can be the default only while AGY access is enabled.")
+        raise ValidationFailed("AGY can be the default only while AGY access is enabled.")
     concurrency = int(values.get("max_concurrent_agy_jobs", 1))
     if not 1 <= concurrency <= 4:
-        raise HTTPException(status_code=422, detail="max_concurrent_agy_jobs must be between 1 and 4.")
+        raise ValidationFailed("max_concurrent_agy_jobs must be between 1 and 4.")
 
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            from novelwiki.bootstrap.ai_execution_worker import identity_user_exists
-            exists = await identity_user_exists(user_id)
+            exists = await _deps().user_exists(user_id)
             if not exists:
-                raise HTTPException(status_code=404, detail="User not found.")
+                raise NotFound("User not found.")
             previous = await conn.fetchrow(
                 "SELECT * FROM user_ai_backend_policies WHERE user_id=$1 FOR UPDATE;", user_id,
             )
@@ -239,8 +258,6 @@ async def delete_policy(user_id: int, admin_id: int) -> bool:
 
 
 async def cancel_revoked_jobs(user_id: int, removed_workloads: set[str] | None) -> int:
-    from novelwiki.modules.work.public import service
-
     kinds = []
     if removed_workloads is None or Workload.TRANSLATE_BATCH.value in removed_workloads:
         kinds.append("translate")
@@ -248,9 +265,8 @@ async def cancel_revoked_jobs(user_id: int, removed_workloads: set[str] | None) 
         kinds.append("codex_build")
     if not kinds:
         return 0
-    from novelwiki.bootstrap.ai_execution_worker import revoked_agy_job_ids
-    rows = await revoked_agy_job_ids(user_id, kinds)
+    rows = await _deps().revoked_job_ids(user_id, kinds)
     changed = 0
     for job_id in rows:
-        changed += int(await service.cancel_job(job_id))
+        changed += int(await _deps().cancel_job(job_id))
     return changed

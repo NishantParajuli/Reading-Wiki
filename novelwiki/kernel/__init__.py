@@ -7,6 +7,7 @@ from .errors import (
     JobAlreadyActive,
     NotFound,
     ProviderUnavailable,
+    RateLimited,
     QuotaExceeded,
     ValidationFailed,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "JobAlreadyActive",
     "NotFound",
     "ProviderUnavailable",
+    "RateLimited",
     "QuotaExceeded",
     "TransactionContext",
     "UnitOfWork",

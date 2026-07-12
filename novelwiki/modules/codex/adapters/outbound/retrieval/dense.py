@@ -1,5 +1,5 @@
 import logging
-from novelwiki.modules.ai_execution.public import get_embedding
+from novelwiki.modules.codex.application.ai_runtime import get_embedding
 from novelwiki.platform.database import get_db_pool
 
 logging.basicConfig(level=logging.INFO)

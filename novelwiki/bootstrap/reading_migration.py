@@ -4,6 +4,8 @@ from __future__ import annotations
 
 
 async def build_reading_migration_service():
+    from novelwiki.bootstrap.translation import wire_translation_worker_dependencies
+    wire_translation_worker_dependencies()
     from novelwiki.modules.catalog.adapters.outbound.postgres import (
         PostgresCatalogRepository,
     )

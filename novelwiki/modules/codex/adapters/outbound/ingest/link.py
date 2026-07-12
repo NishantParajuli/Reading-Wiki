@@ -4,7 +4,7 @@ import asyncpg
 from dataclasses import dataclass
 from novelwiki.platform.config import settings
 from novelwiki.modules.codex.adapters.outbound.cache import clear_caches
-from novelwiki.modules.ai_execution.public import call_chat_completion, get_embedding
+from novelwiki.modules.codex.application.ai_runtime import call_chat_completion, get_embedding
 from novelwiki.modules.codex.domain.prompts import DISAMBIGUATION_SYSTEM, DISAMBIGUATION_USER
 
 logging.basicConfig(level=logging.INFO)

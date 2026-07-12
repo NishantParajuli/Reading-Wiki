@@ -10,12 +10,13 @@ from pydantic import ValidationError
 
 from novelwiki.platform.observability import audit as audit_log
 from novelwiki.modules.ai_execution.public import DisambiguationPayload, ExtractionPayload, InputManifest
-from novelwiki.modules.ai_execution.public import AgyCanceled, AgyValidationError, is_database_error, safe_error_summary
+from novelwiki.modules.ai_execution.public import AgyCanceled, AgyValidationError
 from novelwiki.modules.ai_execution.public import PreflightResult
-from novelwiki.modules.ai_execution.public import run_agy
-from novelwiki.modules.ai_execution.public import create_run, update_run, workspace_relpath
-from novelwiki.modules.ai_execution.public import load_json, read_text_artifact, validate_output_manifest
-from novelwiki.modules.ai_execution.public import add_input, create_run_workspace, seal_inputs, sha256_file, write_json
+from novelwiki.modules.codex.application.ai_runtime import (
+    add_input, create_run, create_run_workspace, is_database_error, load_json,
+    read_text_artifact, run_agy, safe_error_summary, seal_inputs, service,
+    sha256_file, update_run, validate_output_manifest, workspace_relpath, write_json,
+)
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
 from novelwiki.modules.codex.adapters.outbound.ingest.extract import (
@@ -24,7 +25,6 @@ from novelwiki.modules.codex.adapters.outbound.ingest.extract import (
     get_running_summary,
 )
 from novelwiki.modules.codex.adapters.outbound.ingest.link import find_resolution_candidates
-from novelwiki.modules.work.public import service
 
 
 ENTITY_TYPES = {"character", "location", "faction", "item", "concept", "organization"}
@@ -33,9 +33,9 @@ _LOCAL_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,79}$")
 
 async def _chapters(job: dict) -> list[float]:
     opts = job.get("options") or {}
-    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
+    from novelwiki.modules.codex.application.worker_dependencies import reading_port
     novel_id = int(job["novel_id"])
-    numbers = await (await build_reading_codex_gateway()).chapter_numbers(
+    numbers = await reading_port().chapter_numbers(
         novel_id, opts.get("from_chapter"), opts.get("to_chapter"), True
     )
     if opts.get("force") or not numbers:
@@ -51,8 +51,8 @@ async def _chapters(job: dict) -> list[float]:
 
 
 async def _chapter_input(novel_id: int, chapter_number: float) -> dict:
-    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
-    chapter = await (await build_reading_codex_gateway()).chapter_snapshot(
+    from novelwiki.modules.codex.application.worker_dependencies import reading_port
+    chapter = await reading_port().chapter_snapshot(
         novel_id, chapter_number
     )
     if not chapter or not chapter["content"]:
@@ -459,8 +459,8 @@ async def _extract_chapter(job: dict, chapter_number: float, preflight: Prefligh
 
 async def _resume_ready_commits(job: dict, preflight: PreflightResult) -> set[float]:
     """Use a complete extraction artifact after worker loss without rerunning extraction."""
-    from novelwiki.bootstrap.ai_execution_worker import resumable_ai_runs
-    rows = list(reversed(await resumable_ai_runs(
+    from novelwiki.modules.codex.application.worker_dependencies import resumable_run_port
+    rows = list(reversed(await resumable_run_port().list(
         int(job["id"]), ("codex_extract", "codex_verify")
     )))
     completed: set[float] = set()

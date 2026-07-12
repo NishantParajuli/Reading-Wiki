@@ -48,8 +48,8 @@ def _assign_global_numbers(included: list[dict], offset: float) -> None:
 
 async def _resolve_target(apis, job: dict, meta: dict):
     if not hasattr(apis, "acquisition"):
-        from novelwiki.bootstrap.acquisition_routes import bind_import_commit_apis
-        apis = bind_import_commit_apis(apis)
+        from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
+        apis = runtime().bind_commit_apis(apis)
     options = job.get("options") or {}
     target = options.get("target", "new")
     language = (meta.get("language") or "en")[:8]
@@ -139,8 +139,8 @@ async def _preserve_replaced_content_version(
     previous = (source.get("old_versions") or {}).get(float(number))
     if previous is None:
         return None
-    from novelwiki.bootstrap.acquisition_routes import bind_import_commit_apis
-    return await bind_import_commit_apis(connection).reading.preserve_content_version(
+    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
+    return await runtime().bind_commit_apis(connection).reading.preserve_content_version(
         novel_id, number, int(previous) + 1
     )
 
@@ -250,7 +250,7 @@ async def commit_job(job: dict) -> dict:
     document, included = await _load_for_commit(job)
     blocks, meta = document.blocks, document.meta
 
-    from novelwiki.bootstrap.acquisition_routes import build_import_commit_uow_factory
+    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
     from novelwiki.workflows.commit_import import commit_import
 
     state = {}
@@ -282,7 +282,7 @@ async def commit_job(job: dict) -> dict:
         )
         return state
 
-    await commit_import(await build_import_commit_uow_factory(), operation)
+    await commit_import(await runtime().commit_uow_factory(), operation)
     novel_id, lo, hi = state["novel_id"], state["lo"], state["hi"]
     codex_enabled, result_stats = state["codex_enabled"], state["stats"]
 
@@ -320,11 +320,11 @@ async def commit_series(job_ids: list[int]) -> dict:
     series index, each volume becomes its own source, chapters are stacked into a single
     continuous global sequence, and every volume is grouped under its own ``part_label`` in
     the reader's TOC. The cover + book metadata come from the first volume."""
-    from novelwiki.modules.acquisition.adapters.inbound import worker as jobs_mod
+    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
 
     loaded = []
     for jid in job_ids:
-        job = await jobs_mod.get_job(int(jid))
+        job = await runtime().import_job(int(jid))
         if not job:
             raise ValueError(f"Series job {jid} not found.")
         document, included = await _load_for_commit(job)
@@ -341,7 +341,6 @@ async def commit_series(job_ids: list[int]) -> dict:
     owner_id = loaded[0]["job"].get("user_id")
     visibility = "private" if owner_id is not None else "global"
 
-    from novelwiki.bootstrap.acquisition_routes import build_import_commit_uow_factory
     from novelwiki.modules.acquisition.public import ImportNovelDraft
     from novelwiki.workflows.commit_import import commit_import
 
@@ -387,7 +386,7 @@ async def commit_series(job_ids: list[int]) -> dict:
         )
         return state
 
-    await commit_import(await build_import_commit_uow_factory(), operation)
+    await commit_import(await runtime().commit_uow_factory(), operation)
     novel_id, lo_all, hi_all = state["novel_id"], state["lo"], state["hi"]
     codex_enabled = state["codex_enabled"]
 
@@ -409,8 +408,8 @@ async def _reserve_auto_codex(user_id: int | None) -> bool:
     under quota before the build is scheduled."""
     if user_id is None:
         return True
-    from novelwiki.bootstrap.acquisition_routes import reserve_auto_codex
-    return await reserve_auto_codex(user_id)
+    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
+    return await runtime().reserve_auto_codex(user_id)
 
 
 async def _schedule_codex(novel_id: int, frm: float, to: float, user_id: int | None) -> None:
@@ -418,25 +417,9 @@ async def _schedule_codex(novel_id: int, frm: float, to: float, user_id: int | N
     later offset change won't be blocked). Replaces the old fire-and-forget task: the codex-build
     quota reserved by ``_reserve_auto_codex`` is now recorded on the job and refunded by the worker
     if the build fails, and the work survives a restart instead of being silently lost."""
-    from novelwiki.modules.work.public import service as jobs_service
+    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
     try:
-        _job_id, created = await jobs_service.create_job(
-            "codex_build", novel_id=novel_id, user_id=user_id,
-            options={"force": False, "from_chapter": frm, "to_chapter": to},
-            quota_kind="codex_builds", quota_reserved=(1 if user_id is not None else 0),
-        )
-        if not created and user_id is not None:
-            import novelwiki.modules.identity.public as quota
-            await quota.refund(user_id, "codex_builds", 1)
+        await runtime().schedule_codex(novel_id, frm, to, user_id)
         logger.info(f"Scheduled durable codex build over imported chapters {frm}–{to} of novel {novel_id}.")
     except Exception as e:
-        if user_id is not None:
-            import novelwiki.modules.identity.public as quota
-            try:
-                await quota.refund(user_id, "codex_builds", 1)
-            except Exception as refund_error:
-                logger.error(
-                    "Could not release automatic codex reservation after scheduling failure: %s",
-                    refund_error,
-                )
         logger.warning(f"Could not schedule codex build for novel {novel_id}: {e}")

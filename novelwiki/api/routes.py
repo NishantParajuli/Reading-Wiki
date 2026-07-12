@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 from functools import wraps
 
-import novelwiki.modules.identity.public as quota
+import novelwiki.quota as quota
 from novelwiki.modules.codex.adapters.outbound.agent import answer_question
 from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
 

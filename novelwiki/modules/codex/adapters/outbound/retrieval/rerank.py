@@ -1,5 +1,5 @@
 import logging
-from novelwiki.modules.ai_execution.public import rerank_passages
+from novelwiki.modules.codex.application.ai_runtime import rerank_passages
 from novelwiki.platform.config import settings
 
 logging.basicConfig(level=logging.INFO)

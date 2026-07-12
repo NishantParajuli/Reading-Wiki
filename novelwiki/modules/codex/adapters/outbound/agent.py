@@ -4,7 +4,7 @@ import hashlib
 import logging
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
-from novelwiki.modules.ai_execution.public import call_chat_completion
+from novelwiki.modules.codex.application.ai_runtime import call_chat_completion
 from novelwiki.modules.codex.adapters.outbound.retrieval.tools import (
     hybrid_search, rerank, get_chunk, resolve_entity,
     get_entity_profile, get_relationships, get_timeline, list_entities

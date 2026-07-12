@@ -9,21 +9,15 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from novelwiki.modules.ai_execution.public import InputManifest, TranslationMeta
-from novelwiki.modules.ai_execution.public import AgyCanceled, AgyValidationError, is_database_error, safe_error_summary
+from novelwiki.modules.ai_execution.public import AgyCanceled, AgyValidationError
 from novelwiki.modules.ai_execution.public import PreflightResult
-from novelwiki.modules.ai_execution.public import run_agy
-from novelwiki.modules.ai_execution.public import create_run, update_run, workspace_relpath
-from novelwiki.modules.ai_execution.public import load_json, read_text_artifact, validate_output_manifest
-from novelwiki.modules.ai_execution.public import (
-    add_input,
-    create_run_workspace,
-    seal_inputs,
-    sha256_file,
-    write_json,
+from novelwiki.modules.translation.application.ai_runtime import (
+    add_input, create_run, create_run_workspace, is_database_error, load_json,
+    read_text_artifact, run_agy, safe_error_summary, seal_inputs, service,
+    sha256_file, update_run, validate_output_manifest, workspace_relpath, write_json,
 )
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
-from novelwiki.modules.work.public import service
 from novelwiki.modules.translation.adapters.outbound.runtime import (
     commit_translation,
     reset_staged_translations,
@@ -39,8 +33,8 @@ def _chapter_ref(number: float) -> str:
 
 async def _pending(job: dict) -> list[float]:
     opts = job.get("options") or {}
-    from novelwiki.bootstrap.translation import build_translation_runtime
-    reading, _uow = await build_translation_runtime()
+    from novelwiki.modules.translation.application.worker_dependencies import translation_runtime
+    reading, _uow = await translation_runtime()
     return await reading.agy_pending(
         int(job["novel_id"]), opts.get("from_chapter"),
         opts.get("to_chapter"), bool(opts.get("force")),
@@ -89,8 +83,8 @@ def _batch(numbers: list[float], lengths: dict[float, int]) -> list[list[float]]
 async def _lengths(novel_id: int, numbers: list[float]) -> dict[float, int]:
     if not numbers:
         return {}
-    from novelwiki.bootstrap.translation import build_translation_runtime
-    reading, _uow = await build_translation_runtime()
+    from novelwiki.modules.translation.application.worker_dependencies import translation_runtime
+    reading, _uow = await translation_runtime()
     return await reading.source_lengths(novel_id, numbers)
 
 
@@ -262,8 +256,8 @@ async def _run_batch(job: dict, numbers: list[float], preflight: PreflightResult
 
 async def _resume_ready_commits(job: dict) -> int:
     """Commit complete artifacts left by a crash after AGY exit, without rerunning AGY."""
-    from novelwiki.bootstrap.ai_execution_worker import resumable_ai_runs
-    rows = await resumable_ai_runs(int(job["id"]), ("translate_batch",))
+    from novelwiki.modules.translation.application.worker_dependencies import resumable_run_port
+    rows = await resumable_run_port().list(int(job["id"]), ("translate_batch",))
     committed = 0
     for row in rows:
         run_id = row["id"]

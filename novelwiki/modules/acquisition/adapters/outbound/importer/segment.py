@@ -323,15 +323,17 @@ async def _refine_batch(batch: list[dict], by_id: dict, book_title: str) -> None
         for s in batch
     ]
     try:
-        from novelwiki.modules.ai_execution.public import call_llm
+        from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
         from json_repair import repair_json
         messages = [
             {"role": "system", "content": _REFINE_SYSTEM},
             {"role": "user", "content": "Book title: " + book_title +
              "\nSegments:\n" + json.dumps(compact, ensure_ascii=False)},
         ]
-        raw = await call_llm(messages, needs_vision=False, model=settings.SEGMENT_MODEL,
-                             response_format={"type": "json_object"})
+        raw = await runtime().call_llm(
+            messages, needs_vision=False, model=settings.SEGMENT_MODEL,
+            response_format={"type": "json_object"},
+        )
         data = json.loads(repair_json(raw))
     except Exception as e:
         logger.info(f"Segment refinement batch skipped ({type(e).__name__}: {e}); keeping heuristic.")

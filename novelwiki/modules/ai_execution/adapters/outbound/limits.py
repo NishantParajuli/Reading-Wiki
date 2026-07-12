@@ -19,9 +19,7 @@ from __future__ import annotations
 
 import contextlib
 
-from fastapi import HTTPException
-
-import novelwiki.modules.identity.public as quota
+from novelwiki.kernel.errors import Forbidden, RateLimited
 from novelwiki.platform.auth import rate_limit
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
@@ -29,7 +27,12 @@ from novelwiki.platform.database import get_db_pool
 
 def require_ask_spend_allowed(user: dict) -> None:
     """403 unless the account may trigger costed AI work (verified email, or admin)."""
-    quota.require_spend_allowed(user)
+    if user.get("role") != "admin" and (
+        user.get("status", "active") != "active" or not user.get("email_verified")
+    ):
+        raise Forbidden(
+            "Verify your email to use scrape, translation, OCR, codex, or import features."
+        )
 
 
 async def consume_ask_rate(user: dict, kind: str = "ask") -> None:
@@ -38,7 +41,7 @@ async def consume_ask_rate(user: dict, kind: str = "ask") -> None:
     Only called on a cache miss, so cache hits are free. Each ``kind`` gets its own
     hourly budget. Admins are exempt.
     """
-    if quota.is_exempt(user):
+    if user.get("role") == "admin":
         return
     limit = settings.ASK_MAX_UNIQUE_PER_USER_HOUR
     rate = rate_limit.RateLimit(limit=limit, window_seconds=3600)
@@ -48,10 +51,9 @@ async def consume_ask_rate(user: dict, kind: str = "ask") -> None:
         try:
             await rate_limit.consume(conn, key, rate)
         except rate_limit.RateLimitExceeded as exc:
-            raise HTTPException(
-                status_code=429,
-                detail="You've made too many AI requests this hour. Please wait and try again.",
-                headers={"Retry-After": str(exc.retry_after)},
+            raise RateLimited(
+                "You've made too many AI requests this hour. Please wait and try again.",
+                retry_after=exc.retry_after,
             )
 
 
@@ -99,7 +101,7 @@ async def concurrency_slot(user: dict, kind: str = "ask"):
     wrapped provider work raises — so a failed request never leaves a slot stuck. Admins
     bypass the limit entirely.
     """
-    if quota.is_exempt(user):
+    if user.get("role") == "admin":
         yield
         return
     lock_id = await _acquire_slot(
@@ -108,9 +110,8 @@ async def concurrency_slot(user: dict, kind: str = "ask"):
         settings.ASK_CONCURRENCY_TTL_SECONDS,
     )
     if lock_id is None:
-        raise HTTPException(
-            status_code=429,
-            detail="You have too many AI requests running at once. Please wait for them to finish.",
+        raise RateLimited(
+            "You have too many AI requests running at once. Please wait for them to finish."
         )
     try:
         yield

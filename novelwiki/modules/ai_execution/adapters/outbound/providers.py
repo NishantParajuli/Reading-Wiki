@@ -4,6 +4,7 @@ import asyncio
 import math
 from openai import AsyncOpenAI
 from novelwiki.platform.config import settings
+from novelwiki.modules.ai_execution.application.errors import BudgetExhausted
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -125,11 +126,6 @@ async def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
 # The codex/translation/segmentation work is text and goes to OpenRouter (above).
 # Vision work (scanned-PDF OCR escalation) goes to Gemini's free tier through its
 # OpenAI-compatible endpoint, guarded by a persistent daily budget + an RPM limiter.
-
-class BudgetExhausted(Exception):
-    """Raised when the Gemini daily free-tier budget is spent. The import worker
-    catches this and parks the job until the per-day counter rolls over."""
-
 
 _gemini_client = None
 # One in-process limiter for the whole app: serialize a minimum interval between

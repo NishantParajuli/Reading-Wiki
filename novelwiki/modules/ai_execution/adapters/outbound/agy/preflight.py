@@ -5,32 +5,14 @@ import hashlib
 import os
 import re
 import stat
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from novelwiki.modules.ai_execution.adapters.outbound.agy import PLUGIN_SOURCE
 from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import AgyPreflightError
 from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import child_environment
 from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import tree_sha256, validate_work_root
+from novelwiki.modules.ai_execution.application.contracts import PreflightResult
 from novelwiki.platform.config import settings
-
-
-@dataclass(frozen=True)
-class PreflightResult:
-    healthy: bool
-    version: str | None
-    binary_sha256: str | None
-    models: tuple[str, ...]
-    plugin_version: str
-    plugin_sha256: str | None
-    plugin_valid: bool
-    error_code: str | None = None
-    error: str | None = None
-
-    def public(self) -> dict:
-        data = asdict(self)
-        data["models"] = list(self.models)
-        return data
 
 
 async def _command(*argv: str, timeout: float = 20) -> tuple[int, str, str]:

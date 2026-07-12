@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 async def _persist_chapter(conn, source: dict, global_number: float, ch, force: bool) -> bool:
     """Upserts one scraped chapter into the novel's global chapter sequence.
     Returns True if a row was written, False if skipped (already present, no force)."""
-    from novelwiki.bootstrap.reading_migration import build_reading_ingestion_gateway
-    return await (await build_reading_ingestion_gateway()).upsert_ingested_chapter(
+    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
+    return await runtime().upsert_ingested_chapter(
         source, global_number, ch, force
     )
 
@@ -24,17 +24,14 @@ async def _persist_chapter(conn, source: dict, global_number: float, ch, force: 
 async def _resume_url(pool, source_id: int) -> str | None:
     """The URL of the furthest-progressed chapter already scraped by this source, so a
     re-run can jump straight there instead of re-walking every prior chapter page."""
-    from novelwiki.bootstrap.reading_migration import build_reading_ingestion_gateway
-    return await (await build_reading_ingestion_gateway()).resume_url(source_id)
+    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
+    return await runtime().resume_url(source_id)
 
 
 async def set_source_offset(_connection, source_id: int, new_offset: float) -> int:
     """Compatibility callable; new routes use the named owner-bound workflow directly."""
-    from novelwiki.bootstrap.acquisition_routes import build_import_commit_uow_factory
-    from novelwiki.workflows.update_source_offset import update_source_offset
-    return await update_source_offset(
-        await build_import_commit_uow_factory(), source_id, new_offset
-    )
+    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
+    return await runtime().update_source_offset(source_id, new_offset)
 
 
 async def scrape_source(

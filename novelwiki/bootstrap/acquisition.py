@@ -9,6 +9,8 @@ def build_adapter_catalog_query() -> ListScraperAdapters:
 
 
 async def build_import_worker_repository():
+    from novelwiki.bootstrap.acquisition_runtime import wire_acquisition_runtime
+    wire_acquisition_runtime()
     from novelwiki.modules.acquisition.adapters.outbound.worker_jobs import (
         PostgresImportWorkerRepository,
     )
@@ -21,9 +23,11 @@ async def import_worker_owner_can_spend(user_id: int) -> bool:
         PostgresIdentityWorkerLookup,
     )
     from novelwiki.platform.database import init_db_pool
-    import novelwiki.modules.identity.public as quota
     user = await PostgresIdentityWorkerLookup(await init_db_pool()).load_user(user_id)
-    return bool(user and quota.spend_allowed(user))
+    return bool(user and (
+        user.get("role") == "admin"
+        or (user.get("status", "active") == "active" and user.get("email_verified"))
+    ))
 
 
 async def gemini_budget_remaining() -> int:

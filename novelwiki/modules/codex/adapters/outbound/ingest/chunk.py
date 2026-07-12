@@ -107,8 +107,8 @@ async def chunk_chapter(novel_id: int, chapter_number: float, force: bool = Fals
     Fetches readable chapter text, chunks it, and writes chunks to the chunks table.
     Deletes prior chunks first if force=True.
     """
-    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
-    chapter = await (await build_reading_codex_gateway()).chapter_snapshot(
+    from novelwiki.modules.codex.application.worker_dependencies import reading_port
+    chapter = await reading_port().chapter_snapshot(
         novel_id, chapter_number
     )
     if not chapter or not chapter["content"]:
@@ -162,8 +162,8 @@ async def chunk_all_chapters(
     finishing a whole-book pass. The callback signals cancellation by raising the
     worker's cancellation exception.
     """
-    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
-    numbers = await (await build_reading_codex_gateway()).chapter_numbers(
+    from novelwiki.modules.codex.application.worker_dependencies import reading_port
+    numbers = await reading_port().chapter_numbers(
         novel_id, from_chapter, to_chapter
     )
 

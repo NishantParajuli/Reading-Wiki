@@ -10,19 +10,19 @@ class ImportRuntimeGateway:
         self._pool = pool
 
     async def create_job(self, format: str, **fields) -> int:
-        from novelwiki.modules.acquisition.adapters.inbound import worker as jobs
+        from novelwiki.modules.acquisition.application import import_worker as jobs
         return await jobs.create_job(format, **fields)
 
     async def get_job(self, job_id: int) -> dict | None:
-        from novelwiki.modules.acquisition.adapters.inbound import worker as jobs
+        from novelwiki.modules.acquisition.application import import_worker as jobs
         return await jobs.get_job(job_id)
 
     async def list_jobs(self, user_id: int | None) -> list[dict]:
-        from novelwiki.modules.acquisition.adapters.inbound import worker as jobs
+        from novelwiki.modules.acquisition.application import import_worker as jobs
         return await jobs.list_jobs(user_id=user_id)
 
     async def update_job(self, job_id: int, **fields) -> None:
-        from novelwiki.modules.acquisition.adapters.inbound import worker as jobs
+        from novelwiki.modules.acquisition.application import import_worker as jobs
         await jobs.update_job(job_id, **fields)
 
     async def delete_job(self, job_id: int) -> None:
@@ -30,7 +30,7 @@ class ImportRuntimeGateway:
             await connection.execute("DELETE FROM import_jobs WHERE id = $1;", job_id)
 
     async def duplicate_imports(self, sha256: str, job_id: int) -> list[dict]:
-        from novelwiki.modules.acquisition.adapters.inbound import worker as jobs
+        from novelwiki.modules.acquisition.application import import_worker as jobs
         return await jobs.imports_with_hash(sha256, exclude_job_id=job_id)
 
     async def source_novel_id(self, source_id: int) -> int | None:
@@ -75,7 +75,7 @@ class ImportRuntimeGateway:
         return storage.finalize_upload(job_id, extension)
 
     async def touch_job(self, job_id: int) -> None:
-        from novelwiki.modules.acquisition.adapters.inbound import worker as jobs
+        from novelwiki.modules.acquisition.application import import_worker as jobs
         await jobs.touch_job(job_id)
 
     def import_files(self, root: str, recursive: bool) -> list[tuple[str, str]]:

@@ -3,6 +3,73 @@
 from __future__ import annotations
 
 
+def wire_translation_worker_dependencies() -> None:
+    from novelwiki.modules.translation.application.worker_dependencies import (
+        configure_worker_dependencies,
+    )
+
+    class RunBridge:
+        async def list(self, job_id, workloads):
+            from novelwiki.modules.ai_execution.adapters.outbound.worker_state import (
+                PostgresAgyWorkerStateRepository,
+            )
+            from novelwiki.platform.database import init_db_pool
+            return await PostgresAgyWorkerStateRepository(
+                await init_db_pool()
+            ).resumable_runs(job_id, workloads)
+
+    class QuotaBridge:
+        @staticmethod
+        async def _service():
+            from novelwiki.modules.identity.adapters.outbound.postgres_quota import PostgresQuotaRepository
+            from novelwiki.modules.identity.application import QuotaService
+            from novelwiki.platform.database import init_db_pool
+            pool = await init_db_pool()
+            return QuotaService(PostgresQuotaRepository(pool=pool))
+
+        async def reserve(self, user, units=1):
+            from novelwiki.modules.identity.adapters.principals import principal_from_user
+            return await (await self._service()).reserve(
+                principal_from_user(user), "translated_chapters", units
+            )
+
+        async def refund(self, user_id, units=1):
+            return await (await self._service()).refund(
+                user_id, "translated_chapters", units
+            )
+
+    configure_worker_dependencies(
+        build_translation_runtime, seed_system_glossary, RunBridge(), QuotaBridge()
+    )
+    from types import SimpleNamespace
+    from novelwiki.modules.translation.application.ai_runtime import configure_ai_runtime
+    from novelwiki.modules.ai_execution.adapters.outbound import providers
+    from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
+    from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import (
+        create_run, update_run, workspace_relpath,
+    )
+    from novelwiki.modules.ai_execution.adapters.outbound.agy.validators import (
+        load_json, read_text_artifact, validate_output_manifest,
+    )
+    from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import (
+        add_input, create_run_workspace, seal_inputs, sha256_file, write_json,
+    )
+    from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import (
+        is_database_error, safe_error_summary,
+    )
+    from novelwiki.modules.work.adapters.outbound import postgres as work
+    configure_ai_runtime(SimpleNamespace(
+        call_chat_completion=providers.call_chat_completion,
+        run_agy=run_agy, create_run=create_run, update_run=update_run,
+        workspace_relpath=workspace_relpath, load_json=load_json,
+        read_text_artifact=read_text_artifact,
+        validate_output_manifest=validate_output_manifest,
+        add_input=add_input, create_run_workspace=create_run_workspace,
+        seal_inputs=seal_inputs, sha256_file=sha256_file, write_json=write_json,
+        is_database_error=is_database_error, safe_error_summary=safe_error_summary,
+    ), work)
+
+
 async def build_glossary_service():
     from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
     from novelwiki.modules.catalog.application import CatalogTransactionService
@@ -28,6 +95,9 @@ async def build_glossary_service():
 
 
 async def build_translation_scheduling_service():
+    from novelwiki.bootstrap.ai_execution import wire_ai_policy
+    wire_ai_policy()
+    wire_translation_worker_dependencies()
     from novelwiki.modules.ai_execution.adapters.outbound.policy import get_policy, resolve_backend
     from novelwiki.modules.ai_execution.domain.backend import Workload
     from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
@@ -82,6 +152,7 @@ async def build_translation_scheduling_service():
 
 async def build_translation_runtime():
     """Compatibility runtime for provider-facing translation functions."""
+    wire_translation_worker_dependencies()
     from novelwiki.modules.reading.adapters.outbound.translation import (
         PostgresReadingTranslationQuery,
         PostgresReadingTranslationTransactionService,

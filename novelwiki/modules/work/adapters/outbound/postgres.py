@@ -29,17 +29,16 @@ import logging
 from novelwiki.platform.observability import audit
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
-from novelwiki.modules.identity.public import (
-    IdentityQuotaTransactionApi,
-    quota_transaction_factory,
-)
-from novelwiki.modules.work.application.contracts import WorkQuotaFinalizationTransactionApi
-from novelwiki.platform.database import AsyncpgUnitOfWork
 from novelwiki.workflows.finalize_job_quota import finalize_job_quota
 
-from .transactions import PostgresWorkQuotaFinalizationTransactionService
-
 logger = logging.getLogger(__name__)
+
+_finalization_uow_factory = None
+
+
+def configure_finalization_uow(factory) -> None:
+    global _finalization_uow_factory
+    _finalization_uow_factory = factory
 
 KINDS = ("scrape", "codex_build", "translate", "agy_smoke")
 TRIGGER_STATUSES = ("queued",)
@@ -471,13 +470,10 @@ async def release_translation_reservation_for_fallback(job_id: int) -> None:
 async def finalize(job_id: int, *, success: bool) -> None:
     """Settle a terminal job's quota exactly once (guarded by ``quota_finalized``). On success the
     reservation is treated as consumed; otherwise the unconsumed remainder is refunded."""
-    pool = await get_db_pool()
-    factories = {
-        WorkQuotaFinalizationTransactionApi: PostgresWorkQuotaFinalizationTransactionService,
-        IdentityQuotaTransactionApi: quota_transaction_factory,
-    }
+    if _finalization_uow_factory is None:
+        raise RuntimeError("Work quota finalization was not wired by the composition root")
     settlement, refunded = await finalize_job_quota(
-        lambda: AsyncpgUnitOfWork(pool, factories), job_id, success
+        _finalization_uow_factory, job_id, success
     )
     if settlement is None:
         return  # already finalized

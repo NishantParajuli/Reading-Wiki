@@ -18,6 +18,11 @@ def _user(principal):
 
 
 def _convert_transport_error(exc: Exception) -> Exception:
+    from novelwiki.kernel.errors import ApplicationError, RateLimited
+    if isinstance(exc, RateLimited):
+        return QuotaExceeded(str(exc))
+    if isinstance(exc, ApplicationError):
+        return exc
     status = getattr(exc, "status_code", None)
     kind = (
         ValidationFailed if status == 422 else
@@ -29,6 +34,10 @@ def _convert_transport_error(exc: Exception) -> Exception:
 
 
 async def build_codex_migration_service(agent_gateway=None):
+    from novelwiki.bootstrap.codex_worker import wire_codex_worker_dependencies
+    wire_codex_worker_dependencies()
+    from novelwiki.bootstrap.ai_execution import wire_ai_policy
+    wire_ai_policy()
     from novelwiki.modules.codex.adapters.outbound.agent_bridge import (
         CodexAgentGateway,
     )
@@ -105,16 +114,12 @@ async def build_codex_migration_service(agent_gateway=None):
                 async with ai_limits.concurrency_slot(_user(principal), kind):
                     yield
             except Exception as exc:
-                if getattr(exc, "status_code", None) is None:
-                    raise
                 raise _convert_transport_error(exc) from exc
 
         async def consume_rate(self, principal, kind):
             try:
                 await ai_limits.consume_ask_rate(_user(principal), kind)
             except Exception as exc:
-                if getattr(exc, "status_code", None) is None:
-                    raise
                 raise _convert_transport_error(exc) from exc
 
     class BackendBridge:
@@ -124,8 +129,6 @@ async def build_codex_migration_service(agent_gateway=None):
                     _user(principal), Workload.CODEX_EXTRACT, requested
                 )
             except Exception as exc:
-                if getattr(exc, "status_code", None) is None:
-                    raise
                 raise _convert_transport_error(exc) from exc
             fields = decision.as_job_fields()
             return BackendDecision(

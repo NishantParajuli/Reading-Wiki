@@ -2,6 +2,8 @@ from __future__ import annotations
 
 
 def build_agy_worker_runtime():
+    from novelwiki.bootstrap.ai_execution import wire_ai_policy
+    wire_ai_policy()
     from types import SimpleNamespace
 
     from novelwiki.bootstrap.workers import build_agy_worker_registry

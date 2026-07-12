@@ -35,5 +35,11 @@ class ProviderUnavailable(ApplicationError):
     pass
 
 
+class RateLimited(ApplicationError):
+    def __init__(self, detail: str, *, retry_after: int | None = None):
+        super().__init__(detail)
+        self.retry_after = retry_after
+
+
 class JobAlreadyActive(Conflict):
     pass

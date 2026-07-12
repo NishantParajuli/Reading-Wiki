@@ -30,7 +30,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with: { enable-cache: true }
       - run: uv sync --frozen
-      - run: uv run python tools/check_architecture.py
+      - run: uv run python tools/check_architecture.py --strict
       - run: uv run python -m compileall -q novelwiki
       - run: uv run pytest -q
       - run: uv run python -c 'import asyncio; from novelwiki.db.schema import init_database; asyncio.run(init_database())'

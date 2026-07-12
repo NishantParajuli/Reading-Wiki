@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool, close_db_pool
 from novelwiki.modules.codex.adapters.outbound.cache import clear_caches
-from novelwiki.modules.ai_execution.public import call_chat_completion
+from novelwiki.modules.codex.application.ai_runtime import call_chat_completion
 from novelwiki.modules.codex.adapters.outbound.ingest.link import create_entity, resolve_entity
 from novelwiki.modules.codex.domain.prompts import (
     EXTRACTION_SYSTEM,
@@ -205,9 +205,9 @@ async def commit_extraction_proposal(
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            from novelwiki.bootstrap.reading_migration import bind_reading_codex
-            chapter = await bind_reading_codex(conn).locked_chapter_snapshot(
-                novel_id, chapter_number
+            from novelwiki.modules.codex.application.worker_dependencies import reading_port
+            chapter = await reading_port().locked_chapter_snapshot(
+                conn, novel_id, chapter_number
             )
             if not chapter or chapter_source_sha256(chapter["content"]) != expected_source_hash:
                 raise RuntimeError("source_changed")
@@ -385,8 +385,8 @@ async def extract_knowledge_for_chapter(
         await clear_caches(conn, novel_id=novel_id, chapter_number=chapter_number)
 
         # Load chapter info
-        from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
-        chapter = await (await build_reading_codex_gateway()).chapter_snapshot(
+        from novelwiki.modules.codex.application.worker_dependencies import reading_port
+        chapter = await reading_port().chapter_snapshot(
             novel_id, chapter_number
         )
         if not chapter:
@@ -516,8 +516,8 @@ async def extract_all_chapters(
     """Processes chapters in strict ascending order (Invariant 2), optionally limited
     to a [from_chapter, to_chapter] range so the prompt can be iterated on the first
     ~50 chapters before committing to the full paid run."""
-    from novelwiki.bootstrap.reading_migration import build_reading_codex_gateway
-    numbers = await (await build_reading_codex_gateway()).chapter_numbers(
+    from novelwiki.modules.codex.application.worker_dependencies import reading_port
+    numbers = await reading_port().chapter_numbers(
         novel_id, from_chapter, to_chapter
     )
 

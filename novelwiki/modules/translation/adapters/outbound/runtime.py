@@ -16,7 +16,7 @@ import logging
 import uuid
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
-from novelwiki.modules.ai_execution.public import call_chat_completion
+from novelwiki.modules.translation.application.ai_runtime import call_chat_completion
 from novelwiki.modules.translation.domain.prompts import TRANSLATE_SYSTEM, TRANSLATE_USER
 
 logging.basicConfig(level=logging.INFO)
@@ -28,8 +28,8 @@ _locks: dict[tuple[int, float], asyncio.Lock] = {}
 
 
 async def _translation_runtime():
-    from novelwiki.bootstrap.translation import build_translation_runtime
-    return await build_translation_runtime()
+    from novelwiki.modules.translation.application.worker_dependencies import translation_runtime
+    return await translation_runtime()
 
 
 def _lock_for(novel_id: int, number: float) -> asyncio.Lock:
@@ -230,8 +230,8 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
         if ch["translation_status"] == "translating" or ch["translation_run_id"] is not None:
             return {"status": "translating", "content": ch["content"]}
         if meter_user is not None:
-            import novelwiki.modules.identity.public as quota
-            if not await quota.try_reserve(meter_user, "translated_chapters", 1):
+            from novelwiki.modules.translation.application.worker_dependencies import quota_port
+            if not await quota_port().reserve(meter_user, 1):
                 return {"status": "quota_exceeded", "content": ch["content"]}
             charged_user_id = int(meter_user["id"])
         language = ch["language"] or "the source language"
@@ -260,8 +260,8 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
             logger.error(f"Translation failed for novel {novel_id} ch {number}: {e}")
             await reading.mark_translation_failed(novel_id, number)
             if charged_user_id is not None:
-                import novelwiki.modules.identity.public as quota
-                refunded = await quota.refund(charged_user_id, "translated_chapters", 1)
+                from novelwiki.modules.translation.application.worker_dependencies import quota_port
+                refunded = await quota_port().refund(charged_user_id, 1)
                 if refunded:
                     logger.info(
                         "Refunded translated_chapters quota for failed translation "
@@ -282,8 +282,8 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
             logger.warning(f"Translation commit lost race for novel {novel_id} ch {number}: {e}")
             await reading.mark_translation_failed(novel_id, number, only_unowned=True)
             if charged_user_id is not None:
-                import novelwiki.modules.identity.public as quota
-                await quota.refund(charged_user_id, "translated_chapters", 1)
+                from novelwiki.modules.translation.application.worker_dependencies import quota_port
+                await quota_port().refund(charged_user_id, 1)
             return {"status": "failed", "content": None}
         logger.info(f"Translated novel {novel_id} ch {number} ({len(translation.split())} words, +{len(new_terms)} glossary terms).")
         return result
@@ -362,8 +362,7 @@ async def seed_glossary_from_entities(novel_id: int) -> int:
     left equal to the canonical name (the model fills the real foreign term as it meets
     it); the point is to hand the translator the established English spellings so a raw
     continuation keeps "Lin Xuan" rather than inventing "Lin Xenon"."""
-    from novelwiki.bootstrap.translation import seed_system_glossary
-    n = await seed_system_glossary(novel_id)
+    from novelwiki.modules.translation.application.worker_dependencies import seed_glossary
+    n = await seed_glossary(novel_id)
     logger.info(f"Seeded {n} glossary terms from codex entities for novel {novel_id}.")
     return n
-

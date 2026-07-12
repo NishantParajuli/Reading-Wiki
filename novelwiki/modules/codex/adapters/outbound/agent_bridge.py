@@ -39,7 +39,7 @@ class CodexAgentGateway:
         self, profile: dict, relationships: list[dict], ceiling: ChapterCeiling,
         model: str,
     ) -> str:
-        from novelwiki.modules.ai_execution.public import call_chat_completion
+        from novelwiki.modules.codex.application.ai_runtime import call_chat_completion
 
         aliases = ", ".join(profile["aliases"]) if profile["aliases"] else "None"
         facts = "\n".join(
