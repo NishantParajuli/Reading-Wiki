@@ -77,6 +77,7 @@ def build_application_lifecycle() -> ApplicationLifecycle:
     from novelwiki.platform.database import close_db_pool, init_db_pool
 
     pool_holder: dict[str, object] = {}
+    import_worker_holder: dict[str, object] = {}
 
     async def initialize_schema():
         from novelwiki.db.schema import init_database
@@ -100,14 +101,25 @@ def build_application_lifecycle() -> ApplicationLifecycle:
         await maybe_migrate()
 
     def start_import_worker():
-        from novelwiki.bootstrap.acquisition_runtime import wire_acquisition_runtime
-        wire_acquisition_runtime()
-        from novelwiki.modules.acquisition.adapters.inbound.worker import start_worker
-        start_worker()
+        from novelwiki.bootstrap.acquisition_runtime import build_acquisition_runtime
+        from novelwiki.modules.acquisition.adapters.inbound.worker import (
+            ImportWorkerAdapter, ImportWorkerConfig,
+        )
+        worker = ImportWorkerAdapter(
+            build_acquisition_runtime(),
+            ImportWorkerConfig(
+                lease_timeout_seconds=settings.IMPORT_LEASE_TIMEOUT_SECONDS,
+                heartbeat_seconds=settings.IMPORT_WORKER_HEARTBEAT_SECONDS,
+                upload_session_ttl_hours=settings.IMPORT_UPLOAD_SESSION_TTL_HOURS,
+            ),
+        )
+        import_worker_holder["worker"] = worker
+        worker.start()
 
     async def stop_import_worker():
-        from novelwiki.modules.acquisition.adapters.inbound.worker import stop_worker
-        await stop_worker()
+        worker = import_worker_holder.pop("worker", None)
+        if worker is not None:
+            await worker.stop()
 
     def start_tts_worker():
         from types import SimpleNamespace

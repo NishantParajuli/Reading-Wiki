@@ -1,9 +1,9 @@
 /* Add-novel dialog (form logic preserved from the old AddNovelForm). */
 import React, { useEffect, useState } from "react";
-import { acquisitionApi } from "../modules/acquisition/api.js";
-import { catalogApi } from "../modules/catalog/api.js";
-import { Dialog } from "./overlay.jsx";
-import { Button } from "./ui.jsx";
+import { acquisitionApi } from "../acquisition/api.js";
+import { catalogApi } from "./api.js";
+import { Dialog } from "../../components/overlay.jsx";
+import { Button } from "../../components/ui.jsx";
 
 export function AddNovelDialog({ onCreated, onClose }) {
   const [adapters, setAdapters] = useState([]);

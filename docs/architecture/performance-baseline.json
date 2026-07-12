@@ -1,10 +1,18 @@
 {
-  "method": "PostgreSQL EXPLAIN (FORMAT JSON) total-cost budgets on an initialized empty schema",
+  "method": "PostgreSQL query plans plus full ASGI p95 latency and transactional worker-claim throughput",
   "tolerance": "Budgets include at least 2x headroom; update only with an explained plan review",
   "queries": {
     "library_cards": { "observed_total_cost": 97.93, "max_total_cost": 200 },
     "work_claim": { "observed_total_cost": 1.11, "max_total_cost": 10 },
     "import_claim": { "observed_total_cost": 0.03, "max_total_cost": 10 },
     "narration_claim": { "observed_total_cost": 2.38, "max_total_cost": 10 }
+  },
+  "endpoints": {
+    "health": { "max_p95_ms": 100 },
+    "discover": { "max_p95_ms": 500 }
+  },
+  "worker_claim": {
+    "iterations": 100,
+    "min_claims_per_second": 100
   }
 }

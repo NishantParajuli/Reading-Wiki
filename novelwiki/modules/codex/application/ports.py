@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from novelwiki.kernel.transactions import UnitOfWork
 
 from novelwiki.modules.identity.public import Principal
 
@@ -105,10 +109,18 @@ class CodexReadingPort(Protocol):
         to_chapter: float | None = None, include_all: bool = False,
     ) -> list[float]: ...
     async def chapter_snapshot(self, novel_id: int, chapter_number: float) -> dict | None: ...
-    async def locked_chapter_snapshot(
-        self, connection: object, novel_id: int, chapter_number: float
-    ) -> dict | None: ...
 
 
 class ResumableAiRunPort(Protocol):
     async def list(self, job_id: int, workloads: tuple[str, ...]) -> list[dict]: ...
+
+
+@dataclass(frozen=True)
+class CodexRuntime:
+    """Explicit capabilities supplied to Codex command/worker instances."""
+
+    reading: CodexReadingPort
+    runs: ResumableAiRunPort
+    ai: Any
+    work: Any
+    extraction_uow_factory: Callable[[], UnitOfWork]

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol
 
 from novelwiki.modules.identity.public import Principal
 
@@ -52,3 +53,16 @@ class TranslationQuotaPort(Protocol):
     async def check_available(self, principal: Principal, units: int) -> None: ...
     async def reserve(self, principal: Principal, units: int) -> None: ...
     async def refund(self, user_id: int, units: int) -> None: ...
+
+
+@dataclass(frozen=True)
+class TranslationRuntime:
+    """Explicit capabilities supplied to Translation command/worker instances."""
+
+    reading: Any
+    uow_factory: Callable[[], Any]
+    seed_glossary: Callable[[int], Awaitable[int]]
+    runs: Any
+    quota: Any
+    ai: Any
+    work: Any

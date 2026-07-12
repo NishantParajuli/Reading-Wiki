@@ -132,6 +132,65 @@ def _contracts() -> dict[str, str]:
             normalized = re.sub(r"\$\{[^}]+\}", "{}", match)
             endpoints.add("/api" + normalized)
         endpoint_inventory[str(path.relative_to(frontend_root))] = sorted(endpoints)
+    representative_responses = {
+        "identity": {
+            "request": {"method": "GET", "path": "/api/auth/me"},
+            "success": {"status": 200, "json": {"user": "<normalized-user-or-null>"}},
+            "error": {"status": 401, "json": {"detail": "Not authenticated"}},
+        },
+        "catalog": {
+            "request": {"method": "POST", "path": "/api/novels"},
+            "success": {"status": 200, "json": {"id": "<id>"}},
+            "error": {"status": 422, "json": {"detail": "<validation-errors>"}},
+        },
+        "reading": {
+            "request": {"method": "GET", "path": "/api/novels/{novel_id}/chapters"},
+            "success": {"status": 200, "json": {"chapters": ["<normalized-chapter>"]}},
+            "error": {"status": 404, "json": {"detail": "Novel not found"}},
+        },
+        "acquisition": {
+            "request": {"method": "GET", "path": "/api/import/jobs/{job_id}"},
+            "success": {"status": 200, "json": {"id": "<id>", "status": "uploaded"}},
+            "error": {"status": 404, "json": {"detail": "Import job not found."}},
+        },
+        "translation": {
+            "request": {"method": "GET", "path": "/api/novels/{novel_id}/glossary"},
+            "success": {"status": 200, "json": []},
+            "error": {"status": 403, "json": {"detail": "Forbidden"}},
+        },
+        "codex": {
+            "request": {"method": "POST", "path": "/api/novels/{novel_id}/ask"},
+            "success": {"status": 200, "json": {"answer": "<markdown>", "citations": []}},
+            "error": {"status": 403, "json": {"detail": "Forbidden"}},
+        },
+        "work": {
+            "request": {"method": "GET", "path": "/api/jobs"},
+            "success": {"status": 200, "json": []},
+            "error": {"status": 422, "json": {"detail": "<validation-errors>"}},
+        },
+        "narration": {
+            "request": {"method": "GET", "path": "/api/tts/voices"},
+            "success": {"status": 200, "json": {"voices": ["<normalized-voice>"]}},
+            "error": {"status": 503, "json": {"detail": "TTS service unavailable"}},
+        },
+        "experience_admin": {
+            "request": {"method": "GET", "path": "/api/admin/users"},
+            "success": {"status": 200, "json": {"users": ["<normalized-user>"]}},
+            "error": {"status": 403, "json": {"detail": "Admin access required"}},
+        },
+        "platform": {
+            "request": {"method": "GET", "path": "/health"},
+            "success": {"status": 200, "json": {"status": "ok"}},
+            "error": {"status": 503, "json": {"status": "unavailable"}},
+        },
+    }
+    for family, contract in representative_responses.items():
+        request = contract["request"]
+        operation = openapi["paths"].get(request["path"], {}).get(
+            request["method"].lower()
+        )
+        if operation is None:
+            raise RuntimeError(f"response contract route missing for {family}: {request}")
     return {
         "openapi.json": _json(openapi),
         "routes.json": _json(routes),
@@ -144,6 +203,7 @@ def _contracts() -> dict[str, str]:
             "routes": frontend_routes,
             "module_endpoints": endpoint_inventory,
         }),
+        "responses.json": _json(representative_responses),
     }
 
 

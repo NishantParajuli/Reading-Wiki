@@ -10,7 +10,9 @@ logger = logging.getLogger(__name__)
 
 # ── Passage Retrieval Tools ───────────────────────────────────────────────
 
-async def hybrid_search(novel_id: int, query: str, chapter_ceiling: float, k: int = 50) -> list[dict]:
+async def hybrid_search(
+    novel_id: int, query: str, chapter_ceiling: float, k: int = 50, *, runtime
+) -> list[dict]:
     """
     Executes hybrid search (BM25 + pgvector dense) with reciprocal rank fusion,
     scoped to a single novel. Enforces chapter_ceiling on both retrievers before fusion.
@@ -24,7 +26,9 @@ async def hybrid_search(novel_id: int, query: str, chapter_ceiling: float, k: in
     sparse_hits = await manager.asearch(query, chapter_ceiling, k=k)
 
     # 2. Dense Vector Search (pre-filters <= ceiling internally)
-    dense_hits = await dense_search(novel_id, query, chapter_ceiling, k=k)
+    dense_hits = await dense_search(
+        novel_id, query, chapter_ceiling, k=k, runtime=runtime
+    )
 
     # 3. Reciprocal Rank Fusion
     fused_hits = reciprocal_rank_fusion(sparse_hits, dense_hits)
@@ -32,9 +36,9 @@ async def hybrid_search(novel_id: int, query: str, chapter_ceiling: float, k: in
     # Limit to top k
     return fused_hits[:k]
 
-async def rerank(query: str, hits: list[dict], top_n: int = 8) -> list[dict]:
+async def rerank(query: str, hits: list[dict], top_n: int = 8, *, runtime) -> list[dict]:
     """Reranks candidate hits using Cohere Rerank via OpenRouter."""
-    return await rerank_hits(query, hits, top_n=top_n)
+    return await rerank_hits(query, hits, top_n=top_n, runtime=runtime)
 
 async def get_chunk(novel_id: int, chunk_id: int, chapter_ceiling: float) -> dict | None:
     """Verbatim chunk drill-down. Strictly returns None if chunk is beyond the ceiling."""

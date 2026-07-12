@@ -1,11 +1,11 @@
 /* Tag vocabulary editing: radio groups + genre checkboxes, the reader
    "suggest tags" flow, and the shelf segmented control. */
 import React, { useState } from "react";
-import { catalogApi } from "../modules/catalog/api.js";
-import { Icon } from "../components/Icon.jsx";
-import { Button, Chip, SegmentedControl } from "../components/ui.jsx";
-import { useToast } from "../components/toast.jsx";
-import { SHELF_LABELS, SHELF_ORDER, STATUS_TAG_LABELS, STATUS_TAG_RADIO_GROUPS, GENRE_TAGS } from "../lib/constants.js";
+import { catalogApi } from "./api.js";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, Chip, SegmentedControl } from "../../components/ui.jsx";
+import { useToast } from "../../components/toast.jsx";
+import { SHELF_LABELS, SHELF_ORDER, STATUS_TAG_LABELS, STATUS_TAG_RADIO_GROUPS, GENRE_TAGS } from "../../lib/constants.js";
 
 /* Toggle a tag with radio (one-per-group) or checkbox semantics. */
 export function toggleTag(tags, t, group) {

@@ -27,12 +27,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
-import uuid
-from datetime import timedelta
-
-from novelwiki.platform.config import settings
-from .runtime_dependencies import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +45,10 @@ _CJK = ("zh", "ja", "ko")
 
 # Opaque per-process identity stamped on claimed jobs. Freshly minted each process start, so a
 # restarted worker never mistakes a previous incarnation's live-looking claim for its own.
-_WORKER_ID = uuid.uuid4().hex
 
 # How often the worker runs its (cheap) maintenance sweeps: lease recovery + abandoned-upload
 # GC. Kept above the poll interval but well under the lease timeout so an orphaned job is
 # reclaimed promptly after its lease expires.
-_MAINTENANCE_INTERVAL_SECONDS = 60.0
-_last_maintenance = 0.0
-
 _JSON_FIELDS = {"detected_meta", "plan", "stats", "cost_estimate", "progress", "options"}
 
 
@@ -68,16 +58,13 @@ def _looks_raw(language: str | None) -> bool:
     lang = (language or "").strip().lower()
     return bool(lang) and not lang.startswith("en")
 
-_worker_task: asyncio.Task | None = None
-_stop = asyncio.Event()
 # One GPU behind the OCR sidecar → never run two OCR jobs at once (the worker is already
 # sequential, but this also guards a future standalone worker process).
 _OCR_LOCK = asyncio.Lock()
 
 
-async def _worker_repository():
-    from .runtime_dependencies import runtime
-    return await runtime().import_repository()
+async def _worker_repository(runtime):
+    return await runtime.import_repository()
 
 
 # ── Row (de)serialization ────────────────────────────────────────────────────
@@ -100,92 +87,97 @@ def _row_to_job(row) -> dict:
     return job
 
 
-async def _job_owner_can_spend(job: dict) -> bool:
+async def _job_owner_can_spend(job: dict, runtime) -> bool:
     """Queued jobs may have been created before the current route guards. Re-check the
     owner before parser/OCR work that can spend API budget."""
     user_id = job.get("user_id")
     if user_id is None:
         return True
-    from .runtime_dependencies import runtime
-    return await runtime().owner_can_spend(user_id)
+    return await runtime.owner_can_spend(user_id)
 
 
 async def create_job(format: str, original_path: str, file_sha256: str | None = None,
                      options: dict | None = None, detected_meta: dict | None = None,
-                     status: str = "uploaded", user_id: int | None = None) -> int:
+                     status: str = "uploaded", user_id: int | None = None, *, runtime) -> int:
     """Insert a job row owned by `user_id` (the uploader). Callers that already have the file
     on disk use the default 'uploaded' status (the worker picks it up); the multipart upload
     path inserts as 'receiving' first, saves the blob under the new id, then flips to 'uploaded'."""
-    return await (await _worker_repository()).create_job(
+    return await (await _worker_repository(runtime)).create_job(
         format, original_path, file_sha256, options or {}, detected_meta or {},
         status, user_id,
     )
 
 
-async def get_job(job_id: int) -> dict | None:
-    row = await (await _worker_repository()).get_job(job_id)
+async def get_job(job_id: int, *, runtime) -> dict | None:
+    row = await (await _worker_repository(runtime)).get_job(job_id)
     return _row_to_job(row) if row else None
 
 
-async def list_jobs(limit: int = 100, user_id: int | None = None) -> list[dict]:
+async def list_jobs(
+    limit: int = 100, user_id: int | None = None, *, runtime
+) -> list[dict]:
     """All jobs (admin) or only those owned by `user_id`."""
-    rows = await (await _worker_repository()).list_jobs(limit, user_id)
+    rows = await (await _worker_repository(runtime)).list_jobs(limit, user_id)
     return [_row_to_job(r) for r in rows]
 
 
-async def update_job(job_id: int, **fields) -> None:
+async def update_job(job_id: int, *, runtime, **fields) -> None:
     """Patch a job row. JSONB fields are json-dumped automatically; `updated_at` bumps."""
     if not fields:
         return
-    await (await _worker_repository()).update_job(job_id, fields)
+    await (await _worker_repository(runtime)).update_job(job_id, fields)
 
 
-async def fail_job(job_id: int, error: str) -> None:
+async def fail_job(job_id: int, error: str, *, runtime) -> None:
     logger.error(f"Import job {job_id} failed: {error}")
-    await update_job(job_id, status="failed", error=str(error)[:4000])
+    await update_job(
+        job_id, status="failed", error=str(error)[:4000], runtime=runtime
+    )
 
 
-async def touch_job(job_id: int) -> None:
+async def touch_job(job_id: int, *, runtime) -> None:
     """Bump ``updated_at`` alone — marks a `receiving` upload session as still alive so its chunks
     still arriving don't let the abandoned-session sweep read it as dead."""
-    await (await _worker_repository()).touch_job(job_id)
+    await (await _worker_repository(runtime)).touch_job(job_id)
 
 
 # ── Stage handlers ───────────────────────────────────────────────────────────
 
-async def _do_parse(job: dict) -> None:
+async def do_parse(job: dict, *, runtime) -> None:
     """uploaded → parse. EPUB and digital PDF go straight to review; a scanned PDF detours
     through the OCR cost-confirm gate. Heavy parser libs are imported here (not at module
     load) so the app boots even before the web deps land."""
     job_id = int(job["id"])
     fmt = job["format"]
-    await update_job(job_id, status="parsing", stage="parsing", error=None)
+    await update_job(
+        job_id, status="parsing", stage="parsing", error=None, runtime=runtime
+    )
 
     if fmt == "epub":
-        document = runtime().parse_epub(job["original_path"], job_id)
-        await _finish_parse(job_id, document)
+        document = runtime.parse_epub(job["original_path"], job_id)
+        await _finish_parse(job_id, document, runtime=runtime)
     elif fmt == "pdf":
-        document = runtime().parse_pdf_text(job["original_path"], job_id)
+        document = runtime.parse_pdf_text(job["original_path"], job_id)
         if document.meta.get("scanned"):
-            await _enter_ocr_confirm(job_id, document, job)
+            await _enter_ocr_confirm(job_id, document, job, runtime=runtime)
         else:
-            await _finish_parse(job_id, document)
+            await _finish_parse(job_id, document, runtime=runtime)
     else:
         raise NotImplementedError(f"Format '{fmt}' is not handled.")
 
 
-async def _finish_parse(job_id: int, document) -> None:
+async def _finish_parse(job_id: int, document, *, runtime) -> None:
     """Shared tail for every parser: cleanup → segment → quality → awaiting_review. Used by
     EPUB, digital PDF, and the post-OCR path. A batch job with ``auto_commit`` is advanced
     straight past review."""
     from novelwiki.modules.acquisition.domain import cleanup, quality
-    await update_job(job_id, stage="cleanup")
+    await update_job(job_id, stage="cleanup", runtime=runtime)
     cleanup.clean_document(document)
-    runtime().save_blocks(job_id, document)
+    runtime.save_blocks(job_id, document)
 
-    await update_job(job_id, stage="segmenting")
-    plan = runtime().build_segment_plan(document)
-    plan = await runtime().refine_segment_plan(plan, document)
+    await update_job(job_id, stage="segmenting", runtime=runtime)
+    plan = runtime.build_segment_plan(document)
+    plan = await runtime.refine_segment_plan(plan, document)
 
     stats = {
         "blocks": len(document.blocks),
@@ -200,7 +192,7 @@ async def _finish_parse(job_id: int, document) -> None:
     # Auto-flag a non-English book as a raw so it lands in the on-demand translation pipeline.
     # The OCR path may already have set this for a CJK scan; if so, keep it. The review UI
     # surfaces this as a pre-checked toggle the user can still flip before committing.
-    job = await get_job(job_id)
+    job = await get_job(job_id, runtime=runtime)
     options = (job or {}).get("options") or {}
     if "is_raw" not in options and _looks_raw(document.meta.get("language")):
         options = {**options, "is_raw": True}
@@ -208,16 +200,17 @@ async def _finish_parse(job_id: int, document) -> None:
     await update_job(
         job_id,
         options=options,
-        detected_meta=_public_meta(document.meta, job_id),
+        detected_meta=_public_meta(document.meta, job_id, runtime=runtime),
         plan=plan,
         stats=stats,
         status="awaiting_review",
         stage="awaiting review",
         error=None,
+        runtime=runtime,
     )
     logger.info(f"Import job {job_id} parsed: {stats['segments']} segments, {stats['images']} images, "
                 f"quality {stats['quality']['score']}.")
-    await _auto_advance(job_id)
+    await _auto_advance(job_id, runtime=runtime)
 
 
 # States a batch sibling passes through on its own before it reaches review — while any
@@ -227,27 +220,29 @@ _PRE_REVIEW = ("receiving", "uploaded", "parsing", "segmenting",
                "ocr_pending", "ocr_running", "ocr_paused")
 
 
-async def _batch_siblings(batch_id: str) -> list[dict]:
+async def _batch_siblings(batch_id: str, *, runtime) -> list[dict]:
     if not batch_id:
         return []
-    rows = await (await _worker_repository()).batch_siblings(batch_id)
+    rows = await (await _worker_repository(runtime)).batch_siblings(batch_id)
     return [_row_to_job(r) for r in rows]
 
 
-async def _auto_advance(job_id: int) -> None:
+async def _auto_advance(job_id: int, *, runtime) -> None:
     """Honour ``options.auto_commit`` for folder/batch imports. Without ``group_series`` each
     book commits to its own new novel; with it, once every auto-progressing sibling in the
     batch has reached review, siblings are grouped by detected series and each multi-volume
     group is committed into a single novel (others commit individually)."""
-    job = await get_job(job_id)
+    job = await get_job(job_id, runtime=runtime)
     options = (job or {}).get("options") or {}
     if not options.get("auto_commit"):
         return
     if not options.get("group_series"):
-        await update_job(job_id, status="committing", stage="auto-committing")
+        await update_job(
+            job_id, status="committing", stage="auto-committing", runtime=runtime
+        )
         return
 
-    siblings = await _batch_siblings(options.get("batch_id"))
+    siblings = await _batch_siblings(options.get("batch_id"), runtime=runtime)
     if any(s["status"] in _PRE_REVIEW for s in siblings):
         return  # the last straggler to finish parsing will trigger the grouped commit
 
@@ -260,27 +255,32 @@ async def _auto_advance(job_id: int) -> None:
     for key, grp in groups.items():
         ids = [int(s["id"]) for s in grp]
         if key.startswith("__single_") or len(ids) == 1:
-            await update_job(ids[0], status="committing", stage="auto-committing")
+            await update_job(
+                ids[0], status="committing", stage="auto-committing", runtime=runtime
+            )
             continue
         try:
-            await runtime().commit_series(ids)
+            await runtime.commit_series(ids)
             logger.info(f"Auto-committed series '{key}' ({len(ids)} volumes) from batch.")
         except Exception as e:
             logger.warning(f"Series auto-commit failed for '{key}': {e}")
             for jid in ids:
-                await fail_job(jid, f"series commit: {type(e).__name__}: {e}")
+                await fail_job(
+                    jid, f"series commit: {type(e).__name__}: {e}", runtime=runtime
+                )
 
 
-async def imports_with_hash(file_sha256: str, exclude_job_id: int | None = None) -> list[dict]:
+async def imports_with_hash(
+    file_sha256: str, exclude_job_id: int | None = None, *, runtime
+) -> list[dict]:
     """Prior import jobs for the same file bytes (re-import detection). Most-recent first;
     callers surface committed ones as a 'you already imported this' warning."""
     if not file_sha256:
         return []
-    rows = await (await _worker_repository()).duplicate_imports(
+    rows = await (await _worker_repository(runtime)).duplicate_imports(
         file_sha256, exclude_job_id
     )
-    from .runtime_dependencies import runtime
-    titles = await runtime().novel_titles({
+    titles = await runtime.novel_titles({
         int(row["novel_id"]) for row in rows if row["novel_id"] is not None
     })
     return [
@@ -297,32 +297,32 @@ async def imports_with_hash(file_sha256: str, exclude_job_id: int | None = None)
 
 # ── OCR (scanned PDF) ────────────────────────────────────────────────────────
 
-async def _gemini_budget_remaining() -> int:
-    from .runtime_dependencies import runtime
-    return await runtime().gemini_budget_remaining()
+async def _gemini_budget_remaining(runtime) -> int:
+    return await runtime.gemini_budget_remaining()
 
 
-async def _enter_ocr_confirm(job_id: int, document, job: dict) -> None:
+async def _enter_ocr_confirm(job_id: int, document, job: dict, *, runtime) -> None:
     """A scanned PDF is expensive, so we estimate the OCR cost and park the job behind a
     confirm gate instead of burning quota unprompted."""
     options = job.get("options") or {}
     pages = document.meta.get("page_count", 0)
-    est = runtime().estimate_ocr_cost(
-        pages, bool(options.get("gemini_first")), await _gemini_budget_remaining()
+    est = runtime.estimate_ocr_cost(
+        pages, bool(options.get("gemini_first")), await _gemini_budget_remaining(runtime)
     )
     await update_job(
         job_id,
         status="awaiting_ocr_confirm",
         stage="awaiting OCR confirmation",
         cost_estimate=est,
-        detected_meta=_public_meta(document.meta, job_id),
+        detected_meta=_public_meta(document.meta, job_id, runtime=runtime),
         stats={"page_count": pages, "scanned_pages": est["scanned_pages"]},
         error=None,
+        runtime=runtime,
     )
     logger.info(f"Import job {job_id}: scanned PDF, {pages} pages — awaiting OCR confirmation.")
 
 
-async def _do_ocr(job: dict) -> None:
+async def do_ocr(job: dict, *, runtime) -> None:
     """ocr_pending → OCR (serialized on the GPU) → finish parse. A budget exhaustion parks
     the job in `ocr_paused`; per-page checkpoints mean it resumes where it left off."""
     job_id = int(job["id"])
@@ -330,28 +330,37 @@ async def _do_ocr(job: dict) -> None:
     options = job.get("options") or {}
 
     async with _OCR_LOCK:
-        await update_job(job_id, status="ocr_running", stage="OCR in progress", error=None)
+        await update_job(
+            job_id, status="ocr_running", stage="OCR in progress", error=None,
+            runtime=runtime,
+        )
 
         async def progress_cb(done, total):
-            await update_job(job_id, progress={"done": done, "total": total, "unit": "pages"})
+            await update_job(
+                job_id, progress={"done": done, "total": total, "unit": "pages"},
+                runtime=runtime,
+            )
 
         try:
-            document = await runtime().parse_pdf_ocr(
+            document = await runtime.parse_pdf_ocr(
                 job["original_path"], job_id, options, progress_cb
             )
         except BudgetExhausted:
             await update_job(job_id, status="ocr_paused",
-                             stage="paused — Gemini daily budget reached; resumes tomorrow")
+                             stage="paused — Gemini daily budget reached; resumes tomorrow",
+                             runtime=runtime)
             logger.info(f"Import job {job_id} OCR paused on budget; will resume when quota rolls over.")
             return
 
     # CJK scans flow into the translation pipeline as a raw source (text == source language).
     if (document.meta.get("language") or "")[:2] in _CJK:
-        await update_job(job_id, options={**options, "is_raw": True})
-    await _finish_parse(job_id, document)
+        await update_job(
+            job_id, options={**options, "is_raw": True}, runtime=runtime
+        )
+    await _finish_parse(job_id, document, runtime=runtime)
 
 
-async def _do_commit(job: dict) -> None:
+async def do_commit(job: dict, *, runtime) -> None:
     """commit_running → write chapters/assets via the scraper persist path → committed.
 
     ``commit_job`` records completion (novel_id + status='committed') INSIDE its own
@@ -360,13 +369,13 @@ async def _do_commit(job: dict) -> None:
     'committed' (a terminal state, never re-run) — a duplicate novel can't slip through the
     gap. The atomic claim also guarantees only one worker is ever in this stage for a job."""
     job_id = int(job["id"])
-    await update_job(job_id, stage="committing")
-    result = await runtime().commit_job(job)
+    await update_job(job_id, stage="committing", runtime=runtime)
+    result = await runtime.commit_job(job)
     logger.info(f"Import job {job_id} committed → novel {result['novel_id']} "
                 f"({result.get('stats', {}).get('chapters_written', 0)} chapters).")
 
 
-def _public_meta(meta: dict, job_id: int) -> dict:
+def _public_meta(meta: dict, job_id: int, *, runtime) -> dict:
     """The metadata surfaced to the UI: book fields + a staged cover thumbnail URL."""
     out = {
         "title": meta.get("title"),
@@ -381,177 +390,5 @@ def _public_meta(meta: dict, job_id: int) -> dict:
     if cover_sha and cover_sha in assets:
         ext = assets[cover_sha].get("ext", "jpg")
         out["cover_sha"] = cover_sha
-        out["cover_url"] = runtime().staged_asset_url(job_id, cover_sha, ext)
+        out["cover_url"] = runtime.staged_asset_url(job_id, cover_sha, ext)
     return out
-
-
-# ── Worker loop ──────────────────────────────────────────────────────────────
-
-async def _recover_stale_leases() -> None:
-    """Requeue in-progress jobs whose lease has expired — i.e. the owning worker stopped renewing
-    ``claimed_at`` (crashed, was killed mid-deploy, lost the DB). This is the ONLY recovery path,
-    and it is multi-worker safe: a *live* worker heartbeats its claim, so a job it is actively
-    processing never looks reclaimable and is never yanked out from under it. Each expired marker
-    goes back to its trigger status with the claim cleared (a NULL lease = orphaned marker, also
-    reclaimable). Resuming is clean: re-parse from scratch, OCR from on-disk page checkpoints,
-    re-run the idempotent + crash-safe commit."""
-    lease = timedelta(seconds=settings.IMPORT_LEASE_TIMEOUT_SECONDS)
-    repository = await _worker_repository()
-    for markers, trigger in _MARKER_RESUME:
-        result = await repository.recover_stale_leases(markers, trigger, lease)
-        if result and not result.endswith(" 0"):
-            logger.info(f"Recovered orphaned import leases → {trigger}: {result}.")
-
-
-async def _cleanup_stale_uploads() -> None:
-    """GC abandoned resumable-upload sessions: a job stuck in `receiving` past the TTL had its
-    client walk away mid-upload, so its partial blob is dead weight (a disk-fill lever if left
-    unbounded). The DELETE re-checks the stale predicate so a session that received a fresh chunk
-    between the scan and the delete (its ``updated_at`` bumped, see ``touch_job``) is left alone."""
-    ttl = timedelta(hours=settings.IMPORT_UPLOAD_SESSION_TTL_HOURS)
-    removed = 0
-    repository = await _worker_repository()
-    for job_id in await repository.stale_upload_ids(ttl):
-        if not await repository.delete_stale_upload(job_id, ttl):
-            continue
-        try:
-            runtime().cleanup_import_job(job_id)
-        except Exception as e:
-            logger.warning(f"Cleanup of abandoned upload {job_id} left files behind: {e}")
-        removed += 1
-    if removed:
-        logger.info(f"Cleaned up {removed} abandoned upload session(s).")
-
-
-async def _run_maintenance(force: bool = False) -> None:
-    """Throttled housekeeping (lease recovery + abandoned-upload GC), safe to call every tick —
-    it only does real work every `_MAINTENANCE_INTERVAL_SECONDS` (or when `force`)."""
-    global _last_maintenance
-    now = time.monotonic()
-    if not force and (now - _last_maintenance) < _MAINTENANCE_INTERVAL_SECONDS:
-        return
-    _last_maintenance = now
-    await _recover_stale_leases()
-    await _cleanup_stale_uploads()
-
-
-async def _reactivate_paused() -> None:
-    """Unpause budget-held OCR jobs once Gemini quota is available again (e.g. the daily
-    counter reset overnight). One cheap statement per tick; a no-op when nothing is paused."""
-    if await _gemini_budget_remaining() > 0:
-        await (await _worker_repository()).reactivate_paused()
-
-
-async def _claim_next() -> dict | None:
-    """Atomically claim the oldest pending job, moving it from its trigger status to the matching
-    in-progress marker in a single locked statement (mirrors the TTS worker) and stamping this
-    worker's lease (`claim_token` + `claimed_at`). Because the marker is not a trigger status, the
-    job leaves the queue the instant it's claimed, so two workers can never process the same job.
-    The returned row already carries the new in-progress status, which `_process` dispatches on."""
-    row = await (await _worker_repository()).claim_next(
-        TRIGGER_STATUSES, _WORKER_ID
-    )
-    return _row_to_job(row) if row else None
-
-
-async def _renew_lease(job_id: int, token: str | None) -> None:
-    """Bump `claimed_at` on a job we still hold, guarded by `claim_token` so we never steal back a
-    lease that recovery already handed to another worker."""
-    if not token:
-        return
-    await (await _worker_repository()).renew_lease(job_id, token)
-
-
-async def _heartbeat(job_id: int, token: str | None, stop: asyncio.Event) -> None:
-    """Renew the lease every `IMPORT_WORKER_HEARTBEAT_SECONDS` for as long as `_process` runs, so a
-    long stage (OCR especially) keeps its claim alive and the recovery sweep leaves it be. Runs
-    concurrently with the stage; DB hiccups are swallowed (a missed beat just shortens the lease)."""
-    interval = max(5, settings.IMPORT_WORKER_HEARTBEAT_SECONDS)
-    while not stop.is_set():
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval)
-            return                          # stop signalled → stage finished
-        except asyncio.TimeoutError:
-            pass
-        try:
-            await _renew_lease(job_id, token)
-        except Exception as e:
-            logger.debug(f"Import job {job_id} lease heartbeat skipped: {e}")
-
-
-async def _process(job: dict) -> None:
-    job_id = int(job["id"])
-    token = job.get("claim_token")
-    stop_hb = asyncio.Event()
-    heartbeat = asyncio.create_task(_heartbeat(job_id, token, stop_hb))
-    try:
-        from novelwiki.modules.acquisition.application.worker import ImportWorkerService
-
-        class Operations:
-            owner_can_spend = staticmethod(_job_owner_can_spend)
-            parse = staticmethod(_do_parse)
-            ocr = staticmethod(_do_ocr)
-            commit = staticmethod(_do_commit)
-            fail = staticmethod(fail_job)
-            exception = staticmethod(logger.exception)
-
-        await ImportWorkerService(Operations()).process(job)
-    finally:
-        stop_hb.set()
-        try:
-            await heartbeat
-        except Exception:
-            pass
-
-
-async def worker_loop(poll_interval: float = 2.0) -> None:
-    runtime().ensure_import_dirs()
-    # No unconditional "requeue everything" on boot — that would reclaim jobs a sibling worker is
-    # actively processing. Recovery is purely lease-expiry based (multi-worker safe).
-    try:
-        await _run_maintenance(force=True)  # reclaim lease-expired jobs + GC abandoned uploads
-    except Exception as e:
-        logger.warning(f"Import worker: startup maintenance failed: {e}")
-    logger.info("Import worker started.")
-    while not _stop.is_set():
-        try:
-            await _reactivate_paused()      # unpause budget-held OCR jobs when quota returns
-            await _run_maintenance()        # throttled: stale-lease recovery + abandoned-upload GC
-            job = await _claim_next()
-            if job is None:
-                try:
-                    await asyncio.wait_for(_stop.wait(), timeout=poll_interval)
-                except asyncio.TimeoutError:
-                    pass
-                continue
-            await _process(job)
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.warning(f"Import worker loop error: {e}")
-            try:
-                await asyncio.wait_for(_stop.wait(), timeout=poll_interval)
-            except asyncio.TimeoutError:
-                pass
-    logger.info("Import worker stopped.")
-
-
-def start_worker() -> None:
-    """Launch the background worker (idempotent). Called from the FastAPI lifespan."""
-    global _worker_task
-    if _worker_task is not None and not _worker_task.done():
-        return
-    _stop.clear()
-    _worker_task = asyncio.create_task(worker_loop())
-
-
-async def stop_worker() -> None:
-    global _worker_task
-    _stop.set()
-    if _worker_task is not None:
-        _worker_task.cancel()
-        try:
-            await _worker_task
-        except (asyncio.CancelledError, Exception):
-            pass
-        _worker_task = None

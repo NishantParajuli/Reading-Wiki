@@ -1,2 +1,2 @@
-export { Home } from "../../screens/Home.jsx";
+export { Home } from "./Home.jsx";
 export { experienceApi } from "./api.js";

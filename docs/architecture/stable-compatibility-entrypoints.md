@@ -1,7 +1,8 @@
 # Stable compatibility entrypoints
 
 Internal business-module code and Bootstrap wiring use canonical module and Platform
-paths. The remaining old namespaces are passive external import aliases only.
+paths. The remaining old namespaces are passive external import aliases or dependency-injecting
+wrappers only; they hold no business workflow.
 
 | Stable path/category | External consumer and reason |
 |---|---|

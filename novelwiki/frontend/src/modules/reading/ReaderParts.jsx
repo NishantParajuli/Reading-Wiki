@@ -8,7 +8,7 @@ import { Icon } from "../../components/Icon.jsx";
 import { Button, Chip, EmptyState, Loading, SegmentedControl } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
 import { DiffView } from "../../lib/diff.jsx";
-import { VoicePicker, readTtsPrefs } from "../../features/narrate.jsx";
+import { VoicePicker, readTtsPrefs } from "../narration/index.js";
 import { clamp, fmtChapter } from "../../lib/utils.js";
 
 const READER_DEFAULTS = {
@@ -478,4 +478,3 @@ export function RichContent({ html }) {
     </>
   );
 }
-

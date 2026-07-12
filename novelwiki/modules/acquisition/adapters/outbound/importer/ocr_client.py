@@ -68,16 +68,17 @@ _GEMINI_OCR_PROMPT = (
 )
 
 
-async def gemini_ocr(images: list[bytes], lang: str = "en") -> list[dict]:
+async def gemini_ocr(
+    images: list[bytes], lang: str = "en", *, runtime
+) -> list[dict]:
     """Escalate poorly-read pages to Gemini vision. Charges the daily budget (may raise
     BudgetExhausted, which the worker treats as a pause). Returns one page-result per image."""
-    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
     from json_repair import repair_json
 
     content = [{"type": "text", "text": _GEMINI_OCR_PROMPT}]
     for im in images:
         content.append({"type": "image_url", "image_url": {"url": _data_url(im)}})
-    raw = await runtime().call_vision([{"role": "user", "content": content}])
+    raw = await runtime.call_vision([{"role": "user", "content": content}])
     try:
         data = json.loads(repair_json(raw))
         pages = data.get("pages", [])

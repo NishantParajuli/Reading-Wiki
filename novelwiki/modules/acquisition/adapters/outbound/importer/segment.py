@@ -297,7 +297,7 @@ def _needs_refine(s: dict) -> bool:
                 and (s.get("confidence") or 0) >= 0.95)
 
 
-async def refine_plan(plan: dict, document: Document) -> dict:
+async def refine_plan(plan: dict, document: Document, *, runtime) -> dict:
     """Best-effort LLM pass that corrects kinds/titles/numbers/includes for the segments the
     heuristic is unsure about. Any failure (no API key, network, bad JSON) leaves the plan
     unchanged; batches are independent so one bad batch can't sink the rest."""
@@ -310,11 +310,15 @@ async def refine_plan(plan: dict, document: Document) -> dict:
     by_id = {s["id"]: s for s in segs}
     book_title = str(document.meta.get("title"))
     for i in range(0, len(ambiguous), _REFINE_BATCH):
-        await _refine_batch(ambiguous[i:i + _REFINE_BATCH], by_id, book_title)
+        await _refine_batch(
+            ambiguous[i:i + _REFINE_BATCH], by_id, book_title, runtime=runtime
+        )
     return plan
 
 
-async def _refine_batch(batch: list[dict], by_id: dict, book_title: str) -> None:
+async def _refine_batch(
+    batch: list[dict], by_id: dict, book_title: str, *, runtime
+) -> None:
     """Refine one batch of ambiguous segments in place. Isolated try/except: a failed batch
     just leaves its segments on the heuristic result."""
     compact = [
@@ -323,14 +327,13 @@ async def _refine_batch(batch: list[dict], by_id: dict, book_title: str) -> None
         for s in batch
     ]
     try:
-        from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
         from json_repair import repair_json
         messages = [
             {"role": "system", "content": _REFINE_SYSTEM},
             {"role": "user", "content": "Book title: " + book_title +
              "\nSegments:\n" + json.dumps(compact, ensure_ascii=False)},
         ]
-        raw = await runtime().call_llm(
+        raw = await runtime.call_llm(
             messages, needs_vision=False, model=settings.SEGMENT_MODEL,
             response_format={"type": "json_object"},
         )

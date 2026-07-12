@@ -12,11 +12,6 @@ from novelwiki.platform.observability import audit as audit_log
 from novelwiki.modules.ai_execution.public import DisambiguationPayload, ExtractionPayload, InputManifest
 from novelwiki.modules.ai_execution.public import AgyCanceled, AgyValidationError
 from novelwiki.modules.ai_execution.public import PreflightResult
-from novelwiki.modules.codex.application.ai_runtime import (
-    add_input, create_run, create_run_workspace, is_database_error, load_json,
-    read_text_artifact, run_agy, safe_error_summary, seal_inputs, service,
-    sha256_file, update_run, validate_output_manifest, workspace_relpath, write_json,
-)
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
 from novelwiki.modules.codex.adapters.outbound.ingest.extract import (
@@ -31,11 +26,10 @@ ENTITY_TYPES = {"character", "location", "faction", "item", "concept", "organiza
 _LOCAL_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,79}$")
 
 
-async def _chapters(job: dict) -> list[float]:
+async def _chapters(job: dict, runtime) -> list[float]:
     opts = job.get("options") or {}
-    from novelwiki.modules.codex.application.worker_dependencies import reading_port
     novel_id = int(job["novel_id"])
-    numbers = await reading_port().chapter_numbers(
+    numbers = await runtime.reading.chapter_numbers(
         novel_id, opts.get("from_chapter"), opts.get("to_chapter"), True
     )
     if opts.get("force") or not numbers:
@@ -50,9 +44,8 @@ async def _chapters(job: dict) -> list[float]:
     return [number for number in numbers if number not in completed]
 
 
-async def _chapter_input(novel_id: int, chapter_number: float) -> dict:
-    from novelwiki.modules.codex.application.worker_dependencies import reading_port
-    chapter = await reading_port().chapter_snapshot(
+async def _chapter_input(novel_id: int, chapter_number: float, runtime) -> dict:
+    chapter = await runtime.reading.chapter_snapshot(
         novel_id, chapter_number
     )
     if not chapter or not chapter["content"]:
@@ -121,9 +114,11 @@ def _claim_refs(item: dict) -> list[str]:
     return refs
 
 
-def validate_extraction_output(run_root: Path, run_id: uuid.UUID, chapter_number: float, source: dict,
-                               *, workload: str = "codex_extract") -> tuple[dict, str]:
-    manifest, roles = validate_output_manifest(
+def validate_extraction_output(
+    run_root: Path, run_id: uuid.UUID, chapter_number: float, source: dict,
+    *, workload: str = "codex_extract", runtime,
+) -> tuple[dict, str]:
+    manifest, roles = runtime.ai.validate_output_manifest(
         run_root, run_id=str(run_id), workload=workload,
         expected_roles={"codex_extraction": 1, "running_summary": 1, "codex_audit": 1},
     )
@@ -131,7 +126,7 @@ def validate_extraction_output(run_root: Path, run_id: uuid.UUID, chapter_number
     try:
         extraction_path = roles["codex_extraction"][0]
         payload = ExtractionPayload.model_validate(
-            load_json(extraction_path, expected_sha256=expected_hashes[extraction_path.resolve()])
+            runtime.ai.load_json(extraction_path, expected_sha256=expected_hashes[extraction_path.resolve()])
         )
     except ValidationError as exc:
         raise AgyValidationError("codex extraction schema is invalid") from exc
@@ -193,12 +188,12 @@ def validate_extraction_output(run_root: Path, run_id: uuid.UUID, chapter_number
                 check_future(child)
     check_future(data)
     summary_path = roles["running_summary"][0]
-    summary = read_text_artifact(summary_path, max_bytes=128_000,
+    summary = runtime.ai.read_text_artifact(summary_path, max_bytes=128_000,
                                  expected_sha256=expected_hashes[summary_path.resolve()]).strip()
     if not summary or len(summary) > 60_000:
         raise AgyValidationError("running summary is empty or too large")
     audit_path = roles["codex_audit"][0]
-    audit = load_json(audit_path, max_bytes=1_000_000,
+    audit = runtime.ai.load_json(audit_path, max_bytes=1_000_000,
                       expected_sha256=expected_hashes[audit_path.resolve()])
     if not isinstance(audit, dict):
         raise AgyValidationError("codex audit must be an object")
@@ -209,21 +204,22 @@ def validate_extraction_output(run_root: Path, run_id: uuid.UUID, chapter_number
 
 async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source: dict,
                                      chapter_number: float, draft: dict, draft_summary: str,
-                                     preflight: PreflightResult) -> tuple[dict, str, uuid.UUID, Path, object]:
-    run_id = await create_run(
+                                     preflight: PreflightResult, runtime
+                                     ) -> tuple[dict, str, uuid.UUID, Path, object]:
+    run_id = await runtime.ai.create_run(
         job=job, workload="codex_verify", model=settings.AGY_MODEL_CODEX,
         runner_version=preflight.version, plugin_version=settings.AGY_PLUGIN_VERSION,
         plugin_sha256=preflight.plugin_sha256 or "", parent_run_id=parent_run_id,
     )
-    root = create_run_workspace(int(job["id"]), str(run_id))
+    root = runtime.ai.create_run_workspace(int(job["id"]), str(run_id))
     inputs = [
-        add_input(root, "chapter.md", source["marked"].encode(), role="chapter_source", media_type="text/markdown; charset=utf-8"),
-        add_input(root, "entity-roster.json", json.dumps(source["roster"], ensure_ascii=False, indent=2).encode(), role="entity_roster", media_type="application/json"),
-        add_input(root, "draft-extraction.json", json.dumps({"schema_version": "1.0", "chapter": chapter_number,
+        runtime.ai.add_input(root, "chapter.md", source["marked"].encode(), role="chapter_source", media_type="text/markdown; charset=utf-8"),
+        runtime.ai.add_input(root, "entity-roster.json", json.dumps(source["roster"], ensure_ascii=False, indent=2).encode(), role="entity_roster", media_type="application/json"),
+        runtime.ai.add_input(root, "draft-extraction.json", json.dumps({"schema_version": "1.0", "chapter": chapter_number,
                   "source_sha256": source["source_sha256"], **draft, "warnings": []}, ensure_ascii=False, indent=2).encode(),
                   role="draft_extraction", media_type="application/json"),
-        add_input(root, "draft-summary.md", draft_summary.encode(), role="draft_summary", media_type="text/markdown; charset=utf-8"),
-        add_input(root, "schema.json", json.dumps({"allowed_chunk_ids": sorted(source["chunk_ids"]),
+        runtime.ai.add_input(root, "draft-summary.md", draft_summary.encode(), role="draft_summary", media_type="text/markdown; charset=utf-8"),
+        runtime.ai.add_input(root, "schema.json", json.dumps({"allowed_chunk_ids": sorted(source["chunk_ids"]),
                   "source_sha256": source["source_sha256"]}, indent=2).encode(),
                   role="extraction_schema", media_type="application/json"),
     ]
@@ -233,11 +229,11 @@ async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source
         novel_ref="novel", chapter_ceiling=chapter_number, inputs=inputs,
         limits={"allowed_chunk_ids": sorted(source["chunk_ids"])}, created_at=datetime.now(UTC),
     )
-    write_json(root / "input" / "manifest.json", manifest.model_dump(mode="json")); seal_inputs(root)
-    await update_run(run_id, status="running", input_sha256=sha256_file(root / "input" / "manifest.json"),
-                     workspace_relpath=workspace_relpath(root), started_at=datetime.now(UTC))
+    runtime.ai.write_json(root / "input" / "manifest.json", manifest.model_dump(mode="json")); runtime.ai.seal_inputs(root)
+    await runtime.ai.update_run(run_id, status="running", input_sha256=runtime.ai.sha256_file(root / "input" / "manifest.json"),
+                     workspace_relpath=runtime.ai.workspace_relpath(root), started_at=datetime.now(UTC))
     try:
-        result = await run_agy(
+        result = await runtime.ai.run_agy(
             root, prompt=(
                 "Run novelwiki-codex-verify for input/manifest.json. Copy chapter from "
                 "chapter_ceiling and source_sha256 exactly from input/schema.json (never use "
@@ -245,35 +241,39 @@ async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source
                 "summary with only supplied chunk provenance; write manifest.json last."
             ),
             model=settings.AGY_MODEL_CODEX,
-            cancel_check=lambda: service.is_canceled(int(job["id"])),
-            on_spawn=lambda pgid, started: update_run(run_id, process_group_id=pgid, process_started_at=started),
+            cancel_check=lambda: runtime.work.is_canceled(int(job["id"])),
+            on_spawn=lambda pgid, started: runtime.ai.update_run(run_id, process_group_id=pgid, process_started_at=started),
         )
-        await update_run(run_id, status="validating", exit_code=result.exit_code)
-        revised, summary = validate_extraction_output(root, run_id, chapter_number, source, workload="codex_verify")
+        await runtime.ai.update_run(run_id, status="validating", exit_code=result.exit_code)
+        revised, summary = validate_extraction_output(
+            root, run_id, chapter_number, source,
+            workload="codex_verify", runtime=runtime,
+        )
         return revised, summary, run_id, root, result
     except Exception as exc:
-        await update_run(run_id, status="canceled" if isinstance(exc, AgyCanceled) else "failed",
+        await runtime.ai.update_run(run_id, status="canceled" if isinstance(exc, AgyCanceled) else "failed",
                          failure_code=getattr(exc, "code", "unknown"),
-                         error_summary=safe_error_summary(exc), finished_at=datetime.now(UTC))
+                         error_summary=runtime.ai.safe_error_summary(exc), finished_at=datetime.now(UTC))
         raise
 
 
 async def _run_disambiguation(
     job: dict, parent_run_id: uuid.UUID, cases: list[dict], preflight: PreflightResult,
+    runtime,
 ) -> dict[str, int | None]:
-    run_id = await create_run(
+    run_id = await runtime.ai.create_run(
         job=job, workload="entity_disambiguation", model=settings.AGY_MODEL_CODEX,
         runner_version=preflight.version, plugin_version=settings.AGY_PLUGIN_VERSION,
         plugin_sha256=preflight.plugin_sha256 or "", parent_run_id=parent_run_id,
     )
-    root = create_run_workspace(int(job["id"]), str(run_id))
+    root = runtime.ai.create_run_workspace(int(job["id"]), str(run_id))
     public_cases = []
     for case in cases:
         public_cases.append({**case, "candidates": [
             {key: value for key, value in candidate.items() if key != "entity_id"}
             for candidate in case["candidates"]
         ]})
-    inputs = [add_input(root, "cases.json", json.dumps({"schema_version": "1.0", "cases": public_cases},
+    inputs = [runtime.ai.add_input(root, "cases.json", json.dumps({"schema_version": "1.0", "cases": public_cases},
                                                         ensure_ascii=False, indent=2).encode(),
                         role="disambiguation_cases", media_type="application/json")]
     manifest = InputManifest(
@@ -282,19 +282,19 @@ async def _run_disambiguation(
         novel_ref="novel", inputs=inputs,
         limits={"cases": len(cases)}, created_at=datetime.now(UTC),
     )
-    write_json(root / "input" / "manifest.json", manifest.model_dump(mode="json"))
-    seal_inputs(root)
-    await update_run(run_id, status="running", input_sha256=sha256_file(root / "input" / "manifest.json"),
-                     workspace_relpath=workspace_relpath(root), started_at=datetime.now(UTC))
+    runtime.ai.write_json(root / "input" / "manifest.json", manifest.model_dump(mode="json"))
+    runtime.ai.seal_inputs(root)
+    await runtime.ai.update_run(run_id, status="running", input_sha256=runtime.ai.sha256_file(root / "input" / "manifest.json"),
+                     workspace_relpath=runtime.ai.workspace_relpath(root), started_at=datetime.now(UTC))
     try:
-        result = await run_agy(
+        result = await runtime.ai.run_agy(
             root,
             prompt="Run novelwiki-disambiguate for input/manifest.json. Select only supplied candidate refs or NEW and write the contracted output manifest last.",
             model=settings.AGY_MODEL_CODEX,
-            cancel_check=lambda: service.is_canceled(int(job["id"])),
-            on_spawn=lambda pgid, started: update_run(run_id, process_group_id=pgid, process_started_at=started),
+            cancel_check=lambda: runtime.work.is_canceled(int(job["id"])),
+            on_spawn=lambda pgid, started: runtime.ai.update_run(run_id, process_group_id=pgid, process_started_at=started),
         )
-        output_manifest, roles = validate_output_manifest(
+        output_manifest, roles = runtime.ai.validate_output_manifest(
             root, run_id=str(run_id), workload="entity_disambiguation",
             expected_roles={"disambiguation": 1},
         )
@@ -302,7 +302,7 @@ async def _run_disambiguation(
             decision_path = roles["disambiguation"][0]
             decision_hash = next(ref.sha256 for ref in output_manifest.artifacts if ref.role == "disambiguation")
             payload = DisambiguationPayload.model_validate(
-                load_json(decision_path, expected_sha256=decision_hash)
+                runtime.ai.load_json(decision_path, expected_sha256=decision_hash)
             )
         except ValidationError as exc:
             raise AgyValidationError("invalid disambiguation artifact") from exc
@@ -319,20 +319,21 @@ async def _run_disambiguation(
                 decisions[case["mention_ref"]] = candidates[decision.decision]
             else:
                 raise AgyValidationError("disambiguator selected an unsupplied candidate")
-        await update_run(run_id, status="completed", output_sha256=sha256_file(root / "output" / "manifest.json"),
+        await runtime.ai.update_run(run_id, status="completed", output_sha256=runtime.ai.sha256_file(root / "output" / "manifest.json"),
                          exit_code=result.exit_code, finished_at=datetime.now(UTC),
                          metrics={"cases": len(cases), "stdout_bytes": result.stdout_bytes,
                                   "stderr_bytes": result.stderr_bytes})
         return decisions
     except Exception as exc:
-        await update_run(run_id, status="canceled" if isinstance(exc, AgyCanceled) else "failed",
+        await runtime.ai.update_run(run_id, status="canceled" if isinstance(exc, AgyCanceled) else "failed",
                          failure_code=getattr(exc, "code", "unknown"),
-                         error_summary=safe_error_summary(exc), finished_at=datetime.now(UTC))
+                         error_summary=runtime.ai.safe_error_summary(exc), finished_at=datetime.now(UTC))
         raise
 
 
 async def _resolve_mentions(job: dict, parent_run_id: uuid.UUID, source: dict, data: dict,
-                            chapter_number: float, preflight: PreflightResult) -> dict[str, int | None]:
+                            chapter_number: float, preflight: PreflightResult,
+                            runtime) -> dict[str, int | None]:
     resolved, cases = {}, []
     pool = await get_db_pool()
     async with pool.acquire() as conn:
@@ -344,6 +345,7 @@ async def _resolve_mentions(job: dict, parent_run_id: uuid.UUID, source: dict, d
             proposal = await find_resolution_candidates(
                 int(job["novel_id"]), surface, mention["type"], chapter_number, context,
                 conn, description=mention.get("description"),
+                runtime=runtime,
             )
             if proposal.existing_id is not None:
                 resolved[ref] = proposal.existing_id
@@ -359,7 +361,9 @@ async def _resolve_mentions(job: dict, parent_run_id: uuid.UUID, source: dict, d
                 resolved[ref] = None
     if cases:
         try:
-            resolved.update(await _run_disambiguation(job, parent_run_id, cases, preflight))
+            resolved.update(await _run_disambiguation(
+                job, parent_run_id, cases, preflight, runtime
+            ))
         except AgyCanceled:
             raise
         except Exception as exc:
@@ -374,19 +378,21 @@ async def _resolve_mentions(job: dict, parent_run_id: uuid.UUID, source: dict, d
     return resolved
 
 
-async def _extract_chapter(job: dict, chapter_number: float, preflight: PreflightResult) -> None:
-    source = await _chapter_input(int(job["novel_id"]), chapter_number)
-    run_id = await create_run(
+async def _extract_chapter(
+    job: dict, chapter_number: float, preflight: PreflightResult, runtime
+) -> None:
+    source = await _chapter_input(int(job["novel_id"]), chapter_number, runtime)
+    run_id = await runtime.ai.create_run(
         job=job, workload="codex_extract", model=settings.AGY_MODEL_CODEX,
         runner_version=preflight.version, plugin_version=settings.AGY_PLUGIN_VERSION,
         plugin_sha256=preflight.plugin_sha256 or "",
     )
-    root = create_run_workspace(int(job["id"]), str(run_id))
+    root = runtime.ai.create_run_workspace(int(job["id"]), str(run_id))
     inputs = [
-        add_input(root, "chapter.md", source["marked"].encode(), role="chapter_source", media_type="text/markdown; charset=utf-8"),
-        add_input(root, "running-summary.md", source["previous_summary"].encode(), role="running_summary", media_type="text/markdown; charset=utf-8"),
-        add_input(root, "entity-roster.json", json.dumps(source["roster"], ensure_ascii=False, indent=2).encode(), role="entity_roster", media_type="application/json"),
-        add_input(root, "schema.json", json.dumps({"schema_version": "1.0", "required_groups": [
+        runtime.ai.add_input(root, "chapter.md", source["marked"].encode(), role="chapter_source", media_type="text/markdown; charset=utf-8"),
+        runtime.ai.add_input(root, "running-summary.md", source["previous_summary"].encode(), role="running_summary", media_type="text/markdown; charset=utf-8"),
+        runtime.ai.add_input(root, "entity-roster.json", json.dumps(source["roster"], ensure_ascii=False, indent=2).encode(), role="entity_roster", media_type="application/json"),
+        runtime.ai.add_input(root, "schema.json", json.dumps({"schema_version": "1.0", "required_groups": [
             "mentions", "facts", "relationships", "events", "identity_reveals", "new_aliases"
         ], "allowed_chunk_ids": sorted(source["chunk_ids"]), "source_sha256": source["source_sha256"]}, indent=2).encode(),
                   role="extraction_schema", media_type="application/json"),
@@ -398,13 +404,13 @@ async def _extract_chapter(job: dict, chapter_number: float, preflight: Prefligh
         limits={"allowed_chunk_ids": sorted(source["chunk_ids"]), "max_items": 5000},
         created_at=datetime.now(UTC),
     )
-    write_json(root / "input" / "manifest.json", manifest.model_dump(mode="json"))
-    seal_inputs(root)
-    await update_run(run_id, status="running", input_sha256=sha256_file(root / "input" / "manifest.json"),
-                     workspace_relpath=workspace_relpath(root), started_at=datetime.now(UTC))
+    runtime.ai.write_json(root / "input" / "manifest.json", manifest.model_dump(mode="json"))
+    runtime.ai.seal_inputs(root)
+    await runtime.ai.update_run(run_id, status="running", input_sha256=runtime.ai.sha256_file(root / "input" / "manifest.json"),
+                     workspace_relpath=runtime.ai.workspace_relpath(root), started_at=datetime.now(UTC))
     artifacts_valid = False
     try:
-        result = await run_agy(
+        result = await runtime.ai.run_agy(
             root,
             prompt=(
                 "Run novelwiki-codex-extract for input/manifest.json. Copy chapter from "
@@ -413,54 +419,60 @@ async def _extract_chapter(job: dict, chapter_number: float, preflight: Prefligh
                 "contracted output and manifest.json last."
             ),
             model=settings.AGY_MODEL_CODEX,
-            cancel_check=lambda: service.is_canceled(int(job["id"])),
-            on_spawn=lambda pgid, started: update_run(run_id, process_group_id=pgid, process_started_at=started),
+            cancel_check=lambda: runtime.work.is_canceled(int(job["id"])),
+            on_spawn=lambda pgid, started: runtime.ai.update_run(run_id, process_group_id=pgid, process_started_at=started),
         )
-        await update_run(run_id, status="validating", exit_code=result.exit_code)
-        data, summary = validate_extraction_output(root, run_id, chapter_number, source)
+        await runtime.ai.update_run(run_id, status="validating", exit_code=result.exit_code)
+        data, summary = validate_extraction_output(
+            root, run_id, chapter_number, source, runtime=runtime
+        )
         artifacts_valid = True
         final_run_id, verify_root, verify_result = run_id, None, None
         if settings.AGY_SEPARATE_CODEX_VERIFY:
             data, summary, final_run_id, verify_root, verify_result = await _run_separate_verification(
-                job, run_id, source, chapter_number, data, summary, preflight,
+                job, run_id, source, chapter_number, data, summary, preflight, runtime,
             )
-        resolved = await _resolve_mentions(job, final_run_id, source, data, chapter_number, preflight)
+        resolved = await _resolve_mentions(
+            job, final_run_id, source, data, chapter_number, preflight, runtime
+        )
         await commit_extraction_proposal(
             int(job["novel_id"]), chapter_number, data, summary,
             expected_source_hash=source["source_sha256"], resolved_refs=resolved,
             roster_refs=source["roster_map"], run_id=final_run_id,
             model_label=f"agy:{settings.AGY_MODEL_CODEX}",
             force=bool((job.get("options") or {}).get("force")),
+            uow_factory=runtime.extraction_uow_factory,
         )
-        await update_run(run_id, status="completed", output_sha256=sha256_file(root / "output" / "manifest.json"),
+        await runtime.ai.update_run(run_id, status="completed", output_sha256=runtime.ai.sha256_file(root / "output" / "manifest.json"),
                          finished_at=datetime.now(UTC), metrics={
                              "chapter": chapter_number, "chunks": len(source["chunk_ids"]),
                              "items": sum(len(data[k]) for k in data),
                              "stdout_bytes": result.stdout_bytes, "stderr_bytes": result.stderr_bytes,
                          })
         if verify_root is not None:
-            await update_run(final_run_id, status="completed",
-                             output_sha256=sha256_file(verify_root / "output" / "manifest.json"),
+            await runtime.ai.update_run(final_run_id, status="completed",
+                             output_sha256=runtime.ai.sha256_file(verify_root / "output" / "manifest.json"),
                              finished_at=datetime.now(UTC), metrics={
                                  "chapter": chapter_number, "separate_verification": True,
                                  "stdout_bytes": verify_result.stdout_bytes,
                                  "stderr_bytes": verify_result.stderr_bytes,
                              })
     except Exception as exc:
-        if artifacts_valid and is_database_error(exc):
-            await update_run(run_id, status="validating", failure_code="database_commit_failed",
+        if artifacts_valid and runtime.ai.is_database_error(exc):
+            await runtime.ai.update_run(run_id, status="validating", failure_code="database_commit_failed",
                              error_summary="database_commit_failed", finished_at=None)
         else:
-            await update_run(run_id, status="canceled" if isinstance(exc, AgyCanceled) else "failed",
+            await runtime.ai.update_run(run_id, status="canceled" if isinstance(exc, AgyCanceled) else "failed",
                              failure_code=getattr(exc, "code", "unknown"),
-                             error_summary=safe_error_summary(exc), finished_at=datetime.now(UTC))
+                             error_summary=runtime.ai.safe_error_summary(exc), finished_at=datetime.now(UTC))
         raise
 
 
-async def _resume_ready_commits(job: dict, preflight: PreflightResult) -> set[float]:
+async def _resume_ready_commits(
+    job: dict, preflight: PreflightResult, runtime
+) -> set[float]:
     """Use a complete extraction artifact after worker loss without rerunning extraction."""
-    from novelwiki.modules.codex.application.worker_dependencies import resumable_run_port
-    rows = list(reversed(await resumable_run_port().list(
+    rows = list(reversed(await runtime.runs.list(
         int(job["id"]), ("codex_extract", "codex_verify")
     )))
     completed: set[float] = set()
@@ -468,55 +480,60 @@ async def _resume_ready_commits(job: dict, preflight: PreflightResult) -> set[fl
         run_id = row["id"]
         root = Path(settings.AGY_WORK_DIR) / (row["workspace_relpath"] or "")
         try:
-            if sha256_file(root / "input" / "manifest.json") != row["input_sha256"]:
+            if runtime.ai.sha256_file(root / "input" / "manifest.json") != row["input_sha256"]:
                 raise AgyValidationError("saved input manifest hash changed")
-            manifest = load_json(root / "input" / "manifest.json")
+            manifest = runtime.ai.load_json(root / "input" / "manifest.json")
             chapter = float(manifest["chapter_ceiling"])
             if chapter in completed:
-                await update_run(run_id, status="completed", finished_at=datetime.now(UTC),
+                await runtime.ai.update_run(run_id, status="completed", finished_at=datetime.now(UTC),
                                  metrics={"chapter": chapter, "superseded_by_resumed_verification": True})
                 continue
-            source = await _chapter_input(int(job["novel_id"]), chapter)
+            source = await _chapter_input(int(job["novel_id"]), chapter, runtime)
             data, summary = validate_extraction_output(
-                root, run_id, chapter, source, workload=row["workload"],
+                root, run_id, chapter, source, workload=row["workload"], runtime=runtime,
             )
-            resolved = await _resolve_mentions(job, run_id, source, data, chapter, preflight)
+            resolved = await _resolve_mentions(
+                job, run_id, source, data, chapter, preflight, runtime
+            )
             await commit_extraction_proposal(
                 int(job["novel_id"]), chapter, data, summary,
                 expected_source_hash=source["source_sha256"], resolved_refs=resolved,
                 roster_refs=source["roster_map"], run_id=run_id,
                 model_label=f"agy:{settings.AGY_MODEL_CODEX}",
                 force=bool((job.get("options") or {}).get("force")),
+                uow_factory=runtime.extraction_uow_factory,
             )
-            await update_run(run_id, status="completed",
-                             output_sha256=sha256_file(root / "output" / "manifest.json"),
+            await runtime.ai.update_run(run_id, status="completed",
+                             output_sha256=runtime.ai.sha256_file(root / "output" / "manifest.json"),
                              finished_at=datetime.now(UTC),
                              metrics={"chapter": chapter, "resumed_commit": True})
             if row["parent_run_id"]:
-                await update_run(row["parent_run_id"], status="completed", finished_at=datetime.now(UTC),
+                await runtime.ai.update_run(row["parent_run_id"], status="completed", finished_at=datetime.now(UTC),
                                  metrics={"chapter": chapter, "completed_via_verification_run": str(run_id)})
             completed.add(chapter)
         except Exception as exc:
-            await update_run(run_id, status="worker_lost", failure_code="worker_lost",
+            await runtime.ai.update_run(run_id, status="worker_lost", failure_code="worker_lost",
                              error_summary=f"worker_lost: {type(exc).__name__}",
                              finished_at=datetime.now(UTC))
     return completed
 
 
-async def execute_codex_job(job: dict, preflight: PreflightResult) -> dict:
-    resumed = await _resume_ready_commits(job, preflight)
-    chapters = [chapter for chapter in await _chapters(job) if chapter not in resumed]
+async def execute_codex_job(job: dict, preflight: PreflightResult, *, runtime) -> dict:
+    resumed = await _resume_ready_commits(job, preflight, runtime)
+    chapters = [
+        chapter for chapter in await _chapters(job, runtime) if chapter not in resumed
+    ]
     total = len(chapters)
     overall = len(resumed) + total
-    await service.set_progress(int(job["id"]), {"step": 3, "steps": 4, "done": len(resumed),
+    await runtime.work.set_progress(int(job["id"]), {"step": 3, "steps": 4, "done": len(resumed),
                                                 "total": overall, "resumed_commits": len(resumed)},
                                stage="waiting for AGY extraction")
     for index, chapter in enumerate(chapters, 1):
-        if await service.is_canceled(int(job["id"])):
+        if await runtime.work.is_canceled(int(job["id"])):
             raise AgyCanceled()
-        await service.update_job(int(job["id"]), stage=f"extracting AGY chapter {index}/{total}")
-        await _extract_chapter(job, chapter, preflight)
-        await service.set_progress(int(job["id"]), {
+        await runtime.work.update_job(int(job["id"]), stage=f"extracting AGY chapter {index}/{total}")
+        await _extract_chapter(job, chapter, preflight, runtime)
+        await runtime.work.set_progress(int(job["id"]), {
             "step": 3, "steps": 4, "done": len(resumed) + index, "total": overall,
             "current_chapter": chapter, "resumed_commits": len(resumed),
         })

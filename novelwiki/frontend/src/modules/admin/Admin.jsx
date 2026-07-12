@@ -1,12 +1,12 @@
 import React from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { useAuth } from "../App.jsx";
-import { EmptyState, PageHeader, Tabs } from "../components/ui.jsx";
-import { useTitle } from "../lib/hooks.js";
+import { useAuth } from "../../App.jsx";
+import { EmptyState, PageHeader, Tabs } from "../../components/ui.jsx";
+import { useTitle } from "../../lib/hooks.js";
 import {
   ADMIN_TABS, AgyHealthTab, GlobalJobsTab, ModerationTab, UsageTab, UsersTab,
-} from "../modules/admin/AdminPanels.jsx";
+} from "../../modules/admin/AdminPanels.jsx";
 
 export function Admin() {
   const { user } = useAuth();

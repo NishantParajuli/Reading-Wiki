@@ -7,14 +7,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { catalogApi } from "../modules/catalog/api.js";
-import { experienceApi } from "../modules/experience/api.js";
-import { Icon } from "../components/Icon.jsx";
-import { Button, Chip, Cover, EmptyState, Loading, PageHeader } from "../components/ui.jsx";
-import { Popover, MenuItem } from "../components/overlay.jsx";
-import { useToast } from "../components/toast.jsx";
-import { useDebounce, useTitle } from "../lib/hooks.js";
-import { STATUS_TAG_LABELS, STATUS_TAG_ORDER, TRANSLATION_TYPE_LABELS } from "../lib/constants.js";
+import { catalogApi } from "../../modules/catalog/api.js";
+import { experienceApi } from "../../modules/experience/api.js";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, Chip, Cover, EmptyState, Loading, PageHeader } from "../../components/ui.jsx";
+import { Popover, MenuItem } from "../../components/overlay.jsx";
+import { useToast } from "../../components/toast.jsx";
+import { useDebounce, useTitle } from "../../lib/hooks.js";
+import { STATUS_TAG_LABELS, STATUS_TAG_ORDER, TRANSLATION_TYPE_LABELS } from "../../lib/constants.js";
 
 const PAGE = 60;
 

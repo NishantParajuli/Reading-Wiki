@@ -1,11 +1,12 @@
 import logging
-from novelwiki.modules.codex.application.ai_runtime import get_embedding
 from novelwiki.platform.database import get_db_pool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def dense_search(novel_id: int, query: str, chapter_ceiling: float, k: int = 50) -> list[dict]:
+async def dense_search(
+    novel_id: int, query: str, chapter_ceiling: float, k: int = 50, *, runtime
+) -> list[dict]:
     """
     Computes query embedding and performs a pgvector cosine similarity search
     scoped to a single novel, pre-filtering strictly where chapter <= chapter_ceiling.
@@ -13,7 +14,7 @@ async def dense_search(novel_id: int, query: str, chapter_ceiling: float, k: int
     """
     try:
         # 1. Embed query
-        q_vector = await get_embedding(query)
+        q_vector = await runtime.ai.get_embedding(query)
         if not q_vector:
             logger.warning("Failed to generate embedding for query.")
             return []

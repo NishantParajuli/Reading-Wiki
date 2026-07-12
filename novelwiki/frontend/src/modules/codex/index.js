@@ -1,5 +1,5 @@
-export { CodexBrowser } from "../../screens/codex/Browser.jsx";
-export { EntityPage } from "../../screens/codex/Entity.jsx";
-export { Ask } from "../../screens/codex/Ask.jsx";
+export { CodexBrowser } from "./Browser.jsx";
+export { EntityPage } from "./Entity.jsx";
+export { Ask } from "./Ask.jsx";
 export { codexApi } from "./api.js";
 export { buildCiteMap, portraitLabel } from "./presentation.js";

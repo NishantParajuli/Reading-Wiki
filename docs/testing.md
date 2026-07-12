@@ -42,5 +42,9 @@ To rehearse a backup and restore using two hard-coded disposable databases:
 TEST_DB_SUPERUSER_URL=postgresql://.../postgres scripts/rehearse-backup-restore.sh
 ```
 
+The client image defaults to PostgreSQL 18. Set
+`POSTGRES_CLIENT_IMAGE=postgres:<server-major>-alpine` when rehearsing against another supported
+server major so dump and restore tooling match the target.
+
 The script refuses non-`novelwiki_rehearsal_*` database names, verifies the restored table catalog
 and every table's row count, and cleans up both databases even after a failure.

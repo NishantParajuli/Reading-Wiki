@@ -4,9 +4,9 @@
    reader's TOC drawer. Flat lists virtualize above 200 rows.
    ============================================================ */
 import React, { useEffect, useMemo, useState } from "react";
-import { Icon } from "../components/Icon.jsx";
-import { Chip } from "../components/ui.jsx";
-import { VirtualList } from "../components/VirtualList.jsx";
+import { Icon } from "../../components/Icon.jsx";
+import { Chip } from "../../components/ui.jsx";
+import { VirtualList } from "../../components/VirtualList.jsx";
 
 // Non-chapter sections from file imports get a short tag instead of a number.
 const TOC_KIND_LABEL = { frontmatter: "front", interlude: "interlude", backmatter: "extra" };

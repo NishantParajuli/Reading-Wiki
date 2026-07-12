@@ -8,14 +8,14 @@ import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { useAuth } from "../App.jsx";
-import { Icon } from "../components/Icon.jsx";
-import { Button, Cover, ProgressBar, Skeleton, RelativeTime } from "../components/ui.jsx";
-import { AddNovelDialog } from "../components/AddNovelDialog.jsx";
-import { isActiveJob, useActivityQuery, useHomeQuery } from "../modules/experience/queries.js";
-import { activityProgress, activityFraction, ACT_KIND_LABEL } from "../lib/constants.js";
-import { timeGreeting, fmtChapter, relativeTime } from "../lib/utils.js";
-import { useTitle } from "../lib/hooks.js";
+import { useAuth } from "../../App.jsx";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, Cover, ProgressBar, Skeleton, RelativeTime } from "../../components/ui.jsx";
+import { AddNovelDialog } from "../catalog/index.js";
+import { isActiveJob, useActivityQuery, useHomeQuery } from "../../modules/experience/queries.js";
+import { activityProgress, activityFraction, ACT_KIND_LABEL } from "../../lib/constants.js";
+import { timeGreeting, fmtChapter, relativeTime } from "../../lib/utils.js";
+import { useTitle } from "../../lib/hooks.js";
 
 function heroMeta(n) {
   const bits = [];

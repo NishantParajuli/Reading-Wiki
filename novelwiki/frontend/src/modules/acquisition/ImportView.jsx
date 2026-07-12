@@ -6,18 +6,18 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { acquisitionApi } from "../modules/acquisition/api.js";
-import { catalogApi } from "../modules/catalog/api.js";
-import { useAuth } from "../App.jsx";
-import { Icon } from "../components/Icon.jsx";
-import { Button, Chip, Cover, EmptyState, Loading, PageHeader, ProgressBar } from "../components/ui.jsx";
-import { useToast } from "../components/toast.jsx";
-import { useTitle } from "../lib/hooks.js";
+import { acquisitionApi } from "../../modules/acquisition/api.js";
+import { catalogApi } from "../../modules/catalog/api.js";
+import { useAuth } from "../../App.jsx";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, Chip, Cover, EmptyState, Loading, PageHeader, ProgressBar } from "../../components/ui.jsx";
+import { useToast } from "../../components/toast.jsx";
+import { useTitle } from "../../lib/hooks.js";
 
 import {
   DuplicateWarning, FolderImport, IMPORT_BUSY, IMPORT_STATUS_LABEL, OcrConfirm,
   OcrProgress, PlanEditor, QualityBadge, Stepper, UploadDrop,
-} from "../modules/acquisition/ImportParts.jsx";
+} from "../../modules/acquisition/ImportParts.jsx";
 
 export function ImportView() {
   const { user } = useAuth();

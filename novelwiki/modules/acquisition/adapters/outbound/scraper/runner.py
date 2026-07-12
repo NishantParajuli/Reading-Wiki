@@ -12,26 +12,27 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def _persist_chapter(conn, source: dict, global_number: float, ch, force: bool) -> bool:
+async def _persist_chapter(
+    conn, source: dict, global_number: float, ch, force: bool, *, runtime
+) -> bool:
     """Upserts one scraped chapter into the novel's global chapter sequence.
     Returns True if a row was written, False if skipped (already present, no force)."""
-    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
-    return await runtime().upsert_ingested_chapter(
+    return await runtime.upsert_ingested_chapter(
         source, global_number, ch, force
     )
 
 
-async def _resume_url(pool, source_id: int) -> str | None:
+async def _resume_url(pool, source_id: int, *, runtime) -> str | None:
     """The URL of the furthest-progressed chapter already scraped by this source, so a
     re-run can jump straight there instead of re-walking every prior chapter page."""
-    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
-    return await runtime().resume_url(source_id)
+    return await runtime.resume_url(source_id)
 
 
-async def set_source_offset(_connection, source_id: int, new_offset: float) -> int:
+async def set_source_offset(
+    _connection, source_id: int, new_offset: float, *, runtime
+) -> int:
     """Compatibility callable; new routes use the named owner-bound workflow directly."""
-    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
-    return await runtime().update_source_offset(source_id, new_offset)
+    return await runtime.update_source_offset(source_id, new_offset)
 
 
 async def scrape_source(
@@ -40,6 +41,8 @@ async def scrape_source(
     max_chapters: int | None = None,
     expected_novel_id: int | None = None,
     cancel_check: Callable[[], Awaitable[None]] | None = None,
+    *,
+    runtime,
 ) -> int:
     """Scrapes one source into its novel's global chapter sequence using the source's
     chosen adapter. Source-local chapter numbers are shifted by `chapter_offset` so a
@@ -89,7 +92,7 @@ async def scrape_source(
 
     start_url = source["start_url"]
     if not force:
-        resume = await _resume_url(pool, source_id)
+        resume = await _resume_url(pool, source_id, runtime=runtime)
         if resume:
             start_url = resume
             logger.info(f"Resuming source {source_id} from last scraped chapter: {start_url}")
@@ -119,7 +122,9 @@ async def scrape_source(
                 global_number = local_number + offset
 
                 async with pool.acquire() as conn:
-                    wrote = await _persist_chapter(conn, source, global_number, ch, force)
+                    wrote = await _persist_chapter(
+                        conn, source, global_number, ch, force, runtime=runtime
+                    )
                 if wrote:
                     scraped_count += 1
 
@@ -140,6 +145,9 @@ async def scrape_novel(
     force: bool = False,
     max_chapters: int | None = None,
     cancel_check: Callable[[], Awaitable[None]] | None = None,
+    *,
+    runtime,
+    scrape_source_operation=None,
 ) -> int:
     """Scrapes every source of a novel in id order (e.g. the eng source then a raw
     continuation), accumulating into the novel's continuous chapter sequence."""
@@ -150,12 +158,14 @@ async def scrape_novel(
     for s in sources:
         if cancel_check is not None:
             await cancel_check()
-        total += await scrape_source(
+        operation = scrape_source_operation or scrape_source
+        total += await operation(
             int(s["id"]),
             force=force,
             max_chapters=max_chapters,
             expected_novel_id=novel_id,
             cancel_check=cancel_check,
+            runtime=runtime,
         )
     return total
 

@@ -252,8 +252,19 @@ def layer_dependency_violations(root: Path) -> list[str]:
             layer = "outbound"
         elif len(relative.parts) == 2 and relative.name == "public.py":
             layer = "public"
+        business_layer = (
+            "application" in relative.parts or "domain" in relative.parts
+        )
         own_adapters = f"novelwiki.modules.{owner}.adapters"
         for imported, line in _resolved_python_imports(path, module_root):
+            if business_layer and (
+                imported == "novelwiki.platform.config"
+                or imported.startswith("novelwiki.platform.config.")
+                or imported == "novelwiki.config.settings"
+            ):
+                violations.append(
+                    f"{path.relative_to(root)}:{line}: business layer imports global settings {imported}"
+                )
             if imported == "novelwiki.bootstrap" or imported.startswith("novelwiki.bootstrap."):
                 violations.append(
                     f"{path.relative_to(root)}:{line}: module code imports composition root {imported}"
@@ -276,6 +287,21 @@ def layer_dependency_violations(root: Path) -> list[str]:
                 violations.append(
                     f"{path.relative_to(root)}:{line}: outbound adapter imports FastAPI {imported}"
                 )
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if "application" in relative.parts:
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                    node.name == "worker_loop" or node.name in {"start_worker", "stop_worker"}
+                ):
+                    violations.append(
+                        f"{path.relative_to(root)}:{node.lineno}: worker lifecycle belongs in an inbound adapter"
+                    )
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for argument in (*node.args.args, *node.args.kwonlyargs):
+                        if argument.arg in {"connection", "conn", "db_connection"}:
+                            violations.append(
+                                f"{path.relative_to(root)}:{node.lineno}: application boundary exposes raw connection parameter {argument.arg}"
+                            )
     return violations
 
 
@@ -299,6 +325,12 @@ def frontend_boundary_violations(root: Path) -> list[str]:
     for facade in ("api.js", "queries.js"):
         if (frontend / "lib" / facade).exists():
             violations.append(f"frontend compatibility facade still exists: lib/{facade}")
+    for legacy_directory in (frontend / "screens", frontend / "features"):
+        files = list(legacy_directory.rglob("*.js*")) if legacy_directory.exists() else []
+        if files:
+            violations.append(
+                f"frontend legacy directory still owns implementation: {legacy_directory.name}"
+            )
     import_pattern = re.compile(r"(?:from\s+|import\s*\()(['\"])([^'\"]+)\1")
     for path in sorted(frontend.rglob("*.js*")):
         source = path.read_text(encoding="utf-8")
@@ -323,11 +355,11 @@ def frontend_boundary_violations(root: Path) -> list[str]:
                         f"{path.relative_to(root)} imports internal file from {target_owner}: {target}"
                     )
     screen_limits = {
-        frontend / "screens" / "Reader.jsx": 400,
-        frontend / "screens" / "ImportView.jsx": 300,
-        frontend / "screens" / "Admin.jsx": 150,
-        frontend / "screens" / "Account.jsx": 150,
-        frontend / "screens" / "novel" / "Manage.jsx": 400,
+        frontend / "modules" / "reading" / "Reader.jsx": 400,
+        frontend / "modules" / "acquisition" / "ImportView.jsx": 300,
+        frontend / "modules" / "admin" / "Admin.jsx": 150,
+        frontend / "modules" / "identity" / "Account.jsx": 150,
+        frontend / "modules" / "catalog" / "Manage.jsx": 400,
     }
     for path, limit in screen_limits.items():
         count = len(path.read_text(encoding="utf-8").splitlines())

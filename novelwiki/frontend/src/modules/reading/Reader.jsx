@@ -8,27 +8,27 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { identityApi } from "../modules/identity/api.js";
-import { narrationApi } from "../modules/narration/api.js";
-import { readingApi } from "../modules/reading/api.js";
-import { useAuth } from "../App.jsx";
-import { Icon } from "../components/Icon.jsx";
-import { Button, Chip, EmptyState, Loading, SegmentedControl } from "../components/ui.jsx";
-import { useToast } from "../components/toast.jsx";
-import { Drawer, Popover } from "../components/overlay.jsx";
-import { ProvenanceBadges } from "../components/ProvenanceBadges.jsx";
-import { DiffView } from "../lib/diff.jsx";
-import { VolumeTOC } from "../features/toc.jsx";
-import { VoicePicker, readTtsPrefs } from "../features/narrate.jsx";
-import { useNovelQuery } from "../modules/catalog/queries.js";
-import { useAudioCoverageQuery, useVoicesQuery } from "../modules/narration/queries.js";
-import { useTitle } from "../lib/hooks.js";
-import { fmtChapter, minutesLeft, clamp } from "../lib/utils.js";
+import { identityApi } from "../../modules/identity/api.js";
+import { narrationApi } from "../../modules/narration/api.js";
+import { readingApi } from "../../modules/reading/api.js";
+import { useAuth } from "../../App.jsx";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, Chip, EmptyState, Loading, SegmentedControl } from "../../components/ui.jsx";
+import { useToast } from "../../components/toast.jsx";
+import { Drawer, Popover } from "../../components/overlay.jsx";
+import { ProvenanceBadges } from "../../components/ProvenanceBadges.jsx";
+import { DiffView } from "../../lib/diff.jsx";
+import { VolumeTOC } from "./toc.jsx";
+import { VoicePicker, readTtsPrefs } from "../narration/index.js";
+import { useNovelQuery } from "../../modules/catalog/queries.js";
+import { useAudioCoverageQuery, useVoicesQuery } from "../../modules/narration/queries.js";
+import { useTitle } from "../../lib/hooks.js";
+import { fmtChapter, minutesLeft, clamp } from "../../lib/utils.js";
 
 import {
   AUTOSCROLL_PX_PER_SEC, AudioPlayer, EndOfChapterCard, ReaderSettings,
   RichContent, TranslationTools, loadReaderPrefs,
-} from "../modules/reading/ReaderParts.jsx";
+} from "../../modules/reading/ReaderParts.jsx";
 
 export function Reader() {
   const { novelId: novelIdParam, number: numberParam } = useParams();

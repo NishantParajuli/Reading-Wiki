@@ -16,7 +16,6 @@ import logging
 import uuid
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
-from novelwiki.modules.translation.application.ai_runtime import call_chat_completion
 from novelwiki.modules.translation.domain.prompts import TRANSLATE_SYSTEM, TRANSLATE_USER
 
 logging.basicConfig(level=logging.INFO)
@@ -25,11 +24,6 @@ logger = logging.getLogger(__name__)
 # Per-(novel, chapter) locks so an on-demand request and a prefetch task never
 # translate the same chapter twice (single-process uvicorn).
 _locks: dict[tuple[int, float], asyncio.Lock] = {}
-
-
-async def _translation_runtime():
-    from novelwiki.modules.translation.application.worker_dependencies import translation_runtime
-    return await translation_runtime()
 
 
 def _lock_for(novel_id: int, number: float) -> asyncio.Lock:
@@ -151,6 +145,7 @@ async def stage_translation_batch(
     run_id: uuid.UUID,
     *,
     force: bool = False,
+    runtime,
 ) -> list[dict]:
     """Lock, snapshot, and mark an AGY batch before any subscription work.
 
@@ -158,17 +153,17 @@ async def stage_translation_batch(
     reader request now sees ``translating`` and will not launch an API call for a
     chapter already staged by the host worker.
     """
-    reading, _uow_factory = await _translation_runtime()
-    return await reading.stage_translation_batch(
+    return await runtime.reading.stage_translation_batch(
         novel_id, chapter_numbers, run_id, force
     )
 
 
-async def reset_staged_translations(run_id: uuid.UUID, *, status: str = "failed") -> int:
+async def reset_staged_translations(
+    run_id: uuid.UUID, *, status: str = "failed", runtime
+) -> int:
     if status not in ("failed", "pending", "none"):
         raise ValueError("invalid translation reset status")
-    reading, _uow_factory = await _translation_runtime()
-    return await reading.reset_staged_translations(run_id, status)
+    return await runtime.reading.reset_staged_translations(run_id, status)
 
 
 async def commit_translation(
@@ -183,6 +178,7 @@ async def commit_translation(
     model_label: str,
     run_id: uuid.UUID | None = None,
     job_id: int | None = None,
+    runtime,
 ) -> dict:
     """Backend-neutral, row-locked translation commit.
 
@@ -195,10 +191,9 @@ async def commit_translation(
         raise ValueError("translation must not be empty")
     from novelwiki.workflows.commit_translation import commit_translation as workflow
 
-    _reading, uow_factory = await _translation_runtime()
     try:
         return await workflow(
-            uow_factory, novel_id, chapter_number,
+            runtime.uow_factory, novel_id, chapter_number,
             expected_source_hash=expected_source_hash,
             expected_content_version=expected_content_version,
             translated_title=translated_title, translation=translation,
@@ -212,14 +207,14 @@ async def commit_translation(
 
 
 async def translate_chapter(novel_id: int, number: float, force: bool = False,
-                            meter_user: dict | None = None) -> dict:
+                            meter_user: dict | None = None, *, runtime) -> dict:
     """Translate one raw chapter into chapters.content. Idempotent: returns the
     existing translation unless force=True. If meter_user is given, quota is reserved
     only after the chapter is confirmed still untranslated under the per-chapter lock.
     Returns {status, content, new_terms}."""
     charged_user_id = None
     async with _lock_for(novel_id, number):
-        reading, _uow_factory = await _translation_runtime()
+        reading = runtime.reading
         ch = await reading.translation_candidate(novel_id, number)
         if not ch:
             return {"status": "missing", "content": None}
@@ -230,8 +225,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
         if ch["translation_status"] == "translating" or ch["translation_run_id"] is not None:
             return {"status": "translating", "content": ch["content"]}
         if meter_user is not None:
-            from novelwiki.modules.translation.application.worker_dependencies import quota_port
-            if not await quota_port().reserve(meter_user, 1):
+            if not await runtime.quota.reserve(meter_user, 1):
                 return {"status": "quota_exceeded", "content": ch["content"]}
             charged_user_id = int(meter_user["id"])
         language = ch["language"] or "the source language"
@@ -252,7 +246,9 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
         ]
 
         try:
-            raw = await call_chat_completion(model=settings.MODEL_TRANSLATE, messages=messages, temperature=0.2)
+            raw = await runtime.ai.call_chat_completion(
+                model=settings.MODEL_TRANSLATE, messages=messages, temperature=0.2
+            )
             title_translated, translation, new_terms = _parse_translation(raw)
             if not translation:
                 raise ValueError("empty translation returned")
@@ -260,8 +256,7 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
             logger.error(f"Translation failed for novel {novel_id} ch {number}: {e}")
             await reading.mark_translation_failed(novel_id, number)
             if charged_user_id is not None:
-                from novelwiki.modules.translation.application.worker_dependencies import quota_port
-                refunded = await quota_port().refund(charged_user_id, 1)
+                refunded = await runtime.quota.refund(charged_user_id, 1)
                 if refunded:
                     logger.info(
                         "Refunded translated_chapters quota for failed translation "
@@ -277,23 +272,23 @@ async def translate_chapter(novel_id: int, number: float, force: bool = False,
                 translation=translation,
                 new_terms=new_terms,
                 model_label=settings.MODEL_TRANSLATE,
+                runtime=runtime,
             )
         except Exception as e:
             logger.warning(f"Translation commit lost race for novel {novel_id} ch {number}: {e}")
             await reading.mark_translation_failed(novel_id, number, only_unowned=True)
             if charged_user_id is not None:
-                from novelwiki.modules.translation.application.worker_dependencies import quota_port
-                await quota_port().refund(charged_user_id, 1)
+                await runtime.quota.refund(charged_user_id, 1)
             return {"status": "failed", "content": None}
         logger.info(f"Translated novel {novel_id} ch {number} ({len(translation.split())} words, +{len(new_terms)} glossary terms).")
         return result
 
 
-async def translate_raw_text(novel_id: int, number: float) -> str | None:
+async def translate_raw_text(novel_id: int, number: float, *, runtime) -> str | None:
     """Translate a raw chapter's original_text and RETURN the text without touching the
     shared base. Used by per-user self-translation overlays (Phase 5): the result is stored
     in chapter_overlays, never in chapters.content. Returns None if there's nothing to translate."""
-    reading, _uow_factory = await _translation_runtime()
+    reading = runtime.reading
     ch = await reading.translation_candidate(novel_id, number)
     if not ch or not ch["original_text"]:
         return None
@@ -310,27 +305,32 @@ async def translate_raw_text(novel_id: int, number: float) -> str | None:
             language=language, confirmed=confirmed_g, established=established_g,
             number=number, title=title, text=text)},
     ]
-    raw = await call_chat_completion(model=settings.MODEL_TRANSLATE, messages=messages, temperature=0.2)
+    raw = await runtime.ai.call_chat_completion(
+        model=settings.MODEL_TRANSLATE, messages=messages, temperature=0.2
+    )
     _title, translation, _terms = _parse_translation(raw)
     return translation or None
 
 
-async def _pending_after(novel_id: int, after_number: float, count: int) -> list[float]:
-    reading, _uow_factory = await _translation_runtime()
-    return await reading.pending_after(novel_id, after_number, count)
+async def _pending_after(
+    novel_id: int, after_number: float, count: int, *, runtime
+) -> list[float]:
+    return await runtime.reading.pending_after(novel_id, after_number, count)
 
 
 async def prefetch_translations(novel_id: int, after_number: float, count: int | None = None,
-                                meter_user: dict | None = None):
+                                meter_user: dict | None = None, *, runtime):
     """Background task: translate the next few pending raw chapters so the reader
     rarely waits at a chapter boundary. When `meter_user` is given, each prefetched
     chapter is charged to that user's monthly quota and prefetch stops once they're out."""
     count = count if count is not None else settings.TRANSLATE_PREFETCH
     if count <= 0:
         return
-    for num in await _pending_after(novel_id, after_number, count):
+    for num in await _pending_after(novel_id, after_number, count, runtime=runtime):
         try:
-            res = await translate_chapter(novel_id, num, meter_user=meter_user)
+            res = await translate_chapter(
+                novel_id, num, meter_user=meter_user, runtime=runtime
+            )
             if res.get("status") == "quota_exceeded":
                 break
         except Exception as e:
@@ -339,16 +339,17 @@ async def prefetch_translations(novel_id: int, after_number: float, count: int |
 
 async def translate_range(novel_id: int, from_chapter: float | None = None,
                           to_chapter: float | None = None, force: bool = False,
-                          meter_user: dict | None = None) -> int:
+                          meter_user: dict | None = None, *, runtime) -> int:
     """Translate all (pending, unless force) raw chapters in a range. Used by the
     manual 'Translate' action / CLI; reading itself uses on-demand + prefetch."""
-    reading, _uow_factory = await _translation_runtime()
-    rows = await reading.translation_range(
+    rows = await runtime.reading.translation_range(
         novel_id, from_chapter, to_chapter, force
     )
     done = 0
     for number in rows:
-        res = await translate_chapter(novel_id, number, force=force, meter_user=meter_user)
+        res = await translate_chapter(
+            novel_id, number, force=force, meter_user=meter_user, runtime=runtime
+        )
         if res.get("status") == "quota_exceeded":
             break
         if res.get("status") == "done":
@@ -356,13 +357,12 @@ async def translate_range(novel_id: int, from_chapter: float | None = None,
     return done
 
 
-async def seed_glossary_from_entities(novel_id: int) -> int:
+async def seed_glossary_from_entities(novel_id: int, *, runtime) -> int:
     """Cross-source name consistency: seed the glossary's English side from the codex
     entities already established over the novel's English chapters. The source_term is
     left equal to the canonical name (the model fills the real foreign term as it meets
     it); the point is to hand the translator the established English spellings so a raw
     continuation keeps "Lin Xuan" rather than inventing "Lin Xenon"."""
-    from novelwiki.modules.translation.application.worker_dependencies import seed_glossary
-    n = await seed_glossary(novel_id)
+    n = await runtime.seed_glossary(novel_id)
     logger.info(f"Seeded {n} glossary terms from codex entities for novel {novel_id}.")
     return n

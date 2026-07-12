@@ -1,3 +1,3 @@
-export { Jobs } from "../../screens/Jobs.jsx";
-export { JobRow } from "../../components/JobRow.jsx";
+export { Jobs } from "./Jobs.jsx";
+export { JobRow } from "./JobRow.jsx";
 export { workApi } from "./api.js";

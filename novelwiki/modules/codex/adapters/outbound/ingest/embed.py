@@ -2,7 +2,6 @@ import logging
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from novelwiki.modules.codex.application.ai_runtime import get_embeddings_batch
 from novelwiki.platform.database import get_db_pool, close_db_pool
 
 logging.basicConfig(level=logging.INFO)
@@ -13,6 +12,8 @@ async def embed_missing_chunks(
     from_chapter: float | None = None,
     to_chapter: float | None = None,
     cancel_check: Callable[[], Awaitable[None]] | None = None,
+    *,
+    runtime,
 ) -> int:
     """
     Identifies all chunks where embedding IS NULL (optionally within a chapter range)
@@ -53,7 +54,7 @@ async def embed_missing_chunks(
 
         logger.info(f"Embedding batch of {len(batch)} chunks (IDs: {batch_ids[0]}-{batch_ids[-1]})...")
         try:
-            vectors = await get_embeddings_batch(batch_texts)
+            vectors = await runtime.ai.get_embeddings_batch(batch_texts)
         except Exception as e:
             logger.error(f"Failed to embed batch starting with ID {batch_ids[0]}: {e}")
             # Skip and proceed to keep progress rolling for other batches

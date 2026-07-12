@@ -4,8 +4,8 @@ from __future__ import annotations
 
 
 async def build_reading_migration_service():
-    from novelwiki.bootstrap.translation import wire_translation_worker_dependencies
-    wire_translation_worker_dependencies()
+    from novelwiki.bootstrap.translation import build_translation_execution_runtime
+    translation_runtime = build_translation_execution_runtime()
     from novelwiki.modules.catalog.adapters.outbound.postgres import (
         PostgresCatalogRepository,
     )
@@ -62,15 +62,19 @@ async def build_reading_migration_service():
             return await translate_chapter(
                 novel_id, number,
                 meter_user=(user_mapping(principal) if principal is not None else None),
+                runtime=translation_runtime,
             )
 
         async def translate_raw_chapter(self, novel_id, number):
-            return await translate_raw_text(novel_id, number)
+            return await translate_raw_text(
+                novel_id, number, runtime=translation_runtime
+            )
 
         async def prefetch(self, novel_id, after_number, count, principal):
             await prefetch_translations(
                 novel_id, after_number, count,
                 user_mapping(principal) if principal is not None else None,
+                runtime=translation_runtime,
             )
 
     quota = QuotaService(PostgresQuotaRepository(pool=pool))

@@ -102,13 +102,14 @@ def chunk_chapter_text(
         
     return chunks
 
-async def chunk_chapter(novel_id: int, chapter_number: float, force: bool = False) -> int:
+async def chunk_chapter(
+    novel_id: int, chapter_number: float, force: bool = False, *, runtime
+) -> int:
     """
     Fetches readable chapter text, chunks it, and writes chunks to the chunks table.
     Deletes prior chunks first if force=True.
     """
-    from novelwiki.modules.codex.application.worker_dependencies import reading_port
-    chapter = await reading_port().chapter_snapshot(
+    chapter = await runtime.reading.chapter_snapshot(
         novel_id, chapter_number
     )
     if not chapter or not chapter["content"]:
@@ -155,6 +156,8 @@ async def chunk_all_chapters(
     from_chapter: float | None = None,
     to_chapter: float | None = None,
     cancel_check: Callable[[], Awaitable[None]] | None = None,
+    *,
+    runtime,
 ) -> int:
     """Chunks chapters currently in the database, optionally limited to a range.
 
@@ -162,8 +165,7 @@ async def chunk_all_chapters(
     finishing a whole-book pass. The callback signals cancellation by raising the
     worker's cancellation exception.
     """
-    from novelwiki.modules.codex.application.worker_dependencies import reading_port
-    numbers = await reading_port().chapter_numbers(
+    numbers = await runtime.reading.chapter_numbers(
         novel_id, from_chapter, to_chapter
     )
 
@@ -171,7 +173,7 @@ async def chunk_all_chapters(
     for num in numbers:
         if cancel_check is not None:
             await cancel_check()
-        cnt = await chunk_chapter(novel_id, num, force=force)
+        cnt = await chunk_chapter(novel_id, num, force=force, runtime=runtime)
         total_chunks += cnt
 
     return total_chunks

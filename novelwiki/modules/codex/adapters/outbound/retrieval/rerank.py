@@ -1,5 +1,4 @@
 import logging
-from novelwiki.modules.codex.application.ai_runtime import rerank_passages
 from novelwiki.platform.config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -8,7 +7,9 @@ logger = logging.getLogger(__name__)
 async def rerank_hits(
     query: str, 
     hits: list[dict], 
-    top_n: int = None
+    top_n: int = None,
+    *,
+    runtime,
 ) -> list[dict]:
     """
     Reranks a list of candidate chunks against a query using Cohere Rerank on OpenRouter.
@@ -26,7 +27,7 @@ async def rerank_hits(
     
     try:
         logger.info(f"Sending {len(texts)} candidates to Cohere Rerank...")
-        reranked_results = await rerank_passages(query, texts, top_n=top_n)
+        reranked_results = await runtime.ai.rerank_passages(query, texts, top_n=top_n)
         
         reranked_hits = []
         for item in reranked_results:

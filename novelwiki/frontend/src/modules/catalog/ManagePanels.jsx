@@ -8,10 +8,10 @@ import { translationApi } from "../translation/api.js";
 import { workApi } from "../work/api.js";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, Chip, EmptyState, StatTile, ProgressBar } from "../../components/ui.jsx";
-import { JobRow } from "../../components/JobRow.jsx";
+import { JobRow } from "../work/index.js";
 import { DiffView } from "../../lib/diff.jsx";
 import { useToast } from "../../components/toast.jsx";
-import { ttsVoiceLabel } from "../../features/toc.jsx";
+import { ttsVoiceLabel } from "../reading/index.js";
 
 export function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
   const [adapter, setAdapter] = useState(adapters[0] ? adapters[0].name : "fenrirealm");
@@ -514,4 +514,3 @@ export function MetadataCard({ novel, reloadNovel }) {
 }
 
 /* ── Main Manage screen ── */
-

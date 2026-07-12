@@ -4,11 +4,11 @@ import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../App.jsx";
 import { useNovel } from "../../layouts/NovelLayout.jsx";
-import { NovelHeader } from "./NovelHeader.jsx";
+import { NovelHeader } from "../catalog/index.js";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, EmptyState, Loading, SegmentedControl } from "../../components/ui.jsx";
-import { VolumeTOC } from "../../features/toc.jsx";
-import { readTtsPrefs } from "../../features/narrate.jsx";
+import { VolumeTOC } from "./toc.jsx";
+import { readTtsPrefs } from "../narration/index.js";
 import { useAudioCoverageQuery, useVoicesQuery } from "../../modules/narration/queries.js";
 import { useChaptersQuery } from "../../modules/reading/queries.js";
 import { useTitle } from "../../lib/hooks.js";

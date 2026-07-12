@@ -1,2 +1,2 @@
-export { ImportView } from "../../screens/ImportView.jsx";
+export { ImportView } from "./ImportView.jsx";
 export { acquisitionApi } from "./api.js";

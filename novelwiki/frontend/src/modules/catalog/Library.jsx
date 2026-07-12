@@ -6,16 +6,16 @@ import React, { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { catalogApi } from "../modules/catalog/api.js";
-import { Icon } from "../components/Icon.jsx";
-import { Button, Chip, Cover, EmptyState, Loading, PageHeader, ProgressBar, SegmentedControl, Tabs } from "../components/ui.jsx";
-import { Popover, MenuItem } from "../components/overlay.jsx";
-import { AddNovelDialog } from "../components/AddNovelDialog.jsx";
-import { useToast } from "../components/toast.jsx";
-import { useNovelsQuery } from "../modules/catalog/queries.js";
-import { useLocalStorage, useTitle } from "../lib/hooks.js";
-import { SHELF_LABELS, SHELF_ORDER } from "../lib/constants.js";
-import { fmtChapter, relativeTime } from "../lib/utils.js";
+import { catalogApi } from "../../modules/catalog/api.js";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, Chip, Cover, EmptyState, Loading, PageHeader, ProgressBar, SegmentedControl, Tabs } from "../../components/ui.jsx";
+import { Popover, MenuItem } from "../../components/overlay.jsx";
+import { AddNovelDialog } from "./AddNovelDialog.jsx";
+import { useToast } from "../../components/toast.jsx";
+import { useNovelsQuery } from "../../modules/catalog/queries.js";
+import { useLocalStorage, useTitle } from "../../lib/hooks.js";
+import { SHELF_LABELS, SHELF_ORDER } from "../../lib/constants.js";
+import { fmtChapter, relativeTime } from "../../lib/utils.js";
 
 const LIBRARY_TABS = [
   { id: "all", label: "All" },

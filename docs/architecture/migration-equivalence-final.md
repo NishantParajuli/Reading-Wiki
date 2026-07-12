@@ -1,6 +1,6 @@
 # Migration equivalence report
 
-Verified locally on 2026-07-11 against baseline commit
+Verified locally again on 2026-07-12 against baseline commit
 `c244a1fa6e562747041fee0fba5ce455402621de` and migration starting point
 `97c9618`.
 
@@ -23,13 +23,13 @@ line wrapping are discarded, while every word, option, default and command order
 Applying that normalization to the previously approved raw snapshot produces the exact current
 artifact (`db528ae00217ff230a73fec3bfbc2a294865879fe368a69a21b4e14036c1675b`).
 
-The repository now also snapshots CLI help, AGY manifest schemas/plugin file hashes,
-and frontend route/module-endpoint inventories.
+The repository now also snapshots CLI help, representative success/error JSON for every route
+family, AGY manifest schemas/plugin file hashes, and frontend route/module-endpoint inventories.
 
 ## Local release evidence
 
-- Backend with disposable PostgreSQL/pgvector: 514 passed.
-- Architecture/contracts/unit gate: 302 passed.
+- Backend with disposable PostgreSQL/pgvector: 524 passed.
+- Architecture/contracts/unit gate: 311 passed.
 - Python compilation: passed.
 - Contract snapshot verification: passed.
 - Frontend Vitest: 19 passed.
@@ -41,8 +41,10 @@ and frontend route/module-endpoint inventories.
   review/commit, job cancellation/Activity, cached spoiler-clamped Ask, authorized HTTP Range
   audio, and an admin quota mutation. Provider boundaries use seeded cache/audio fixtures only.
 - Docker Compose validation: passed.
-- Query-plan budgets: passed (`11.37/200`, `2.39/10`, `3.42/10`, `2.39/10`).
-- PostgreSQL 18 custom-format backup/restore rehearsal: passed; table catalogs and
+- Runtime performance gate: passed. Query costs were `33.02/200`, `8.19/10`, `9.67/10`,
+  and `8.19/10`; Health/Discover ASGI p95 was `6.90/100 ms` and `22.80/500 ms`; transactional
+  worker claims measured `7,422/s` against a `100/s` minimum.
+- Version-matched PostgreSQL custom-format backup/restore rehearsal: passed; table catalogs and
   every table row count matched and both disposable databases were removed.
 - `git diff --check`: passed.
 

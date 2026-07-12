@@ -2,9 +2,9 @@
    relative time, cancel. Used by Home's activity strip, the Jobs page, and
    the novel Manage tab (replaces the two colliding ActivityRow components). */
 import React from "react";
-import { Icon } from "./Icon.jsx";
-import { Chip, ProgressBar, RelativeTime, IconButton } from "./ui.jsx";
-import { ACT_KIND_LABEL, ACT_KIND_ICON, ACT_STATUS_TONE, activityProgress, activityFraction } from "../lib/constants.js";
+import { Icon } from "../../components/Icon.jsx";
+import { Chip, ProgressBar, RelativeTime, IconButton } from "../../components/ui.jsx";
+import { ACT_KIND_LABEL, ACT_KIND_ICON, ACT_STATUS_TONE, activityProgress, activityFraction } from "../../lib/constants.js";
 
 export function JobRow({ job, onCancel, onOpenNovel, busy, detail }) {
   const kindLabel = ACT_KIND_LABEL[job.kind] || job.kind;

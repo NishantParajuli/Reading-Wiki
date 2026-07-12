@@ -4,8 +4,6 @@ from __future__ import annotations
 
 
 async def build_acquisition_service():
-    from novelwiki.bootstrap.acquisition_runtime import wire_acquisition_runtime
-    wire_acquisition_runtime()
     from novelwiki.modules.work.adapters.outbound import postgres as jobs_service
     from novelwiki.modules.acquisition.adapters.outbound.assets import (
         AcquisitionAssetFilesystem,
@@ -90,8 +88,8 @@ def build_acquisition_routes():
 
 
 async def build_import_service():
-    from novelwiki.bootstrap.acquisition_runtime import wire_acquisition_runtime
-    wire_acquisition_runtime()
+    from novelwiki.bootstrap.acquisition_runtime import build_acquisition_runtime
+    runtime = build_acquisition_runtime()
     from novelwiki.platform.config import settings
     from novelwiki.modules.acquisition.adapters.outbound.import_gateway import (
         ImportRuntimeGateway,
@@ -135,7 +133,7 @@ async def build_import_service():
             await self._quota.check_and_reserve(principal, "ocr_pages", pages)
 
     return ImportService(
-        ImportRuntimeGateway(pool), CatalogAccessBridge(), SpendPolicyBridge(),
+        ImportRuntimeGateway(pool, runtime), CatalogAccessBridge(), SpendPolicyBridge(),
         ImportConfig(
             incoming_dir=settings.IMPORT_INCOMING_DIR,
             max_upload_bytes=settings.MAX_UPLOAD_MB * 1024 * 1024,

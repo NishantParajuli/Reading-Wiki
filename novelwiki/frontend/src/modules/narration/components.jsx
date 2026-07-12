@@ -3,12 +3,12 @@
    (deduplicates the old reader/novel voice UIs).
    ============================================================ */
 import React, { useEffect, useRef, useState } from "react";
-import { experienceApi } from "../modules/experience/api.js";
-import { narrationApi } from "../modules/narration/api.js";
-import { Icon } from "../components/Icon.jsx";
-import { Button, Chip, ProgressBar } from "../components/ui.jsx";
-import { Popover, MenuItem, CostConfirmDialog } from "../components/overlay.jsx";
-import { ttsVoiceMeta } from "./toc.jsx";
+import { experienceApi } from "../experience/api.js";
+import { narrationApi } from "./api.js";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, Chip, ProgressBar } from "../../components/ui.jsx";
+import { Popover, MenuItem, CostConfirmDialog } from "../../components/overlay.jsx";
+import { ttsVoiceMeta } from "../reading/index.js";
 
 export function readTtsPrefs(user) {
   const p = (user && user.prefs && user.prefs.tts) || {};

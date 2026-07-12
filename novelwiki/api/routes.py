@@ -122,6 +122,7 @@ async def _invoke(handler, *args, **kwargs):
         )
         agent = None
         if name == "ask_question":
+            from novelwiki.bootstrap.codex_worker import build_codex_runtime
             from novelwiki.modules.codex.adapters.outbound.agent_bridge import (
                 CodexAgentGateway,
             )
@@ -133,7 +134,7 @@ async def _invoke(handler, *args, **kwargs):
                 async def answer(self, novel_id, question, ceiling):
                     return await answer_question(novel_id, question, ceiling.value)
 
-            agent = DirectCallAgent()
+            agent = DirectCallAgent(build_codex_runtime())
         service = await build_codex_migration_service(agent)
         kwargs.setdefault("service", service)
         kwargs.setdefault("principal_factory", codex_principal_from_user)

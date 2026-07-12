@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 
-def wire_translation_worker_dependencies() -> None:
-    from novelwiki.modules.translation.application.worker_dependencies import (
-        configure_worker_dependencies,
-    )
+def build_translation_execution_runtime():
+    """Build an immutable dependency bundle for Translation use-case instances."""
 
     class RunBridge:
         async def list(self, job_id, workloads):
@@ -38,11 +36,7 @@ def wire_translation_worker_dependencies() -> None:
                 user_id, "translated_chapters", units
             )
 
-    configure_worker_dependencies(
-        build_translation_runtime, seed_system_glossary, RunBridge(), QuotaBridge()
-    )
     from types import SimpleNamespace
-    from novelwiki.modules.translation.application.ai_runtime import configure_ai_runtime
     from novelwiki.modules.ai_execution.adapters.outbound import providers
     from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
     from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import (
@@ -58,7 +52,25 @@ def wire_translation_worker_dependencies() -> None:
         is_database_error, safe_error_summary,
     )
     from novelwiki.modules.work.adapters.outbound import postgres as work
-    configure_ai_runtime(SimpleNamespace(
+    from novelwiki.modules.translation.application.ports import TranslationRuntime
+
+    class ReadingBridge:
+        def __getattr__(self, name):
+            async def call(*args, **kwargs):
+                reading, _uow = await build_translation_runtime()
+                return await getattr(reading, name)(*args, **kwargs)
+            return call
+
+    class LazyUnitOfWork:
+        async def __aenter__(self):
+            _reading, factory = await build_translation_runtime()
+            self._delegate = factory()
+            return await self._delegate.__aenter__()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return await self._delegate.__aexit__(exc_type, exc, traceback)
+
+    ai = SimpleNamespace(
         call_chat_completion=providers.call_chat_completion,
         run_agy=run_agy, create_run=create_run, update_run=update_run,
         workspace_relpath=workspace_relpath, load_json=load_json,
@@ -67,7 +79,17 @@ def wire_translation_worker_dependencies() -> None:
         add_input=add_input, create_run_workspace=create_run_workspace,
         seal_inputs=seal_inputs, sha256_file=sha256_file, write_json=write_json,
         is_database_error=is_database_error, safe_error_summary=safe_error_summary,
-    ), work)
+    )
+    return TranslationRuntime(
+        reading=ReadingBridge(), uow_factory=LazyUnitOfWork,
+        seed_glossary=seed_system_glossary, runs=RunBridge(), quota=QuotaBridge(),
+        ai=ai, work=work,
+    )
+
+
+def wire_translation_worker_dependencies():
+    """Stable bootstrap wrapper; returns dependencies instead of mutating globals."""
+    return build_translation_execution_runtime()
 
 
 async def build_glossary_service():
@@ -97,7 +119,6 @@ async def build_glossary_service():
 async def build_translation_scheduling_service():
     from novelwiki.bootstrap.ai_execution import wire_ai_policy
     wire_ai_policy()
-    wire_translation_worker_dependencies()
     from novelwiki.modules.ai_execution.adapters.outbound.policy import get_policy, resolve_backend
     from novelwiki.modules.ai_execution.domain.backend import Workload
     from novelwiki.modules.catalog.adapters.outbound.postgres import PostgresCatalogRepository
@@ -152,7 +173,6 @@ async def build_translation_scheduling_service():
 
 async def build_translation_runtime():
     """Compatibility runtime for provider-facing translation functions."""
-    wire_translation_worker_dependencies()
     from novelwiki.modules.reading.adapters.outbound.translation import (
         PostgresReadingTranslationQuery,
         PostgresReadingTranslationTransactionService,

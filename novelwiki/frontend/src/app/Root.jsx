@@ -20,7 +20,7 @@ import { Library, Discover, Overview } from "../modules/catalog/index.js";
 import { Jobs } from "../modules/work/index.js";
 import { ImportView } from "../modules/acquisition/index.js";
 import { Chapters, Reader } from "../modules/reading/index.js";
-import { Manage } from "../screens/novel/Manage.jsx";
+import { Manage } from "../modules/catalog/index.js";
 import { CodexBrowser, EntityPage, Ask } from "../modules/codex/index.js";
 import { Admin } from "../modules/admin/index.js";
 

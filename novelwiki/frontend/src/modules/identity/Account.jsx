@@ -1,15 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { authApi } from "../modules/identity/api.js";
+import { authApi } from "../../modules/identity/api.js";
 import {
   AppearanceSection, AudioSection, LinkedSection, ProfileSection, ReadingSection,
   SECTIONS, SecuritySection, UsageSection,
-} from "../modules/identity/AccountSections.jsx";
-import { useAuth } from "../App.jsx";
-import { Icon } from "../components/Icon.jsx";
-import { Button, PageHeader } from "../components/ui.jsx";
-import { useTitle } from "../lib/hooks.js";
+} from "../../modules/identity/AccountSections.jsx";
+import { useAuth } from "../../App.jsx";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, PageHeader } from "../../components/ui.jsx";
+import { useTitle } from "../../lib/hooks.js";
 
 export function Account() {
   const { section: sectionParam } = useParams();

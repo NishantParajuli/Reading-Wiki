@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,17 @@ class CodexTransactionApi(Protocol):
     async def invalidate_chapter_range(
         self, novel_id: int, start: float, end: float
     ) -> None: ...
+
+
+class CodexExtractionTransactionApi(Protocol):
+    """Codex-owned half of the atomic Reading/Codex extraction commit."""
+
+    async def commit_extraction(
+        self, novel_id: int, chapter: float, data: dict, running_summary: str,
+        *, chapter_snapshot: dict, expected_source_hash: str,
+        resolved_refs: dict[str, int | None], roster_refs: dict[str, int],
+        run_id: Any | None, model_label: str | None, force: bool,
+    ) -> dict: ...
 
 
 @dataclass(frozen=True)

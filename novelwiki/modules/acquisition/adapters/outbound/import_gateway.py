@@ -6,24 +6,25 @@ import os
 class ImportRuntimeGateway:
     """Adapter over the existing durable importer and filesystem implementation."""
 
-    def __init__(self, pool):
+    def __init__(self, pool, runtime):
         self._pool = pool
+        self._runtime = runtime
 
     async def create_job(self, format: str, **fields) -> int:
         from novelwiki.modules.acquisition.application import import_worker as jobs
-        return await jobs.create_job(format, **fields)
+        return await jobs.create_job(format, runtime=self._runtime, **fields)
 
     async def get_job(self, job_id: int) -> dict | None:
         from novelwiki.modules.acquisition.application import import_worker as jobs
-        return await jobs.get_job(job_id)
+        return await jobs.get_job(job_id, runtime=self._runtime)
 
     async def list_jobs(self, user_id: int | None) -> list[dict]:
         from novelwiki.modules.acquisition.application import import_worker as jobs
-        return await jobs.list_jobs(user_id=user_id)
+        return await jobs.list_jobs(user_id=user_id, runtime=self._runtime)
 
     async def update_job(self, job_id: int, **fields) -> None:
         from novelwiki.modules.acquisition.application import import_worker as jobs
-        await jobs.update_job(job_id, **fields)
+        await jobs.update_job(job_id, runtime=self._runtime, **fields)
 
     async def delete_job(self, job_id: int) -> None:
         async with self._pool.acquire() as connection:
@@ -31,7 +32,9 @@ class ImportRuntimeGateway:
 
     async def duplicate_imports(self, sha256: str, job_id: int) -> list[dict]:
         from novelwiki.modules.acquisition.application import import_worker as jobs
-        return await jobs.imports_with_hash(sha256, exclude_job_id=job_id)
+        return await jobs.imports_with_hash(
+            sha256, exclude_job_id=job_id, runtime=self._runtime
+        )
 
     async def source_novel_id(self, source_id: int) -> int | None:
         async with self._pool.acquire() as connection:
@@ -76,7 +79,7 @@ class ImportRuntimeGateway:
 
     async def touch_job(self, job_id: int) -> None:
         from novelwiki.modules.acquisition.application import import_worker as jobs
-        await jobs.touch_job(job_id)
+        await jobs.touch_job(job_id, runtime=self._runtime)
 
     def import_files(self, root: str, recursive: bool) -> list[tuple[str, str]]:
         files: list[tuple[str, str]] = []
@@ -117,4 +120,4 @@ class ImportRuntimeGateway:
 
     async def commit_series(self, job_ids: list[int]) -> dict:
         from novelwiki.modules.acquisition.adapters.outbound.importer import commit
-        return await commit.commit_series(job_ids)
+        return await commit.commit_series(job_ids, runtime=self._runtime)

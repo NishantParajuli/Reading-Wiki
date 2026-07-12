@@ -1,2 +1,2 @@
-export * from "../../features/narrate.jsx";
+export * from "./components.jsx";
 export { narrationApi } from "./api.js";

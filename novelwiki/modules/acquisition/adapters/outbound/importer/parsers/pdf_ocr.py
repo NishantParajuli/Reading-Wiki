@@ -84,7 +84,9 @@ def _detect_language(blocks: list[Block]) -> str:
     return "zh" if cjk / max(1, len(sample)) > 0.15 else "en"
 
 
-async def parse_pdf_ocr(path: str, job_id: int, options: dict, progress_cb=None) -> Document:
+async def parse_pdf_ocr(
+    path: str, job_id: int, options: dict, progress_cb=None, *, runtime=None
+) -> Document:
     """OCR a scanned PDF into a Document. Resumes from on-disk page checkpoints; may raise
     BudgetExhausted (the worker pauses the job and retries when the daily budget rolls over)."""
     import fitz
@@ -129,7 +131,13 @@ async def parse_pdf_ocr(path: str, job_id: int, options: dict, progress_cb=None)
 
         for sub in _chunks(escalate, settings.GEMINI_PAGES_PER_REQUEST):
             imgs = [images[window.index(i)] for i in sub]
-            gres = await ocr_client.gemini_ocr(imgs, lang)   # may raise BudgetExhausted
+            if runtime is None:
+                # Compatibility tests replace this boundary with a deterministic fake.
+                gres = await ocr_client.gemini_ocr(imgs, lang)
+            else:
+                gres = await ocr_client.gemini_ocr(
+                    imgs, lang, runtime=runtime
+                )
             for k, i in enumerate(sub):
                 results[i] = gres[k] if k < len(gres) else {"blocks": [], "mean_confidence": 0.0}
                 _save_page(job_id, i, results[i])

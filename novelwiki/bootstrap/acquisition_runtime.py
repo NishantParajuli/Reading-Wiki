@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 
-def wire_acquisition_runtime() -> None:
-    from novelwiki.modules.acquisition.application.runtime_dependencies import (
-        configure_runtime,
-    )
+def build_acquisition_runtime():
 
     class Runtime:
         async def import_repository(self):
@@ -24,10 +21,6 @@ def wire_acquisition_runtime() -> None:
         async def gemini_budget_remaining(self):
             from novelwiki.bootstrap.acquisition import gemini_budget_remaining
             return await gemini_budget_remaining()
-
-        def bind_commit_apis(self, connection):
-            from novelwiki.bootstrap.acquisition_routes import bind_import_commit_apis
-            return bind_import_commit_apis(connection)
 
         async def commit_uow_factory(self):
             from novelwiki.bootstrap.acquisition_routes import build_import_commit_uow_factory
@@ -65,7 +58,7 @@ def wire_acquisition_runtime() -> None:
 
         async def import_job(self, job_id):
             from novelwiki.modules.acquisition.application import import_worker
-            return await import_worker.get_job(job_id)
+            return await import_worker.get_job(job_id, runtime=self)
 
         @staticmethod
         async def _reading():
@@ -130,11 +123,11 @@ def wire_acquisition_runtime() -> None:
 
         async def refine_segment_plan(self, plan, document):
             from novelwiki.modules.acquisition.adapters.outbound.importer.segment import refine_plan
-            return await refine_plan(plan, document)
+            return await refine_plan(plan, document, runtime=self)
 
         async def commit_series(self, job_ids):
             from novelwiki.modules.acquisition.adapters.outbound.importer.commit import commit_series
-            return await commit_series(job_ids)
+            return await commit_series(job_ids, runtime=self)
 
         def estimate_ocr_cost(self, pages, gemini_first, remaining):
             from novelwiki.modules.acquisition.adapters.outbound.importer.parsers.pdf_ocr import estimate_cost
@@ -142,10 +135,17 @@ def wire_acquisition_runtime() -> None:
 
         async def parse_pdf_ocr(self, path, job_id, options, progress):
             from novelwiki.modules.acquisition.adapters.outbound.importer.parsers.pdf_ocr import parse_pdf_ocr
-            return await parse_pdf_ocr(path, job_id, options, progress)
+            return await parse_pdf_ocr(
+                path, job_id, options, progress, runtime=self
+            )
 
         async def commit_job(self, job):
             from novelwiki.modules.acquisition.adapters.outbound.importer.commit import commit_job
-            return await commit_job(job)
+            return await commit_job(job, runtime=self)
 
-    configure_runtime(Runtime())
+    return Runtime()
+
+
+def wire_acquisition_runtime():
+    """Stable bootstrap wrapper; returns dependencies instead of mutating globals."""
+    return build_acquisition_runtime()

@@ -37,7 +37,10 @@ def test_domain_and_application_are_framework_independent(path: Path):
     relative = path.relative_to(MODULE_ROOT)
     if "domain" not in relative.parts and "application" not in relative.parts:
         return
-    forbidden = ("fastapi", "asyncpg", "novelwiki.config.settings", "novelwiki.db.connection")
+    forbidden = (
+        "fastapi", "asyncpg", "novelwiki.config.settings",
+        "novelwiki.platform.config", "novelwiki.db.connection",
+    )
     violations = [name for name in _imports(path) if name.startswith(forbidden)]
     assert not violations, f"{relative}: forbidden imports {violations}"
 
@@ -225,6 +228,44 @@ def test_worker_adapters_delegate_claimed_job_orchestration_to_application():
         )
         assert f"novelwiki.modules.{owner}.application.worker" in source
         assert service in source
+
+
+def test_worker_lifecycle_exists_only_in_inbound_adapters():
+    for path in _python_files(MODULE_ROOT):
+        relative = path.relative_to(MODULE_ROOT)
+        source = path.read_text(encoding="utf-8")
+        if "def worker_loop" not in source and "def start_worker" not in source:
+            continue
+        assert relative.parts[1:3] == ("adapters", "inbound"), relative
+
+
+def test_public_and_application_ports_never_expose_raw_connections():
+    violations = []
+    candidates = list(MODULE_ROOT.glob("*/public.py"))
+    candidates.extend(MODULE_ROOT.glob("*/application/ports.py"))
+    for path in candidates:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            names = {arg.arg for arg in (*node.args.args, *node.args.kwonlyargs)}
+            exposed = names & {"connection", "conn", "db_connection"}
+            if exposed:
+                violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: {sorted(exposed)}")
+    assert not violations, "\n".join(violations)
+
+
+def test_application_layers_have_no_mutable_dependency_locators():
+    violations = []
+    for path in MODULE_ROOT.glob("*/application/*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("configure_"):
+                violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: {node.name}")
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if any(isinstance(child, ast.Global) for child in ast.walk(node)):
+                    violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: global mutation")
+    assert not violations, "\n".join(violations)
 
 
 def test_feature_cli_adapters_delegate_to_application_commands():

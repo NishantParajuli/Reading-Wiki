@@ -4,7 +4,6 @@ import hashlib
 import logging
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
-from novelwiki.modules.codex.application.ai_runtime import call_chat_completion
 from novelwiki.modules.codex.adapters.outbound.retrieval.tools import (
     hybrid_search, rerank, get_chunk, resolve_entity,
     get_entity_profile, get_relationships, get_timeline, list_entities
@@ -51,7 +50,9 @@ def _tool_query(args: dict) -> tuple[str | None, str | None]:
     return query, None
 
 
-async def execute_tool(novel_id: int, tool: str, args: dict, chapter_ceiling: float) -> str:
+async def execute_tool(
+    novel_id: int, tool: str, args: dict, chapter_ceiling: float, *, runtime=None
+) -> str:
     """Safely dispatches tool calls from the LLM, strictly injecting novel_id + chapter_ceiling.
     Model-supplied fan-out args (`k`, `top_n`, query length, rerank hits) are hard-limited
     so the planner can't be steered into runaway/expensive retrieval."""
@@ -61,7 +62,15 @@ async def execute_tool(novel_id: int, tool: str, args: dict, chapter_ceiling: fl
             if err:
                 return f"Error: hybrid_search {err}"
             k = _clamp_int(args.get("k"), settings.RETRIEVE_K, 1, settings.ASK_TOOL_MAX_K)
-            res = await hybrid_search(novel_id, query, chapter_ceiling, k)
+            import inspect
+            if "runtime" in inspect.signature(hybrid_search).parameters:
+                if runtime is None:
+                    raise RuntimeError("Codex runtime was not supplied")
+                res = await hybrid_search(
+                    novel_id, query, chapter_ceiling, k, runtime=runtime
+                )
+            else:
+                res = await hybrid_search(novel_id, query, chapter_ceiling, k)
             return json.dumps(res, default=str)
 
         elif tool == "rerank":
@@ -73,7 +82,13 @@ async def execute_tool(novel_id: int, tool: str, args: dict, chapter_ceiling: fl
                 hits = []
             hits = hits[: settings.ASK_TOOL_MAX_RERANK_HITS]
             top_n = _clamp_int(args.get("top_n"), settings.RERANK_TOP_N, 1, settings.ASK_TOOL_MAX_TOP_N)
-            res = await rerank(query, hits, top_n)
+            import inspect
+            if "runtime" in inspect.signature(rerank).parameters:
+                if runtime is None:
+                    raise RuntimeError("Codex runtime was not supplied")
+                res = await rerank(query, hits, top_n, runtime=runtime)
+            else:
+                res = await rerank(query, hits, top_n)
             return json.dumps(res, default=str)
 
         elif tool == "get_chunk":
@@ -233,7 +248,9 @@ def _is_done(decision_clean: str) -> bool:
     return decision_clean.strip().strip('"').strip("'").upper() == "DONE"
 
 
-async def answer_question(novel_id: int, question: str, chapter_ceiling: float) -> dict:
+async def answer_question(
+    novel_id: int, question: str, chapter_ceiling: float, *, runtime
+) -> dict:
     """
     Full Pro/Flash agentic orchestrator: Pro plans -> (Flash distills) -> Pro reasons
     -> Pro synthesizes -> Flash verifies -> (Pro repairs) -> grounded, cited answer.
@@ -256,7 +273,7 @@ async def answer_question(novel_id: int, question: str, chapter_ceiling: float) 
 
     # 1. Pro produces an initial plan (subgoals + entities to resolve)
     try:
-        plan = await call_chat_completion(
+        plan = await runtime.ai.call_chat_completion(
             model=settings.MODEL_PRO,
             messages=[
                 {"role": "system", "content": PLAN_SYSTEM.format(chapter_ceiling=chapter_ceiling)},
@@ -284,7 +301,7 @@ async def answer_question(novel_id: int, question: str, chapter_ceiling: float) 
         )
 
         try:
-            decision = await call_chat_completion(
+            decision = await runtime.ai.call_chat_completion(
                 model=settings.MODEL_PRO,
                 messages=[
                     {"role": "system", "content": PLAN_SYSTEM.format(chapter_ceiling=chapter_ceiling)},
@@ -331,10 +348,12 @@ async def answer_question(novel_id: int, question: str, chapter_ceiling: float) 
             tool_name = call.get("tool")
             args = call.get("args", {}) or {}
             logger.info(f"Executing Agent Tool: {tool_name} with args {args}")
-            raw_result = await execute_tool(novel_id, tool_name, args, chapter_ceiling)
+            raw_result = await execute_tool(
+                novel_id, tool_name, args, chapter_ceiling, runtime=runtime
+            )
             _accumulate_evidence(tool_name, raw_result, evidence)
 
-            distill = await call_chat_completion(
+            distill = await runtime.ai.call_chat_completion(
                 model=settings.MODEL_FLASH,
                 messages=[
                     {"role": "system", "content": DISTILL_SYSTEM.format(chapter_ceiling=chapter_ceiling)},
@@ -348,7 +367,7 @@ async def answer_question(novel_id: int, question: str, chapter_ceiling: float) 
     logger.info("Synthesizing final answer via Pro...")
     digests_str = "\n\n=============\n\n".join(digests) if digests else "No retrieval evidence gathered."
 
-    draft = await call_chat_completion(
+    draft = await runtime.ai.call_chat_completion(
         model=settings.MODEL_PRO,
         messages=[
             {"role": "system", "content": SYNTHESIS_SYSTEM.format(chapter_ceiling=chapter_ceiling)},
@@ -360,7 +379,7 @@ async def answer_question(novel_id: int, question: str, chapter_ceiling: float) 
     # 4. Flash verifies grounding against the SAME cited digests Pro saw
     logger.info("Running grounding verification pass via Flash...")
     try:
-        verdict_str = await call_chat_completion(
+        verdict_str = await runtime.ai.call_chat_completion(
             model=settings.MODEL_FLASH,
             messages=[
                 {"role": "system", "content": VERIFY_SYSTEM.format(chapter_ceiling=chapter_ceiling)},
@@ -382,7 +401,7 @@ async def answer_question(novel_id: int, question: str, chapter_ceiling: float) 
             flags_str = "\n".join(
                 f"- {f.get('sentence', '')} (reason: {f.get('reason', '')})" for f in flags
             ) or "(none specified)"
-            draft = await call_chat_completion(
+            draft = await runtime.ai.call_chat_completion(
                 model=settings.MODEL_PRO,
                 messages=[
                     {"role": "system", "content": REPAIR_SYSTEM.format(chapter_ceiling=chapter_ceiling)},

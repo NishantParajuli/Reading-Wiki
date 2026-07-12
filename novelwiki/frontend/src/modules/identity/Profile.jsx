@@ -2,11 +2,11 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { identityApi } from "../modules/identity/api.js";
-import { useAuth } from "../App.jsx";
-import { Button, Chip, Cover, EmptyState, Loading, ProgressBar, StatTile, UserAvatar } from "../components/ui.jsx";
-import { useTitle } from "../lib/hooks.js";
-import { fmtChapter } from "../lib/utils.js";
+import { identityApi } from "../../modules/identity/api.js";
+import { useAuth } from "../../App.jsx";
+import { Button, Chip, Cover, EmptyState, Loading, ProgressBar, StatTile, UserAvatar } from "../../components/ui.jsx";
+import { useTitle } from "../../lib/hooks.js";
+import { fmtChapter } from "../../lib/utils.js";
 
 function MiniNovelRail({ title, items }) {
   if (!items || items.length === 0) return null;

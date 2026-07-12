@@ -9,8 +9,6 @@ def build_adapter_catalog_query() -> ListScraperAdapters:
 
 
 async def build_import_worker_repository():
-    from novelwiki.bootstrap.acquisition_runtime import wire_acquisition_runtime
-    wire_acquisition_runtime()
     from novelwiki.modules.acquisition.adapters.outbound.worker_jobs import (
         PostgresImportWorkerRepository,
     )

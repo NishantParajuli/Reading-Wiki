@@ -1,2 +1,2 @@
-export { Admin } from "../../screens/Admin.jsx";
+export { Admin } from "./Admin.jsx";
 export { adminApi } from "./api.js";

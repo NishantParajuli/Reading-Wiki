@@ -6,6 +6,7 @@ source_db="novelwiki_rehearsal_source"
 restore_db="novelwiki_rehearsal_restore"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 artifact="$(mktemp -t tideglass-rehearsal-XXXXXX.dump)"
+client_image="${POSTGRES_CLIENT_IMAGE:-postgres:18-alpine}"
 cleanup() {
   rm -f "$artifact"
   uv run python "$root/tools/rehearsal_database.py" drop \
@@ -19,7 +20,7 @@ case "$TEST_DB_SUPERUSER_URL" in
 esac
 
 client() {
-  docker run --rm --network host -v "$artifact:/backup.dump" postgres:18-alpine "$@"
+  docker run --rm --network host -v "$artifact:/backup.dump" "$client_image" "$@"
 }
 
 uv run python "$root/tools/rehearsal_database.py" create \

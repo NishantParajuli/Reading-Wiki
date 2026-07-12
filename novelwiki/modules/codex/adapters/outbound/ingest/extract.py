@@ -9,7 +9,6 @@ from collections.abc import Awaitable, Callable
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool, close_db_pool
 from novelwiki.modules.codex.adapters.outbound.cache import clear_caches
-from novelwiki.modules.codex.application.ai_runtime import call_chat_completion
 from novelwiki.modules.codex.adapters.outbound.ingest.link import create_entity, resolve_entity
 from novelwiki.modules.codex.domain.prompts import (
     EXTRACTION_SYSTEM,
@@ -72,17 +71,23 @@ def _coerce_extraction(data) -> dict:
     return {key: (data[key] if isinstance(data.get(key), list) else []) for key in EXTRACTION_KEYS}
 
 
-async def _call_and_parse(messages: list[dict], label: str, temperature: float = 0.0) -> dict:
+async def _call_and_parse(
+    messages: list[dict], label: str, runtime, temperature: float = 0.0
+) -> dict:
     """Invoke Flash, parse + coerce the JSON, and re-ask ONCE (with a small temperature
     nudge so a deterministic bad output isn't simply reproduced) if the payload is
     unusable. Raises on a second failure rather than corrupting the knowledge base."""
-    raw = await call_chat_completion(model=settings.MODEL_FLASH, messages=messages, temperature=temperature)
+    raw = await runtime.ai.call_chat_completion(
+        model=settings.MODEL_FLASH, messages=messages, temperature=temperature
+    )
     try:
         return _coerce_extraction(_parse_json_object(raw))
     except Exception as first_err:
         retry_temp = max(temperature, 0.3)
         logger.warning(f"{label}: JSON parse/shape failed ({first_err}); re-asking once at temp {retry_temp}...")
-        raw_retry = await call_chat_completion(model=settings.MODEL_FLASH, messages=messages, temperature=retry_temp)
+        raw_retry = await runtime.ai.call_chat_completion(
+            model=settings.MODEL_FLASH, messages=messages, temperature=retry_temp
+        )
         try:
             return _coerce_extraction(_parse_json_object(raw_retry))
         except Exception as second_err:
@@ -191,6 +196,7 @@ async def commit_extraction_proposal(
     run_id: uuid.UUID | None = None,
     model_label: str | None = None,
     force: bool = False,
+    uow_factory=None,
 ) -> dict:
     """Transactionally commit a validated provider proposal.
 
@@ -201,160 +207,190 @@ async def commit_extraction_proposal(
     normalized = _coerce_extraction(data)
     if not running_summary or not running_summary.strip():
         raise ValueError("running summary must not be empty")
-    roster_refs = dict(roster_refs or {})
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            from novelwiki.modules.codex.application.worker_dependencies import reading_port
-            chapter = await reading_port().locked_chapter_snapshot(
-                conn, novel_id, chapter_number
-            )
-            if not chapter or chapter_source_sha256(chapter["content"]) != expected_source_hash:
-                raise RuntimeError("source_changed")
-            existing = await conn.fetchrow(
+    if uow_factory is None:
+        raise RuntimeError("Codex extraction Unit of Work was not supplied")
+    from novelwiki.workflows.commit_codex_extraction import commit_codex_extraction
+    return await commit_codex_extraction(
+        uow_factory,
+        novel_id,
+        chapter_number,
+        normalized,
+        running_summary,
+        expected_source_hash=expected_source_hash,
+        resolved_refs=resolved_refs,
+        roster_refs=roster_refs,
+        run_id=run_id,
+        model_label=model_label,
+        force=force,
+    )
+
+
+class PostgresCodexExtractionTransactionService:
+    """Transaction-bound Codex writer; its connection never crosses a module port."""
+
+    def __init__(self, connection, runtime, entity_resolver=resolve_entity):
+        self._connection = connection
+        self._runtime = runtime
+        self._entity_resolver = entity_resolver
+
+    async def commit_extraction(
+        self, novel_id: int, chapter_number: float, data: dict,
+        running_summary: str, *, chapter_snapshot: dict,
+        expected_source_hash: str, resolved_refs: dict[str, int | None],
+        roster_refs: dict[str, int], run_id=None, model_label: str | None = None,
+        force: bool = False,
+    ) -> dict:
+        conn = self._connection
+        chapter = chapter_snapshot
+        normalized = _coerce_extraction(data)
+        roster_refs = dict(roster_refs)
+        entity_resolver = self._entity_resolver
+        existing = await conn.fetchrow(
                 "SELECT run_id,source_sha256 FROM extraction_state "
                 "WHERE novel_id=$1 AND chapter=$2 FOR UPDATE;", novel_id, chapter_number,
-            )
-            if existing and run_id is not None and existing["run_id"] == run_id \
-                    and existing["source_sha256"] == expected_source_hash:
-                return {"status": "done", "idempotent": True}
-            if existing and not force:
-                raise RuntimeError("chapter extraction was committed by another worker")
-            if force:
-                await _clear_extraction_chapter(conn, novel_id, chapter_number)
-            await clear_caches(conn, novel_id=novel_id, chapter_number=chapter_number)
-            _marked, valid_chunk_ids, all_chunk_ids = await _load_chapter_chunks(
-                novel_id, chapter_number, conn,
-            )
-            local: dict[str, int] = dict(roster_refs)
+        )
+        if existing and run_id is not None and existing["run_id"] == run_id \
+                and existing["source_sha256"] == expected_source_hash:
+            return {"status": "done", "idempotent": True}
+        if existing and not force:
+            raise RuntimeError("chapter extraction was committed by another worker")
+        if force:
+            await _clear_extraction_chapter(conn, novel_id, chapter_number)
+        await clear_caches(conn, novel_id=novel_id, chapter_number=chapter_number)
+        _marked, valid_chunk_ids, all_chunk_ids = await _load_chapter_chunks(
+            novel_id, chapter_number, conn,
+        )
+        local: dict[str, int] = dict(roster_refs)
 
-            for mention in normalized["mentions"]:
-                ref = str(mention.get("entity_ref") or "").strip()
-                surface = str(mention.get("surface_form") or ref).strip()
-                if not ref or not surface or ref in roster_refs:
-                    continue
-                if ref in resolved_refs:
-                    entity = resolved_refs[ref]
-                elif entity_resolver is not None:
-                    position = (chapter["content"] or "").lower().find(surface.lower())
-                    context = ((chapter["content"] or "")[max(0, position-100):position+len(surface)+100]
-                               if position >= 0 else surface)
-                    entity = await entity_resolver(
-                        novel_id=novel_id, mention=ref or surface,
-                        entity_type=mention.get("type") or "concept", chapter=chapter_number,
-                        context=context, conn=conn, description=mention.get("description"),
-                    )
-                else:
-                    raise ValueError(f"unresolved entity reference: {ref}")
-                if entity is None:
-                    entity = await create_entity(
-                        novel_id, surface, mention.get("type") or "concept", chapter_number,
-                        conn, description=mention.get("description"),
-                    )
-                local[ref] = int(entity)
-                description = (mention.get("description") or "").strip()
-                if description:
-                    await conn.execute(
-                        """
-                        INSERT INTO entity_descriptions (novel_id,entity_id,chapter,description)
-                        VALUES ($1,$2,$3,$4) ON CONFLICT (entity_id,chapter) DO UPDATE
-                        SET description=EXCLUDED.description;
-                        """,
-                        novel_id, entity, chapter_number, description,
-                    )
-
-            async def ensure_entity_id(ref, fallback_type="concept") -> int:
-                key = str(ref or "").strip()
-                if key in local:
-                    return local[key]
-                if entity_resolver is None:
-                    raise ValueError(f"proposal references unknown entity ref: {key}")
+        for mention in normalized["mentions"]:
+            ref = str(mention.get("entity_ref") or "").strip()
+            surface = str(mention.get("surface_form") or ref).strip()
+            if not ref or not surface or ref in roster_refs:
+                continue
+            if ref in resolved_refs:
+                entity = resolved_refs[ref]
+            elif entity_resolver is not None:
+                position = (chapter["content"] or "").lower().find(surface.lower())
+                context = ((chapter["content"] or "")[max(0, position-100):position+len(surface)+100]
+                           if position >= 0 else surface)
                 entity = await entity_resolver(
-                    novel_id=novel_id, mention=key, entity_type=fallback_type,
-                    chapter=chapter_number, context=key, conn=conn,
+                    novel_id=novel_id, mention=ref or surface,
+                    entity_type=mention.get("type") or "concept", chapter=chapter_number,
+                    context=context, conn=conn, description=mention.get("description"),
+                    runtime=self._runtime,
                 )
-                local[key] = int(entity)
-                return int(entity)
+            else:
+                raise ValueError(f"unresolved entity reference: {ref}")
+            if entity is None:
+                entity = await create_entity(
+                    novel_id, surface, mention.get("type") or "concept", chapter_number,
+                    conn, description=mention.get("description"), runtime=self._runtime,
+                )
+            local[ref] = int(entity)
+            description = (mention.get("description") or "").strip()
+            if description:
+                await conn.execute(
+                    """
+                    INSERT INTO entity_descriptions (novel_id,entity_id,chapter,description)
+                    VALUES ($1,$2,$3,$4) ON CONFLICT (entity_id,chapter) DO UPDATE
+                    SET description=EXCLUDED.description;
+                    """,
+                    novel_id, entity, chapter_number, description,
+                )
 
-            for fact in normalized["facts"]:
-                if not fact.get("entity_ref") or not fact.get("content"):
-                    continue
-                await conn.execute(
-                    """
-                    INSERT INTO entity_facts (novel_id,entity_id,chapter,fact_type,content,source_chunk_ids)
-                    VALUES ($1,$2,$3,$4,$5,$6);
-                    """,
-                    novel_id, await ensure_entity_id(fact["entity_ref"]), chapter_number,
-                    fact.get("fact_type"), fact["content"],
-                    _clean_chunk_ids(fact.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids),
-                )
-            for rel in normalized["relationships"]:
-                if not rel.get("source_ref") or not rel.get("target_ref"):
-                    continue
-                await conn.execute(
-                    """
-                    INSERT INTO relationships
-                      (novel_id,source_id,target_id,chapter,relation_type,directed,content,source_chunk_ids)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8);
-                    """,
-                    novel_id, await ensure_entity_id(rel["source_ref"], "character"),
-                    await ensure_entity_id(rel["target_ref"], "character"),
-                    chapter_number, rel.get("relation_type"), bool(rel.get("directed", True)),
-                    rel.get("content"),
-                    _clean_chunk_ids(rel.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids),
-                )
-            for event in normalized["events"]:
-                participants = [await ensure_entity_id(ref, "character") for ref in (event.get("participant_refs") or []) if ref]
-                location = await ensure_entity_id(event["location_ref"], "location") if event.get("location_ref") else None
-                await conn.execute(
-                    """
-                    INSERT INTO events
-                      (novel_id,chapter,description,participants,location_id,significance,source_chunk_ids)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7);
-                    """,
-                    novel_id, chapter_number, event.get("description"), participants, location,
-                    event.get("significance"),
-                    _clean_chunk_ids(event.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids),
-                )
-            for reveal in normalized["identity_reveals"]:
-                if not reveal.get("persona_ref") or not reveal.get("true_entity_ref"):
-                    continue
-                persona = await ensure_entity_id(reveal["persona_ref"], "character")
-                true = await ensure_entity_id(reveal["true_entity_ref"], "character")
-                if persona != true:
-                    await conn.execute(
-                        """
-                        INSERT INTO identity_links (novel_id,entity_a,entity_b,revealed_at_chapter,note)
-                        VALUES ($1,$2,$3,$4,$5);
-                        """,
-                        novel_id, persona, true, chapter_number, reveal.get("note"),
-                    )
-            for alias in normalized["new_aliases"]:
-                if not alias.get("entity_ref") or not alias.get("alias"):
-                    continue
-                reveal_at = chapter_number if alias.get("is_reveal") else 0.0
-                await conn.execute(
-                    """
-                    INSERT INTO entity_aliases (novel_id,entity_id,alias,revealed_at_chapter)
-                    VALUES ($1,$2,$3,$4) ON CONFLICT (entity_id,alias) DO UPDATE
-                    SET revealed_at_chapter=LEAST(entity_aliases.revealed_at_chapter,EXCLUDED.revealed_at_chapter);
-                    """,
-                    novel_id, await ensure_entity_id(alias["entity_ref"]), alias["alias"], reveal_at,
-                )
+        async def ensure_entity_id(ref, fallback_type="concept") -> int:
+            key = str(ref or "").strip()
+            if key in local:
+                return local[key]
+            if entity_resolver is None:
+                raise ValueError(f"proposal references unknown entity ref: {key}")
+            entity = await entity_resolver(
+                novel_id=novel_id, mention=key, entity_type=fallback_type,
+                chapter=chapter_number, context=key, conn=conn,
+                runtime=self._runtime,
+            )
+            local[key] = int(entity)
+            return int(entity)
+
+        for fact in normalized["facts"]:
+            if not fact.get("entity_ref") or not fact.get("content"):
+                continue
             await conn.execute(
                 """
-                INSERT INTO extraction_state
-                  (novel_id,chapter,running_summary,run_id,model_label,source_sha256,processed_at)
-                VALUES ($1,$2,$3,$4,$5,$6,now())
-                ON CONFLICT (novel_id,chapter) DO UPDATE SET
-                  running_summary=EXCLUDED.running_summary, run_id=EXCLUDED.run_id,
-                  model_label=EXCLUDED.model_label, source_sha256=EXCLUDED.source_sha256,
-                  processed_at=now();
+                INSERT INTO entity_facts (novel_id,entity_id,chapter,fact_type,content,source_chunk_ids)
+                VALUES ($1,$2,$3,$4,$5,$6);
                 """,
-                novel_id, chapter_number, running_summary.strip(), run_id,
-                model_label, expected_source_hash,
+                novel_id, await ensure_entity_id(fact["entity_ref"]), chapter_number,
+                fact.get("fact_type"), fact["content"],
+                _clean_chunk_ids(fact.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids),
             )
-    return {"status": "done", "idempotent": False}
+        for rel in normalized["relationships"]:
+            if not rel.get("source_ref") or not rel.get("target_ref"):
+                continue
+            await conn.execute(
+                """
+                INSERT INTO relationships
+                  (novel_id,source_id,target_id,chapter,relation_type,directed,content,source_chunk_ids)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8);
+                """,
+                novel_id, await ensure_entity_id(rel["source_ref"], "character"),
+                await ensure_entity_id(rel["target_ref"], "character"),
+                chapter_number, rel.get("relation_type"), bool(rel.get("directed", True)),
+                rel.get("content"),
+                _clean_chunk_ids(rel.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids),
+            )
+        for event in normalized["events"]:
+            participants = [await ensure_entity_id(ref, "character") for ref in (event.get("participant_refs") or []) if ref]
+            location = await ensure_entity_id(event["location_ref"], "location") if event.get("location_ref") else None
+            await conn.execute(
+                """
+                INSERT INTO events
+                  (novel_id,chapter,description,participants,location_id,significance,source_chunk_ids)
+                VALUES ($1,$2,$3,$4,$5,$6,$7);
+                """,
+                novel_id, chapter_number, event.get("description"), participants, location,
+                event.get("significance"),
+                _clean_chunk_ids(event.get("source_chunk_ids"), valid_chunk_ids, all_chunk_ids),
+            )
+        for reveal in normalized["identity_reveals"]:
+            if not reveal.get("persona_ref") or not reveal.get("true_entity_ref"):
+                continue
+            persona = await ensure_entity_id(reveal["persona_ref"], "character")
+            true = await ensure_entity_id(reveal["true_entity_ref"], "character")
+            if persona != true:
+                await conn.execute(
+                    """
+                    INSERT INTO identity_links (novel_id,entity_a,entity_b,revealed_at_chapter,note)
+                    VALUES ($1,$2,$3,$4,$5);
+                    """,
+                    novel_id, persona, true, chapter_number, reveal.get("note"),
+                )
+        for alias in normalized["new_aliases"]:
+            if not alias.get("entity_ref") or not alias.get("alias"):
+                continue
+            reveal_at = chapter_number if alias.get("is_reveal") else 0.0
+            await conn.execute(
+                """
+                INSERT INTO entity_aliases (novel_id,entity_id,alias,revealed_at_chapter)
+                VALUES ($1,$2,$3,$4) ON CONFLICT (entity_id,alias) DO UPDATE
+                SET revealed_at_chapter=LEAST(entity_aliases.revealed_at_chapter,EXCLUDED.revealed_at_chapter);
+                """,
+                novel_id, await ensure_entity_id(alias["entity_ref"]), alias["alias"], reveal_at,
+            )
+        await conn.execute(
+            """
+            INSERT INTO extraction_state
+              (novel_id,chapter,running_summary,run_id,model_label,source_sha256,processed_at)
+            VALUES ($1,$2,$3,$4,$5,$6,now())
+            ON CONFLICT (novel_id,chapter) DO UPDATE SET
+              running_summary=EXCLUDED.running_summary, run_id=EXCLUDED.run_id,
+              model_label=EXCLUDED.model_label, source_sha256=EXCLUDED.source_sha256,
+              processed_at=now();
+            """,
+            novel_id, chapter_number, running_summary.strip(), run_id,
+            model_label, expected_source_hash,
+            )
+        return {"status": "done", "idempotent": False}
 
 
 async def extract_knowledge_for_chapter(
@@ -362,6 +398,8 @@ async def extract_knowledge_for_chapter(
     chapter_number: float,
     force: bool = False,
     cancel_check: Callable[[], Awaitable[None]] | None = None,
+    *,
+    runtime,
 ):
     """
     Extracts structured knowledge from chapter_number in a forward-only transaction.
@@ -385,8 +423,7 @@ async def extract_knowledge_for_chapter(
         await clear_caches(conn, novel_id=novel_id, chapter_number=chapter_number)
 
         # Load chapter info
-        from novelwiki.modules.codex.application.worker_dependencies import reading_port
-        chapter = await reading_port().chapter_snapshot(
+        chapter = await runtime.reading.chapter_snapshot(
             novel_id, chapter_number
         )
         if not chapter:
@@ -427,7 +464,9 @@ async def extract_knowledge_for_chapter(
         ]
 
         logger.info(f"Calling Flash extraction model for Chapter {chapter_number}...")
-        data = await _call_and_parse(messages, f"Chapter {chapter_number} extraction")
+        data = await _call_and_parse(
+            messages, f"Chapter {chapter_number} extraction", runtime
+        )
         if cancel_check is not None:
             await cancel_check()
         if not any(data[k] for k in EXTRACTION_KEYS):
@@ -453,7 +492,9 @@ async def extract_knowledge_for_chapter(
                 },
             ]
             try:
-                vdata = await _call_and_parse(verify_messages, f"Chapter {chapter_number} verification")
+                vdata = await _call_and_parse(
+                    verify_messages, f"Chapter {chapter_number} verification", runtime
+                )
                 added = 0
                 for key in EXTRACTION_KEYS:
                     if vdata[key]:
@@ -485,7 +526,7 @@ async def extract_knowledge_for_chapter(
         if cancel_check is not None:
             await cancel_check()
         logger.info(f"Generating updated running summary through Chapter {chapter_number}...")
-        new_summary = await call_chat_completion(
+        new_summary = await runtime.ai.call_chat_completion(
             model=settings.MODEL_FLASH,
             messages=summary_messages,
             temperature=0.3,
@@ -502,6 +543,7 @@ async def extract_knowledge_for_chapter(
             entity_resolver=resolve_entity,
             model_label=settings.MODEL_FLASH,
             force=force,
+            uow_factory=runtime.extraction_uow_factory,
         )
         logger.info(f"--- Chapter {chapter_number} Extraction Complete ---")
 
@@ -512,12 +554,13 @@ async def extract_all_chapters(
     from_chapter: float | None = None,
     to_chapter: float | None = None,
     cancel_check: Callable[[], Awaitable[None]] | None = None,
+    *,
+    runtime,
 ):
     """Processes chapters in strict ascending order (Invariant 2), optionally limited
     to a [from_chapter, to_chapter] range so the prompt can be iterated on the first
     ~50 chapters before committing to the full paid run."""
-    from novelwiki.modules.codex.application.worker_dependencies import reading_port
-    numbers = await reading_port().chapter_numbers(
+    numbers = await runtime.reading.chapter_numbers(
         novel_id, from_chapter, to_chapter
     )
 
@@ -526,6 +569,7 @@ async def extract_all_chapters(
             await cancel_check()
         await extract_knowledge_for_chapter(
             novel_id, number, force=force, cancel_check=cancel_check,
+            runtime=runtime,
         )
 
 

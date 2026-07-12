@@ -8,7 +8,7 @@ import { NovelHeader } from "./NovelHeader.jsx";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, Chip, EmptyState, Loading } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
-import { TagSuggestForm, TagChips } from "../../features/tags.jsx";
+import { TagSuggestForm, TagChips } from "./tags.jsx";
 import { useChaptersQuery } from "../../modules/reading/queries.js";
 import { useTitle } from "../../lib/hooks.js";
 import { fmtChapter } from "../../lib/utils.js";

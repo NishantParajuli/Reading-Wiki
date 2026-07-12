@@ -4,7 +4,6 @@ import asyncpg
 from dataclasses import dataclass
 from novelwiki.platform.config import settings
 from novelwiki.modules.codex.adapters.outbound.cache import clear_caches
-from novelwiki.modules.codex.application.ai_runtime import call_chat_completion, get_embedding
 from novelwiki.modules.codex.domain.prompts import DISAMBIGUATION_SYSTEM, DISAMBIGUATION_USER
 
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +28,8 @@ async def find_resolution_candidates(
     context: str,
     conn: asyncpg.Connection,
     description: str | None = None,
+    *,
+    runtime,
 ) -> EntityResolutionProposal:
     """Deterministic exact/fuzzy/semantic stages used before AGY gray-case batching.
 
@@ -67,7 +68,7 @@ async def find_resolution_candidates(
         return EntityResolutionProposal(candidates[0]["id"])
 
     desc = (description or "").strip()
-    embedding = await get_embedding(f"{name}: {desc}" if desc else name)
+    embedding = await runtime.ai.get_embedding(f"{name}: {desc}" if desc else name)
     if embedding:
         vector = "[" + ",".join(map(str, embedding)) + "]"
         row = await conn.fetchrow(
@@ -90,10 +91,12 @@ async def create_entity(
     chapter: float,
     conn: asyncpg.Connection,
     description: str | None = None,
+    *,
+    runtime,
 ) -> int:
     name = mention.strip()
     desc = (description or "").strip() or None
-    embedding = await get_embedding(f"{name}: {desc}" if desc else name)
+    embedding = await runtime.ai.get_embedding(f"{name}: {desc}" if desc else name)
     vector = "[" + ",".join(map(str, embedding)) + "]" if embedding else None
     entity_id = await conn.fetchval(
         """
@@ -119,6 +122,8 @@ async def resolve_entity(
     context: str,
     conn: asyncpg.Connection,
     description: str | None = None,
+    *,
+    runtime,
 ) -> int:
     """
     Resolves a surface mention back to a canonical entities.id.
@@ -197,7 +202,7 @@ async def resolve_entity(
         ]
         
         try:
-            response = await call_chat_completion(
+            response = await runtime.ai.call_chat_completion(
                 model=settings.MODEL_FLASH,
                 messages=messages,
                 temperature=0.0
@@ -218,7 +223,7 @@ async def resolve_entity(
             logger.warning(f"Fuzzy LLM disambiguation failed: {e}. Falling back to semantic check.")
 
     # ── Step 3: Semantic Match / Vector Fallback ──
-    emb = await get_embedding(embed_text)
+    emb = await runtime.ai.get_embedding(embed_text)
     if emb:
         emb_str = "[" + ",".join(map(str, emb)) + "]"
         row = await conn.fetchrow(

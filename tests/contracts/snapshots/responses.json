@@ -1,0 +1,186 @@
+{
+  "acquisition": {
+    "error": {
+      "json": {
+        "detail": "Import job not found."
+      },
+      "status": 404
+    },
+    "request": {
+      "method": "GET",
+      "path": "/api/import/jobs/{job_id}"
+    },
+    "success": {
+      "json": {
+        "id": "<id>",
+        "status": "uploaded"
+      },
+      "status": 200
+    }
+  },
+  "catalog": {
+    "error": {
+      "json": {
+        "detail": "<validation-errors>"
+      },
+      "status": 422
+    },
+    "request": {
+      "method": "POST",
+      "path": "/api/novels"
+    },
+    "success": {
+      "json": {
+        "id": "<id>"
+      },
+      "status": 200
+    }
+  },
+  "codex": {
+    "error": {
+      "json": {
+        "detail": "Forbidden"
+      },
+      "status": 403
+    },
+    "request": {
+      "method": "POST",
+      "path": "/api/novels/{novel_id}/ask"
+    },
+    "success": {
+      "json": {
+        "answer": "<markdown>",
+        "citations": []
+      },
+      "status": 200
+    }
+  },
+  "experience_admin": {
+    "error": {
+      "json": {
+        "detail": "Admin access required"
+      },
+      "status": 403
+    },
+    "request": {
+      "method": "GET",
+      "path": "/api/admin/users"
+    },
+    "success": {
+      "json": {
+        "users": [
+          "<normalized-user>"
+        ]
+      },
+      "status": 200
+    }
+  },
+  "identity": {
+    "error": {
+      "json": {
+        "detail": "Not authenticated"
+      },
+      "status": 401
+    },
+    "request": {
+      "method": "GET",
+      "path": "/api/auth/me"
+    },
+    "success": {
+      "json": {
+        "user": "<normalized-user-or-null>"
+      },
+      "status": 200
+    }
+  },
+  "narration": {
+    "error": {
+      "json": {
+        "detail": "TTS service unavailable"
+      },
+      "status": 503
+    },
+    "request": {
+      "method": "GET",
+      "path": "/api/tts/voices"
+    },
+    "success": {
+      "json": {
+        "voices": [
+          "<normalized-voice>"
+        ]
+      },
+      "status": 200
+    }
+  },
+  "platform": {
+    "error": {
+      "json": {
+        "status": "unavailable"
+      },
+      "status": 503
+    },
+    "request": {
+      "method": "GET",
+      "path": "/health"
+    },
+    "success": {
+      "json": {
+        "status": "ok"
+      },
+      "status": 200
+    }
+  },
+  "reading": {
+    "error": {
+      "json": {
+        "detail": "Novel not found"
+      },
+      "status": 404
+    },
+    "request": {
+      "method": "GET",
+      "path": "/api/novels/{novel_id}/chapters"
+    },
+    "success": {
+      "json": {
+        "chapters": [
+          "<normalized-chapter>"
+        ]
+      },
+      "status": 200
+    }
+  },
+  "translation": {
+    "error": {
+      "json": {
+        "detail": "Forbidden"
+      },
+      "status": 403
+    },
+    "request": {
+      "method": "GET",
+      "path": "/api/novels/{novel_id}/glossary"
+    },
+    "success": {
+      "json": [],
+      "status": 200
+    }
+  },
+  "work": {
+    "error": {
+      "json": {
+        "detail": "<validation-errors>"
+      },
+      "status": 422
+    },
+    "request": {
+      "method": "GET",
+      "path": "/api/jobs"
+    },
+    "success": {
+      "json": [],
+      "status": 200
+    }
+  }
+}

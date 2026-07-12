@@ -1,4 +1,4 @@
-export { Reader } from "../../screens/Reader.jsx";
-export { Chapters } from "../../screens/novel/Chapters.jsx";
-export * from "../../features/toc.jsx";
+export { Reader } from "./Reader.jsx";
+export { Chapters } from "./Chapters.jsx";
+export * from "./toc.jsx";
 export { readingApi } from "./api.js";

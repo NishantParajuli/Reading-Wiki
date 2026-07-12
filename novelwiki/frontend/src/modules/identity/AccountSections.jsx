@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { authApi, identityApi } from "./api.js";
 import { useAuth, useTheme } from "../../App.jsx";
 import { Button, Loading, ProgressBar, SegmentedControl, UserAvatar, Chip } from "../../components/ui.jsx";
-import { VoicePicker } from "../../features/narrate.jsx";
+import { VoicePicker } from "../narration/index.js";
 import { useToast } from "../../components/toast.jsx";
 import { useVoicesQuery } from "../narration/queries.js";
 

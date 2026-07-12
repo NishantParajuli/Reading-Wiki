@@ -34,8 +34,6 @@ def _convert_transport_error(exc: Exception) -> Exception:
 
 
 async def build_codex_migration_service(agent_gateway=None):
-    from novelwiki.bootstrap.codex_worker import wire_codex_worker_dependencies
-    wire_codex_worker_dependencies()
     from novelwiki.bootstrap.ai_execution import wire_ai_policy
     wire_ai_policy()
     from novelwiki.modules.codex.adapters.outbound.agent_bridge import (
@@ -192,9 +190,10 @@ async def build_codex_migration_service(agent_gateway=None):
                     await CatalogTransactionService(
                         PostgresCatalogRepository(connection)
                     ).enable_codex(novel_id)
+    from novelwiki.bootstrap.codex_worker import build_codex_runtime
     queries = CodexQueryService(
         ReadingCeilingBridge(), PostgresCodexQueries(pool),
-        agent_gateway or CodexAgentGateway(), AiCostBridge(),
+        agent_gateway or CodexAgentGateway(build_codex_runtime()), AiCostBridge(),
         ask_max_query_chars=settings.ASK_MAX_QUERY_CHARS,
         ask_requires_verified=settings.ASK_REQUIRE_VERIFIED,
         profile_requires_verified=settings.ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED,

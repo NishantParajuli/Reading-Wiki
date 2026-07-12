@@ -47,9 +47,6 @@ def _assign_global_numbers(included: list[dict], offset: float) -> None:
 
 
 async def _resolve_target(apis, job: dict, meta: dict):
-    if not hasattr(apis, "acquisition"):
-        from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
-        apis = runtime().bind_commit_apis(apis)
     options = job.get("options") or {}
     target = options.get("target", "new")
     language = (meta.get("language") or "en")[:8]
@@ -133,14 +130,13 @@ async def _commit_assets(acquisition, novel_id: int, job_id: int, shas: set[str]
 
 
 async def _preserve_replaced_content_version(
-    connection, novel_id: int, number: float, source: dict
+    reading, novel_id: int, number: float, source: dict
 ) -> int | None:
     """Compatibility seam retained for the pre-migration regression fixture."""
     previous = (source.get("old_versions") or {}).get(float(number))
     if previous is None:
         return None
-    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
-    return await runtime().bind_commit_apis(connection).reading.preserve_content_version(
+    return await reading.preserve_content_version(
         novel_id, number, int(previous) + 1
     )
 
@@ -243,14 +239,13 @@ async def _write_segments(apis, job_id: int, blocks: list, meta: dict,
     )
 
 
-async def commit_job(job: dict) -> dict:
+async def commit_job(job: dict, *, runtime) -> dict:
     """Write the reviewed plan into chapters (new / append / replace). Returns
     {novel_id, source_id, stats}."""
     job_id = int(job["id"])
     document, included = await _load_for_commit(job)
     blocks, meta = document.blocks, document.meta
 
-    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
     from novelwiki.workflows.commit_import import commit_import
 
     state = {}
@@ -282,13 +277,15 @@ async def commit_job(job: dict) -> dict:
         )
         return state
 
-    await commit_import(await runtime().commit_uow_factory(), operation)
+    await commit_import(await runtime.commit_uow_factory(), operation)
     novel_id, lo, hi = state["novel_id"], state["lo"], state["hi"]
     codex_enabled, result_stats = state["codex_enabled"], state["stats"]
 
     if codex_enabled or settings.IMPORT_AUTO_BUILD_CODEX:
-        if await _reserve_auto_codex(job.get("user_id")):
-            await _schedule_codex(novel_id, lo, hi, job.get("user_id"))
+        if await _reserve_auto_codex(job.get("user_id"), runtime=runtime):
+            await _schedule_codex(
+                novel_id, lo, hi, job.get("user_id"), runtime=runtime
+            )
         else:
             logger.info(f"Skipped automatic codex build for imported novel {novel_id}: owner is not quota-eligible.")
 
@@ -315,16 +312,14 @@ def _volume_label(idx: float | None, meta: dict) -> str:
     return "Volume"
 
 
-async def commit_series(job_ids: list[int]) -> dict:
+async def commit_series(job_ids: list[int], *, runtime) -> dict:
     """Commit several parsed EPUB/PDF jobs as the volumes of ONE novel: ordered by detected
     series index, each volume becomes its own source, chapters are stacked into a single
     continuous global sequence, and every volume is grouped under its own ``part_label`` in
     the reader's TOC. The cover + book metadata come from the first volume."""
-    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
-
     loaded = []
     for jid in job_ids:
-        job = await runtime().import_job(int(jid))
+        job = await runtime.import_job(int(jid))
         if not job:
             raise ValueError(f"Series job {jid} not found.")
         document, included = await _load_for_commit(job)
@@ -386,13 +381,15 @@ async def commit_series(job_ids: list[int]) -> dict:
         )
         return state
 
-    await commit_import(await runtime().commit_uow_factory(), operation)
+    await commit_import(await runtime.commit_uow_factory(), operation)
     novel_id, lo_all, hi_all = state["novel_id"], state["lo"], state["hi"]
     codex_enabled = state["codex_enabled"]
 
     if codex_enabled or settings.IMPORT_AUTO_BUILD_CODEX:
-        if await _reserve_auto_codex(owner_id):
-            await _schedule_codex(novel_id, lo_all, hi_all, owner_id)
+        if await _reserve_auto_codex(owner_id, runtime=runtime):
+            await _schedule_codex(
+                novel_id, lo_all, hi_all, owner_id, runtime=runtime
+            )
         else:
             logger.info(f"Skipped automatic codex build for imported series {novel_id}: owner is not quota-eligible.")
 
@@ -402,24 +399,24 @@ async def commit_series(job_ids: list[int]) -> dict:
             "stats": {"from_chapter": lo_all, "to_chapter": hi_all, "series": series_name}}
 
 
-async def _reserve_auto_codex(user_id: int | None) -> bool:
+async def _reserve_auto_codex(user_id: int | None, *, runtime) -> bool:
     """Reserve the codex quota for import-triggered background builds. Trusted CLI/system
     imports (no user_id) keep the old behavior; user-owned imports must be verified and
     under quota before the build is scheduled."""
     if user_id is None:
         return True
-    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
-    return await runtime().reserve_auto_codex(user_id)
+    return await runtime.reserve_auto_codex(user_id)
 
 
-async def _schedule_codex(novel_id: int, frm: float, to: float, user_id: int | None) -> None:
+async def _schedule_codex(
+    novel_id: int, frm: float, to: float, user_id: int | None, *, runtime
+) -> None:
     """Enqueue a DURABLE codex build over the imported range (numbering is already final, so a
     later offset change won't be blocked). Replaces the old fire-and-forget task: the codex-build
     quota reserved by ``_reserve_auto_codex`` is now recorded on the job and refunded by the worker
     if the build fails, and the work survives a restart instead of being silently lost."""
-    from novelwiki.modules.acquisition.application.runtime_dependencies import runtime
     try:
-        await runtime().schedule_codex(novel_id, frm, to, user_id)
+        await runtime.schedule_codex(novel_id, frm, to, user_id)
         logger.info(f"Scheduled durable codex build over imported chapters {frm}–{to} of novel {novel_id}.")
     except Exception as e:
         logger.warning(f"Could not schedule codex build for novel {novel_id}: {e}")

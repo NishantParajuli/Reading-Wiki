@@ -1,4 +1,4 @@
-# 🌊 Tideglass (OUTDATED)
+# 🌊 Tideglass
 
 A self-hosted, **multi-user** reading platform for webnovels and ebooks. Bring a story in
 from anywhere — **scrape** it chapter-by-chapter from a site, or **import** an EPUB/PDF (digital

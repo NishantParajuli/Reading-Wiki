@@ -12,8 +12,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from novelwiki.config.settings import settings
-
 
 def _host_accessible_url(url: str) -> str:
     parsed = urlparse(url)
@@ -31,8 +29,19 @@ def _host_accessible_url(url: str) -> str:
 
 
 def main() -> int:
-    os.environ.setdefault("TEST_DATABASE_URL", _host_accessible_url(settings.DATABASE_URL))
-    os.environ.setdefault("TEST_DB_SUPERUSER_URL", _host_accessible_url(settings.DB_SUPERUSER_URL))
+    missing = [
+        name for name in ("TEST_DATABASE_URL", "TEST_DB_SUPERUSER_URL")
+        if not os.environ.get(name)
+    ]
+    if missing:
+        print(
+            "Refusing to derive destructive-test authority from application settings; "
+            "set " + " and ".join(missing) + " to disposable test-only PostgreSQL URLs.",
+            file=sys.stderr,
+        )
+        return 2
+    for name in ("TEST_DATABASE_URL", "TEST_DB_SUPERUSER_URL"):
+        os.environ[name] = _host_accessible_url(os.environ[name])
     return pytest.main(sys.argv[1:] or ["-q"])
 
 

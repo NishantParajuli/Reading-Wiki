@@ -29,7 +29,9 @@ class CodexAgentGateway:
         self, novel_id: int, question: str, ceiling: ChapterCeiling
     ) -> dict:
         from .agent import answer_question
-        return await answer_question(novel_id, question, ceiling.value)
+        return await answer_question(
+            novel_id, question, ceiling.value, runtime=self._runtime
+        )
 
     async def ensure_index(self, novel_id: int) -> None:
         from .retrieval.bm25 import get_bm25_manager
@@ -39,8 +41,6 @@ class CodexAgentGateway:
         self, profile: dict, relationships: list[dict], ceiling: ChapterCeiling,
         model: str,
     ) -> str:
-        from novelwiki.modules.codex.application.ai_runtime import call_chat_completion
-
         aliases = ", ".join(profile["aliases"]) if profile["aliases"] else "None"
         facts = "\n".join(
             f"- [Fact {fact['id']}, Ch {fact['chapter']}] "
@@ -53,7 +53,7 @@ class CodexAgentGateway:
             f"{rel['target_name']}: {rel['content'] or ''}"
             for rel in relationships
         ) if relationships else "No relationships recorded."
-        return await call_chat_completion(
+        return await self._runtime.ai.call_chat_completion(
             model=model,
             messages=[
                 {
@@ -73,3 +73,5 @@ class CodexAgentGateway:
             ],
             temperature=0.0,
         )
+    def __init__(self, runtime):
+        self._runtime = runtime

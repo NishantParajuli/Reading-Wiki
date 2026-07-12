@@ -28,33 +28,53 @@ class WorkerRegistry:
 
 
 def build_api_worker_registry() -> WorkerRegistry:
-    from novelwiki.bootstrap.acquisition_runtime import wire_acquisition_runtime
-    wire_acquisition_runtime()
-    from novelwiki.bootstrap.codex_worker import wire_codex_worker_dependencies
-    wire_codex_worker_dependencies()
-    from novelwiki.bootstrap.translation import wire_translation_worker_dependencies
-    wire_translation_worker_dependencies()
+    from novelwiki.bootstrap.acquisition_runtime import build_acquisition_runtime
+    acquisition_runtime = build_acquisition_runtime()
+    from novelwiki.bootstrap.codex_worker import build_codex_runtime
+    codex_runtime = build_codex_runtime()
+    from novelwiki.bootstrap.translation import build_translation_execution_runtime
+    translation_runtime = build_translation_execution_runtime()
     from novelwiki.modules.acquisition.adapters.inbound.jobs import execute_scrape_job
     from novelwiki.modules.codex.adapters.inbound.jobs import execute_codex_job
     from novelwiki.modules.translation.adapters.inbound.jobs import execute_translation_job
-    from novelwiki.modules.codex.adapters.outbound.ingest.chunk import chunk_all_chapters as _chunk
-    from novelwiki.modules.codex.adapters.outbound.ingest.embed import embed_missing_chunks as _embed
-    from novelwiki.modules.codex.adapters.outbound.ingest.extract import extract_all_chapters as _extract
+    from novelwiki.ingest.chunk import chunk_all_chapters as _chunk
+    from novelwiki.ingest.embed import embed_missing_chunks as _embed
+    from novelwiki.ingest.extract import extract_all_chapters as _extract
     from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
-    from novelwiki.modules.acquisition.adapters.outbound.scraper.runner import (
+
+    from novelwiki.scraper.runner import (
         scrape_novel as _scrape_novel, scrape_source as _scrape_source,
     )
-    from novelwiki.modules.translation.adapters.outbound.runtime import (
+    from novelwiki.translate.translate import (
         seed_glossary_from_entities as _seed_glossary,
         translate_chapter as _translate_chapter,
     )
+
+    async def invoke_translation(operation, *args, **kwargs):
+        import inspect
+        parameters = inspect.signature(operation).parameters.values()
+        accepts_runtime = any(
+            item.name == "runtime" or item.kind is inspect.Parameter.VAR_KEYWORD
+            for item in parameters
+        )
+        if accepts_runtime:
+            kwargs["runtime"] = translation_runtime
+        return await operation(*args, **kwargs)
 
     async def scrape(job, context):
         class ScrapeContext:
             bail_if_canceled = staticmethod(context.bail_if_canceled)
             update_job = staticmethod(context.update_job)
-            scrape_novel = staticmethod(_scrape_novel)
-            scrape_source = staticmethod(_scrape_source)
+            scrape_novel = staticmethod(
+                lambda *args, **kwargs: _scrape_novel(
+                    *args, runtime=acquisition_runtime, **kwargs
+                )
+            )
+            scrape_source = staticmethod(
+                lambda *args, **kwargs: _scrape_source(
+                    *args, runtime=acquisition_runtime, **kwargs
+                )
+            )
         return await execute_scrape_job(job, ScrapeContext())
 
     async def translation(job, context):
@@ -62,9 +82,17 @@ def build_api_worker_registry() -> WorkerRegistry:
             bail_if_canceled = staticmethod(context.bail_if_canceled)
             load_user = staticmethod(context.load_user)
             pending_translations = staticmethod(context.pending_translations)
-            seed_glossary = staticmethod(_seed_glossary)
+            seed_glossary = staticmethod(
+                lambda *args, **kwargs: invoke_translation(
+                    _seed_glossary, *args, **kwargs
+                )
+            )
             set_progress = staticmethod(context.set_progress)
-            translate_chapter = staticmethod(_translate_chapter)
+            translate_chapter = staticmethod(
+                lambda *args, **kwargs: invoke_translation(
+                    _translate_chapter, *args, **kwargs
+                )
+            )
             update_job = staticmethod(context.update_job)
 
             @staticmethod
@@ -81,9 +109,15 @@ def build_api_worker_registry() -> WorkerRegistry:
     async def codex(job, context):
         class CodexContext:
             bail_if_canceled = staticmethod(context.bail_if_canceled)
-            chunk_all_chapters = staticmethod(_chunk)
-            embed_missing_chunks = staticmethod(_embed)
-            extract_all_chapters = staticmethod(_extract)
+            chunk_all_chapters = staticmethod(
+                lambda *args, **kwargs: _chunk(*args, runtime=codex_runtime, **kwargs)
+            )
+            embed_missing_chunks = staticmethod(
+                lambda *args, **kwargs: _embed(*args, runtime=codex_runtime, **kwargs)
+            )
+            extract_all_chapters = staticmethod(
+                lambda *args, **kwargs: _extract(*args, runtime=codex_runtime, **kwargs)
+            )
             set_progress = staticmethod(context.set_progress)
 
             @staticmethod
@@ -100,21 +134,31 @@ def build_api_worker_registry() -> WorkerRegistry:
 
 
 def build_agy_worker_registry() -> WorkerRegistry:
-    from novelwiki.bootstrap.codex_worker import wire_codex_worker_dependencies
-    wire_codex_worker_dependencies()
-    from novelwiki.bootstrap.translation import wire_translation_worker_dependencies
-    wire_translation_worker_dependencies()
+    from novelwiki.bootstrap.codex_worker import build_codex_runtime
+    codex_runtime = build_codex_runtime()
+    from novelwiki.bootstrap.translation import build_translation_execution_runtime
+    translation_runtime = build_translation_execution_runtime()
     from novelwiki.modules.translation.adapters.outbound.agy import execute_translation_job
     from novelwiki.modules.codex.adapters.inbound.jobs import execute_agy_codex_job
     from novelwiki.modules.codex.adapters.outbound.agy import (
         execute_codex_job as execute_codex_extraction,
     )
-    from novelwiki.modules.codex.adapters.outbound.ingest.chunk import chunk_all_chapters as _chunk
-    from novelwiki.modules.codex.adapters.outbound.ingest.embed import embed_missing_chunks as _embed
+    from novelwiki.ingest.chunk import chunk_all_chapters as _chunk
+    from novelwiki.ingest.embed import embed_missing_chunks as _embed
     from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
 
+    async def run_codex_extraction(job, preflight):
+        import inspect
+        if "runtime" in inspect.signature(execute_codex_extraction).parameters:
+            return await execute_codex_extraction(
+                job, preflight, runtime=codex_runtime
+            )
+        return await execute_codex_extraction(job, preflight)
+
     async def translation(job, preflight, _context):
-        return await execute_translation_job(job, preflight)
+        return await execute_translation_job(
+            job, preflight, runtime=translation_runtime
+        )
 
     async def smoke(job, _preflight, _context):
         from novelwiki.modules.ai_execution.adapters.outbound.agy.smoke import run_smoke_test
@@ -124,11 +168,19 @@ def build_agy_worker_registry() -> WorkerRegistry:
     async def codex(job, preflight, context):
         class CodexContext:
             bail_if_canceled = staticmethod(context.bail_if_canceled)
-            chunk_all_chapters = staticmethod(_chunk)
-            embed_missing_chunks = staticmethod(_embed)
+            chunk_all_chapters = staticmethod(
+                lambda *args, **kwargs: _chunk(*args, runtime=codex_runtime, **kwargs)
+            )
+            embed_missing_chunks = staticmethod(
+                lambda *args, **kwargs: _embed(*args, runtime=codex_runtime, **kwargs)
+            )
             set_progress = staticmethod(context.set_progress)
             execute_codex_job = staticmethod(
-                getattr(context, "execute_codex_job", execute_codex_extraction)
+                getattr(
+                    context,
+                    "execute_codex_job",
+                    run_codex_extraction,
+                )
             )
 
             @staticmethod

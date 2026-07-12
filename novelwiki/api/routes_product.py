@@ -81,6 +81,7 @@ async def api_recap(novel_id: int, req: RecapRequest, user: dict):  # noqa: F405
         codex_principal_from_user,
     )
     from novelwiki.modules.codex.adapters.outbound.agent_bridge import CodexAgentGateway
+    from novelwiki.bootstrap.codex_worker import build_codex_runtime
 
     class DirectCallAgent(CodexAgentGateway):
         async def ensure_index(self, target_novel_id):
@@ -89,7 +90,9 @@ async def api_recap(novel_id: int, req: RecapRequest, user: dict):  # noqa: F405
         async def answer(self, target_novel_id, question, ceiling):
             return await answer_question(target_novel_id, question, ceiling.value)
 
-    service = await build_codex_migration_service(DirectCallAgent())
+    service = await build_codex_migration_service(
+        DirectCallAgent(build_codex_runtime())
+    )
     return await _native.api_recap(
         novel_id,
         req,
