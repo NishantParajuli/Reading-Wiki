@@ -5,6 +5,11 @@ architecture is a **modular monolith organized as vertical slices with Clean/Hex
 boundaries inside each module** — if that sentence isn't fully transparent yet, start
 with the primer.
 
+This index distinguishes **living references** (expected to describe `HEAD`) from
+**historical records** (ADRs, migration evidence, and measured baselines). Historical
+records remain valuable evidence, but their dated counts and verification results are
+not promises about a later checkout.
+
 ## Reading paths
 
 - **Brand new to the project (or to these concepts):**
@@ -25,6 +30,7 @@ with the primer.
   [security](operations/security.md)
 
 ## Getting started
+
 | Doc | Contents |
 |---|---|
 | [what-is-tideglass](getting-started/what-is-tideglass.md) | product tour, the invariant, external services |
@@ -32,6 +38,7 @@ with the primer.
 | [repo-tour](getting-started/repo-tour.md) | every top-level path + task→entry-point table |
 
 ## Concepts
+
 | Doc | Contents |
 |---|---|
 | [primer](concepts/primer.md) | every underlying concept from first principles (web, async, DB, patterns, AI/retrieval, ops) |
@@ -39,20 +46,23 @@ with the primer.
 | [glossary](concepts/glossary.md) | project terms A–Z |
 
 ## Architecture
+
 | Doc | Contents |
 |---|---|
 | [overview](architecture/overview.md) | the whole shape: categories, modules, request lifecycle |
 | [module-anatomy](architecture/module-anatomy.md) | the standard slice layout, layer rules, naming, how to extend |
 | [composition-root](architecture/composition-root.md) | bootstrap: app assembly, DI, lifecycle, worker registry, CLI |
-| [workflows-and-transactions](architecture/workflows-and-transactions.md) | kernel, unit of work, the 8 named workflows |
+| [workflows-and-transactions](architecture/workflows-and-transactions.md) | kernel, unit of work, 7 transactional workflows + the guarded-compensation scheduler |
 | [platform](architecture/platform.md) | settings, pool/UoW, web factory (CSRF/CSP), static, audit, checker |
 | [enforcement](architecture/enforcement.md) | every automated gate + pre-merge checklist |
-| [module-ownership](architecture/module-ownership.md) | table-writer registry + workflow owners *(migration artifact)* |
+| [module-ownership](architecture/module-ownership.md) | human-readable table-writer and workflow-participant map; executable authority is `TABLE_OWNERS` |
 | ADRs [001](architecture/adr-001-modular-monolith.md) · [002](architecture/adr-002-baseline-defects.md) · [003](architecture/adr-003-ai-scheduling-consistency.md) | decisions: the architecture, baseline defects, AI scheduling consistency |
-| [migration-completion](architecture/migration-completion.md) · [migration-equivalence-final](architecture/migration-equivalence-final.md) · [architecture-debt](architecture/architecture-debt.md) | migration evidence (historical) |
+| [migration-completion](architecture/migration-completion.md) · [migration-equivalence-final](architecture/migration-equivalence-final.md) · [architecture-debt](architecture/architecture-debt.md) | dated migration evidence and debt burn-down *(historical)* |
+| [performance-baseline.json](architecture/performance-baseline.json) | executable query/endpoint/worker budgets consumed by `tools/benchmark_queries.py` |
 | [stable-compatibility-entrypoints](architecture/stable-compatibility-entrypoints.md) | the sanctioned legacy import paths |
 
 ## Module reference — [map & dependency graph](modules/README.md)
+
 [identity](modules/identity.md) · [catalog](modules/catalog.md) ·
 [reading](modules/reading.md) · [acquisition](modules/acquisition.md) ·
 [translation](modules/translation.md) · [codex](modules/codex.md) ·
@@ -60,6 +70,7 @@ with the primer.
 [ai-execution](modules/ai-execution.md) · [experience](modules/experience.md)
 
 ## Pipelines (end-to-end walkthroughs)
+
 | Doc | Contents |
 |---|---|
 | [background-jobs-and-quota](pipelines/background-jobs-and-quota.md) | the shared durable-job machinery + the money lifecycle (read first) |
@@ -71,19 +82,23 @@ with the primer.
 | [ai-backends](pipelines/ai-backends.md) | API vs AGY: selection, hardened execution, failure paths |
 
 ## Data & API
+
 | Doc | Contents |
 |---|---|
-| [data/database-schema](data/database-schema.md) | all 39 tables, column-by-column, with ER sketch |
+| [data/database-schema](data/database-schema.md) | all 39 created tables, table-by-table column semantics, including the intentional 38-table reset-list quirk |
 | [data/filesystem-layout](data/filesystem-layout.md) | on-disk roots, serving rules, cleanup, backup |
-| [api/http-api](api/http-api.md) | all 119 routes + auth/CSRF/error conventions |
+| [api/http-api](api/http-api.md) | annotated route families + auth/CSRF/error conventions |
+| [api/http-route-inventory](api/http-route-inventory.md) | exact method/path/endpoint-name inventory for all 119 routes |
 | [api/cli](api/cli.md) | all 13 commands + module entrypoints + recipes |
 
 ## Frontend
+
 | Doc | Contents |
 |---|---|
 | [frontend/overview](frontend/overview.md) | stack, slice structure, routing, data layer, reader, testing |
 
 ## Operations
+
 | Doc | Contents |
 |---|---|
 | [operations/deployment](operations/deployment.md) | topology, image, compose, first boot, deploying changes |
@@ -95,8 +110,21 @@ with the primer.
 
 ## Keeping these docs honest
 
-The contract snapshots (`tests/contracts/snapshots/`) are the machine-checked source of
-truth for routes, CLI, schema, and job states — when they change, update the
-corresponding reference page here (`api/http-api.md`, `api/cli.md`,
-`data/database-schema.md`, `pipelines/background-jobs-and-quota.md`). Module docs should
-change in the same PR as significant module-shape changes.
+Use this precedence when prose and code disagree:
+
+1. Runtime code and executable registries (`TABLE_OWNERS`, router composition, settings,
+   schema DDL) are the implementation truth.
+2. Contract snapshots (`tests/contracts/snapshots/`) freeze externally observable
+   routes, OpenAPI, CLI, DDL, job states, response examples, AGY contracts, and frontend
+   inventory.
+3. Living reference pages explain those artifacts.
+4. ADRs explain why decisions were made; migration reports describe what was verified at
+   the date/commit printed in the report.
+
+After an intentional contract change, run
+`uv run python scripts/contracts.py --update`, review the JSON diff, and update the
+corresponding reference (`api/http-api.md`, `api/http-route-inventory.md`, `api/cli.md`,
+`data/database-schema.md`, or `pipelines/background-jobs-and-quota.md`). Module and
+pipeline docs should change in the same PR as their code. Before merging documentation,
+also verify local Markdown targets and anchors and search renamed symbols/paths across
+`README.md` and `docs/`.

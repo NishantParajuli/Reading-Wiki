@@ -1,5 +1,9 @@
 # Modular-monolith migration finalization status
 
+> **Historical verification record.** This records the migration-finalization state and
+> evidence at the dates/commits named below. Use the living architecture/module docs and
+> executable checks for the current checkout.
+
 The target remains one FastAPI/React deployable and one PostgreSQL database. Runtime ownership is
 now divided among ten business modules plus Platform; no service split or topology change was made.
 

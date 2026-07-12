@@ -1,9 +1,9 @@
 # Pipeline: durable background jobs & the quota lifecycle
 
-> Everything that costs real money or real time runs as a **durable job** — a row in a
-> database table advanced by a polling worker — never as fire-and-forget framework
-> background tasks. This page explains the shared machinery and follows one job through
-> its whole life, including the money.
+> Long-running, user-visible pipelines run as **durable jobs** — rows advanced by polling
+> workers, not fire-and-forget framework tasks. Short read-path AI (Ask/profile/recap)
+> and on-demand translation still execute inline behind their own cost/concurrency
+> guards. This page explains the durable machinery and follows one job through its life.
 
 ## Why durable
 
@@ -25,9 +25,9 @@ All are surfaced together in `GET /api/activity` (Experience) and individually v
 own endpoints. States are contract-frozen in
 `tests/contracts/snapshots/job_states.json`.
 
-## The shared claim–lease pattern
+## Claiming and recovery (two models)
 
-Every worker uses the same concurrency-safe core:
+The generic Work and Import workers share the concurrency-safe claim–lease core:
 
 1. **Atomic claim** — one `UPDATE … WHERE status IN (trigger states) … FOR UPDATE SKIP
    LOCKED` moves the oldest eligible row into a **distinct in-progress status**, bumps
@@ -40,20 +40,26 @@ Every worker uses the same concurrency-safe core:
    *only* when its lease has gone unrenewed past `*_LEASE_TIMEOUT_SECONDS`
    (120 import / 180 generic), i.e. its owner is provably gone. There is deliberately
    **no "requeue everything on boot"** — that would steal live jobs from sibling workers.
-   (The single-instance TTS worker is the exception: it requeues `generating → queued`
-   at startup, safe because generation is idempotent against its audio cache.)
 4. **Cooperative cancel** — `cancel` marks intent; queued jobs are simply never claimed;
    running handlers call `bail_if_canceled()` between expensive stages, so completed
    units are kept.
 5. **Retry** — a crashed attempt goes back to `queued` while `attempts < max_attempts`
    (3), else `failed` with the error recorded.
 
+TTS is the explicit alternate model: it has no `claim_token`/heartbeat lease columns,
+assumes one worker per database, and requeues `generating → queued` at startup. Audio
+generation is cache-idempotent and protected by a PostgreSQL advisory target lock, but
+operators must not start multiple TTS worker processes because one startup could requeue
+another process's live job.
+
 ## Life of a codex build (worked example)
 
 1. **Schedule** — `POST /api/novels/42/codex/build` →
    `CodexCommandService.schedule_build`: Catalog editable check → AI-backend resolution →
    **quota reserve** (1 × `codex_builds` via Identity) → `create_job(kind='codex_build',
-   idempotency_key='codex_build:42', quota_kind='codex_builds', quota_reserved=1, …)`.
+   idempotency_key='codex:novel42:None:None:0', quota_kind='codex_builds',
+   quota_reserved=1, …)`. The final key fields are `from`, `to`, and `force`, so
+   different ranges are independently deduplicated.
    - If an active job with that key exists (`queued`/`running`/`waiting_provider`), the
      insert **dedupes** onto it and the reservation is refunded — a double-click costs
      nothing (the `schedule_ai_job` compensation shape; ADR 003 documents the accepted
@@ -74,7 +80,8 @@ Every worker uses the same concurrency-safe core:
 | Kind | Reserve | Consume | On cancel/fail |
 |---|---|---|---|
 | `codex_build` | 1 up front | 1 on success | full refund |
-| `translate` | pending-chapter count up front | +1 per chapter **as it actually commits** (inside the `commit_translation` transaction) | refund of the un-consumed remainder — finished chapters stay charged, unreached ones never charge |
+| `translate` (AGY) | pending-chapter count up front | +1 per chapter **as it actually commits** (inside the `commit_translation` transaction) | refund of the unconsumed remainder — finished chapters stay charged |
+| `translate` (API) | availability-check only at scheduling; reserve 1 under each chapter lock | the reserved unit is the charge; failed provider/commit attempts refund it immediately | no batch reservation remains to settle |
 | TTS (`tts_jobs`) | none (checked, not reserved) | 1 per chapter **only on actual generation** (cache hits/skips free) | nothing to refund |
 | OCR (`ocr_pages`) | via import cost-confirm gate | per page escalated | budget + quota guards; `ocr_paused` on daily-budget exhaustion |
 | `scrape` | — | free | — |

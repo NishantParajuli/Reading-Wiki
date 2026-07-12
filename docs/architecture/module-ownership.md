@@ -1,5 +1,9 @@
 # NovelWiki module ownership
 
+This is the human-readable ownership map. The executable authority is
+`novelwiki/platform/architecture/checks.py::TABLE_OWNERS`; the architecture test fails
+when production SQL violates it. Keep this page and that registry in the same change.
+
 | Module | Write-owned tables |
 |---|---|
 | Platform Database / Observability | `app_migrations`, `audit_events` |
@@ -14,9 +18,9 @@
 | AI Execution | `user_ai_backend_policies`, `ai_request_locks`, `provider_budget`, `ai_execution_runs`, `ai_worker_heartbeats` |
 | Experience | none; registered read-only projections only |
 
-Cross-module executable dependencies are injected behind consumer-owned ports. Atomic multi-writer
-operations live in `novelwiki/workflows`; router, CLI, and worker adapters do not own transactions
-or SQL.
+Cross-module executable dependencies are injected behind consumer-owned ports.
+Cross-module write coordination lives in `novelwiki/workflows`; router, CLI, and worker
+adapters do not own transactions or SQL.
 
 ## Named cross-module workflows
 
@@ -27,10 +31,15 @@ or SQL.
 | `update_source_offset` | Acquisition, Reading, Codex |
 | `commit_import` | Acquisition, Catalog, Reading, Codex |
 | `commit_translation` | Reading, Translation, Work |
+| `commit_codex_extraction` | Reading, Codex |
+| `finalize_job_quota` | Work, Identity |
 | `schedule_ai_job` | requesting feature, Identity quota, Work |
 
-Every participant is bound to the workflow unit of work's connection. The workflow imports only
-public module contracts and contains no FastAPI, asyncpg, provider, or filesystem implementation.
+The first seven workflows are transaction-bound: every participant is bound to the unit
+of work's one connection. `schedule_ai_job` is the explicit exception: it preserves
+`reserve → optional owner command → create/dedupe → compensate` ordering and has the
+documented process-crash window in ADR 003. Every workflow is SQL-free and contains no
+FastAPI, asyncpg, provider, or filesystem implementation.
 
 ## Approved cross-owner projections
 

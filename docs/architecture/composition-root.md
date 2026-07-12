@@ -102,11 +102,12 @@ Startup/shutdown is an explicit, ordered list of `LifecycleHook`s executed by
 Shutdown stops workers **before** closing the pool (10 → 20 → 30 → 40), so an in-flight
 job can finish its last write. Worker `stop()`s cancel their loop tasks and wait.
 
-Rationale for "workers inside the web process": one deployable. Any worker can also run as
-a separate process (the import worker has a first-class CLI mode; the generic/TTS loops
-are idempotent to start and lease-safe across multiple instances) — the leased-claim
-design in [../pipelines/background-jobs-and-quota.md](../pipelines/background-jobs-and-quota.md)
-is what makes N>1 workers safe.
+Rationale for "workers inside the web process": one deployable. Import has a first-class
+standalone CLI mode and, like the generic Work worker, is claim-lease safe with N>1
+instances. TTS is different: it requeues every `generating` row at startup and is a
+single-instance-per-database design (its advisory target lock prevents duplicate audio
+targets but does not make lifecycle recovery multi-worker safe). See
+[../pipelines/background-jobs-and-quota.md](../pipelines/background-jobs-and-quota.md).
 
 ## 4. The worker-handler registry (`bootstrap/workers.py`)
 

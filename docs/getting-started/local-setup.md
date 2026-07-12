@@ -55,8 +55,9 @@ uvicorn novelwiki.api.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Open http://localhost:8000 — register, or log in with the bootstrapped admin. The SPA is
-served by FastAPI itself; there is no separate frontend server. (For frontend work,
-`npm run dev` gives you Vite HMR proxied onto the backend instead of rebuilding.)
+served by FastAPI itself; there is no separate frontend server. For frontend work, Vite
+defaults its proxy to backend port 8001. With the port-8000 command above, run
+`VITE_API_PROXY=http://localhost:8000 npm run dev` instead of rebuilding.
 
 Startup also launches the three background workers (import, TTS, generic jobs) inside
 the server process — no extra processes needed in dev.
@@ -88,8 +89,9 @@ All 13 commands: [../api/cli.md](../api/cli.md).
 ```bash
 uv run python tools/check_architecture.py   # boundary rules (no DB needed)
 uv run pytest -q tests                      # unit + architecture + contracts (no DB)
-uv run python scripts/test_backend.py       # full integration (creates a disposable
-                                            # tg_pytest_* database; needs pgvector)
+TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/novelwiki \
+TEST_DB_SUPERUSER_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres \
+  uv run python scripts/test_backend.py     # creates/drops a random tg_pytest_* DB
 cd novelwiki/frontend && npm test
 ```
 

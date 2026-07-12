@@ -1,16 +1,20 @@
 # Testing NovelWiki
 
-Backend integration tests create a random `tg_pytest_*` database and destroy it after the run.
-They never use the configured application database directly.
+Backend integration tests create a random `tg_pytest_*` database and destroy it after
+the run. They never use the configured application database directly. The launcher
+deliberately refuses to infer destructive-test authority from the app's `DATABASE_URL`:
+point both variables at a PostgreSQL/pgvector server on which the test user may create
+and drop databases. The named app database is only a naming/connection template.
 
 ```bash
-uv run python scripts/test_backend.py
+TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/novelwiki \
+TEST_DB_SUPERUSER_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres \
+  uv run python scripts/test_backend.py
 ```
 
-The launcher maps Docker's `host.docker.internal` to `127.0.0.1` when tests run on the host. In CI,
-set `TEST_DATABASE_URL` and `TEST_DB_SUPERUSER_URL` explicitly to a PostgreSQL service containing
-the pgvector extension. Connections fail within five seconds and diagnostics contain only the
-host and database name, never credentials.
+The launcher maps Docker's `host.docker.internal` to `127.0.0.1` when tests run on
+the host. Connections fail within five seconds and diagnostics contain only the host and
+database name, never credentials.
 
 Architecture-only tests do not require PostgreSQL:
 
@@ -21,13 +25,22 @@ uv run pytest -q tests
 The blocking local release-candidate checks are:
 
 ```bash
-uv run python tools/check_architecture.py
-TEST_DATABASE_URL=... TEST_DB_SUPERUSER_URL=... uv run pytest -q
+export TEST_DATABASE_URL=postgresql://test-user:password@127.0.0.1:5432/novelwiki_test
+export TEST_DB_SUPERUSER_URL=postgresql://test-admin:password@127.0.0.1:5432/postgres
+
+uv run python tools/check_architecture.py --strict
+uv run pytest -q tests
+uv run python scripts/contracts.py
+uv run python scripts/test_backend.py
+DATABASE_URL="$TEST_DATABASE_URL" DB_SUPERUSER_URL="$TEST_DB_SUPERUSER_URL" \
+  uv run python -m novelwiki.db.schema
 uv run python tools/benchmark_queries.py --database-url "$TEST_DATABASE_URL" --check
 cd novelwiki/frontend
 npm test
 npm run build
 npm run test:e2e
+cd ../..
+uv run python scripts/test_real_browser.py
 ```
 
 The architecture checker enforces table writers/readers, an acyclic module graph, SQL-free inbound

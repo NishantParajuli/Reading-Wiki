@@ -22,7 +22,7 @@ point *inward*. Concretely, per layer:
 
 | Layer | May import | Must NOT import |
 |---|---|---|
-| `domain/` | stdlib, `novelwiki.kernel` | anything else — no FastAPI, no asyncpg, no settings, no other modules |
+| `domain/` | stdlib, its own domain package, `novelwiki.kernel`, and passive types from another module's `public.py` where the current model requires them | frameworks/infrastructure — no FastAPI, asyncpg, settings, pools, or adapters |
 | `application/` | its own `domain/`, `novelwiki.kernel`, other modules' `public.py` **types** | FastAPI, asyncpg, the DB pool, provider SDKs, `novelwiki.platform.database`, any adapter |
 | `adapters/inbound/` | its own `application/`, kernel errors, FastAPI/Typer | the database (inbound adapters are **database-free** — verified by the checker), other modules' internals |
 | `adapters/outbound/` | its own `application/` ports (to implement them), asyncpg/httpx/etc., `platform.database`, other modules' `public.py` | other modules' internals |
@@ -65,12 +65,15 @@ this module. It contains three kinds of things, all *passive*:
 3. **Stable errors/enums** where consumers need them (e.g. AI Execution re-exports
    `AgyError`, `BudgetExhausted`, `Workload`, `ExecutionBackend` through its `public.py`).
 
-What you will **never** find in `public.py`: functions with bodies, SQL, module-level
-state, or imports of another module. Importing a protocol tells you *nothing* about who
-implements it — that decision belongs to Bootstrap.
+What you will **never** find at module scope in `public.py`: executable service/repository
+functions, SQL, mutable implementation state, adapter imports, or another module's
+internals. DTOs may have passive derived helpers (`Principal.is_admin` and
+`Principal.from_user`), and a public file may re-export its own application/domain
+contracts. Importing a protocol still tells you *nothing* about who implements it — that
+decision belongs to Bootstrap.
 
 Sizes vary with responsibility: Reading's contract is the largest (`reading/public.py`,
-~149 lines, seven distinct protocols, because chapters are the shared substrate that
+149 lines, nine protocol declarations, because chapters are the shared substrate that
 translation, codex, narration, and import all touch), while Experience's is six lines
 (`ExperienceQueries` with `home()` and `activity()`).
 
@@ -243,7 +246,7 @@ port + outbound adapter if new data is needed. Then regenerate the contract snap
 `public.py`, implement it in your outbound layer, and have Bootstrap inject it into the
 consumer's port. Never let the consumer import your internals.
 
-**A new cross-module atomic write** — a new named workflow (see
+**A new cross-module atomic write** — a new transaction-bound named workflow (see
 [workflows-and-transactions.md](workflows-and-transactions.md)) plus `…TransactionApi`
 entries in each participating module's `public.py` and transaction-bound services in their
 outbound layers, registered in the UoW factory Bootstrap builds.

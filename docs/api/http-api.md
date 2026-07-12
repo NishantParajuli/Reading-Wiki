@@ -3,7 +3,9 @@
 > **Source of truth:** the contract snapshot `tests/contracts/snapshots/routes.json`
 > (119 routes) and `openapi.json` (schemas). A live instance serves interactive docs at
 > `/docs` (Swagger) and `/redoc`, and the raw spec at `/openapi.json`. This page is the
-> annotated map: every route, grouped by owning module, plus the cross-cutting rules.
+> annotated map: every route family, grouped by owning module, plus the cross-cutting
+> rules. For the literal 119-row method/path/endpoint-name list, use
+> [http-route-inventory.md](http-route-inventory.md).
 
 ## Cross-cutting rules
 
@@ -33,7 +35,12 @@ not unlock anything.
 
 ---
 
-## Identity — auth (`/api/auth`, public with per-route rate limits)
+## Identity — auth (`/api/auth`, mixed public/session-gated routes)
+
+The router has no blanket session dependency because registration/login/reset/OAuth must
+be reachable before authentication. Individual account routes (`logout`, `me`,
+`change-password`, and linked-provider reads) require a valid session; public mutations
+apply their own durable rate limits.
 
 | Method & path | Purpose |
 |---|---|
@@ -161,7 +168,7 @@ self, admins may add `user_id`) · `GET /api/jobs/{id}` · `POST /api/jobs/{id}/
 ### Changing the API
 
 Any route addition/change must regenerate `routes.json`/`openapi.json`/`responses.json`
-via `scripts/contracts.py` — the snapshot diff is part of the review
+via `uv run python scripts/contracts.py --update` — the snapshot diff is part of the review
 ([../architecture/enforcement.md](../architecture/enforcement.md)). Frontend calls live
 in the matching slice's `api.js` (checker-verified module boundaries; inventory frozen in
 `frontend_inventory.json`).

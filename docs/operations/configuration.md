@@ -6,6 +6,16 @@
 > default and what it actually controls. An AGY `@model_validator` range-checks that
 > block at boot — invalid AGY config refuses to start.
 
+Operating-system environment variables override `.env`, and code defaults apply when
+neither supplies a value. `.env.example` is an opinionated deployment template, not a
+copy of code defaults (for example it may deliberately override a model or verification
+toggle). Unknown/stale template keys are ignored because `extra="ignore"`; confirm the
+field exists on `Settings` before relying on it.
+
+At this revision, `.env.example` contains one such ignored legacy key:
+`SCRAPER_CONCURRENCY`. Scraping is sequential and controlled by delay/timeout settings;
+setting that name has no runtime effect.
+
 ## Database
 
 | Setting | Default | Notes |
@@ -143,8 +153,8 @@ content.
 |---|---|
 | Login | `AUTH_LOGIN_IP_LIMIT` 10, `AUTH_LOGIN_ACCOUNT_LIMIT` 5 / `AUTH_LOGIN_WINDOW_SECONDS` 600 |
 | Register | `AUTH_REGISTER_IP_LIMIT` 5 / `AUTH_REGISTER_WINDOW_SECONDS` 3600 |
-| Reset request | IP 5, email 3 / 3600 (`AUTH_RESET_REQUEST_*`) |
-| Reset submit | IP 10, token 5 / 3600 (`AUTH_RESET_SUBMIT_*`) |
+| Reset request | `AUTH_RESET_REQUEST_IP_LIMIT` 5, `AUTH_RESET_REQUEST_EMAIL_LIMIT` 3 / `AUTH_RESET_REQUEST_WINDOW_SECONDS` 3600 |
+| Reset submit | `AUTH_RESET_SUBMIT_IP_LIMIT` 10, `AUTH_RESET_SUBMIT_TOKEN_LIMIT` 5 / `AUTH_RESET_SUBMIT_WINDOW_SECONDS` 3600 |
 
 ## Bootstrap admin & migration
 
@@ -182,7 +192,7 @@ boot. See [../modules/ai-execution.md](../modules/ai-execution.md) and
 | `AGY_ENABLED` | `false` | global kill switch |
 | `AGY_BINARY` / `AGY_MIN_VERSION` / `AGY_BINARY_SHA256` | local path / `1.1.1` / pinned hash | integrity pin; updating AGY is an explicit operator action (empty hash = deliberate unpinned dev) |
 | `AGY_WORK_DIR` | `~/.local/share/novelwiki/agy-jobs` | story-bearing workspaces outside checkout + public roots |
-| `AGY_MODEL_TRANSLATE` / `_CODEX` / `_SEGMENT` / `_OCR` | Gemini 3.5 Flash (Medium/High/Medium/High) | **exact display names** from `agy models`; preflight hard-fails on catalog drift |
+| `AGY_MODEL_TRANSLATE` / `AGY_MODEL_CODEX` / `AGY_MODEL_SEGMENT` / `AGY_MODEL_OCR` | Gemini 3.5 Flash (Medium/High/Medium/High) | **exact display names** from `agy models`; preflight hard-fails on catalog drift |
 | `AGY_MODE` | `""` | `""` \| `accept-edits` \| `plan` |
 | `AGY_MAX_CONCURRENT` | 1 | 1–4 |
 | `AGY_PRINT_TIMEOUT_SECONDS` / `AGY_OUTER_TIMEOUT_GRACE_SECONDS` / `AGY_KILL_GRACE_SECONDS` | 1200 / 30 / 10 | subprocess timeout → grace → kill escalation |

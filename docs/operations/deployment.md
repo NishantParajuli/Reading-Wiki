@@ -87,9 +87,11 @@ docker compose build web
 docker compose up -d web       # workers stop gracefully; leases/durable jobs resume
 ```
 
-Durable jobs survive this by design: queued work stays queued; a job that was running is
-reclaimed after its lease expires. For release-candidate rigor (contract gates, backup
-rehearsal, image-digest rollback), follow [../release-runbook.md](../release-runbook.md).
+Durable jobs survive this by design: queued work stays queued; running generic/import
+work is reclaimed after lease expiry, while the single-instance TTS worker requeues
+interrupted `generating` jobs at startup and skips audio already cached. For
+release-candidate rigor (contract gates, backup rehearsal, image-digest rollback), follow
+[../release-runbook.md](../release-runbook.md).
 
 ## Running without Docker (dev)
 

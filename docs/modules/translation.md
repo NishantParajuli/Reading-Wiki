@@ -55,12 +55,15 @@ under a staged batch).
 `TranslationSchedulingService.schedule(novel_id, principal, command)` — the HTTP
 `POST /api/novels/{id}/translate` path:
 
-1. Catalog editable check (port).
-2. Count pending chapters in range (Reading port) — nothing to do ⇒ `InvalidOperation`.
-3. Resolve execution backend (API vs AGY) via `BackendResolutionPort` (AI Execution).
-4. Reserve quota for the pending count (`TranslationQuotaPort` → Identity).
+1. Catalog editable check (port), then fast dedupe against the idempotency key.
+2. Resolve execution backend (API vs AGY) via `BackendResolutionPort` (AI Execution).
+3. Count pending chapters in range (Reading port). A zero count is allowed: the job
+   starts and completes as a no-op after recomputing the range at execution time.
+4. **AGY:** reserve the pending count up front. **API:** check that the current count
+   would fit, but reserve one unit at a time under the per-chapter lock during execution.
 5. Create-or-dedupe the durable Work job (`TranslationWorkPort`, idempotency-keyed).
-6. Refund on failure or dedupe — the `schedule_ai_job` compensation shape (ADR 003).
+6. Refund any speculative AGY reservation on failure or a create-time dedupe race — the
+   `schedule_ai_job` compensation shape (ADR 003).
 
 The worker side then meters per chapter *as it actually translates*, so a canceled batch
 keeps only what it finished charged.

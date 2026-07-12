@@ -28,7 +28,7 @@ wiki/
 │   │   #  config/settings.py · database/{pool,uow} · web/{factory,static} ·
 │   │   #  observability/audit · auth re-exports · cli runtime · architecture/checks
 │   ├── kernel/                # shared errors + opaque transaction contracts
-│   ├── workflows/             # 8 named cross-module atomic operations
+│   ├── workflows/             # 8 coordinators (7 transactional + scheduler compensation)
 │   ├── bootstrap/             # THE composition root: web app assembly, DI wiring,
 │   │                          # lifecycle, worker registry, CLI composition
 │   │
@@ -58,7 +58,7 @@ wiki/
 │                              # (disposable-DB integration launcher) ·
 │                              # rehearse-backup-restore.sh · real-browser fixtures
 ├── deploy/                    # novelwiki-agy-worker.service (systemd --user unit)
-├── implementation-plan/       # the migration plan (normative for table ownership)
+├── implementation-plan/       # historical migration plans (not living authority)
 ├── data/                      # runtime data (gitignored)                → docs/data/filesystem-layout.md
 └── docs/                      # ← you are here                          → docs/README.md
 ```

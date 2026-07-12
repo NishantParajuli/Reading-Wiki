@@ -27,7 +27,7 @@ No PostgreSQL needed — these are static analyses over the production tree
 | **Legacy facade imports** | a business module imports a compatibility path (`novelwiki.auth.*`, `novelwiki.jobs.*`, `novelwiki.quota`, …) | using the canonical module/platform path; facades are for external consumers only |
 | **Inbound database ban** | SQL strings or pool usage appear in any `adapters/inbound/` file (HTTP/CLI/worker transports are database-free) | pushing persistence into the application/outbound layers |
 | **Pool placement** | pool initialization occurs outside outbound adapters/Bootstrap | letting Bootstrap construct pool-backed services |
-| **Frontend boundaries** | a frontend module's `api.js` calls endpoints outside its slice's surface | adding the endpoint to the right slice's `api.js` |
+| **Frontend boundaries** | the deleted global API/query facade returns, a slice imports another slice's implementation file, or a reviewed route screen exceeds its size limit | using the owning slice's public `api.js`/`queries.js`/`index.js`, shared hooks, or extracting components |
 | **Layer matrix / public surface** (strict) | domain importing application, application importing adapters, non-passive `public.py`, etc. | restructuring per [module-anatomy.md](module-anatomy.md) |
 
 There is no suppression count and no baseline file: **any** violation ⇒ exit 1. A genuine
@@ -47,14 +47,14 @@ compares the live application against deterministic JSON snapshots in
 | `routes.json` | the full HTTP route inventory (method + path + endpoint name; currently 119 routes) |
 | `openapi.json` | the normalized OpenAPI document (request/response schemas) |
 | `cli.json`, `cli_help.json` | the 13 CLI commands and every help surface, captured semantically via Typer's `CliRunner` (ANSI styling/wrapping discarded; every word, option, default, and command order kept) |
-| `schema.json` | the normalized DDL — all 39 tables, columns, indexes |
+| `schema.json` | normalized DDL (which creates all 39 tables) plus the 38-entry `ALL_TABLES` reset list; `auth_rate_limits` omission is frozen by ADR 002 |
 | `job_states.json` | the three job systems' state machines (generic kinds + active/terminal sets, import trigger/marker/resume map, TTS states) |
 | `responses.json` | representative success/error JSON for every route family |
 | `agy_contracts.json` | AGY manifest schemas and plugin file hashes |
 | `frontend_inventory.json` | frontend routes and the per-module endpoint lists |
 
 If your change *intentionally* alters a contract (new endpoint, new column, new CLI
-option), regenerate via `scripts/contracts.py` and commit the diff — the snapshot diff *is*
+option), regenerate via `uv run python scripts/contracts.py --update` and commit the diff — the snapshot diff *is*
 the reviewable statement of the external change. If the diff surprises you, the change
 was not intentional. `docs/architecture/migration-equivalence-final.md` records the
 SHA-256s proving the migrated tree matched the pre-migration baseline.
@@ -68,7 +68,7 @@ Full instructions in [../testing.md](../testing.md); summary of who tests what:
 | Unit | `uv run pytest -q tests/unit` | no | domain policies, application services with fake ports, kernel/platform pieces, workflow logic |
 | Architecture | `uv run pytest -q tests/architecture` | no | §1 rules |
 | Contracts | `uv run pytest -q tests/contracts` | no | §2 snapshots |
-| Backend integration (eval) | `uv run python scripts/test_backend.py` | yes (creates a disposable `tg_pytest_*` DB, needs pgvector) | end-to-end suites in `novelwiki/eval/`: auth/CSRF security, spoiler boundaries, durable jobs, import (incl. chunked upload attack cases), scraper SSRF, sidecar auth, quota/cost controls, AGY policy/runner/workload contracts, product smoke |
+| Backend integration (eval) | `TEST_DATABASE_URL=… TEST_DB_SUPERUSER_URL=… uv run python scripts/test_backend.py` | yes (creates a disposable `tg_pytest_*` DB, needs pgvector) | end-to-end suites in `novelwiki/eval/`: auth/CSRF security, spoiler boundaries, durable jobs, import (incl. chunked upload attack cases), scraper SSRF, sidecar auth, quota/cost controls, AGY policy/runner/workload contracts, product smoke |
 | Frontend | `cd novelwiki/frontend && npm test && npm run build && npm run test:e2e` | – | component/API-contract unit tests, production build, Playwright critical paths |
 | Query performance | `uv run python tools/benchmark_queries.py --database-url "$TEST_DATABASE_URL" --check` | yes | hot-path query plans/latencies vs. `docs/architecture/performance-baseline.json` |
 

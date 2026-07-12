@@ -26,7 +26,7 @@ novelwiki/platform/
 
 ## 1. Configuration (`platform/config/settings.py`)
 
-A single `Settings(BaseSettings)` class (~90 fields) loaded from the environment and
+A single `Settings(BaseSettings)` class (currently 150 declared fields) loaded from the environment and
 `.env` (`extra="ignore"`). Import it as `from novelwiki.platform.config import settings`.
 Highlights of the structure (the full annotated reference is
 [../operations/configuration.md](../operations/configuration.md)):
@@ -128,8 +128,10 @@ A minimal, durable audit facility:
 
 `cli_runtime.run_cli(coro)` gives every Typer command the same asyncio entry (loop setup,
 pool teardown, clean Ctrl-C). `platform/cli.py` contributes the one platform-owned
-command, `reset-db` (interactive confirm unless `--force`; drops all 39 tables in
-dependency order then re-applies schema — destructive by design).
+command, `reset-db` (interactive confirm unless `--force`; drops the 38 tables in the
+historically frozen `ALL_TABLES` list, then re-applies all DDL). The omitted
+`auth_rate_limits` table survives reset by ADR-002 compatibility policy, so “reset” is
+not a literal empty-schema operation.
 
 ## 6. The architecture checker (`platform/architecture/checks.py`)
 
@@ -148,8 +150,9 @@ tree exposing the violation finders that `tools/check_architecture.py` and
 - `legacy_facade_import_violations` — a business module importing a compatibility path
   (`novelwiki.auth.*`, `novelwiki.jobs.*`, …) for internal communication.
 - `inbound_database_violations` — SQL/pool usage in any `adapters/inbound/` file.
-- `frontend_boundary_violations` — frontend module-boundary rules (each
-  `frontend/src/modules/<name>/api.js` may only call its own backend surface).
+- `frontend_boundary_violations` — bans the deleted global API/query facades, internal
+  cross-slice imports, and growth beyond reviewed route-screen size limits. Endpoint
+  inventories themselves are frozen separately by the contract snapshot.
 - `layer_dependency_violations`, `public_surface_violations` (strict mode) — the full
   Clean Architecture layer matrix and public-surface shape rules.
 

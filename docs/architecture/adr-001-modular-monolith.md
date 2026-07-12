@@ -13,7 +13,9 @@ code is owned by the canonical modules `identity`, `catalog`, `reading`, `acquis
 Within a module, inbound adapters depend on application code, application code depends on domain
 rules and ports, and outbound adapters implement those ports. A module may import only stable types
 from another module's `public.py`; executable capabilities are injected by the composition root.
-Cross-module atomic operations are named, SQL-free workflows using transaction-bound public APIs.
+Cross-module writes are named, SQL-free workflows. Atomic operations use
+transaction-bound public APIs; ADR 003 records the one accepted guarded-compensation
+exception for initial AI scheduling.
 
 Each database table and filesystem root has one writer owner as defined in
 `implementation-plan/modular-monolith-clean-architecture-migration-plan.md`. Experience is the only

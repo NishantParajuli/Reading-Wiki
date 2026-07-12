@@ -45,11 +45,13 @@ src/
 └── styles/                  # tokens.css (design tokens) → base/components/shell/screens/reader
 ```
 
-**Slice rule (checker-enforced, snapshot-frozen):** each `modules/<name>/api.js` may only
-call its own backend surface; the full route/endpoint inventory is contract-frozen in
-`tests/contracts/snapshots/frontend_inventory.json`, and `check_architecture.py` has a
-frontend-boundary rule. Cross-slice needs go through props/shared hooks, not another
-slice's api.js.
+**Slice rule:** each `modules/<name>/api.js` owns that frontend slice's backend calls.
+The endpoint inventory is contract-frozen in
+`tests/contracts/snapshots/frontend_inventory.json`. The architecture checker
+mechanically bans the deleted global API/query facades and internal cross-slice imports;
+endpoint-to-owner semantics remain a required snapshot/code-review check. Cross-slice
+needs go through props/shared hooks or another slice's public `api.js`/`queries.js`/
+`index.js`, never its implementation files.
 
 ## Routing (`app/Root.jsx`)
 
@@ -89,8 +91,10 @@ volume-grouped TOC (`toc.jsx`), bookmarks, per-chapter translation editing (over
 editor + base-vs-mine diff via `lib/diff.jsx`), provenance badges, the audiobook
 transport (narration slice), and codex citation popovers (`lib/markdown.jsx` renders
 answer markdown with `CiteProvider` so `[c:…]` markers open evidence popovers).
-Progress writes are debounced `PUT /progress` calls — which is also what advances the
-server-trusted spoiler ceiling.
+Resume writes are debounced `PUT /progress` calls and update `last_chapter`/`scroll_pct`
+only. The trusted spoiler ceiling advances separately when the authenticated
+`GET /chapter/{number}` response is served, so a fabricated progress PUT cannot unlock
+future codex data.
 
 ## Styling
 

@@ -84,5 +84,7 @@ owned tables; also `novel_titles(ids)` used by projections through injected port
   `NarrationAccessPort`, `CatalogEditPort`, `CatalogAccessPort`, …).
 - `touch_novel` bumps `updated_at` when chapters land (scrape/import), which feeds
   Discover's freshness filter.
-- `enable_codex` is flipped by the first codex build (Codex asks Catalog to enable it
-  transactionally with scheduling).
+- `enable_codex` is flipped before the first codex job is inserted. This is the optional
+  owner command inside ADR 003's guarded-compensation sequence, not part of one DB
+  transaction with scheduling; a scheduling exception refunds quota but may leave the
+  harmless opt-in flag enabled.

@@ -49,7 +49,7 @@ Everything under `novelwiki/` falls into exactly one of five categories:
 | **Business modules** | `novelwiki/modules/{identity,catalog,reading,acquisition,translation,codex,narration,work,ai_execution,experience}` | All business behavior; each owns specific DB tables and filesystem roots. |
 | **Platform** | `novelwiki/platform/` | Technical infrastructure with no business rules: settings, DB pool + unit of work, FastAPI factory (middleware/CSP/CSRF), static file serving, audit sink, CLI runtime, and the architecture checker itself. |
 | **Kernel** | `novelwiki/kernel/` | Tiny shared vocabulary: transport-neutral error types and the opaque transaction contracts. Everything may import kernel; kernel imports nothing. |
-| **Workflows** | `novelwiki/workflows/` | Named cross-module *atomic* operations (e.g. `commit_translation`). Workflows own no SQL; they coordinate transaction-bound public capabilities of several modules inside one database transaction. |
+| **Workflows** | `novelwiki/workflows/` | Named cross-module write coordinators. Seven coordinate transaction-bound public capabilities inside one DB transaction; `schedule_ai_job` is the ADR-003 guarded-compensation exception. Workflows own no SQL. |
 | **Bootstrap (composition root)** | `novelwiki/bootstrap/` | The only place that knows how everything is wired together: builds the FastAPI app, registers routers, injects every dependency, starts/stops workers, owns the worker-handler registry and the CLI composition. |
 
 Everything else at the `novelwiki/` top level (`api/`, `auth/`, `db/`, `jobs/`, `agy/`,
@@ -73,7 +73,7 @@ Outside the package:
 | `tools/` | `check_architecture.py` (boundary gate), `benchmark_queries.py`, `rehearsal_database.py`. |
 | `scripts/` | `contracts.py` (snapshot regeneration), `test_backend.py` (integration launcher), backup-restore rehearsal, real-browser fixture. |
 | `deploy/` | `novelwiki-agy-worker.service` systemd unit for the dedicated AGY host worker. |
-| `implementation-plan/` | The migration plan that produced this architecture (historical, but it is the normative source for table ownership). |
+| `implementation-plan/` | Historical plans that produced this architecture. They explain migration intent; living ownership authority is `platform/architecture/checks.py::TABLE_OWNERS`. |
 | `data/` | Runtime data (BM25 indexes, assets, audio, import scratch). See [../data/filesystem-layout.md](../data/filesystem-layout.md). |
 
 ---
@@ -99,8 +99,8 @@ reference: [../modules/README.md](../modules/README.md)):
 
 Platform Database/Observability owns the two remaining tables: `app_migrations`,
 `audit_events`. **Every one of the 39 tables has exactly one writer module** — the
-authoritative table is [module-ownership.md](module-ownership.md), and the checker in
-`tools/check_architecture.py` fails the build if any module's SQL touches a table it
+human-readable map is [module-ownership.md](module-ownership.md), and the executable
+registry/checker in `tools/check_architecture.py` fails the build if any module's SQL touches a table it
 doesn't own (reads across owners are only allowed inside Experience's registered
 projections).
 
@@ -113,8 +113,9 @@ projections).
   (`ChapterTextPort`) and Bootstrap injects a Reading-backed implementation at wiring time.
   This keeps the *executable* module graph acyclic and every dependency visible in one
   place.
-- Anything that must write to two modules' tables **atomically** is a named workflow in
-  `novelwiki/workflows/` — see
+- Cross-module writes belong in a named workflow in `novelwiki/workflows/`; operations
+  requiring atomicity use a unit of work, while the one compensating exception is
+  explicitly recorded in ADR 003 — see
   [workflows-and-transactions.md](workflows-and-transactions.md).
 
 ---
@@ -128,7 +129,7 @@ Every module follows the same internal layout (full walkthrough with real code:
 novelwiki/modules/<name>/
 ├── public.py              ← the ONLY thing other modules may import: frozen DTOs,
 │                            Protocol capability interfaces, stable errors
-├── domain/                ← pure business rules & prompts; imports nothing but stdlib/kernel
+├── domain/                ← pure rules/prompts; no framework or infrastructure imports
 ├── application/           ← use cases (services/commands), ports (Protocols the module
 │                            NEEDS), DTOs; no SQL, no HTTP, no provider SDKs, no pool
 └── adapters/
@@ -150,7 +151,7 @@ whether its port is backed by Postgres, a fake in a unit test, or another module
 
 ## Life of a request (worked example)
 
-`PUT /api/novels/42/progress` — a reader finished a chapter:
+`GET /api/novels/42/chapter/12` — a signed-in reader opens a chapter:
 
 1. **Platform Web** (`novelwiki/platform/web/factory.py`): the middleware stamps/propagates
    `X-Request-ID`, enforces CSRF (double-submit cookie), and applies security headers.
@@ -159,15 +160,15 @@ whether its port is backed by Postgres, a fake in a unit test, or another module
    resolves the `tg_session` cookie → hashed token → `sessions` row → `users` row, and
    rejects with 401 if absent/expired.
 3. **Reading inbound HTTP adapter**
-   (`novelwiki/modules/reading/adapters/inbound/http.py::api_set_progress`) validates the
-   Pydantic body and calls the injected `ReadingService`. The adapter contains no SQL.
-4. **Reading application service** (`application/services.py`) applies the business rule —
-   progress may only move to an existing chapter; `max_chapter_read` is monotonic (it never
-   goes down, which is what makes the spoiler ceiling trustworthy) — through its
-   repository port.
+   (`novelwiki/modules/reading/adapters/inbound/http.py::api_get_chapter`) calls the
+   injected `ReadingMigrationService`. The adapter contains no SQL.
+4. **Reading application façade** checks Catalog readability and asks its Reading query
+   capability for the chapter snapshot. On-demand translation may run here when the
+   source is raw and pending.
 5. **Reading outbound adapter** (`adapters/outbound/postgres.py::PostgresReadingRepository`)
-   executes the actual `INSERT … ON CONFLICT` against `reading_progress`, the table Reading
-   owns.
+   loads the snapshot and, because this is an authenticated server-served chapter read,
+   raises `reading_progress.max_chapter_read` with `GREATEST(...)`. A later
+   `PUT /progress` updates only `last_chapter`/`scroll_pct`; it cannot unlock the codex.
 6. Errors flow back as kernel `ApplicationError` subtypes (`NotFound`, `Forbidden`, …) and
    the inbound adapter translates them to HTTP status codes; the transport never leaks
    inward.
@@ -203,7 +204,7 @@ receives out-of-bounds text. Full treatment:
 | CLI commands | 13 (`tests/contracts/snapshots/cli.json`) |
 | Database tables | 39, one writer each (`docs/architecture/module-ownership.md`) |
 | Business modules | 10 + Platform |
-| Named cross-module workflows | 8 (`novelwiki/workflows/`) |
+| Named cross-module workflows | 8: 7 transaction-bound + 1 guarded-compensation (`novelwiki/workflows/`) |
 | In-process durable workers | 3 (import, TTS, generic jobs) + 1 dedicated AGY host worker |
 | Test suites | unit (`tests/unit`), architecture (`tests/architecture`), contracts (`tests/contracts`), DB-backed eval (`novelwiki/eval`), frontend unit + e2e |
 
@@ -211,7 +212,7 @@ receives out-of-bounds text. Full treatment:
 
 - How one module is built inside: [module-anatomy.md](module-anatomy.md)
 - How it's all wired at startup: [composition-root.md](composition-root.md)
-- Atomic cross-module writes: [workflows-and-transactions.md](workflows-and-transactions.md)
+- Cross-module writes and transaction boundaries: [workflows-and-transactions.md](workflows-and-transactions.md)
 - The technical substrate: [platform.md](platform.md)
 - How the rules are enforced mechanically: [enforcement.md](enforcement.md)
 - Per-module deep dives: [../modules/README.md](../modules/README.md)

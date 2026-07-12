@@ -74,9 +74,10 @@ snapshot a version/hash first, do the work, then commit only if it still matches
 (`content_version`, `expected_source_hash`). A mismatch means someone changed it —
 refuse instead of overwrite.
 
-**`FOR UPDATE SKIP LOCKED`.** The queue-claim trick: many workers run
+**`FOR UPDATE SKIP LOCKED`.** The queue-claim trick: many generic/import workers run
 `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED)` and each claims a *different*
-row without waiting — the heart of every durable worker here.
+row without waiting — the heart of the generic Work and Import workers here. TTS uses a
+single-instance queue with restart requeue plus advisory locks instead.
 
 **Idempotency.** An operation you can safely repeat. Our schema DDL is idempotent
 (`CREATE TABLE IF NOT EXISTS`), job scheduling is (an `idempotency_key` dedupes repeat
@@ -123,15 +124,17 @@ process — and we redeploy by replacing the process. So every long/costly task 
 **durable job**: a DB row a **worker** (an infinite poll loop) advances through a state
 machine (`queued → running → done/failed/canceled`), surviving restarts.
 
-**Leases & heartbeats.** A claimed job carries "who claimed it and when the claim was
+**Leases & heartbeats.** A claimed generic/import job carries "who claimed it and when the claim was
 last renewed". A worker renews (heartbeats) while alive; if the lease goes stale, the
 worker is provably dead and the job is safely reclaimed. This is how N workers share one
-queue without double-processing.
+queue without double-processing. It does not apply to the deliberately single-instance
+TTS worker.
 [../pipelines/background-jobs-and-quota.md](../pipelines/background-jobs-and-quota.md).
 
-**Reserve/consume/refund.** Money-safety for jobs: reserve quota up front (so you can't
-over-commit), record consumption as work actually completes, settle exactly once at the
-end (refund the unused remainder on failure/cancel).
+**Reserve/consume/refund.** Money-safety depends on the workload: codex and AGY
+translation reserve up front and generic Work settles once; API translation and TTS
+charge one completed unit at a time. The common goal is the same—never charge work that
+did not land and never double-refund.
 
 ## AI / retrieval
 

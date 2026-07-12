@@ -147,8 +147,11 @@ participants get connection-bound capabilities; commit/rollback decided once.
 **`waiting_provider`** — the parked-for-capacity job status (AGY subscription
 exhausted): no lease, no retries burned, still dedupes, auto-released at `not_before`.
 
-**Workflow** — a named cross-module atomic operation in `novelwiki/workflows/` (8 of
-them). See [workflows-and-transactions](../architecture/workflows-and-transactions.md).
+**Workflow** — a named cross-module write coordinator in `novelwiki/workflows/` (8 of
+them): seven transaction-bound operations plus ADR 003's guarded-compensation AI
+scheduler. See [workflows-and-transactions](../architecture/workflows-and-transactions.md).
 
-**Workload (AI)** — a grantable AGY work category: `translate_batch`, `codex_extract`,
-`segment_import`, `ocr_pages`, `ask`, `profile_synthesis`.
+**Workload (AI)** — the backend-policy vocabulary: `translate_batch`, `codex_extract`,
+`segment_import`, `ocr_pages`, `ask`, `profile_synthesis`. Only the first two
+currently have end-to-end AGY executors; the rest stay on API for automatic/default
+selection and reject an explicit AGY request.

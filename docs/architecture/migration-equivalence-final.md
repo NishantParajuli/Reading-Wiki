@@ -1,5 +1,8 @@
 # Migration equivalence report
 
+> **Historical verification record.** Test counts, timings, and hashes below describe
+> the stated 2026-07-12 run; they are not continuously updated repository statistics.
+
 Verified locally again on 2026-07-12 against baseline commit
 `c244a1fa6e562747041fee0fba5ce455402621de` and migration starting point
 `97c9618`.

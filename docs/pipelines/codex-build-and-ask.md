@@ -11,16 +11,19 @@ job, 1 × `codex_builds` quota) or stage-by-stage via CLI. All stages are idempo
 range-limitable; a rebuild after new chapters only processes the new range.
 
 ### 1. Chunk
+
 Readable chapter text (Reading port) → sentence/paragraph-bounded passages of
 ~`CHUNK_TARGET_TOKENS` (500) with `CHUNK_OVERLAP` (80) token overlap (tiktoken-counted),
 stored in `chunks` with `(novel_id, chapter, chunk_index)` identity. Chapter-bounded
 chunks are what make `WHERE chapter <= ceiling` airtight for retrieval.
 
 ### 2. Embed
+
 Every chunk with `embedding IS NULL` → `EMBED_MODEL` (batched) → pgvector column
 (HNSW cosine index when `EMBED_DIM ≤ 2000`).
 
 ### 3. Extract — forward-only, in strict chapter order
+
 For each chapter ascending (never backwards — Invariant 2 of the pipeline):
 
 1. Inputs: the chapter's chunks (id-marked so the model can cite them), the **running
@@ -47,6 +50,7 @@ For each chapter ascending (never backwards — Invariant 2 of the pipeline):
    Ceiling-relevant caches for the range are cleared.
 
 ### 4. Index
+
 `BM25Manager.rebuild()` — the per-novel bm25s lexical index, persisted under
 `data/bm25_index/<novel_id>/`, staleness-fingerprinted against the chunk set, lazily
 loaded on first query, blocking work offloaded to a thread.

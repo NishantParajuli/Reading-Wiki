@@ -62,10 +62,12 @@ unlock future codex data. Full model:
   hybrid retrieval (BM25 ⊕ pgvector → RRF → rerank) → agentic **Ask** with inline
   citations; entity profiles, timelines, identity-reveal banners; one-click no-spoiler
   **recap** — all bounded by the same trusted ceiling and cached per ceiling.
-- **⚙️ Durable everything** — scrapes, imports, codex builds, translations, and
-  narration run as leased, heartbeated, restart-surviving jobs with idempotent dedupe,
-  cooperative cancel, and **exactly-once quota settlement** (refunds on failure).
-  Optionally, AI jobs can run on the **AGY** subscription backend instead of the
+- **⚙️ Durable pipelines** — scrapes, imports, codex builds, translation batches, and
+  narration survive restarts as database-backed jobs with dedupe and cooperative
+  cancellation. Generic Work jobs and imports use claim leases and heartbeats; the TTS
+  queue is a deliberately single-instance, idempotent worker. Generic metered jobs settle
+  quota exactly once, while TTS charges only audio actually generated. Codex builds and
+  translation batches can optionally use the **AGY** subscription backend instead of the
   metered API (admin-granted, heavily sandboxed).
 
 ---
@@ -76,8 +78,9 @@ unlock future codex data. Full model:
 inside each module.** One FastAPI process + one PostgreSQL database + one React SPA —
 but the code is partitioned into ten business modules that each own their tables (all
 39 have exactly one writer), expose a small `public.py` contract, and receive every
-cross-module capability by injection from a single composition root. Cross-module
-atomic writes are eight named workflows over an opaque unit-of-work. Boundaries are
+cross-module capability by injection from a single composition root. Eight named
+workflows coordinate cross-module writes: seven use an opaque unit-of-work for one DB
+transaction; initial AI scheduling uses guarded compensation by explicit ADR. Boundaries are
 **mechanically enforced** (`tools/check_architecture.py` + architecture tests), and the
 external surface (routes/CLI/schema/job states) is **contract-frozen** as snapshots.
 
@@ -88,7 +91,7 @@ novelwiki/
 │                  (each: public.py + domain/ + application/ + adapters/{inbound,outbound})
 ├── platform/      settings · db pool/UoW · web factory (CSRF/CSP) · audit · arch checks
 ├── kernel/        shared errors + opaque transaction contracts
-├── workflows/     8 named cross-module atomic operations
+├── workflows/     8 named cross-module coordinators (7 transactional + 1 compensating)
 ├── bootstrap/     THE composition root: wiring, lifecycle, workers, CLI
 ├── frontend/      React SPA (vertical slices mirroring the backend)
 └── api/ auth/ db/ jobs/ …   stable compatibility aliases for external consumers
@@ -172,12 +175,15 @@ Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (119 route
 ```bash
 uv run python tools/check_architecture.py    # boundary rules (no DB)
 uv run pytest -q tests                       # unit + architecture + contract snapshots (no DB)
-uv run python scripts/test_backend.py        # DB-backed eval suites (disposable tg_pytest_* DB)
+TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/novelwiki \
+TEST_DB_SUPERUSER_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres \
+  uv run python scripts/test_backend.py      # creates/drops a random tg_pytest_* DB
 cd novelwiki/frontend && npm test && npm run build && npm run test:e2e
 ```
 
 The suites never touch your real database. Contract snapshots freeze routes/OpenAPI/
-CLI/schema/job-states — intentional changes regenerate them via `scripts/contracts.py`.
+CLI/schema/job-states — intentional changes regenerate them via
+`uv run python scripts/contracts.py --update`.
 Details: [docs/testing.md](docs/testing.md) ·
 [docs/architecture/enforcement.md](docs/architecture/enforcement.md).
 
@@ -213,6 +219,6 @@ Full topology + first boot + release/rollback:
 | Architecture | [overview](docs/architecture/overview.md) · [module-anatomy](docs/architecture/module-anatomy.md) · [composition-root](docs/architecture/composition-root.md) · [workflows](docs/architecture/workflows-and-transactions.md) · [platform](docs/architecture/platform.md) · [enforcement](docs/architecture/enforcement.md) |
 | Modules | [map](docs/modules/README.md) + one doc per module |
 | Pipelines | [jobs & quota](docs/pipelines/background-jobs-and-quota.md) · [scraping](docs/pipelines/scraping.md) · [import](docs/pipelines/file-import.md) · [translation](docs/pipelines/translation.md) · [codex](docs/pipelines/codex-build-and-ask.md) · [narration](docs/pipelines/narration.md) · [AI backends](docs/pipelines/ai-backends.md) |
-| Reference | [DB schema](docs/data/database-schema.md) · [filesystem](docs/data/filesystem-layout.md) · [HTTP API](docs/api/http-api.md) · [CLI](docs/api/cli.md) · [configuration](docs/operations/configuration.md) |
+| Reference | [DB schema](docs/data/database-schema.md) · [filesystem](docs/data/filesystem-layout.md) · [HTTP behavior](docs/api/http-api.md) · [exact route inventory](docs/api/http-route-inventory.md) · [CLI](docs/api/cli.md) · [configuration](docs/operations/configuration.md) |
 | Operating | [deployment](docs/operations/deployment.md) · [security](docs/operations/security.md) · [testing](docs/testing.md) · [release runbook](docs/release-runbook.md) · [AGY runbook](docs/agy-operator-runbook.md) |
 | Frontend | [overview](docs/frontend/overview.md) |

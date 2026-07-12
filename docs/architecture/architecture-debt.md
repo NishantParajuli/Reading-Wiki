@@ -1,5 +1,8 @@
 # Architecture finalization debt ledger
 
+> **Historical migration ledger.** Initial counts are evidence from commit `97c9618`;
+> the final zero-debt claim is continuously rechecked by the current architecture gate.
+
 The finalization audit at commit `97c9618` replaced the original narrow architecture
 checker with whole-production-tree SQL placement checks, alias-aware module graph
 resolution, compatibility-facade reporting, and pool/SQL bans for domain,

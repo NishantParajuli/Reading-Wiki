@@ -16,8 +16,8 @@
 | Auth | `OPENROUTER_API_KEY` / `GEMINI_API_KEY` in app env | the CLI's own official browser/keyring login on the host — **never** an app credential |
 | Cost model | per-token, metered by user quotas | subscription capacity (rate/quota windows) |
 | Executor | in-process (routes, generic worker) | dedicated host worker only (`python -m novelwiki.agy.worker`, systemd) |
-| Default | ✅ always available | dormant unless `AGY_ENABLED` **and** an admin grant |
-| Workloads | everything | grantable subset: `translate_batch`, `codex_extract`, `segment_import`, `ocr_pages`, `ask`, `profile_synthesis` |
+| Default | default selection; requires the configured provider credentials | dormant unless `AGY_ENABLED` **and** an admin grant |
+| Workloads | all six policy workloads | implemented end-to-end: `translate_batch`, `codex_extract`; policy/schema vocabulary reserves `segment_import`, `ocr_pages`, `ask`, `profile_synthesis` for future routing, but automatic selection keeps them on API and explicit AGY is rejected today |
 
 ## Backend selection (at scheduling time)
 
@@ -28,8 +28,9 @@ onto the job (`execution_backend`, `backend_model`, `backend_policy_version`,
 1. `requested` is `auto` | `api` | `agy` (UI/API may ask; `auto` follows the user's
    `default_backend`).
 2. AGY is chosen only if: `AGY_ENABLED` globally, the user's
-   `user_ai_backend_policies` row has `agy_enabled` **and** the workload in
-   `agy_workloads`, and the per-user active-AGY-job cap (`max_concurrent_agy_jobs`,
+   `user_ai_backend_policies` row has `agy_enabled`, the workload is one of
+   `IMPLEMENTED_AGY_WORKLOADS`, **and** it appears in `agy_workloads`, and the
+   per-user active-AGY-job cap (`max_concurrent_agy_jobs`,
    1–4) isn't exceeded. Otherwise: API (or a typed error if `agy` was demanded
    explicitly).
 3. The whole schedule runs inside the `schedule_ai_job` compensation shape:
@@ -82,10 +83,12 @@ The dedicated host worker (never the web process) claims `jobs` rows with
 
 ## Read-side AI (no jobs involved)
 
-Ask and profile synthesis execute inline on the API backend, guarded not by monthly
+Ask and profile synthesis execute inline on the API backend (their AGY policy names are
+reserved but not implemented), guarded not by monthly
 quota but by the denial-of-wallet gates (verified email; 30 uncached/h; 2 concurrent;
 tool-arg clamps) — see
-[codex-build-and-ask.md](codex-build-and-ask.md) and `ai_limits`.
+[codex-build-and-ask.md](codex-build-and-ask.md) and AI Execution's
+`adapters/outbound/limits.py`.
 
 ## Admin surface
 

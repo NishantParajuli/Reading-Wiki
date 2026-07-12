@@ -14,7 +14,7 @@ capabilities*, never by touching `chapters` directly.
 
 ## Public contract (`public.py`) — the largest in the codebase
 
-Seven protocols, one per consumer relationship:
+Nine protocol declarations, grouped by seven consumer relationships:
 
 | Protocol | Consumer | Purpose |
 |---|---|---|
@@ -32,6 +32,7 @@ DTOs in `application/dto.py`: `Progress`, `Bookmark`, `ChapterListItem`,
 ## Core concepts
 
 ### Global chapter numbering
+
 `chapters` is keyed `(novel_id, number NUMERIC)` — floats like `15.5` are legal. `number`
 is the **global** reading index: each source's local numbering is mapped on via
 `sources.chapter_offset`, so a novel stitched from several sites reads as one sequence.
@@ -39,14 +40,18 @@ Changing an offset renumbers through the `update_source_offset` workflow (all-or
 refused while codex artifacts exist on the old numbering).
 
 ### The trusted ceiling
+
 `reading_progress` (PK `(user_id, novel_id)`) tracks `last_chapter` + `scroll_pct`
 (resume position — client-driven, low trust) and `max_chapter_read` (**monotonic**,
-server-observed — the spoiler ceiling). `PostgresReadingRepository.trusted_ceiling()` is
+advanced when an authenticated chapter snapshot is served — the spoiler ceiling).
+`PUT /progress` never writes `max_chapter_read`.
+`PostgresReadingRepository.trusted_ceiling()` is
 what Codex's `CeilingPort` resolves through: a reader's requested ceiling is clamped to
 what the server has seen them read. Full model:
 [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md).
 
 ### Content resolution & versioning
+
 A chapter's readable text is `chapters.content` (English text, or the translation for raw
 sources), with `original_text` preserving the source language so re-translation never
 needs a re-scrape, and `raw_html`/rich content for imported books (asset URLs rewritten to
@@ -57,6 +62,7 @@ base change marks it `conflict` and the UI offers a base-vs-mine resolver. Narra
 audio cache is keyed by `content_version` too — text edits naturally invalidate audio.
 
 ### Overlays & contributions (translation collaboration)
+
 - `PUT /api/novels/{id}/chapter/{n}/overlay` — save a personal override (origin
   `manual_edit` or `self_translated`).
 - `POST …/self-translate` — machine-translate a raw chapter *into the caller's overlay*
@@ -81,8 +87,9 @@ schedules prefetch of the next `TRANSLATE_PREFETCH` chapters as background work)
 
 ## Application & outbound
 
-- `application/services.py::ReadingService` — progress/bookmark use cases guarded by
-  Catalog access; monotonic `max_chapter_read`; chapter-exists validation.
+- `application/services.py::ReadingService` — resume-progress/bookmark use cases guarded
+  by Catalog access; progress PUT chapter-exists validation. The chapter snapshot query
+  in the outbound repository performs the monotonic `max_chapter_read` advance.
 - `application/migration.py` — the route-facing façade for chapter/overlay/contribution
   flows (composed by Bootstrap's `build_reading_migration_service`), including on-demand
   translation triggering through an injected Translation capability.

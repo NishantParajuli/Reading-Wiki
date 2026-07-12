@@ -22,6 +22,7 @@ dependency of almost no one.
 ## Read projections
 
 ### `adapters/outbound/projections.py::PostgresExperienceProjectionRepository`
+
 "The reviewed read-only cross-module projection registry" — the product reads:
 
 - `library_cards(principal)` — the caller's library grid (novels they own or added),
@@ -35,6 +36,7 @@ dependency of almost no one.
   recently-finished + published novels.
 
 ### `adapters/outbound/operational_projections.py::PostgresOperationalProjectionRepository`
+
 The operational/admin reads: per-system activity slices (`generic_activity`,
 `import_activity`, `tts_activity` — active filters applied in SQL before LIMIT),
 `home_rows`, `novel_health`, `translation_units` and `audiobook_missing` (cost-estimate

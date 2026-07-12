@@ -26,11 +26,13 @@
 ## Platform-owned
 
 ### `app_migrations`
+
 Durable one-time migration markers. `name TEXT PK`, `applied_at`, `details JSONB`.
 Prevents guarded data migrations from re-interpreting valid post-migration rows (e.g.
 ownerless novels after a user delete) as legacy single-user data on a later restart.
 
 ### `audit_events`
+
 Append-only operational log. `id`, `event` (`job.created`, `job.done`, `quota.refund`,
 auth/admin actions…), `user_id` (SET NULL on user delete), `novel_id`, `request_id`
 (ties the event to the HTTP request via the `X-Request-ID` middleware), `data JSONB`,
@@ -39,6 +41,7 @@ auth/admin actions…), `user_id` (SET NULL on user delete), `novel_id`, `reques
 ## Identity-owned
 
 ### `users`
+
 One row per human. `email` (unique, lowercased), `email_verified`, `password_hash`
 (**NULL for OAuth-only accounts**), `username` (unique handle for `/u/<username>`),
 `display_name`, `bio`, `avatar_path` (relative under `ASSET_DIR/_users/<id>/`),
@@ -48,23 +51,28 @@ deleting data), per-user quota overrides `quota_translated_chapters`, `quota_ocr
 settings**), `prefs JSONB` (reader preferences synced across devices), timestamps.
 
 ### `oauth_accounts`
+
 Provider links. `user_id`, `provider` (`google`|`discord`), `provider_account_id`,
 `UNIQUE (provider, provider_account_id)`. A user may link several providers.
 
 ### `sessions`
+
 Server-side sessions. **`token_hash` is the PK** — the cookie holds the opaque token, the
 DB only its hash; deleting the row (logout/ban) revokes instantly. `user_id`,
 `created_at`, `expires_at`, `last_seen_at`, `user_agent`.
 
 ### `email_tokens`
+
 One-time verification/reset tokens, hashed at rest. `user_id`, `kind` (`verify`|`reset`),
 `token_hash` (unique), `expires_at`, `used_at` (single-use guard).
 
 ### `auth_rate_limits`
+
 Durable fixed-window abuse counters. `bucket_key` (**scoped hashes** of IP/account/email/
 token — raw identifiers are never stored), `count`, `reset_at`.
 
 ### `quota_usage`
+
 The monthly spend meter: PK `(user_id, period)` where `period` is the first-of-month
 date; counters `translated_chapters`, `ocr_pages`, `codex_builds`, `tts_chapters`.
 Refunds decrement with a floor of zero.
@@ -72,6 +80,7 @@ Refunds decrement with a floor of zero.
 ## AI-Execution-owned
 
 ### `user_ai_backend_policies`
+
 Admin-owned AGY entitlement (no row = API-only). `user_id PK`, `agy_enabled`,
 `default_backend` (`api`|`agy`, CHECK: must be `api` unless enabled), `agy_workloads
 TEXT[]` (CHECK ⊆ {`translate_batch`, `codex_extract`, `segment_import`, `ocr_pages`,
@@ -80,15 +89,18 @@ TEXT[]` (CHECK ⊆ {`translate_batch`, `codex_extract`, `segment_import`, `ocr_p
 `notes`, `granted_by`.
 
 ### `ai_request_locks`
+
 Self-expiring concurrency slots for **read-side** AI (denial-of-wallet control): one row
 per in-flight uncached Ask/profile-synthesis; `user_id`, `kind`, `expires_at` (a crashed
 request can't hold a slot forever).
 
 ### `provider_budget`
+
 Daily provider call counter that survives restarts (Gemini free-tier guard). PK
 `(provider, day)`, `used`.
 
 ### `ai_execution_runs`
+
 One row per provider invocation (a job may have many: attempts, chapters, child runs).
 `id UUID PK`, exactly one of `job_id` / `import_job_id` (CHECK), `parent_run_id`
 (disambiguation/verification children), `user_id`, `novel_id`, `workload`, `backend`
@@ -98,6 +110,7 @@ One row per provider invocation (a job may have many: attempts, chapters, child 
 `exit_code`, `failure_code`, `error_summary`, `metrics JSONB`, timing columns.
 
 ### `ai_worker_heartbeats`
+
 Small non-secret health record from the dedicated AGY host worker: `worker_id PK`,
 `backend`, `status`, versions + plugin hash, `details JSONB`, `heartbeat_at`,
 `started_at`. Drives the admin health panel (stale after
@@ -106,6 +119,7 @@ Small non-secret health record from the dedicated AGY host worker: `worker_id PK
 ## Catalog-owned
 
 ### `novels`
+
 The library aggregate. `title`, `author`, `cover_url`, `description`,
 `original_language`, `codex_enabled` (opt-in pipeline), `shelf` + `status_tags`
 (legacy/owner defaults — per-user values live in `library_entries`), `series` (multi-
@@ -115,11 +129,13 @@ a duplicate novel), `owner_id` (SET NULL on user delete — moderation is delibe
 how contribute-back offers merge), timestamps. Indexed by shelf/series/owner/visibility.
 
 ### `library_entries`
+
 Per-user library membership + curation: `UNIQUE (user_id, novel_id)`, `shelf`
 (`to_read`|`reading`|`completed`), `status_tags TEXT[]`, `added_at`. Adding a shared
 novel here is the "read the shared copy" action — one text, many readers.
 
 ### `tag_suggestions`
+
 Reader-proposed status tags for shared novels: `novel_id`, `from_user_id`,
 `tags TEXT[]` (the full proposed array), `note`, `status`
 (`pending`|`accepted`|`rejected`), `reviewed_by`, `reviewed_at`.
@@ -127,6 +143,7 @@ Reader-proposed status tags for shared novels: `novel_id`, `from_user_id`,
 ## Acquisition-owned
 
 ### `sources`
+
 A novel's ingestion sources. `novel_id`, `adapter` (registry key: `fenrirealm`,
 `readhive`, `boti-translations`, `69shuba`, `wetriedtls`, or the import adapter),
 `start_url` (or file path for imports), `config JSONB` (per-source knobs),
@@ -135,6 +152,7 @@ number + offset = the novel's GLOBAL chapter number — the mechanism that stitc
 multiple sites into one sequence), `label`, `last_scraped_at`.
 
 ### `import_jobs`
+
 Durable, resumable EPUB/PDF ingestion state (big artifacts live on disk; this row is
 status + the small editable plan). `novel_id` (null until target chosen), `source_id`,
 `format` (`epub`|`pdf`), `original_path`, `file_sha256`, `status` (see
@@ -147,6 +165,7 @@ status + the small editable plan). `novel_id` (null until target chosen), `sourc
 `claim_token`/`claimed_at` (multi-worker safety).
 
 ### `assets`
+
 Extracted images (covers, illustrations, page scans). Bytes live under
 `ASSET_DIR/<novel_id>/`; the row is the pointer: `sha256` + `UNIQUE (novel_id, sha256)`
 (content-addressed dedup — an image shared across chapters is stored once), `path`,
@@ -155,6 +174,7 @@ Extracted images (covers, illustrations, page scans). Bytes live under
 ## Reading-owned
 
 ### `chapters`
+
 PK `(novel_id, number NUMERIC)` — `number` is the GLOBAL reading index and the value
 compared against the spoiler ceiling everywhere. `source_id` (SET NULL), `title`, `url`,
 `raw_html` (rich content for imports), `original_text` (cleaned source-language text —
@@ -169,19 +189,23 @@ skip), `part_label` ("Volume 1" TOC grouping), `translation_run_id UUID` +
 a chapter staged by another run), `scraped_at`.
 
 ### `reading_progress`
+
 PK `(user_id, novel_id)`. `last_chapter` + `scroll_pct` (resume position; client-driven),
 **`max_chapter_read`** (monotonic, server-observed — THE spoiler ceiling), `updated_at`.
 
 ### `bookmarks`
+
 `user_id`, `novel_id`, `chapter`, `note`, indexed `(user_id, novel_id, chapter)`.
 
 ### `chapter_overlays`
+
 Per-user translation override on top of shared base content. `UNIQUE (user_id, novel_id,
 chapter)`; `content`, **`base_version`** (the `chapters.content_version` it forked from),
 `origin` (`manual_edit`|`self_translated`), **`conflict`** (set when the base moved under
 the overlay; drives the base-vs-mine resolver).
 
 ### `contributions`
+
 Contribute-back "pull requests" of overlays to the novel owner. `novel_id`,
 `from_user_id`, `kind` (`translation`), `chapter`, `content`, `base_version`, `status`
 (`pending`|`accepted`|`rejected`|`auto_merged`), `reviewed_by`, `reviewed_at`.
@@ -189,6 +213,7 @@ Contribute-back "pull requests" of overlays to the novel owner. `novel_id`,
 ## Translation-owned
 
 ### `translation_glossary`
+
 Per-novel name/term consistency anchor. `UNIQUE (novel_id, source_term)`;
 `source_term` (e.g. 林轩), `translation` (canonical rendering, e.g. Lin Xuan),
 `term_type` (`name`|`place`|`skill`|`item`|`term`), `notes`, **`locked`** (user-pinned
@@ -197,59 +222,71 @@ renderings the auto-glossary never overwrites).
 ## Codex-owned (11 tables — every row chapter-keyed for spoiler safety)
 
 ### `chunks`
+
 Retrieval passages. `UNIQUE (novel_id, chapter, chunk_index)`; `text`, `token_count`,
 `embedding vector(EMBED_DIM)`; composite FK to `chapters(novel_id, number)` ON DELETE
 CASCADE (deleting a chapter removes its chunks). HNSW cosine index when dim ≤ 2000.
 
 ### `entities`
+
 Canonical entities. `canonical_name`, `type` (`character`|`location`|`faction`|`item`|
 `concept`|`organization`), `description`, `name_embedding` (embeds "name + description"
 for semantic linking), **`first_seen_chapter`** (an entity is invisible until its first
 appearance is within the ceiling). Trigram GIN index on name.
 
 ### `entity_descriptions`
+
 Per-chapter description history — `UNIQUE (entity_id, chapter)` — so a profile shows the
 description *as of the reader's ceiling*, not the latest.
 
 ### `entity_aliases`
+
 Alternate names with **`revealed_at_chapter`** — an alias only resolves once its reveal
 chapter is within the ceiling. Trigram-indexed.
 
 ### `identity_links`
+
 "A is B" reveals (`entity_a`, `entity_b`, **`revealed_at_chapter`**, `note`) — powers
 identity-reveal banners and persona folding, only past the reveal chapter.
 
 ### `entity_facts`
+
 The atomic knowledge unit: `entity_id`, **`chapter` (the spoiler key)**, `fact_type`
 (`trait`|`status`|`backstory`|`action`|`location`|`possession`|`belief`|…), `content`
 (natural-language fact as known at that chapter), `data JSONB`,
 `source_chunk_ids BIGINT[]` (provenance for citations).
 
 ### `relationships`
+
 `source_id` → `target_id`, `chapter`, `relation_type` (`mentor`|`ally`|`enemy`|`family`|
 `romantic`|`rival`|`subordinate`|…), `directed`, `content`, `data`, `source_chunk_ids`.
 
 ### `events`
+
 `chapter`, `description`, `participants BIGINT[]` (entity ids), `location_id`,
 `significance`, `data`, `source_chunk_ids`.
 
 ### `extraction_state`
+
 Per-chapter pipeline state: PK `(novel_id, chapter)`; **`running_summary`** (the
 story-so-far text that feeds the next chapter's extraction), `run_id UUID`,
 `model_label`, **`source_sha256`** (hash of the exact text extracted — the
 `commit_codex_extraction` workflow verifies it under lock), `processed_at`.
 
 ### `wiki_cache`
+
 Synthesized entity profiles, cached per ceiling: PK `(novel_id, entity_id,
 chapter_ceiling)`; `rendered_md`, `model`, `evidence_ids JSONB`.
 
 ### `query_cache`
+
 Ask answers, cached per ceiling: `UNIQUE (novel_id, query_hash, chapter_ceiling)` where
 `query_hash` = md5 of the normalized question; `answer_md`, `evidence_ids`.
 
 ## Narration-owned
 
 ### `tts_jobs`
+
 Durable narration jobs. `novel_id`, `user_id` (quota owner), `scope`
 (`chapter`|`book`), `voice_id`, `status` (`queued`|`generating`|`done`|`failed`|
 `canceled`), `stage`, `progress` (`{done,total,current_chapter,stopped_reason?}`),
@@ -258,6 +295,7 @@ dedupe index on `options->>'dedupe_key'` over active statuses prevents duplicate
 in-flight chapter jobs.
 
 ### `chapter_audio`
+
 The narration cache/manifest. `novel_id`, `chapter` (composite FK to chapters),
 `user_id` (**NULL = shared base audio reused by every reader; set = overlay audio for
 one user**), `voice_id`, `language`, **`content_version`** (rendered-from version —
@@ -268,6 +306,7 @@ per (novel, chapter, voice, version)) because `user_id` is nullable.
 ## Work-owned
 
 ### `jobs`
+
 The generic durable-job queue (scrape / codex_build / translate / agy_smoke). Fields in
 four groups:
 - *Lifecycle*: `kind`, `novel_id`, `user_id` (requester/quota owner; SET NULL on user

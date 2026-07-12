@@ -49,11 +49,13 @@ management primitives.
 
 ### Inbound adapters
 
-- **`http.py`** (mounted at `/api/auth`, public): `register`, `login`, `logout`, `me`,
+- **`http.py`** (mounted at `/api/auth`, without a blanket router gate): `register`,
+  `login`, `logout`, `me`,
   `change-password`, `verify` (GET link + POST confirm), `request-reset`, `reset`,
   `providers`, `oauth/{provider}/start`, `oauth/{provider}/callback`, `links`.
-  Each mutation consults the durable rate limiter (per-IP and per-account/email/token
-  windows from `AUTH_*` settings → 429). Email delivery functions are injected by
+  Pre-auth flows are public; `logout`, `me`, `change-password`, and link reads apply
+  `current_user` individually. Each applicable mutation consults the durable rate limiter
+  (per-IP and per-account/email/token windows from `AUTH_*` settings → 429). Email delivery functions are injected by
   Bootstrap via `configure_email_delivery(...)` (kept as a stable monkeypatch seam for
   the auth eval tests).
 - **`account_http.py`** (authenticated, `/api`): `GET /api/me/usage` (monthly spend vs

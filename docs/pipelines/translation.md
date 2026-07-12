@@ -47,11 +47,13 @@ spend.
 
 ## Batch scheduling (HTTP)
 
-`TranslationSchedulingService`: editable check → count pending in range (nothing to do ⇒
-400) → resolve backend (API vs AGY per the user's grant) → **reserve** quota for the
-pending count → create/dedupe the durable job (idempotency key over novel+range) →
-refund on failure/dedupe. The worker then walks the range with cancel checks between
-chapters; unfinished reservation is refunded at finalization.
+`TranslationSchedulingService`: editable check → fast active-job dedupe → resolve backend
+(API vs AGY per the user's grant) → count pending → quota guard → create/dedupe the
+durable job (idempotency key over novel+range). AGY reserves the pending count up front
+and finalization refunds the unconsumed remainder. API merely checks availability at
+scheduling, then reserves/refunds one unit inside each per-chapter execution; therefore
+it has no batch reservation. A zero pending count is a valid no-op job because the worker
+recomputes the range at execution time.
 
 ## The AGY variant
 

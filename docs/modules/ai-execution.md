@@ -18,10 +18,13 @@ Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md).
 
 - **Gateways** (`Protocol`s other modules' runtimes receive): `ChatGateway.complete`,
   `EmbeddingGateway.embed`, `RerankGateway.rerank`, `VisionGateway.inspect`.
-- **Domain types** (`domain/backend.py`): `Workload` (the six grantable workloads:
+- **Domain types** (`domain/backend.py`): `Workload` (the six policy-vocabulary workloads:
   `translate_batch`, `codex_extract`, `segment_import`, `ocr_pages`, `ask`,
   `profile_synthesis`), `RequestedBackend` (`auto`/`api`/`agy`), `ExecutionBackend`
-  (`api`/`agy`).
+  (`api`/`agy`). `IMPLEMENTED_AGY_WORKLOADS` currently contains only
+  `translate_batch` and `codex_extract`; for the other four, automatic/default
+  selection remains on API and an explicit AGY request is rejected, even if the name is
+  stored in an admin policy.
 - **Contracts** (`application/contracts.py`): the AGY manifest dataclasses —
   `InputManifest`/`OutputManifest`/`ArtifactRef`, `ExtractionPayload`,
   `DisambiguationPayload`, `TranslationMeta`, `PreflightResult`.
@@ -34,6 +37,7 @@ Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md).
 ## Outbound adapters
 
 ### `providers.py` — the API backend
+
 OpenRouter-backed implementations of the four gateways (model ids from settings:
 `MODEL_FLASH`/`MODEL_PRO`/`MODEL_TRANSLATE`/`SEGMENT_MODEL`, `EMBED_MODEL`(+`EMBED_DIM`,
 `EMBED_REQUEST_DIMENSIONS`), `RERANK_MODEL`) plus Gemini vision via its OpenAI-compatible
@@ -42,6 +46,7 @@ day), `GEMINI_DAILY_BUDGET`, `GEMINI_RPM`) so a multi-day OCR run can't blow the
 tier after a restart.
 
 ### `limits.py` — read-side cost controls
+
 Uncached AI *reads* (Ask, entity-profile synthesis) fan out to embeddings + rerank +
 multiple model calls, so they're gated like costed writes:
 `require_ask_spend_allowed` (verified email or admin → else 403),
@@ -51,6 +56,7 @@ by self-expiring `ai_request_locks` rows with a `ASK_CONCURRENCY_TTL_SECONDS`=18
 so a crashed request frees its slot). **Cache hits skip every gate.**
 
 ### `policy.py` — grants and backend resolution
+
 - `user_ai_backend_policies` is **admin-owned** (no row ⇒ API-only; only admin routes
   mutate it): `agy_enabled`, `default_backend`, the granted `agy_workloads` array,
   `fallback_to_api`, `max_concurrent_agy_jobs` (1–4), `policy_version` (bumped on every
@@ -63,6 +69,7 @@ so a crashed request frees its slot). **Cache hits skip every gate.**
   an entitlement*; `capability_for_user` feeds the `/auth/me` UI capabilities.
 
 ### `agy/` — the hardened CLI runner
+
 - **`preflight.py`** — refuses to run unless: the binary at `AGY_BINARY` matches
   `AGY_BINARY_SHA256`, version ≥ `AGY_MIN_VERSION`, the exact configured model display
   names exist in `agy models`, and the plugin validates
@@ -93,6 +100,7 @@ so a crashed request frees its slot). **Cache hits skip every gate.**
   in the contract snapshot.
 
 ### `worker_state.py`
+
 AGY-worker persistence: heartbeat writes (`ai_worker_heartbeats` — status, versions,
 plugin hash, details; health TTL `AGY_WORKER_HEALTH_TTL_SECONDS`=90 drives the admin
 panel and `/auth/me` capability), orphan-run detection, resumable-run queries.
@@ -119,7 +127,8 @@ Mounted in Experience's admin router, executed here through injected ports:
 ## Design invariants
 
 1. **Dormant by default** — AGY requires `AGY_ENABLED=true` *and* an explicit per-user
-   workload grant; neither alone suffices. Admin role grants nothing implicitly.
+   workload grant for one of the two implemented AGY workloads; neither alone suffices.
+   Admin role grants nothing implicitly.
 2. **No AGY credentials in this app** — authentication belongs to the CLI's own
    keyring/browser login on the host.
 3. **Immutable decisions, revocable execution** — backend decisions are stamped on the

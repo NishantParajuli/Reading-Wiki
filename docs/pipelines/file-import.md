@@ -23,7 +23,7 @@
 
 Trigger statuses (`uploaded`, `ocr_pending`, `committing`) are claimed atomically
 (`FOR UPDATE SKIP LOCKED`) into distinct in-progress markers with a leased
-`claim_token`/`claimed_at` heartbeat — same pattern as every worker
+`claim_token`/`claimed_at` heartbeat — the same pattern as the generic Work worker
 ([background-jobs-and-quota.md](background-jobs-and-quota.md)); recovery is purely
 lease-expiry-based.
 
