@@ -96,10 +96,12 @@ The deploy agent uses an isolated checkout under
 docker compose --project-name wiki up -d --no-deps web
 ```
 
-It saves the currently running image as `wiki-web:rollback`, waits for
-`http://127.0.0.1:8001/health`, and automatically restores that image if the new container
-does not become healthy. A failed SHA is not retried every two minutes; after diagnosing
-the failure, remove `~/.local/share/tideglass-deploy/failed-deployment-sha` and start
+It saves the currently running image as `wiki-web:rollback` and preserves the previously
+deployed commit in a separate rollback checkout. If candidate `docker compose up` fails,
+or if `http://127.0.0.1:8001/health` does not become healthy, it recreates `web` from that
+image using the previous release's Compose configuration. A failed SHA is not retried every
+two minutes; after diagnosing the failure, remove
+`~/.local/share/tideglass-deploy/failed-deployment-sha` and start
 `tideglass-deploy.service` manually to retry it. The agent never recreates the OCR or TTS
 sidecars.
 

@@ -13,6 +13,7 @@ WORKFLOW_FILE="${TIDEGLASS_WORKFLOW_FILE:-quality.yml}"
 BRANCH="${TIDEGLASS_DEPLOY_BRANCH:-main}"
 DEPLOY_ROOT="${TIDEGLASS_DEPLOY_ROOT:-${HOME}/.local/share/tideglass-deploy}"
 CHECKOUT_DIR="${TIDEGLASS_CHECKOUT_DIR:-${DEPLOY_ROOT}/repository}"
+ROLLBACK_CHECKOUT_DIR="${TIDEGLASS_ROLLBACK_CHECKOUT_DIR:-${DEPLOY_ROOT}/rollback-repository}"
 STATE_FILE="${TIDEGLASS_STATE_FILE:-${DEPLOY_ROOT}/last-deployed-sha}"
 FAILED_STATE_FILE="${TIDEGLASS_FAILED_STATE_FILE:-${DEPLOY_ROOT}/failed-deployment-sha}"
 ENV_FILE="${TIDEGLASS_ENV_FILE:-${HOME}/wiki/.env}"
@@ -22,6 +23,9 @@ WEB_CONTAINER="${TIDEGLASS_WEB_CONTAINER:-novelwiki-web}"
 WEB_IMAGE="${TIDEGLASS_WEB_IMAGE:-wiki-web:latest}"
 ROLLBACK_IMAGE="${TIDEGLASS_ROLLBACK_IMAGE:-wiki-web:rollback}"
 DRY_RUN="${TIDEGLASS_DRY_RUN:-0}"
+HEALTH_ATTEMPTS="${TIDEGLASS_HEALTH_ATTEMPTS:-30}"
+ROLLBACK_HEALTH_ATTEMPTS="${TIDEGLASS_ROLLBACK_HEALTH_ATTEMPTS:-15}"
+HEALTH_RETRY_SECONDS="${TIDEGLASS_HEALTH_RETRY_SECONDS:-2}"
 
 log() {
   printf '%s %s\n' "$(date --iso-8601=seconds)" "$*"
@@ -46,6 +50,65 @@ record_failed_deployment() {
   local failed_tmp="${FAILED_STATE_FILE}.tmp"
   printf '%s\n' "${candidate_sha}" > "${failed_tmp}"
   mv "${failed_tmp}" "${FAILED_STATE_FILE}"
+}
+
+prepare_checkout() {
+  local checkout_dir="$1"
+  local revision="$2"
+
+  if [[ ! -d "${checkout_dir}/.git" ]]; then
+    log "creating isolated checkout at ${checkout_dir}"
+    git clone --filter=blob:none --no-checkout "${REPOSITORY_URL}" "${checkout_dir}"
+  fi
+
+  git -C "${checkout_dir}" remote set-url origin "${REPOSITORY_URL}"
+  git -C "${checkout_dir}" fetch --force --prune --depth=1 origin "${revision}"
+  # These checkouts belong exclusively to the deploy agent; force removes artifacts
+  # from a previous Docker build without touching the developer checkout in ~/wiki.
+  git -C "${checkout_dir}" -c advice.detachedHead=false checkout --detach --force "${revision}"
+  git -C "${checkout_dir}" clean -ffd
+  # Older releases used a relative .env path. Keep rollback compatible with them while
+  # newer releases use the absolute TIDEGLASS_ENV_FILE override.
+  ln -sfn "${ENV_FILE}" "${checkout_dir}/.env"
+}
+
+wait_for_health() {
+  local attempts="$1"
+  local phase="$2"
+  local attempt
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if curl --fail --silent --show-error --max-time 5 "${HEALTH_URL}" >/dev/null; then
+      return 0
+    fi
+    log "${phase} health check ${attempt}/${attempts} failed; retrying"
+    if ((attempt < attempts)); then
+      sleep "${HEALTH_RETRY_SECONDS}"
+    fi
+  done
+  return 1
+}
+
+rollback_deployment() {
+  local reason="$1"
+
+  log "${reason}"
+  record_failed_deployment
+  if [[ "${rollback_ready:-0}" != "1" ]]; then
+    fail "deployment failed and no verified rollback release was available"
+  fi
+
+  log "rolling back to ${ROLLBACK_IMAGE} with release ${deployed_sha}"
+  if ! docker tag "${ROLLBACK_IMAGE}" "${WEB_IMAGE}"; then
+    fail "deployment failed and the rollback image could not be retagged"
+  fi
+  if ! "${rollback_compose[@]}" up -d --no-deps --force-recreate --no-build web; then
+    fail "deployment failed and Compose could not recreate the previous web release"
+  fi
+  if wait_for_health "${ROLLBACK_HEALTH_ATTEMPTS}" "rollback"; then
+    fail "deployment failed; the previous web release was restored successfully"
+  fi
+  fail "deployment and automatic rollback both failed health checks"
 }
 
 mkdir -p "${DEPLOY_ROOT}"
@@ -116,17 +179,7 @@ fi
 
 [[ -r "${ENV_FILE}" ]] || fail "production env file is not readable: ${ENV_FILE}"
 
-if [[ ! -d "${CHECKOUT_DIR}/.git" ]]; then
-  log "creating isolated production checkout at ${CHECKOUT_DIR}"
-  git clone --filter=blob:none --no-checkout "${REPOSITORY_URL}" "${CHECKOUT_DIR}"
-fi
-
-git -C "${CHECKOUT_DIR}" remote set-url origin "${REPOSITORY_URL}"
-git -C "${CHECKOUT_DIR}" fetch --force --prune --depth=1 origin "${candidate_sha}"
-# This checkout belongs exclusively to the deploy agent; force removes artifacts from
-# a previous Docker build without touching the developer checkout in ~/wiki.
-git -C "${CHECKOUT_DIR}" -c advice.detachedHead=false checkout --detach --force "${candidate_sha}"
-git -C "${CHECKOUT_DIR}" clean -ffd
+prepare_checkout "${CHECKOUT_DIR}" "${candidate_sha}"
 
 export TIDEGLASS_ENV_FILE="${ENV_FILE}"
 compose=(
@@ -140,49 +193,39 @@ compose=(
 "${compose[@]}" config --quiet
 
 previous_image="$(docker inspect --format '{{.Image}}' "${WEB_CONTAINER}" 2>/dev/null || true)"
+rollback_ready=0
+rollback_compose=()
 if [[ -n "${previous_image}" ]]; then
+  [[ "${deployed_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "running web container exists but the deployed revision is unknown"
+  prepare_checkout "${ROLLBACK_CHECKOUT_DIR}" "${deployed_sha}"
+  rollback_compose=(
+    docker compose
+    --project-name "${COMPOSE_PROJECT}"
+    --project-directory "${ROLLBACK_CHECKOUT_DIR}"
+    --env-file "${ENV_FILE}"
+    --file "${ROLLBACK_CHECKOUT_DIR}/docker-compose.yml"
+  )
+  "${rollback_compose[@]}" config --quiet
   docker tag "${previous_image}" "${ROLLBACK_IMAGE}"
   log "saved current web image ${previous_image} as ${ROLLBACK_IMAGE}"
+  rollback_ready=1
 fi
 
 log "building web image for ${candidate_sha}"
 "${compose[@]}" build --build-arg "SOURCE_COMMIT=${candidate_sha}" web
 
 log "replacing only the web service"
-"${compose[@]}" up -d --no-deps web
+if ! "${compose[@]}" up -d --no-deps web; then
+  rollback_deployment "new deployment failed during docker compose up"
+fi
 
-healthy=0
-for attempt in $(seq 1 30); do
-  if curl --fail --silent --show-error --max-time 5 "${HEALTH_URL}" >/dev/null; then
-    healthy=1
-    break
-  fi
-  log "health check ${attempt}/30 failed; retrying"
-  sleep 2
-done
-
-if [[ "${healthy}" != "1" ]]; then
-  log "new deployment failed its health check"
-  record_failed_deployment
-  if docker image inspect "${ROLLBACK_IMAGE}" >/dev/null 2>&1; then
-    log "rolling back to ${ROLLBACK_IMAGE}"
-    docker tag "${ROLLBACK_IMAGE}" "${WEB_IMAGE}"
-    "${compose[@]}" up -d --no-deps --force-recreate --no-build web
-    for attempt in $(seq 1 15); do
-      if curl --fail --silent --show-error --max-time 5 "${HEALTH_URL}" >/dev/null; then
-        fail "deployment failed; the previous web image was restored successfully"
-      fi
-      sleep 2
-    done
-    fail "deployment and automatic rollback both failed health checks"
-  fi
-  fail "deployment failed and no rollback image was available"
+if ! wait_for_health "${HEALTH_ATTEMPTS}" "deployment"; then
+  rollback_deployment "new deployment failed its health check"
 fi
 
 running_revision="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${WEB_CONTAINER}" 2>/dev/null || true)"
 if [[ "${running_revision}" != "${candidate_sha}" ]]; then
-  record_failed_deployment
-  fail "healthy container revision '${running_revision}' does not match ${candidate_sha}"
+  rollback_deployment "healthy container revision '${running_revision}' does not match ${candidate_sha}"
 fi
 
 state_tmp="${STATE_FILE}.tmp"
