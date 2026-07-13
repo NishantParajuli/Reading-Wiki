@@ -17,5 +17,11 @@
    and validate counts/health before reopening traffic. Do not use destructive down migrations as
    rollback.
 
+For ordinary merged changes, the local deploy agent performs steps 4-5 automatically after the
+GitHub `quality` workflow succeeds for the current `main` SHA. It retains the previous web image as
+`wiki-web:rollback`, replaces only the `web` service, checks the loopback `/health` endpoint, and
+restores the rollback image on failure. Database backup/restore rehearsal and operator-level smoke
+checks remain manual release responsibilities for schema or high-risk changes.
+
 The architecture migration changes code ownership but deliberately retains the existing monolith,
 schema, routes, job states, filesystem/cache identities, and deployment topology.

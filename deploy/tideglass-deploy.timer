@@ -1,0 +1,12 @@
+[Unit]
+Description=Check GitHub for a CI-approved Tideglass deployment
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+RandomizedDelaySec=15s
+Persistent=true
+Unit=tideglass-deploy.service
+
+[Install]
+WantedBy=timers.target

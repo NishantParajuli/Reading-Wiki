@@ -3,9 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Keep the local image name stable so the deploy agent can retain one rollback image.
+    image: wiki-web:latest
     container_name: novelwiki-web
     env_file:
-      - .env
+      # Normal terminal usage reads ./.env. The deploy agent points this at the existing
+      # production env file while building from its isolated checkout.
+      - ${TIDEGLASS_ENV_FILE:-.env}
     environment:
       # Reach the sidecars over the private bridge (service DNS), NOT host localhost. These
       # override whatever OCR_SIDECAR_URL/TTS_SIDECAR_URL are in .env.

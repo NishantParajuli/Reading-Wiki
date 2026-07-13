@@ -79,12 +79,54 @@ unit (`loginctl enable-linger` if it must survive logout) and follow
 model catalog check, plugin validation, permission-rule verification, explicit per-user
 grants). Kill switch: `AGY_ENABLED=false` + restart consumers.
 
-## Deploying a change
+## Automated deployment after CI
+
+Every push and pull request runs the GitHub-hosted `quality` workflow. A push to `main`
+becomes deployable only after the backend, frontend, and production-image jobs all pass.
+Because this is a public repository, the production laptop is deliberately **not** a
+GitHub Actions self-hosted runner. Instead, a local systemd user timer checks GitHub every
+two minutes and deploys only when the latest successful `quality.yml` push SHA exactly
+matches the current `main` SHA.
+
+The deploy agent uses an isolated checkout under
+`~/.local/share/tideglass-deploy/repository`, reads the existing production `.env` from
+`~/wiki/.env`, builds `wiki-web:latest`, and runs:
 
 ```bash
-git pull
-docker compose build web
-docker compose up -d web       # workers stop gracefully; leases/durable jobs resume
+docker compose --project-name wiki up -d --no-deps web
+```
+
+It saves the currently running image as `wiki-web:rollback` and preserves the previously
+deployed commit in a separate rollback checkout. If candidate `docker compose up` fails,
+or if `http://127.0.0.1:8001/health` does not become healthy, it recreates `web` from that
+image using the previous release's Compose configuration. A failed SHA is not retried every
+two minutes; after diagnosing the failure, remove
+`~/.local/share/tideglass-deploy/failed-deployment-sha` and start
+`tideglass-deploy.service` manually to retry it. The agent never recreates the OCR or TTS
+sidecars.
+
+Install the agent once when provisioning a production laptop (it is already installed on
+the current host):
+
+```bash
+./deploy/install-tideglass-deploy-agent.sh
+systemctl --user status tideglass-deploy.timer
+journalctl --user -u tideglass-deploy.service -f
+```
+
+If the installer reports that user lingering is disabled, enable it so the timer runs
+after reboot even before an interactive login:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Manual deployment remains available from this checkout when needed:
+
+```bash
+docker compose build --build-arg SOURCE_COMMIT="$(git rev-parse HEAD)" web
+docker compose up -d --no-deps web
+curl --fail http://127.0.0.1:8001/health
 ```
 
 Durable jobs survive this by design: queued work stays queued; running generic/import
