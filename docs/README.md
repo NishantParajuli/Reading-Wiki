@@ -110,6 +110,10 @@ not promises about a later checkout.
 
 ## Keeping these docs honest
 
+AI-assisted changes follow the repository-wide documentation policy in
+[`AGENTS.md`](../AGENTS.md). It requires a documentation-impact assessment for every change
+and same-change updates whenever living documentation would otherwise become stale.
+
 Use this precedence when prose and code disagree:
 
 1. Runtime code and executable registries (`TABLE_OWNERS`, router composition, settings,
