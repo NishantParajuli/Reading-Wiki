@@ -16,7 +16,9 @@ wheels/
 
 .claude
 
-implementation-plan/
+# Keep generated/non-document planning artifacts local, but version Markdown plans.
+implementation-plan/*
+!implementation-plan/*.md
 node_modules/
 test-results/
 playwright-report/
