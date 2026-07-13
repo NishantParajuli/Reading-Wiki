@@ -30,6 +30,9 @@ RUN uv sync --frozen --no-dev
 # --- Stage 2: Runtime image ---
 FROM python:3.12-slim-bookworm
 
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}"
+
 # Create a dedicated non-root group and user
 RUN groupadd --gid 10001 app && \
     useradd --uid 10001 --gid app --shell /bin/bash --create-home app

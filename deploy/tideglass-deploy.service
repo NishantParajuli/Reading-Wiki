@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy the latest CI-approved Tideglass main commit
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/tideglass-deploy-agent
+TimeoutStartSec=45min
+NoNewPrivileges=true
+PrivateTmp=true
