@@ -214,6 +214,7 @@ Full topology + first boot + release/rollback:
 | | |
 |---|---|
 | **Start** | [docs/README.md](docs/README.md) (hub with reading paths) |
+| AI-assisted changes | [AGENTS.md](AGENTS.md) (documentation-impact and review policy) |
 | Product & setup | [what-is-tideglass](docs/getting-started/what-is-tideglass.md) · [local-setup](docs/getting-started/local-setup.md) · [repo-tour](docs/getting-started/repo-tour.md) |
 | Concepts | [primer](docs/concepts/primer.md) · [spoiler-safety](docs/concepts/spoiler-safety.md) · [glossary](docs/concepts/glossary.md) |
 | Architecture | [overview](docs/architecture/overview.md) · [module-anatomy](docs/architecture/module-anatomy.md) · [composition-root](docs/architecture/composition-root.md) · [workflows](docs/architecture/workflows-and-transactions.md) · [platform](docs/architecture/platform.md) · [enforcement](docs/architecture/enforcement.md) |
