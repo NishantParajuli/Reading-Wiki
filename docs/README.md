@@ -61,6 +61,15 @@ not promises about a later checkout.
 | [performance-baseline.json](architecture/performance-baseline.json) | executable query/endpoint/worker budgets consumed by `tools/benchmark_queries.py` |
 | [stable-compatibility-entrypoints](architecture/stable-compatibility-entrypoints.md) | the sanctioned legacy import paths |
 
+## Future implementation plans
+
+Plans describe possible future work and are **not** living authority. Re-check them
+against `HEAD` and the living references above before implementation.
+
+| Plan | Contents |
+|---|---|
+| [PostgreSQL-centered platform evolution](../implementation-plan/postgres-platform-evolution-plan.md) | TTS leadership, separate worker roles, versioned migrations, storage reconciliation, durable event fan-out with `LISTEN/NOTIFY`, cache lifecycle, queue operations, observability, and recovery |
+
 ## Module reference — [map & dependency graph](modules/README.md)
 
 [identity](modules/identity.md) · [catalog](modules/catalog.md) ·

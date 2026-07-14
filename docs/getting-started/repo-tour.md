@@ -58,7 +58,7 @@ wiki/
 │                              # (disposable-DB integration launcher) ·
 │                              # rehearse-backup-restore.sh · real-browser fixtures
 ├── deploy/                    # novelwiki-agy-worker.service (systemd --user unit)
-├── implementation-plan/       # historical migration plans (not living authority)
+├── implementation-plan/       # dated future/historical plans (not living authority)
 ├── data/                      # runtime data (gitignored)                → docs/data/filesystem-layout.md
 └── docs/                      # ← you are here                          → docs/README.md
 ```

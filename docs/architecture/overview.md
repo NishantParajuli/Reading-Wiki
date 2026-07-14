@@ -73,7 +73,7 @@ Outside the package:
 | `tools/` | `check_architecture.py` (boundary gate), `benchmark_queries.py`, `rehearsal_database.py`. |
 | `scripts/` | `contracts.py` (snapshot regeneration), `test_backend.py` (integration launcher), backup-restore rehearsal, real-browser fixture. |
 | `deploy/` | `novelwiki-agy-worker.service` systemd unit for the dedicated AGY host worker. |
-| `implementation-plan/` | Historical plans that produced this architecture. They explain migration intent; living ownership authority is `platform/architecture/checks.py::TABLE_OWNERS`. |
+| `implementation-plan/` | Dated future and historical plans. They preserve implementation intent but are not living authority; current ownership authority is `platform/architecture/checks.py::TABLE_OWNERS`. |
 | `data/` | Runtime data (BM25 indexes, assets, audio, import scratch). See [../data/filesystem-layout.md](../data/filesystem-layout.md). |
 
 ---
