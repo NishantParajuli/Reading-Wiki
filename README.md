@@ -222,5 +222,5 @@ Full topology + first boot + release/rollback:
 | Modules | [map](docs/modules/README.md) + one doc per module |
 | Pipelines | [jobs & quota](docs/pipelines/background-jobs-and-quota.md) · [scraping](docs/pipelines/scraping.md) · [import](docs/pipelines/file-import.md) · [translation](docs/pipelines/translation.md) · [codex](docs/pipelines/codex-build-and-ask.md) · [narration](docs/pipelines/narration.md) · [AI backends](docs/pipelines/ai-backends.md) |
 | Reference | [DB schema](docs/data/database-schema.md) · [filesystem](docs/data/filesystem-layout.md) · [HTTP behavior](docs/api/http-api.md) · [exact route inventory](docs/api/http-route-inventory.md) · [CLI](docs/api/cli.md) · [configuration](docs/operations/configuration.md) |
-| Operating | [deployment](docs/operations/deployment.md) · [security](docs/operations/security.md) · [testing](docs/testing.md) · [release runbook](docs/release-runbook.md) · [AGY runbook](docs/agy-operator-runbook.md) |
+| Operating | [deployment](docs/operations/deployment.md) · [configuration](docs/operations/configuration.md) · [structured logging](docs/operations/logging.md) · [security](docs/operations/security.md) · [testing](docs/testing.md) · [release runbook](docs/release-runbook.md) · [AGY runbook](docs/agy-operator-runbook.md) |
 | Frontend | [overview](docs/frontend/overview.md) |

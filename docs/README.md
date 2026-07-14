@@ -26,6 +26,7 @@ not promises about a later checkout.
 - **Operating an instance:**
   [deployment](operations/deployment.md) →
   [configuration](operations/configuration.md) →
+  [structured logging](operations/logging.md) →
   [release-runbook](release-runbook.md) →
   [security](operations/security.md)
 
@@ -112,6 +113,7 @@ against `HEAD` and the living references above before implementation.
 |---|---|
 | [operations/deployment](operations/deployment.md) | topology, image, compose, first boot, deploying changes |
 | [operations/configuration](operations/configuration.md) | every setting with defaults + prod checklist |
+| [operations/logging](operations/logging.md) | JSON event schema, worker/job coverage, Grafana/Loki queries, incident use |
 | [operations/security](operations/security.md) | the full control inventory, layer by layer |
 | [testing](testing.md) | how to run every suite |
 | [release-runbook](release-runbook.md) | release & rollback procedure |

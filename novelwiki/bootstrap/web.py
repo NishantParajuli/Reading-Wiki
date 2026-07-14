@@ -3,7 +3,10 @@ from fastapi import FastAPI
 from novelwiki.platform.database import init_db_pool
 from novelwiki.modules.identity.adapters.inbound.cookies import set_csrf_cookie
 from novelwiki.modules.identity.adapters.outbound.tokens import new_token
+from novelwiki.platform.observability.logging import configure_logging
 from novelwiki.platform.web.factory import create_web_app
+
+configure_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

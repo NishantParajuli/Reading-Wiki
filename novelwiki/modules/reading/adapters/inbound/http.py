@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import re
+import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
@@ -15,11 +17,50 @@ from novelwiki.kernel.errors import (
 )
 from novelwiki.modules.identity.public import Principal
 from novelwiki.platform.config import settings
+from novelwiki.platform.observability import audit
+from novelwiki.platform.observability.logging import log_context, log_event
 
 from ...application import ReadingService
 from ...application.migration import ReadingMigrationService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+async def _logged_translation_prefetch(
+    service: ReadingMigrationService,
+    novel_id: int,
+    after_number: float,
+    principal: Principal | None,
+    request_id: str | None,
+) -> None:
+    with log_context(
+        request_id=request_id, job_system="inline_background",
+        job_kind="translation_prefetch", novel_id=novel_id,
+        user_id=principal.user_id if principal is not None else None,
+        after_chapter=after_number,
+    ):
+        started = time.monotonic()
+        log_event(
+            logger, logging.INFO, "background_task.started",
+            f"Starting translation prefetch after chapter {after_number} for novel {novel_id}.",
+        )
+        try:
+            await service.prefetch(novel_id, after_number, principal)
+        except Exception:
+            log_event(
+                logger, logging.ERROR, "background_task.failed",
+                f"Translation prefetch after chapter {after_number} for novel {novel_id} failed.",
+                exc_info=True,
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+            )
+            raise
+        else:
+            log_event(
+                logger, logging.INFO, "background_task.completed",
+                f"Translation prefetch after chapter {after_number} for novel {novel_id} completed.",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+            )
 
 
 class ProgressUpdate(BaseModel):
@@ -168,7 +209,10 @@ async def api_get_chapter(
         content = chapter.overlay_content
         rich_html = None
     if result.prefetch_after is not None:
-        bg_tasks.add_task(service.prefetch, novel_id, result.prefetch_after, principal)
+        bg_tasks.add_task(
+            _logged_translation_prefetch, service, novel_id, result.prefetch_after,
+            principal, audit.get_request_id(),
+        )
     can_edit_base = principal is not None and (
         principal.is_admin or result.novel.owner_id == principal.user_id
     )

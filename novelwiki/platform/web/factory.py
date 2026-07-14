@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import hmac
+import logging
+import time
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from novelwiki.platform.config import settings
+from novelwiki.platform.observability.logging import log_event
+
+logger = logging.getLogger(__name__)
 
 _CSP = (
     "default-src 'self'; script-src 'self' 'unsafe-inline'; "
@@ -64,10 +69,48 @@ def create_web_app(*, lifespan, seed_csrf_cookie) -> FastAPI:
         incoming = request.headers.get(_REQUEST_ID_HEADER, "").strip()
         request_id = incoming[:64] if incoming else audit.new_request_id()
         token = audit.set_request_id(request_id)
+        started = time.monotonic()
         try:
             response = _csrf_rejection(request)
             if response is None:
                 response = await call_next(request)
+        except Exception:
+            if settings.LOG_HTTP_REQUESTS:
+                route = request.scope.get("route")
+                log_event(
+                    logger, logging.ERROR, "http.request.failed",
+                    f"{request.method} {request.url.path} failed.",
+                    exc_info=True,
+                    request_id=request_id,
+                    method=request.method,
+                    path=request.url.path,
+                    route=getattr(route, "path", None),
+                    client_ip=request.client.host if request.client else None,
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                )
+            raise
+        else:
+            if settings.LOG_HTTP_REQUESTS:
+                route = request.scope.get("route")
+                status = int(response.status_code)
+                level = logging.WARNING if status >= 400 else logging.INFO
+                content_length = response.headers.get("content-length")
+                log_event(
+                    logger, level, "http.request.completed",
+                    f"{request.method} {request.url.path} completed with {status}.",
+                    request_id=request_id,
+                    method=request.method,
+                    path=request.url.path,
+                    route=getattr(route, "path", None),
+                    status_code=status,
+                    client_ip=request.client.host if request.client else None,
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                    response_bytes=(
+                        int(content_length)
+                        if content_length and content_length.isdigit()
+                        else None
+                    ),
+                )
         finally:
             audit.reset_request_id(token)
         response.headers[_REQUEST_ID_HEADER] = request_id

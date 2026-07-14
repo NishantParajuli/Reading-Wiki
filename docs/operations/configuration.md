@@ -3,8 +3,8 @@
 > **Source of truth:** `novelwiki/platform/config/settings.py` (compat alias:
 > `novelwiki/config/settings.py`). Settings load from environment variables and `.env`
 > (pydantic-settings, unknown keys ignored). This page lists **every** setting with its
-> default and what it actually controls. An AGY `@model_validator` range-checks that
-> block at boot — invalid AGY config refuses to start.
+> default and what it actually controls. A runtime `@model_validator` checks logging
+> values and range-checks the AGY block at boot — invalid config refuses to start.
 
 Operating-system environment variables override `.env`, and code defaults apply when
 neither supplies a value. `.env.example` is an opinionated deployment template, not a
@@ -15,6 +15,21 @@ field exists on `Settings` before relying on it.
 At this revision, `.env.example` contains one such ignored legacy key:
 `SCRAPER_CONCURRENCY`. Scraping is sequential and controlled by delay/timeout settings;
 setting that name has no runtime effect.
+
+## Logging and observability
+
+Application, HTTP, worker, job, and AGY lifecycle logs use a shared structured schema.
+See [logging.md](logging.md) for fields, event names, Grafana/Loki queries, and the
+sensitive-data boundary.
+
+| Setting | Default | Notes |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | `DEBUG` also emits successful worker/lease heartbeats and maintenance sweeps |
+| `LOG_FORMAT` | `json` | one JSON object per line; use `console` for interactive local output |
+| `LOG_SERVICE` | `tideglass` | stable service field on every application record |
+| `LOG_ENVIRONMENT` | `development` | deployment field; set `production`/`staging` as appropriate |
+| `LOG_HTTP_REQUESTS` | `true` | request completion/failure events with request ID, route, status, and duration |
+| `LOG_JOB_PROGRESS` | `true` | structured durable-job stage/progress events |
 
 ## Database
 
@@ -210,5 +225,5 @@ boot. See [../modules/ai-execution.md](../modules/ai-execution.md) and
 `DATABASE_URL`, `DB_SUPERUSER_URL`, `OPENROUTER_API_KEY`, a long random
 `SESSION_SECRET`, a long random `SIDECAR_AUTH_TOKEN` (if any sidecar runs),
 `ALLOWED_ORIGINS`/`PUBLIC_BASE_URL` for your domain, `COOKIE_SECURE=true`,
-`ADMIN_EMAIL`/`ADMIN_PASSWORD` for first boot, SMTP if you want real email, and — only if
-scanned-PDF OCR is needed — `GEMINI_API_KEY`.
+`LOG_ENVIRONMENT=production`, `ADMIN_EMAIL`/`ADMIN_PASSWORD` for first boot, SMTP if you
+want real email, and — only if scanned-PDF OCR is needed — `GEMINI_API_KEY`.
