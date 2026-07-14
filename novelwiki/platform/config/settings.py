@@ -4,6 +4,16 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    # Single-line JSON is the production/default contract for Docker/journald → Loki/Grafana.
+    # Console mode is available for interactive local work.  DEBUG additionally exposes lease
+    # and worker heartbeats; story text, prompts, credentials, and provider output stay excluded.
+    LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "json"
+    LOG_SERVICE: str = "tideglass"
+    LOG_ENVIRONMENT: str = "development"
+    LOG_HTTP_REQUESTS: bool = True
+    LOG_JOB_PROGRESS: bool = True
+
     # NOTE: asyncpg expects a plain `postgresql://` scheme (NOT the SQLAlchemy
     # `postgresql+asyncpg://` dialect form) — both the pool and the schema
     # bootstrap connect via asyncpg directly.
@@ -290,7 +300,13 @@ class Settings(BaseSettings):
     DEFAULT_QUOTA_TTS_CHAPTERS: int = 200    # chapters narrated per month (charged only on actual generation)
 
     @model_validator(mode="after")
-    def _validate_agy_settings(self):
+    def _validate_runtime_settings(self):
+        if self.LOG_LEVEL.strip().upper() not in {
+            "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+        }:
+            raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        if self.LOG_FORMAT not in {"json", "console"}:
+            raise ValueError("LOG_FORMAT must be 'json' or 'console'")
         if self.AGY_MODE not in ("", "accept-edits", "plan"):
             raise ValueError("AGY_MODE must be empty, 'accept-edits', or 'plan'")
         if not 1 <= self.AGY_MAX_CONCURRENT <= 4:

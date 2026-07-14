@@ -24,9 +24,12 @@ import asyncio
 import json
 import logging
 import os
+import time
+import uuid
 from pathlib import Path
 
 from novelwiki.platform.config import settings
+from novelwiki.platform.observability.logging import log_context, log_event
 from novelwiki.modules.narration.domain import textprep
 
 logger = logging.getLogger(__name__)
@@ -41,6 +44,7 @@ _stop = asyncio.Event()
 # sequential, but this also guards a future standalone worker process).
 _TTS_LOCK = asyncio.Lock()
 _runtime = None
+_WORKER_ID = f"tts-{os.getpid()}-{uuid.uuid4().hex[:12]}"
 
 
 def configure_worker_runtime(runtime) -> None:
@@ -120,9 +124,18 @@ def chapter_job_options(number, content_version: int, target_user_id: int | None
 async def create_job(novel_id: int, user_id: int | None, scope: str, voice_id: str,
                      options: dict | None = None) -> int:
     opts = dict(options or {})
-    return await (await _worker_state()).create_job(
+    job_id = await (await _worker_state()).create_job(
         novel_id, user_id, scope, voice_id, opts, ACTIVE_STATUSES,
     )
+    log_event(
+        logger, logging.INFO, "tts_job.scheduled",
+        f"Scheduled or reused {scope} narration job {job_id} with voice {voice_id}.",
+        job_system="tts", job_id=job_id, job_kind=f"narrate_{scope}",
+        novel_id=novel_id, user_id=user_id, scope=scope, voice_id=voice_id,
+        chapters_total=len(opts.get("chapters") or []),
+        force=bool(opts.get("force")), dedupe_key=opts.get("dedupe_key"),
+    )
+    return job_id
 
 
 async def get_job(job_id: int) -> dict | None:
@@ -154,10 +167,22 @@ async def update_job(job_id: int, **fields) -> None:
     if not fields:
         return
     await (await _worker_state()).update_job(job_id, fields)
+    if settings.LOG_JOB_PROGRESS and ({"status", "stage", "progress"} & fields.keys()):
+        log_event(
+            logger, logging.INFO, "tts_job.state_changed",
+            f"Narration job {job_id} state changed.",
+            job_system="tts", job_id=job_id, status=fields.get("status"),
+            stage=fields.get("stage"), progress=fields.get("progress"),
+            changed_fields=sorted(fields),
+        )
 
 
 async def fail_job(job_id: int, error: str) -> None:
-    logger.error(f"TTS job {job_id} failed: {error}")
+    log_event(
+        logger, logging.ERROR, "tts_job.failed",
+        f"Narration job {job_id} failed.",
+        job_system="tts", job_id=job_id, error=str(error)[:4000],
+    )
     await update_job(job_id, status="failed", error=str(error)[:4000])
 
 
@@ -258,10 +283,25 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
 
     info = await _configured_runtime().resolve_chapter_text(novel_id, number, user)
     if info["reason"] == "not_found":
+        log_event(
+            logger, logging.WARNING, "tts_job.chapter_skipped",
+            f"Narration job {job_id} skipped missing chapter {_numstr(number)}.",
+            chapter=_numstr(number), skip_reason="missing",
+        )
         return "missing"
     if info["reason"] == "untranslated":
+        log_event(
+            logger, logging.WARNING, "tts_job.chapter_skipped",
+            f"Narration job {job_id} skipped untranslated chapter {_numstr(number)}.",
+            chapter=_numstr(number), skip_reason="untranslated",
+        )
         return "untranslated"
     if info["reason"] != "ok" or not (info.get("text") or "").strip():
+        log_event(
+            logger, logging.WARNING, "tts_job.chapter_skipped",
+            f"Narration job {job_id} skipped empty chapter {_numstr(number)}.",
+            chapter=_numstr(number), skip_reason=info.get("reason") or "empty",
+        )
         return "empty"
 
     version = info["content_version"]
@@ -269,21 +309,35 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
 
     async with _target_lock(chapter_target_key(novel_id, number, voice_id, version, uid)):
         if not force and await find_audio(novel_id, number, voice_id, version, uid):
-            logger.info(f"TTS job {job_id}: chapter {_numstr(number)} already cached; skipping generation.")
+            log_event(
+                logger, logging.INFO, "tts_job.chapter_cached",
+                f"Narration job {job_id} reused cached audio for chapter {_numstr(number)}.",
+                chapter=_numstr(number), voice_id=voice_id,
+                content_version=version, target_user_id=uid,
+            )
             return "cached"
 
         # Charge quota right before the (expensive) generation, mirroring how the importer reserves
         # close to the work. A cache hit above never reaches here, so reuse stays free.
         if not await _configured_runtime().quota.try_reserve(user, "tts_chapters", 1):
+            log_event(
+                logger, logging.WARNING, "tts_job.quota_exhausted",
+                f"Narration job {job_id} reached TTS quota before chapter {_numstr(number)}.",
+                chapter=_numstr(number), quota_kind="tts_chapters",
+            )
             return "quota"
 
         paras = textprep.to_paragraphs(
             info["text"], title=info["title"], number=number, intro=settings.TTS_TITLE_INTRO,
         )
         language = lang_override or info["language"]
-        logger.info(
-            f"TTS job {job_id}: narrating chapter {_numstr(number)} "
-            f"({len(paras)} paragraphs, voice={voice_id})."
+        generation_started = time.monotonic()
+        log_event(
+            logger, logging.INFO, "tts_job.chapter_started",
+            f"Narration job {job_id} started chapter {_numstr(number)} with voice {voice_id}.",
+            chapter=_numstr(number), paragraphs=len(paras), voice_id=voice_id,
+            language=language, content_version=version, target_user_id=uid,
+            force=force, tts_steps=settings.TTS_NUM_STEP, speed=settings.TTS_SPEED,
         )
         heartbeat_stop = asyncio.Event()
 
@@ -292,7 +346,12 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
                 try:
                     await asyncio.wait_for(heartbeat_stop.wait(), timeout=30.0)
                 except asyncio.TimeoutError:
-                    logger.info(f"TTS job {job_id}: still narrating chapter {_numstr(number)}...")
+                    log_event(
+                        logger, logging.INFO, "tts_job.chapter_heartbeat",
+                        f"Narration job {job_id} is still generating chapter {_numstr(number)}.",
+                        chapter=_numstr(number),
+                        elapsed_ms=round((time.monotonic() - generation_started) * 1000, 2),
+                    )
 
         heartbeat_task = asyncio.create_task(heartbeat())
         try:
@@ -317,9 +376,13 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
         tmp.write_bytes(opus)
         os.replace(tmp, dest)
         await _upsert_audio(novel_id, number, uid, voice_id, language, version, rel, duration, len(opus))
-        logger.info(
-            f"TTS job {job_id}: published chapter {_numstr(number)} "
-            f"({int(duration)}s, {len(opus)} bytes)."
+        log_event(
+            logger, logging.INFO, "tts_job.chapter_completed",
+            f"Narration job {job_id} published chapter {_numstr(number)} audio.",
+            chapter=_numstr(number), duration_seconds=int(duration),
+            audio_bytes=len(opus), voice_id=voice_id, language=language,
+            content_version=version, target_user_id=uid,
+            duration_ms=round((time.monotonic() - generation_started) * 1000, 2),
         )
         return "generated"
 
@@ -333,8 +396,16 @@ class _NarrationWorkerOperations:
     update_job = staticmethod(update_job)
     fail_job = staticmethod(fail_job)
     chapter_label = staticmethod(_numstr)
-    info = staticmethod(logger.info)
-    exception = staticmethod(logger.exception)
+
+    @staticmethod
+    def info(message):
+        log_event(logger, logging.INFO, "tts_job.lifecycle", message)
+
+    @staticmethod
+    def exception(message):
+        log_event(
+            logger, logging.ERROR, "tts_job.crashed", message, exc_info=True
+        )
 
     @staticmethod
     async def acquire_generation():
@@ -354,7 +425,12 @@ async def _requeue_interrupted() -> None:
     finished chapters are skipped via the chapter_audio cache)."""
     n = await (await _worker_state()).requeue_interrupted()
     if n and not n.endswith(" 0"):
-        logger.info(f"Requeued interrupted TTS jobs: {n}.")
+        log_event(
+            logger, logging.WARNING, "tts_job.interrupted_requeued",
+            "Requeued narration jobs interrupted by a prior process exit.",
+            job_system="tts", worker_type="tts", worker_id=_WORKER_ID,
+            requeued_jobs=int(n.rsplit(" ", 1)[-1]),
+        )
 
 
 async def _claim_next() -> dict | None:
@@ -364,7 +440,47 @@ async def _claim_next() -> dict | None:
 
 async def _process(job: dict) -> None:
     from novelwiki.modules.narration.application.worker import NarrationWorkerService
-    await NarrationWorkerService(_NarrationWorkerOperations()).process(job)
+    job_id = int(job["id"])
+    options = job.get("options") or {}
+    with log_context(
+        worker_type="tts", worker_id=_WORKER_ID, job_system="tts",
+        job_id=job_id, job_kind=f"narrate_{job.get('scope', 'unknown')}",
+        novel_id=job.get("novel_id"), user_id=job.get("user_id"),
+        scope=job.get("scope"), voice_id=job.get("voice_id"),
+    ):
+        started = time.monotonic()
+        log_event(
+            logger, logging.INFO, "tts_job.started",
+            f"Starting {job.get('scope', 'unknown')} narration job {job_id} "
+            f"with voice {job.get('voice_id')}.",
+            status=job.get("status"), stage=job.get("stage"),
+            chapters_total=len(options.get("chapters") or []),
+            force=bool(options.get("force")),
+        )
+        try:
+            await NarrationWorkerService(_NarrationWorkerOperations()).process(job)
+        finally:
+            try:
+                finished = await get_job(job_id)
+            except Exception:
+                log_event(
+                    logger, logging.WARNING, "tts_job.outcome_lookup_failed",
+                    f"Could not load the final state for narration job {job_id}.",
+                    exc_info=True,
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                )
+            else:
+                status = (finished or {}).get("status", "missing")
+                level = logging.ERROR if status == "failed" else (
+                    logging.WARNING if status == "canceled" else logging.INFO
+                )
+                log_event(
+                    logger, level, "tts_job.attempt_finished",
+                    f"Finished narration job {job_id} with status {status}.",
+                    status=status, stage=(finished or {}).get("stage"),
+                    progress=(finished or {}).get("progress"),
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                )
 
 
 async def worker_loop(poll_interval: float = 2.0) -> None:
@@ -372,8 +488,16 @@ async def worker_loop(poll_interval: float = 2.0) -> None:
     try:
         await _requeue_interrupted()
     except Exception as e:
-        logger.warning(f"TTS worker: could not requeue interrupted jobs: {e}")
-    logger.info("TTS worker started.")
+        log_event(
+            logger, logging.WARNING, "worker.maintenance_failed",
+            "Narration worker could not requeue interrupted jobs.", exc_info=True,
+            worker_type="tts", worker_id=_WORKER_ID, job_system="tts",
+        )
+    log_event(
+        logger, logging.INFO, "worker.started", "Narration worker started.",
+        worker_type="tts", worker_id=_WORKER_ID, job_system="tts",
+        poll_interval_seconds=poll_interval,
+    )
     while not _stop.is_set():
         try:
             job = await _claim_next()
@@ -386,13 +510,20 @@ async def worker_loop(poll_interval: float = 2.0) -> None:
             await _process(job)
         except asyncio.CancelledError:
             break
-        except Exception as e:
-            logger.warning(f"TTS worker loop error: {e}")
+        except Exception:
+            log_event(
+                logger, logging.ERROR, "worker.loop_failed",
+                "Narration worker loop failed.", exc_info=True,
+                worker_type="tts", worker_id=_WORKER_ID, job_system="tts",
+            )
             try:
                 await asyncio.wait_for(_stop.wait(), timeout=poll_interval)
             except asyncio.TimeoutError:
                 pass
-    logger.info("TTS worker stopped.")
+    log_event(
+        logger, logging.INFO, "worker.stopped", "Narration worker stopped.",
+        worker_type="tts", worker_id=_WORKER_ID, job_system="tts",
+    )
 
 
 def start_worker() -> None:

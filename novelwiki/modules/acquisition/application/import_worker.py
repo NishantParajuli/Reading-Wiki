@@ -30,6 +30,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def _log_event(level: int, event: str, message: str, **fields) -> None:
+    """Emit adapter-neutral event metadata without coupling Application to Platform."""
+    logger.log(
+        level, message, extra={"event": event, "event_fields": fields}, stacklevel=2
+    )
+
 # Statuses the worker actively advances (trigger states). Each is claimed atomically into a
 # distinct in-progress marker: `parsing`/`ocr_running`/`commit_running`. `ocr_paused` is a
 # budget hold that `_reactivate_paused` flips back to `ocr_pending` when quota returns.
@@ -102,10 +109,20 @@ async def create_job(format: str, original_path: str, file_sha256: str | None = 
     """Insert a job row owned by `user_id` (the uploader). Callers that already have the file
     on disk use the default 'uploaded' status (the worker picks it up); the multipart upload
     path inserts as 'receiving' first, saves the blob under the new id, then flips to 'uploaded'."""
-    return await (await _worker_repository(runtime)).create_job(
+    job_id = await (await _worker_repository(runtime)).create_job(
         format, original_path, file_sha256, options or {}, detected_meta or {},
         status, user_id,
     )
+    _log_event(
+        logging.INFO, "import_job.created",
+        f"Created {format} import job {job_id} with status {status}.",
+        job_system="import", job_id=job_id, job_kind=f"import_{format}",
+        job_format=format, user_id=user_id, status=status,
+        file_sha256_prefix=(file_sha256 or "")[:12] or None,
+        auto_commit=bool((options or {}).get("auto_commit")),
+        batch_id=(options or {}).get("batch_id"),
+    )
+    return job_id
 
 
 async def get_job(job_id: int, *, runtime) -> dict | None:
@@ -126,10 +143,23 @@ async def update_job(job_id: int, *, runtime, **fields) -> None:
     if not fields:
         return
     await (await _worker_repository(runtime)).update_job(job_id, fields)
+    state_fields = {"status", "stage", "progress"} & fields.keys()
+    if state_fields:
+        _log_event(
+            logging.INFO, "import_job.state_changed",
+            f"Import job {job_id} state changed"
+            f"{f' to {fields.get("status")}' if fields.get('status') else ''}.",
+            job_system="import", job_id=job_id, status=fields.get("status"),
+            stage=fields.get("stage"), progress=fields.get("progress"),
+            changed_fields=sorted(fields),
+        )
 
 
 async def fail_job(job_id: int, error: str, *, runtime) -> None:
-    logger.error(f"Import job {job_id} failed: {error}")
+    _log_event(
+        logging.ERROR, "import_job.failed", f"Import job {job_id} failed.",
+        job_system="import", job_id=job_id, error=str(error)[:4000],
+    )
     await update_job(
         job_id, status="failed", error=str(error)[:4000], runtime=runtime
     )
@@ -208,8 +238,14 @@ async def _finish_parse(job_id: int, document, *, runtime) -> None:
         error=None,
         runtime=runtime,
     )
-    logger.info(f"Import job {job_id} parsed: {stats['segments']} segments, {stats['images']} images, "
-                f"quality {stats['quality']['score']}.")
+    _log_event(
+        logging.INFO, "import_job.parsed",
+        f"Import job {job_id} parsed {stats['segments']} segments and "
+        f"{stats['images']} images.",
+        job_system="import", job_id=job_id, segments=stats["segments"],
+        images=stats["images"], blocks=stats["blocks"], words=stats["words"],
+        quality_score=stats["quality"]["score"],
+    )
     await _auto_advance(job_id, runtime=runtime)
 
 
@@ -261,9 +297,20 @@ async def _auto_advance(job_id: int, *, runtime) -> None:
             continue
         try:
             await runtime.commit_series(ids)
-            logger.info(f"Auto-committed series '{key}' ({len(ids)} volumes) from batch.")
+            _log_event(
+                logging.INFO, "import_batch.series_committed",
+                f"Auto-committed a {len(ids)}-volume series from an import batch.",
+                job_system="import", job_ids=ids, volumes=len(ids),
+                batch_id=options.get("batch_id"),
+            )
         except Exception as e:
-            logger.warning(f"Series auto-commit failed for '{key}': {e}")
+            _log_event(
+                logging.WARNING, "import_batch.series_commit_failed",
+                f"Auto-commit failed for a {len(ids)}-volume import series.",
+                job_system="import", job_ids=ids, volumes=len(ids),
+                batch_id=options.get("batch_id"), error_type=type(e).__name__,
+                error=str(e),
+            )
             for jid in ids:
                 await fail_job(
                     jid, f"series commit: {type(e).__name__}: {e}", runtime=runtime
@@ -319,7 +366,12 @@ async def _enter_ocr_confirm(job_id: int, document, job: dict, *, runtime) -> No
         error=None,
         runtime=runtime,
     )
-    logger.info(f"Import job {job_id}: scanned PDF, {pages} pages — awaiting OCR confirmation.")
+    _log_event(
+        logging.INFO, "import_job.awaiting_ocr_confirmation",
+        f"Import job {job_id} detected a scanned PDF with {pages} pages and is awaiting OCR confirmation.",
+        job_system="import", job_id=job_id, pages=pages,
+        scanned_pages=est.get("scanned_pages"),
+    )
 
 
 async def do_ocr(job: dict, *, runtime) -> None:
@@ -349,7 +401,11 @@ async def do_ocr(job: dict, *, runtime) -> None:
             await update_job(job_id, status="ocr_paused",
                              stage="paused — Gemini daily budget reached; resumes tomorrow",
                              runtime=runtime)
-            logger.info(f"Import job {job_id} OCR paused on budget; will resume when quota rolls over.")
+            _log_event(
+                logging.WARNING, "import_job.ocr_paused",
+                f"Import job {job_id} paused OCR because the provider budget was exhausted.",
+                job_system="import", job_id=job_id, reason="provider_budget_exhausted",
+            )
             return
 
     # CJK scans flow into the translation pipeline as a raw source (text == source language).
@@ -371,8 +427,14 @@ async def do_commit(job: dict, *, runtime) -> None:
     job_id = int(job["id"])
     await update_job(job_id, stage="committing", runtime=runtime)
     result = await runtime.commit_job(job)
-    logger.info(f"Import job {job_id} committed → novel {result['novel_id']} "
-                f"({result.get('stats', {}).get('chapters_written', 0)} chapters).")
+    _log_event(
+        logging.INFO, "import_job.committed",
+        f"Import job {job_id} committed to novel {result['novel_id']}.",
+        job_system="import", job_id=job_id, novel_id=result["novel_id"],
+        chapters_written=result.get("stats", {}).get("chapters_written", 0),
+        from_chapter=result.get("stats", {}).get("from_chapter"),
+        to_chapter=result.get("stats", {}).get("to_chapter"),
+    )
 
 
 def _public_meta(meta: dict, job_id: int, *, runtime) -> dict:

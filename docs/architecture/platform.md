@@ -19,14 +19,16 @@ novelwiki/platform/
 │   ├── static.py              # /health, avatar mount, SPA static serving
 │   └── app.py                 # composed-app re-export plumbing
 ├── auth.py                    # re-export of Identity's web dependencies (see note)
-├── observability/audit.py     # append-only audit events + request-id contextvar
+├── observability/
+│   ├── audit.py               # append-only audit events + request-id contextvar
+│   └── logging.py             # JSON formatter + async-safe structured context
 ├── cli.py / cli_runtime.py    # reset-db command + uniform async CLI runner
 └── architecture/checks.py     # the machine-readable architecture rules (394 lines)
 ```
 
 ## 1. Configuration (`platform/config/settings.py`)
 
-A single `Settings(BaseSettings)` class (currently 150 declared fields) loaded from the environment and
+A single `Settings(BaseSettings)` class loaded from the environment and
 `.env` (`extra="ignore"`). Import it as `from novelwiki.platform.config import settings`.
 Highlights of the structure (the full annotated reference is
 [../operations/configuration.md](../operations/configuration.md)):
@@ -41,6 +43,8 @@ Highlights of the structure (the full annotated reference is
 - **Cost controls** — the `ASK_*` denial-of-wallet family, quotas (`DEFAULT_QUOTA_*`),
   Gemini daily budget.
 - **Workers** — heartbeat/lease/attempt settings for the import and generic job workers.
+- **Logging** — format/level, service/environment tags, HTTP events, and job-progress
+  controls.
 - **AGY** — a large, *validated* block (a `@model_validator` enforces sane ranges for
   concurrency, timeouts, batch sizes, retention, and non-empty model names; bad AGY
   config refuses to boot).
@@ -75,7 +79,7 @@ Builds the FastAPI instance with *security policy only* (no routes):
 
 - **CORS** — explicit origins from `ALLOWED_ORIGINS` with credentials enabled (a `*`
   origin can't be used with cookies, so the list is explicit).
-- **One `http` middleware** doing four jobs per request:
+- **One `http` middleware** doing five jobs per request:
   1. **Request-ID** — honor an incoming `X-Request-ID` (truncated to 64 chars) or mint
      one; store it in the audit contextvar for the request's lifetime; echo it on the
      response. Every audit event written during the request carries it.
@@ -91,6 +95,9 @@ Builds the FastAPI instance with *security policy only* (no routes):
   4. **CSRF cookie seeding** — a session cookie without a CSRF cookie gets one issued
      (via the Identity-supplied `seed_csrf_cookie` callback — the seam through which the
      business token generator is *handed in*).
+  5. **Request logging** — emit a completion or failure event with request ID, method,
+     path/route, status, client address, response size, duration, and traceback on an
+     exception. Request bodies and query strings are not logged.
 
 ### `static.py::mount_platform_surfaces(app, *, ensure_owner_assets)`
 
@@ -111,18 +118,36 @@ adapters and Bootstrap depend on a stable location rather than on Identity's int
 (This is a *composition* convenience, one of the two sanctioned seams, not Platform
 containing auth logic.)
 
-## 4. Observability (`platform/observability/audit.py`)
+## 4. Observability (`platform/observability/`)
 
-A minimal, durable audit facility:
+The durable audit facility in `audit.py` provides:
 
 - `new_request_id()` / `set_request_id()` / `reset_request_id()` — a `contextvars`-based
   request-id, set by the web middleware and readable anywhere down-stack without passing
   it through every signature.
-- `FunctionAuditSink` / `log_event(event, user_id=…, novel_id=…, **data)` — appends to the
+- `FunctionAuditSink` / `record(event, user_id=…, novel_id=…, data=…)` — appends to the
   `audit_events` table (owned by Platform Observability): job lifecycle
   (`job.created`, `job.done`, `job.failed`…), quota movements (`quota.refund`), auth and
   admin actions. Fire-and-forget writes: an audit failure never breaks the business
   operation.
+
+`logging.py` owns the operational stream:
+
+- `configure_logging()` installs a shared JSON/console formatter and routes Uvicorn
+  error/application loggers through it for the web, CLI, and dedicated AGY entrypoints.
+  Uvicorn's raw-target access logger is disabled; the request middleware owns sanitized
+  access events without query strings.
+- `log_context()` uses `contextvars` to propagate job, worker, backend, run, and ownership
+  fields through nested async calls and child tasks.
+- `log_event()` adds a stable event name and queryable fields. JSON output includes timing,
+  source/process identity, request ID, and active exception tracebacks.
+- Common credential shapes are redacted. Lifecycle code intentionally excludes story
+  content, prompts, provider/AGY output, bodies, and raw job options.
+
+Worker adapters establish context at claim time; deep scraper/translation/codex/provider
+logs inherit the actual `job_kind` and `job_id` without threading them through every
+function. See [../operations/logging.md](../operations/logging.md) for the event schema and
+Grafana/Loki operations.
 
 ## 5. CLI runtime (`platform/cli.py`, `platform/cli_runtime.py`)
 

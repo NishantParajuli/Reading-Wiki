@@ -74,6 +74,10 @@ another process's live job.
    `reserved − consumed` (clamped ≥ 0).
 4. **Audit** — `job.created` / `job.done` / `quota.refund` events land in `audit_events`
    with the scheduling request's `X-Request-ID`.
+5. **Structured logs** — scheduling, claim, stage/progress, completion/retry/failure,
+   lease recovery, and quota settlement emit JSON events keyed by the real `job_kind`
+   plus `job_id`, worker identity, backend/model, attempt, outcome, and duration. The
+   scheduling request uses `request_id`; later worker activity is joined by `job_id`.
 
 ## Quota semantics per kind
 
@@ -105,3 +109,6 @@ unused reservation first). Details: [ai-backends.md](ai-backends.md).
   overrides.
 - Worker liveness: heartbeat visibility is part of the release checklist
   ([../release-runbook.md](../release-runbook.md)).
+- Logs: [structured logging](../operations/logging.md) documents the complete event/field
+  schema and ready-to-adapt Grafana/Loki queries. `INFO` includes lifecycle/progress and
+  heartbeat failures; `DEBUG` adds successful heartbeats and maintenance sweeps.

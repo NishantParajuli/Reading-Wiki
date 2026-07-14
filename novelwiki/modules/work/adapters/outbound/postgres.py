@@ -27,6 +27,7 @@ import json
 import logging
 
 from novelwiki.platform.observability import audit
+from novelwiki.platform.observability.logging import log_event
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
 from novelwiki.workflows.finalize_job_quota import finalize_job_quota
@@ -181,6 +182,14 @@ async def create_job(kind: str, *, novel_id: int | None, user_id: int | None,
                     kind, key, list(ACTIVE_STATUSES),
                 )
                 if existing is not None:
+                    log_event(
+                        logger, logging.INFO, "job.deduplicated",
+                        f"Reused active {kind} job {int(existing)} instead of creating a duplicate.",
+                        job_system="generic", job_id=int(existing), job_kind=kind,
+                        user_id=user_id, novel_id=novel_id,
+                        execution_backend=execution_backend,
+                        backend_requested=backend_requested, backend_model=backend_model,
+                    )
                     return int(existing), False
             if execution_backend == "agy" and user_id is not None and kind != "agy_smoke":
                 # Close the route-level count/create race across web processes.
@@ -225,6 +234,21 @@ async def create_job(kind: str, *, novel_id: int | None, user_id: int | None,
                        data={"job_id": job_id, "kind": kind, "requested": backend_requested,
                              "resolved": execution_backend, "model": backend_model,
                              "policy_version": backend_policy_version})
+    log_event(
+        logger, logging.INFO, "job.created",
+        f"Created {kind} job {job_id} for {execution_backend} execution.",
+        job_system="generic", job_id=job_id, job_kind=kind,
+        user_id=user_id, novel_id=novel_id, status="queued", stage="queued",
+        max_attempts=max_att, execution_backend=execution_backend,
+        backend_requested=backend_requested, backend_model=backend_model,
+        backend_policy_version=backend_policy_version,
+        fallback_allowed=bool(backend_fallback_allowed),
+        quota_kind=quota_kind, quota_reserved=int(quota_reserved),
+        option_keys=sorted(opts), force=bool(opts.get("force")),
+        source_id=opts.get("source_id"), max_chapters=opts.get("max_chapters"),
+        from_chapter=opts.get("from_chapter"), to_chapter=opts.get("to_chapter"),
+        seed_from_codex=opts.get("seed_from_codex"),
+    )
     return job_id, True
 
 
@@ -325,6 +349,12 @@ async def cancel_job(job_id: int) -> bool:
         await audit.record("job.canceled", data={"job_id": job_id})
     else:
         await audit.record("agy.run.cancel_requested", data={"job_id": job_id})
+    log_event(
+        logger, logging.WARNING, "job.cancel_requested",
+        f"Cancellation was requested for background job {job_id}; status is {row['status']}.",
+        job_system="generic", job_id=job_id, status=row["status"],
+        cooperative=row["status"] != "canceled",
+    )
     return True
 
 
@@ -350,6 +380,11 @@ async def mark_canceled_if_running(job_id: int) -> bool:
     if row:
         await finalize(job_id, success=False)
         await audit.record("job.canceled", data={"job_id": job_id})
+        log_event(
+            logger, logging.WARNING, "job.canceled",
+            f"Canceled running AGY job {job_id} after its child process stopped.",
+            job_system="generic", job_id=job_id, execution_backend="agy",
+        )
     return row is not None
 
 
@@ -402,11 +437,26 @@ async def fail_or_retry(job: dict, error: str) -> None:
         await finalize(job_id, success=False)
         return
     if row["status"] == "failed":
-        logger.error(f"Job {job_id} failed permanently: {err}")
+        log_event(
+            logger, logging.ERROR, "job.failed",
+            f"{job.get('kind', 'Background')} job {job_id} failed permanently.",
+            job_system="generic", job_id=job_id, job_kind=job.get("kind"),
+            user_id=job.get("user_id"), novel_id=job.get("novel_id"),
+            attempt=job.get("attempts"), max_attempts=job.get("max_attempts"),
+            error=err,
+        )
         await finalize(job_id, success=False)
         await audit.record("job.failed", data={"job_id": job_id, "error": err})
     else:
-        logger.warning(f"Job {job_id} will retry: {err}")
+        log_event(
+            logger, logging.WARNING, "job.retry_scheduled",
+            f"{job.get('kind', 'Background')} job {job_id} will retry after attempt "
+            f"{job.get('attempts')}/{job.get('max_attempts')} failed.",
+            job_system="generic", job_id=job_id, job_kind=job.get("kind"),
+            user_id=job.get("user_id"), novel_id=job.get("novel_id"),
+            attempt=job.get("attempts"), max_attempts=job.get("max_attempts"),
+            error=err,
+        )
 
 
 async def wait_for_provider(job_id: int, failure_code: str, error: str, minutes: int) -> bool:
@@ -424,6 +474,13 @@ async def wait_for_provider(job_id: int, failure_code: str, error: str, minutes:
         )
     if row:
         await audit.record("agy.run.waiting_provider", data={"job_id": job_id, "failure_code": failure_code})
+        log_event(
+            logger, logging.WARNING, "agy.run.waiting_provider",
+            f"AGY job {job_id} is waiting {max(1, int(minutes))} minute(s) for the provider.",
+            job_system="generic", job_id=job_id, execution_backend="agy",
+            failure_code=failure_code, retry_after_minutes=max(1, int(minutes)),
+            error=str(error)[:4000],
+        )
     return row is not None
 
 
@@ -440,7 +497,15 @@ async def retry_waiting(*, job_id: int | None = None) -> int:
                 "UPDATE jobs SET status='queued', stage='queued', not_before=NULL, error=NULL, updated_at=now() "
                 "WHERE id=$1 AND status='waiting_provider';", job_id,
             )
-    return int(result.rsplit(" ", 1)[-1])
+    count = int(result.rsplit(" ", 1)[-1])
+    if count:
+        log_event(
+            logger, logging.INFO, "agy.waiting_jobs_released",
+            f"Released {count} AGY provider-wait job(s) back to the queue.",
+            job_system="generic", job_id=job_id, released_jobs=count,
+            execution_backend="agy",
+        )
+    return count
 
 
 async def increment_quota_consumed(job_id: int, units: int = 1, *, conn=None) -> None:
@@ -479,9 +544,11 @@ async def finalize(job_id: int, *, success: bool) -> None:
         return  # already finalized
     if refunded:
         kind = settlement.quota_kind
-        logger.info(
-            "Job %s: refunded %s %s unit(s) to user %s.",
-            job_id, refunded, kind, settlement.user_id,
+        log_event(
+            logger, logging.INFO, "quota.refunded",
+            f"Refunded {refunded} {kind} unit(s) for background job {job_id}.",
+            job_system="generic", job_id=job_id, user_id=settlement.user_id,
+            novel_id=settlement.novel_id, quota_kind=kind, refunded_units=refunded,
         )
         await audit.record(
             "quota.refund",

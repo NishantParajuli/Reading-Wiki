@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -52,13 +53,35 @@ class ApplicationLifecycle:
 
     async def start(self) -> None:
         for hook in self._hooks:
+            started = time.monotonic()
             try:
                 await _invoke(hook.start)
             except Exception as exc:
+                from novelwiki.platform.observability.logging import log_event
+
                 if hook.fatal_start:
-                    logger.error("%s: %s", hook.start_error, exc)
+                    log_event(
+                        logger, logging.ERROR, "application.startup_hook_failed",
+                        f"{hook.start_error}: {hook.name}.", exc_info=True,
+                        hook=hook.name, fatal=True,
+                        duration_ms=round((time.monotonic() - started) * 1000, 2),
+                    )
                     raise
-                logger.warning("%s (continuing): %s", hook.start_error, exc)
+                log_event(
+                    logger, logging.WARNING, "application.startup_hook_failed",
+                    f"{hook.start_error}: {hook.name}; startup is continuing.",
+                    exc_info=True, hook=hook.name, fatal=False,
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                )
+            else:
+                from novelwiki.platform.observability.logging import log_event
+
+                log_event(
+                    logger, logging.INFO, "application.startup_hook_completed",
+                    f"Application startup hook {hook.name} completed.",
+                    hook=hook.name,
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                )
 
     async def stop(self) -> None:
         hooks = sorted(
@@ -66,10 +89,27 @@ class ApplicationLifecycle:
             key=lambda hook: hook.shutdown_order,
         )
         for hook in hooks:
+            started = time.monotonic()
             try:
                 await _invoke(hook.stop)
             except Exception as exc:
-                logger.warning("%s: %s", hook.stop_error, exc)
+                from novelwiki.platform.observability.logging import log_event
+
+                log_event(
+                    logger, logging.WARNING, "application.shutdown_hook_failed",
+                    f"{hook.stop_error}: {hook.name}.", exc_info=True,
+                    hook=hook.name,
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                )
+            else:
+                from novelwiki.platform.observability.logging import log_event
+
+                log_event(
+                    logger, logging.INFO, "application.shutdown_hook_completed",
+                    f"Application shutdown hook {hook.name} completed.",
+                    hook=hook.name,
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                )
 
 
 def build_application_lifecycle() -> ApplicationLifecycle:

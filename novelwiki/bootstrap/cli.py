@@ -2,6 +2,10 @@ import logging
 
 import typer
 
+from novelwiki.platform.observability.logging import configure_logging
+
+configure_logging()
+
 from novelwiki.modules.acquisition.adapters.inbound.cli import (
     app as acquisition_cli,
     configure_cli as configure_acquisition_cli,

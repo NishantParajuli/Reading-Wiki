@@ -11,7 +11,9 @@
    Reader, one provider-free cached Codex read, and worker heartbeat visibility.
 6. Observe request errors, auth failures, queued/running/waiting-provider counts, stale leases,
    sidecar errors, and provider/quota spend. Do not retry expensive jobs in bulk until the queue is
-   understood.
+   understood. Use the structured event fields and baseline queries in
+   [operations/logging.md](operations/logging.md); confirm `worker.started` exists for every
+   enabled role and investigate `worker.loop_failed` or heartbeat failures first.
 7. For an application-only regression, restore the prior image. For a data/schema regression, stop
    writers, restore the verified database backup into a new database, point the prior image at it,
    and validate counts/health before reopening traffic. Do not use destructive down migrations as

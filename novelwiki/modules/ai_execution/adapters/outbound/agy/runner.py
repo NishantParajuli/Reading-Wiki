@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
+import time
 from datetime import UTC, datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +13,9 @@ from typing import Awaitable, Callable
 
 from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import AgyCanceled, AgyError, classify_failure
 from novelwiki.platform.config import settings
+from novelwiki.platform.observability.logging import log_context, log_event
+
+logger = logging.getLogger(__name__)
 
 
 CancelCheck = Callable[[], Awaitable[bool]]
@@ -130,15 +135,36 @@ async def run_agy(
     on_spawn: Callable[[int, str | None], Awaitable[None]] | None = None,
 ) -> RunnerResult:
     argv = build_argv(run_root, prompt, model)
-    process = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=run_root,
-        env=child_environment(),
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
-    )
+    started_monotonic = time.monotonic()
+    run_id = run_root.name
+    with log_context(ai_run_id=run_id):
+        log_event(
+            logger, logging.INFO, "agy.process_starting",
+            f"Starting AGY subprocess for run {run_id} with model {model}.",
+            model=model, binary=Path(settings.AGY_BINARY).name,
+            print_timeout_seconds=settings.AGY_PRINT_TIMEOUT_SECONDS,
+            outer_grace_seconds=settings.AGY_OUTER_TIMEOUT_GRACE_SECONDS,
+            mode=settings.AGY_MODE or "default", sandbox=True,
+        )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=run_root,
+            env=child_environment(),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+    except Exception:
+        with log_context(ai_run_id=run_id):
+            log_event(
+                logger, logging.ERROR, "agy.process_spawn_failed",
+                f"Could not spawn the AGY subprocess for run {run_id}.",
+                exc_info=True, model=model, binary=Path(settings.AGY_BINARY).name,
+                duration_ms=round((time.monotonic() - started_monotonic) * 1000, 2),
+            )
+        raise
     pgid = process.pid
     started_at = _proc_start_time(process.pid)
     stdout_task = asyncio.create_task(_drain(process.stdout, settings.AGY_STDOUT_MAX_BYTES))
@@ -152,6 +178,13 @@ async def run_agy(
         _runner_event(run_root, "spawned", pid=pgid, model=model,
                       binary=Path(settings.AGY_BINARY).name,
                       flags=["print", "model", "sandbox", "print-timeout", "log-file"] + (["mode"] if settings.AGY_MODE else []))
+        with log_context(ai_run_id=run_id):
+            log_event(
+                logger, logging.INFO, "agy.process_spawned",
+                f"Spawned AGY subprocess {pgid} for run {run_id}.",
+                process_group_id=pgid, process_started_at=started_at, model=model,
+                binary=Path(settings.AGY_BINARY).name,
+            )
 
         deadline = asyncio.get_running_loop().time() + settings.AGY_PRINT_TIMEOUT_SECONDS + settings.AGY_OUTER_TIMEOUT_GRACE_SECONDS
         timed_out = canceled = False
@@ -175,6 +208,13 @@ async def run_agy(
         await process.wait()
         await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
         _runner_event(run_root, "monitor_error", error_type=type(exc).__name__, exit_code=process.returncode)
+        with log_context(ai_run_id=run_id):
+            log_event(
+                logger, logging.ERROR, "agy.process_monitor_failed",
+                f"AGY subprocess monitoring failed for run {run_id}.",
+                exc_info=True, process_group_id=pgid, exit_code=process.returncode,
+                duration_ms=round((time.monotonic() - started_monotonic) * 1000, 2),
+            )
         raise
     await process.wait()
     stdout_data, stdout_bytes = await stdout_task
@@ -186,6 +226,20 @@ async def run_agy(
     )
     _runner_event(run_root, "exited", exit_code=result.exit_code, timed_out=timed_out,
                   canceled=canceled, stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes)
+    with log_context(ai_run_id=run_id):
+        exit_level = logging.ERROR if (timed_out or (result.exit_code != 0 and not canceled)) else (
+            logging.WARNING if canceled else logging.INFO
+        )
+        log_event(
+            logger, exit_level, "agy.process_exited",
+            f"AGY subprocess for run {run_id} exited with code {result.exit_code}.",
+            process_group_id=pgid, exit_code=result.exit_code,
+            timed_out=timed_out, canceled=canceled,
+            stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes,
+            stdout_truncated=stdout_bytes > settings.AGY_STDOUT_MAX_BYTES,
+            stderr_truncated=stderr_bytes > settings.AGY_STDERR_MAX_BYTES,
+            duration_ms=round((time.monotonic() - started_monotonic) * 1000, 2),
+        )
     if canceled:
         raise AgyCanceled("AGY run was canceled")
     if timed_out:

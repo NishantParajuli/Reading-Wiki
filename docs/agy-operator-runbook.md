@@ -22,6 +22,18 @@ retain access to the authenticated user's DBus/keyring session.
 
 ## Incidents
 
+Start with the structured journal stream:
+
+```bash
+journalctl --user -u novelwiki-agy-worker.service -f -o cat
+```
+
+Every claimed job identifies its actual `job_kind` and `agy_workload`, with `job_id`,
+`ai_run_id`, model, attempt, preflight state, subprocess PID/exit code, stdout/stderr byte
+counts, duration, retry/provider-wait decision, and traceback on exceptions. See
+[operations/logging.md](operations/logging.md) for the field/event reference and Loki
+queries.
+
 - Immediate new-work kill switch: set `AGY_ENABLED=false` and restart the web/worker settings
   consumers. Queued AGY jobs remain explicit; they do not silently spend API quota.
 - Quota/provider wait: inspect the official quota UI, avoid tight retry, then use the admin
