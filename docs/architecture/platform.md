@@ -134,7 +134,9 @@ The durable audit facility in `audit.py` provides:
 `logging.py` owns the operational stream:
 
 - `configure_logging()` installs a shared JSON/console formatter and routes Uvicorn
-  loggers through it for the web, CLI, and dedicated AGY entrypoints.
+  error/application loggers through it for the web, CLI, and dedicated AGY entrypoints.
+  Uvicorn's raw-target access logger is disabled; the request middleware owns sanitized
+  access events without query strings.
 - `log_context()` uses `contextvars` to propagate job, worker, backend, run, and ownership
   fields through nested async calls and child tasks.
 - `log_event()` adds a stable event name and queryable fields. JSON output includes timing,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import logging
 import sys
@@ -8,6 +9,7 @@ from novelwiki.platform.observability import audit
 from novelwiki.platform.observability.logging import (
     ConsoleFormatter,
     JsonFormatter,
+    configure_logging,
     log_context,
 )
 
@@ -103,3 +105,45 @@ def test_formatters_keep_json_valid_and_redact_console_credentials():
     assert payload["duration_ms"] is None
     assert "hunter2" not in console
     assert "[REDACTED]" in console
+
+
+def test_configure_logging_drops_raw_uvicorn_access_targets():
+    root = logging.getLogger()
+    logger_names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    root_state = (list(root.handlers), root.level)
+    logger_state = {
+        name: (
+            list(logging.getLogger(name).handlers),
+            logging.getLogger(name).propagate,
+            logging.getLogger(name).disabled,
+            logging.getLogger(name).level,
+        )
+        for name in logger_names
+    }
+    capture_stream = io.StringIO()
+    capture = logging.StreamHandler(capture_stream)
+    try:
+        configure_logging(force=True)
+        root.addHandler(capture)
+
+        access = logging.getLogger("uvicorn.access")
+        access.info(
+            '127.0.0.1 - "GET /api/auth/oauth/callback?code=secret-code HTTP/1.1" 200'
+        )
+
+        assert access.disabled is True
+        assert access.propagate is False
+        assert access.handlers == []
+        assert "secret-code" not in capture_stream.getvalue()
+        assert logging.getLogger("uvicorn.error").propagate is True
+    finally:
+        root.handlers.clear()
+        root.handlers.extend(root_state[0])
+        root.setLevel(root_state[1])
+        for name, (handlers, propagate, disabled, level) in logger_state.items():
+            target = logging.getLogger(name)
+            target.handlers.clear()
+            target.handlers.extend(handlers)
+            target.propagate = propagate
+            target.disabled = disabled
+            target.setLevel(level)

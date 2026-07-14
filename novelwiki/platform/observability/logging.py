@@ -162,7 +162,7 @@ class ConsoleFormatter(logging.Formatter):
 
 
 def configure_logging(*, force: bool = False) -> None:
-    """Install the shared formatter and route Uvicorn loggers through it.
+    """Install the shared formatter and route safe Uvicorn loggers through it.
 
     ``force`` is used by tests or explicit entrypoints that need to replace an earlier
     configuration.  Normal repeated application imports are idempotent.
@@ -186,12 +186,20 @@ def configure_logging(*, force: bool = False) -> None:
         root.setLevel(level)
 
         # Uvicorn normally installs non-propagating handlers before importing the app.
-        # Clearing them keeps access/error/application events in the same JSON stream.
-        for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        # Route server/application diagnostics through the shared formatter, but disable
+        # its access logger: that logger renders the raw request target, including query
+        # strings. Our http.request.* middleware events are the safe access-log contract.
+        for name in ("uvicorn", "uvicorn.error"):
             uvicorn_logger = logging.getLogger(name)
             uvicorn_logger.handlers.clear()
             uvicorn_logger.propagate = True
+            uvicorn_logger.disabled = False
             uvicorn_logger.setLevel(level)
+        uvicorn_access = logging.getLogger("uvicorn.access")
+        uvicorn_access.handlers.clear()
+        uvicorn_access.propagate = False
+        uvicorn_access.disabled = True
+        uvicorn_access.setLevel(level)
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
 

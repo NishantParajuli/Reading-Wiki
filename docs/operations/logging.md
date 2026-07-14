@@ -27,8 +27,10 @@ Keep `INFO` in normal production operation. `DEBUG` additionally exposes success
 heartbeats, AGY worker heartbeats, and maintenance sweeps; heartbeat failures are always
 `WARNING` because they can lead to lease recovery.
 
-Uvicorn access/error loggers are routed through the same formatter. The web process (which
-hosts the generic, import, and narration workers), CLI processes, and dedicated
+Uvicorn error/application loggers are routed through the same formatter. Its built-in access
+logger is disabled because it renders the raw request target, including query strings; the
+sanitized `http.request.completed`/`failed` events below replace it. The web process (which hosts
+the generic, import, and narration workers), CLI processes, and dedicated
 `python -m novelwiki.agy.worker` process all install the application logging configuration.
 
 ## Common fields
