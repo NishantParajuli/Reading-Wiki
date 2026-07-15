@@ -39,6 +39,7 @@ def build_translation_execution_runtime():
     from types import SimpleNamespace
     from novelwiki.modules.ai_execution.adapters.outbound import providers
     from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
+    from novelwiki.modules.ai_execution.adapters.outbound.agy.prompts import build_task_prompt
     from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import (
         create_run, update_run, workspace_relpath,
     )
@@ -72,7 +73,8 @@ def build_translation_execution_runtime():
 
     ai = SimpleNamespace(
         call_chat_completion=providers.call_chat_completion,
-        run_agy=run_agy, create_run=create_run, update_run=update_run,
+        run_agy=run_agy, build_task_prompt=build_task_prompt,
+        create_run=create_run, update_run=update_run,
         workspace_relpath=workspace_relpath, load_json=load_json,
         read_text_artifact=read_text_artifact,
         validate_output_manifest=validate_output_manifest,

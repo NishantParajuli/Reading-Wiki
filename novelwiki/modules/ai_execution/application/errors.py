@@ -7,12 +7,20 @@ class AgyError(RuntimeError):
     code = "unknown"
     retryable = True
 
-    def __init__(self, message: str = "", *, code: str | None = None, retryable: bool | None = None):
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        code: str | None = None,
+        retryable: bool | None = None,
+        metrics: dict | None = None,
+    ):
         super().__init__(message or code or self.code)
         if code is not None:
             self.code = code
         if retryable is not None:
             self.retryable = retryable
+        self.metrics = dict(metrics or {})
 
 
 class AgyPreflightError(AgyError):

@@ -4,6 +4,179 @@ import hashlib
 import json
 import os
 import sys
+from datetime import datetime, timezone
+
+
+def _expected_artifacts(root, input_manifest):
+    workload = input_manifest.get("workload")
+    fixed = {
+        "smoke_test": [
+            ("smoke.txt", "smoke", "text/plain; charset=utf-8"),
+        ],
+        "codex_extract": [
+            ("extraction.json", "codex_extraction", "application/json"),
+            ("running-summary.md", "running_summary", "text/markdown; charset=utf-8"),
+            ("audit.json", "codex_audit", "application/json"),
+        ],
+        "codex_verify": [
+            ("extraction.json", "codex_extraction", "application/json"),
+            ("running-summary.md", "running_summary", "text/markdown; charset=utf-8"),
+            ("audit.json", "codex_audit", "application/json"),
+        ],
+        "entity_disambiguation": [
+            ("decisions.json", "disambiguation", "application/json"),
+        ],
+    }
+    if workload in fixed:
+        return fixed[workload]
+    if workload == "translate_batch":
+        expected = []
+        for ref in input_manifest.get("inputs", []):
+            if ref.get("role") != "chapter_metadata":
+                continue
+            name = os.path.basename(str(ref.get("path") or ""))
+            if not name.endswith(".meta.json"):
+                return []
+            chapter_ref = name[:-len(".meta.json")]
+            expected.extend([
+                (f"chapters/{chapter_ref}.translation.txt", "translation", "text/plain; charset=utf-8"),
+                (f"chapters/{chapter_ref}.meta.json", "translation_meta", "application/json"),
+            ])
+        return expected
+    return []
+
+
+def finalize_manifest(root):
+    """Trusted hook computes hashes so the agent never needs a terminal turn."""
+    input_path = os.path.join(root, "input", "manifest.json")
+    if not os.path.isfile(input_path) or os.path.islink(input_path):
+        return False
+    with open(input_path, "r", encoding="utf-8") as handle:
+        input_manifest = json.load(handle)
+    expected = _expected_artifacts(root, input_manifest)
+    if not expected:
+        return False
+    output = os.path.join(root, "output")
+    refs = []
+    expected_paths = {path for path, _role, _media in expected}
+    actual_paths = set()
+    for base, _dirs, files in os.walk(output):
+        for name in files:
+            rel = os.path.relpath(os.path.join(base, name), output).replace(os.sep, "/")
+            if rel not in {"manifest.json", ".hook-repair-count"}:
+                actual_paths.add(rel)
+    if actual_paths != expected_paths:
+        return False
+    for rel, role, media_type in expected:
+        path = os.path.realpath(os.path.join(output, rel))
+        if os.path.commonpath([output, path]) != output or not os.path.isfile(path) or os.path.islink(path):
+            return False
+        with open(path, "rb") as handle:
+            data = handle.read()
+        refs.append({
+            "path": rel,
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "bytes": len(data),
+            "media_type": media_type,
+            "role": role,
+        })
+    manifest = {
+        "schema_version": "1.0",
+        "run_id": input_manifest.get("run_id"),
+        "workload": input_manifest.get("workload"),
+        "status": "complete",
+        "artifacts": refs,
+        "warnings": [],
+        "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "failure_reason": None,
+    }
+    manifest_path = os.path.join(output, "manifest.json")
+    temp_path = manifest_path + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, manifest_path)
+    return True
+
+
+def _validate_translation_artifacts(root, input_manifest, artifacts_by_role):
+    expected = {}
+    for ref in input_manifest.get("inputs", []):
+        if ref.get("role") != "chapter_metadata":
+            continue
+        path = os.path.realpath(os.path.join(root, "input", str(ref.get("path") or "")))
+        if os.path.commonpath([os.path.join(root, "input"), path]) != os.path.join(root, "input"):
+            return "a translation input metadata path is unsafe"
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                source = json.load(handle)
+        except (OSError, ValueError):
+            return "translation input metadata is unreadable"
+        chapter_ref = source.get("chapter_ref")
+        if not isinstance(chapter_ref, str) or not chapter_ref:
+            return "translation input chapter_ref is invalid"
+        expected[chapter_ref] = source
+
+    metadata_paths = artifacts_by_role.get("translation_meta", [])
+    translation_paths = artifacts_by_role.get("translation", [])
+    if len(metadata_paths) != len(expected) or len(translation_paths) != len(expected):
+        return "translation output count does not match the requested chapters"
+    translation_names = {os.path.basename(path) for path in translation_paths}
+    seen = set()
+    required = {
+        "schema_version", "chapter_ref", "source_sha256", "source_content_version",
+        "translated_title", "translation_path", "new_terms", "self_review",
+    }
+    term_types = {
+        "name", "place", "skill", "item", "term", "faction", "organization", "concept",
+    }
+    for path in metadata_paths:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+        except (OSError, ValueError):
+            return "translation metadata is not valid JSON"
+        if not isinstance(metadata, dict) or set(metadata) != required:
+            return "translation metadata has missing or extra fields"
+        chapter_ref = metadata.get("chapter_ref")
+        source = expected.get(chapter_ref)
+        if source is None or chapter_ref in seen:
+            return "translation metadata has an unknown or duplicate chapter_ref"
+        seen.add(chapter_ref)
+        if metadata.get("schema_version") != "1.0":
+            return "translation metadata schema_version is invalid"
+        if (
+            metadata.get("source_sha256") != source.get("source_sha256")
+            or metadata.get("source_content_version") != source.get("source_content_version")
+        ):
+            return "translation metadata source snapshot does not match the input"
+        title = metadata.get("translated_title")
+        if not isinstance(title, str) or not title or len(title) > 500:
+            return "translation metadata translated_title is invalid"
+        translation_name = str(metadata.get("translation_path") or "")
+        if translation_name != f"{chapter_ref}.translation.txt" or translation_name not in translation_names:
+            return "translation metadata translation_path is invalid"
+        terms = metadata.get("new_terms")
+        if not isinstance(terms, list) or len(terms) > 2000:
+            return "translation metadata new_terms is invalid"
+        for term in terms:
+            if not isinstance(term, dict) or set(term) != {"source_term", "translation", "term_type"}:
+                return "a translation new_terms entry has missing or extra fields"
+            if not all(isinstance(term.get(key), str) and term[key] for key in ("source_term", "translation")):
+                return "a translation new_terms entry is invalid"
+            if term.get("term_type") not in term_types:
+                return "a translation new_terms term_type is invalid"
+        review = metadata.get("self_review")
+        review_fields = {"complete", "paragraphs_preserved", "glossary_checked"}
+        if not isinstance(review, dict) or set(review) != review_fields:
+            return "translation self_review has missing or extra fields"
+        if any(review.get(field) is not True for field in review_fields):
+            return "translation self_review did not pass"
+    if seen != set(expected):
+        return "not every requested chapter has translation metadata"
+    return None
 
 
 def validate(root):
@@ -83,6 +256,10 @@ def validate(root):
                 "codex source_sha256 must copy input/schema.json source_sha256 exactly; "
                 "do not use the chapter.md artifact hash from input/manifest.json"
             )
+    if input_manifest.get("workload") == "translate_batch":
+        error = _validate_translation_artifacts(root, input_manifest, artifacts_by_role)
+        if error:
+            return error
     return None
 
 
@@ -92,6 +269,8 @@ def main():
         roots = payload.get("workspacePaths") or []
         root = os.path.realpath(roots[0] if roots else os.getcwd())
         error = validate(root)
+        if error and finalize_manifest(root):
+            error = validate(root)
     except Exception as exc:
         root = os.path.realpath(os.getcwd())
         error = f"manifest validation failed: {type(exc).__name__}"

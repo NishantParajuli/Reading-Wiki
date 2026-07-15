@@ -79,14 +79,18 @@ endpoints require the shared `X-Tideglass-Sidecar-Token` and fail closed without
 ## AGY containment (AI Execution)
 
 Defense-in-depth around a subscription CLI that executes model output:
-dormant-by-default (global flag **and** per-user, per-workload admin grants; admin role
-alone grants nothing) · binary + plugin SHA-256 pins and model-catalog preflight ·
-sealed read-only inputs, size-capped workspaces outside the checkout/public roots ·
-positive-allowlist child environment, own process group, timeout→grace→kill,
-identity-verified orphan reaping · plugin hooks denying command/web/MCP/subagent/
-outside-workspace access · all artifacts size-capped, hash-verified,
-traversal-safe, schema-validated · re-authorization immediately before execution ·
-run records with input/output hashes. No AGY credential ever enters app config.
+dormant-by-default (global flag **and** per-user, per-workload admin grants; Codex has an
+additional default-off global switch; admin role alone grants nothing) · binary + plugin
+SHA-256 pins and model-catalog preflight · isolated mutable CLI state and trusted-workspace
+settings per run · sealed read-only inputs, size-capped workspaces outside the
+checkout/public roots · positive-allowlist child environment, own process group,
+timeout→grace→kill, identity-verified orphan reaping · plugin hooks denying
+command/web/MCP/subagent/directory-search/outside-workspace access · runtime proof that
+exactly the pinned two hooks loaded from one file · model-request and no-output-progress
+loop ceilings · all artifacts size-capped, hash-verified, traversal-safe, schema-validated ·
+re-authorization immediately before execution · run records with input/output hashes. App
+configuration contains only the CLI credential directory path; NovelWiki never loads the
+OAuth token into settings or the child environment.
 Eval: `agy_contract_tests.py`, `agy_policy_tests.py`, `agy_runner_tests.py`,
 `agy_workload_tests.py`. Ops: [../agy-operator-runbook.md](../agy-operator-runbook.md).
 

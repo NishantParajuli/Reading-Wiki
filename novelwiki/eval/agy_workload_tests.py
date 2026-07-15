@@ -5,6 +5,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -17,7 +18,16 @@ from novelwiki.agy.translation import validate_translation_output
 from novelwiki.db.connection import close_db_pool, get_db_pool
 from novelwiki.db.schema import init_database
 from novelwiki.ingest.extract import chapter_source_sha256, commit_extraction_proposal
+from novelwiki.ingest.chunk import chunk_chapter
 from novelwiki.jobs import service
+from novelwiki.modules.ai_execution.adapters.outbound.worker_state import (
+    PostgresAgyWorkerStateRepository,
+)
+from novelwiki.modules.codex.adapters.outbound.agy import (
+    _checkpointed_job_chapters,
+    _codex_task_document,
+)
+from novelwiki.modules.translation.adapters.outbound.agy import _translation_task_document
 from novelwiki.translate.translate import (
     SourceChangedError,
     commit_translation,
@@ -140,6 +150,31 @@ def test_translation_contract_validates_chapter_snapshot_and_quality(tmp_path):
     assert proposals[0]["title"] == "Chapter 1"
 
 
+def test_agy_task_bundles_put_each_workload_in_one_exact_read():
+    chapter = {
+        "number": 1.0, "title": "First", "language": "zh",
+        "source_sha256": "a" * 64, "source_content_version": 2,
+        "original_text": "untrusted source",
+    }
+    translation = _translation_task_document([chapter], {
+        "schema_version": "1.0", "confirmed_mappings": [],
+        "established_english_spellings": [],
+    })
+    assert "c000001" in translation and "untrusted source" in translation
+    assert '"translated_title": "<translated title>"' in translation
+    assert '"paragraphs_preserved": true' in translation
+    assert "do not add fields" in translation
+
+    source = {
+        "chunk_ids": {10}, "source_sha256": "b" * 64,
+        "roster": {"ceiling": 0.0, "entities": []},
+        "previous_summary": "Prior.", "marked": "[chunk 10]\nCurrent.",
+    }
+    codex = _codex_task_document(source, 1.0)
+    assert '"source_chunk_ids": [\n          10' in codex
+    assert "one record per distinct newly introduced entity" in codex
+
+
 def test_codex_contract_requires_supplied_provenance(tmp_path):
     output = tmp_path / "output"; output.mkdir(); run_id = uuid.uuid4()
     source = {"source_sha256": "a" * 64, "chunk_ids": {10}, "roster_map": {}}
@@ -180,3 +215,100 @@ async def test_codex_commit_is_idempotent_by_run_and_source_hash(workload_db):
         model_label="agy:fake",
     )
     assert result["idempotent"] is False and replay["idempotent"] is True
+
+
+@pytest.mark.asyncio
+async def test_deterministic_force_rechunk_preserves_chunk_ids_and_citations(workload_db):
+    pool, novel = workload_db["pool"], workload_db["novel_id"]
+    content = "English sentence one.\n\nEnglish sentence two."
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE chapters SET content=$2,original_text=NULL WHERE novel_id=$1 AND number=1;",
+            novel, content,
+        )
+
+    class Reading:
+        async def chapter_snapshot(self, novel_id, chapter):
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT title,content FROM chapters WHERE novel_id=$1 AND number=$2;",
+                    novel_id, chapter,
+                )
+            return dict(row) if row else None
+
+    runtime = SimpleNamespace(reading=Reading())
+    assert await chunk_chapter(novel, 1.0, force=True, runtime=runtime) > 0
+    async with pool.acquire() as conn:
+        original_ids = [int(row["id"]) for row in await conn.fetch(
+            "SELECT id FROM chunks WHERE novel_id=$1 AND chapter=1 ORDER BY chunk_index;", novel,
+        )]
+        entity_id = await conn.fetchval(
+            "INSERT INTO entities (novel_id,canonical_name,type,first_seen_chapter) "
+            "VALUES ($1,'Witness','character',1) RETURNING id;", novel,
+        )
+        fact_id = await conn.fetchval(
+            "INSERT INTO entity_facts (novel_id,entity_id,chapter,content,source_chunk_ids) "
+            "VALUES ($1,$2,1,'Observed.', $3::bigint[]) RETURNING id;",
+            novel, entity_id, original_ids,
+        )
+        await conn.execute(
+            "INSERT INTO extraction_state (novel_id,chapter,running_summary,source_sha256) "
+            "VALUES ($1,1,'Observed.',$2);",
+            novel, chapter_source_sha256(content),
+        )
+
+    await chunk_chapter(novel, 1.0, force=True, runtime=runtime)
+    async with pool.acquire() as conn:
+        rebuilt_ids = [int(row["id"]) for row in await conn.fetch(
+            "SELECT id FROM chunks WHERE novel_id=$1 AND chapter=1 ORDER BY chunk_index;", novel,
+        )]
+        cited = list(await conn.fetchval(
+            "SELECT source_chunk_ids FROM entity_facts WHERE id=$1;", fact_id,
+        ))
+        await conn.execute(
+            "UPDATE chapters SET content=$2 WHERE novel_id=$1 AND number=1;",
+            novel, content + " Changed.",
+        )
+    assert rebuilt_ids == original_ids and cited == original_ids
+    with pytest.raises(RuntimeError, match="invalidate the chapter extraction"):
+        await chunk_chapter(novel, 1.0, force=True, runtime=runtime)
+
+
+@pytest.mark.asyncio
+async def test_agy_retry_finds_committed_chapters_through_run_port(workload_db):
+    pool = workload_db["pool"]
+    novel = workload_db["novel_id"]
+    user = workload_db["user"]
+    job_id, _created = await service.create_job(
+        "codex_build",
+        novel_id=novel,
+        user_id=user["id"],
+        options={"from_chapter": 1, "to_chapter": 1},
+        execution_backend="agy",
+        backend_requested="agy",
+    )
+    run_id = uuid.uuid4()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO ai_execution_runs "
+            "(id,job_id,user_id,novel_id,workload,backend,status) "
+            "VALUES ($1,$2,$3,$4,'codex_extract','agy','completed');",
+            run_id, job_id, user["id"], novel,
+        )
+        await conn.execute(
+            "INSERT INTO extraction_state "
+            "(novel_id,chapter,running_summary,run_id,source_sha256) "
+            "VALUES ($1,1,'Checkpointed.',$2,$3);",
+            novel, run_id, chapter_source_sha256(""),
+        )
+
+    class Runs:
+        async def job_run_ids(self, requested_job_id, workloads):
+            return await PostgresAgyWorkerStateRepository(pool).job_run_ids(
+                requested_job_id, workloads
+            )
+
+    chapters = await _checkpointed_job_chapters(
+        {"id": job_id, "novel_id": novel}, SimpleNamespace(runs=Runs())
+    )
+    assert chapters == {1.0}

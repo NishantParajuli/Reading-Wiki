@@ -11,6 +11,7 @@ def build_codex_runtime():
         is_database_error, safe_error_summary,
     )
     from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
+    from novelwiki.modules.ai_execution.adapters.outbound.agy.prompts import build_task_prompt
     from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import (
         create_run, update_run, workspace_relpath,
     )
@@ -54,12 +55,22 @@ def build_codex_runtime():
                 await init_db_pool()
             ).resumable_runs(job_id, workloads)
 
+        async def job_run_ids(self, job_id, workloads):
+            from novelwiki.modules.ai_execution.adapters.outbound.worker_state import (
+                PostgresAgyWorkerStateRepository,
+            )
+            from novelwiki.platform.database import init_db_pool
+            return await PostgresAgyWorkerStateRepository(
+                await init_db_pool()
+            ).job_run_ids(job_id, workloads)
+
     ai = SimpleNamespace(
         call_chat_completion=providers.call_chat_completion,
         get_embedding=providers.get_embedding,
         get_embeddings_batch=providers.get_embeddings_batch,
         rerank_passages=providers.rerank_passages,
         run_agy=run_agy,
+        build_task_prompt=build_task_prompt,
         create_run=create_run,
         update_run=update_run,
         workspace_relpath=workspace_relpath,

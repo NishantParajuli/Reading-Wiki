@@ -226,6 +226,8 @@ renderings the auto-glossary never overwrites).
 Retrieval passages. `UNIQUE (novel_id, chapter, chunk_index)`; `text`, `token_count`,
 `embedding vector(EMBED_DIM)`; composite FK to `chapters(novel_id, number)` ON DELETE
 CASCADE (deleting a chapter removes its chunks). HNSW cosine index when dim ≤ 2000.
+`(novel_id, chapter, chunk_index)` is also the stable force-rebuild identity: unchanged
+text retains its row id and embedding so `source_chunk_ids` citations remain valid.
 
 ### `entities`
 
@@ -271,7 +273,9 @@ The atomic knowledge unit: `entity_id`, **`chapter` (the spoiler key)**, `fact_t
 Per-chapter pipeline state: PK `(novel_id, chapter)`; **`running_summary`** (the
 story-so-far text that feeds the next chapter's extraction), `run_id UUID`,
 `model_label`, **`source_sha256`** (hash of the exact text extracted — the
-`commit_codex_extraction` workflow verifies it under lock), `processed_at`.
+`commit_codex_extraction` workflow verifies it under lock), `processed_at`. Because each
+running summary depends on every earlier chapter, force rebuilding chapter N deletes the
+checkpoint suffix from N onward; chronological builds recreate it.
 
 ### `wiki_cache`
 

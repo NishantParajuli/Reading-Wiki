@@ -49,6 +49,9 @@ also include:
 | `attempt`, `max_attempts` | current generic/AGY attempt and retry ceiling |
 | `execution_backend`, `backend_model` | `api`/`agy` routing and selected model |
 | `agy_workload`, `ai_run_id` | precise AGY task (`translate_batch`, `codex_extract`, and nested run workloads) and UUID |
+| `agy_model_requests`, `agy_tool_confirmations`, `agy_sandbox_blocks` | metadata-only counters parsed from the private AGY log; request count is the capacity proxy because print mode exposes no token total |
+| `agy_hooks_loaded`, `agy_hook_files_loaded`, `agy_hook_failures` | runtime customization activation/failure proof; absence or failure terminates the run |
+| `agy_empty_planner_responses`, `agy_token_usage_available` | total AGY planner-without-modified-response warnings (successful tool steps can increment it); the runner aborts only a no-output-progress streak. Token telemetry is explicitly unavailable (`false` for the pinned CLI) |
 | `status`, `stage`, `progress` | resulting durable state and structured progress object |
 | `duration_ms` | elapsed wall-clock time for requests, attempts, subprocesses, or generated chapters |
 | `error_type`, `error_message`, `stack_trace` | exception class, summary, and traceback when a live exception is logged |
@@ -134,7 +137,7 @@ cookies, or provider keys. Common bearer tokens, secret assignments, and URL pas
 redacted as defense in depth. Avoid adding raw `options`, request bodies, query strings, or
 provider payloads to future events.
 
-AGY stdout/stderr byte counts and truncation flags are logged, but content remains only in
+AGY stdout/stderr byte counts, truncation flags, and metadata counters are logged, but content remains only in
 the private mode-0700 workspace. Per-run `logs/runner.jsonl` and `logs/agy.log` remain
 available under `AGY_WORK_DIR` for a privileged incident investigation and follow the
 configured success/failure retention windows.

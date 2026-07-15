@@ -47,3 +47,54 @@ async def test_agy_codex_dispatch_forwards_preflight_to_codex(monkeypatch):
     handler = build_agy_worker_registry().resolve("codex_build")
     assert await handler(job, preflight, Context()) == {"step": 4, "steps": 4, "done": 1}
     assert calls == [(job, preflight)]
+
+
+@pytest.mark.asyncio
+async def test_agy_codex_retry_reruns_idempotent_preprocessing():
+    from novelwiki.modules.codex.adapters.inbound.jobs import execute_agy_codex_job
+
+    calls = []
+
+    class Context:
+        async def bail_if_canceled(self, job_id):
+            calls.append(("cancel", job_id))
+
+        async def set_progress(self, *_args, **_kwargs):
+            return None
+
+        async def chunk_all_chapters(self, novel_id, **kwargs):
+            calls.append(("chunk", novel_id, kwargs))
+
+        async def embed_missing_chunks(self, novel_id, **kwargs):
+            calls.append(("embed", novel_id, kwargs))
+
+        async def execute_codex_job(self, _job, _preflight):
+            calls.append(("extract",))
+            return {"chapters": 5, "checkpointed_chapters": 1}
+
+        async def rebuild_bm25(self, novel_id):
+            calls.append(("index", novel_id))
+
+    job = {
+        "id": 10,
+        "novel_id": 33,
+        "attempts": 2,
+        "options": {"force": True, "from_chapter": 1, "to_chapter": 5},
+    }
+    result = await execute_agy_codex_job(job, object(), Context())
+    chunk_call = next(call for call in calls if call[0] == "chunk")
+    embed_call = next(call for call in calls if call[0] == "embed")
+    assert chunk_call[1] == 33
+    assert {key: value for key, value in chunk_call[2].items() if key != "cancel_check"} == {
+        "force": True,
+        "from_chapter": 1,
+        "to_chapter": 5,
+    }
+    assert callable(chunk_call[2]["cancel_check"])
+    assert embed_call[1] == 33
+    assert {key: value for key, value in embed_call[2].items() if key != "cancel_check"} == {
+        "from_chapter": 1,
+        "to_chapter": 5,
+    }
+    assert callable(embed_call[2]["cancel_check"])
+    assert result["checkpointed_chapters"] == 1

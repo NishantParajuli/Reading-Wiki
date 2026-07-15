@@ -5,6 +5,5 @@ description: Performs the explicit isolated NovelWiki AGY health smoke test with
 
 # NovelWiki smoke test
 
-Read `input/manifest.json` and `input/smoke.txt`. Write exactly `READY` plus a newline to
-`output/smoke.txt`. Then write `output/manifest.json` last, listing that file with role `smoke`,
-its exact byte size, UTF-8 text media type, and lowercase SHA-256. Do nothing else.
+Write exactly `READY` plus a newline to `output/smoke.txt`, then stop. Do not read, list, or
+verify files and do not write `output/manifest.json`; the trusted stop hook creates it.

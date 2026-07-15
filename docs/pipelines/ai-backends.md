@@ -16,8 +16,8 @@
 | Auth | `OPENROUTER_API_KEY` / `GEMINI_API_KEY` in app env | the CLI's own official browser/keyring login on the host — **never** an app credential |
 | Cost model | per-token, metered by user quotas | subscription capacity (rate/quota windows) |
 | Executor | in-process (routes, generic worker) | dedicated host worker only (`python -m novelwiki.agy.worker`, systemd) |
-| Default | default selection; requires the configured provider credentials | dormant unless `AGY_ENABLED` **and** an admin grant |
-| Workloads | all six policy workloads | implemented end-to-end: `translate_batch`, `codex_extract`; policy/schema vocabulary reserves `segment_import`, `ocr_pages`, `ask`, `profile_synthesis` for future routing, but automatic selection keeps them on API and explicit AGY is rejected today |
+| Default | default selection; requires the configured provider credentials | dormant unless `AGY_ENABLED` **and** an admin grant; Codex also requires `AGY_CODEX_ENABLED` |
+| Workloads | all six policy workloads | implemented adapters: `translate_batch`, `codex_extract`; `codex_extract` remains globally disabled by default for controlled rollout even though the pinned first-five canary now passes, while the other four reserved vocabulary values remain API-only |
 
 ## Backend selection (at scheduling time)
 
@@ -27,7 +27,8 @@ onto the job (`execution_backend`, `backend_model`, `backend_policy_version`,
 
 1. `requested` is `auto` | `api` | `agy` (UI/API may ask; `auto` follows the user's
    `default_backend`).
-2. AGY is chosen only if: `AGY_ENABLED` globally, the user's
+2. AGY is chosen only if: `AGY_ENABLED` globally, `AGY_CODEX_ENABLED` for
+   `codex_extract`, the user's
    `user_ai_backend_policies` row has `agy_enabled`, the workload is one of
    `IMPLEMENTED_AGY_WORKLOADS`, **and** it appears in `agy_workloads`, and the
    per-user active-AGY-job cap (`max_concurrent_agy_jobs`,
@@ -46,18 +47,27 @@ The dedicated host worker (never the web process) claims `jobs` rows with
 `execution_backend='agy'` via the same atomic `claim_next` primitive:
 
 1. **Preflight** (cached per loop): binary SHA-256 pin (`AGY_BINARY_SHA256`) + minimum
-   version + exact model display names present in `agy models` + plugin validation
+   version + exact model display names present in `agy models` + a plugin copied into a
+   disposable isolated CLI state, validated and confirmed by `agy plugin list`
    (`AGY_PLUGIN_VERSION`/`SHA256`). Any drift ⇒ refuse all work.
 2. **Orphan reaping** — kill *identity-verified* stale process groups (pid + start-time
    match from `ai_execution_runs`) before new work.
-3. **Workspace** — per-run directory under `AGY_WORK_DIR`: content-hashed input
-   manifests (chapters, glossary, rosters — whatever the workload needs), then inputs
-   are **sealed read-only**; output/logs stay writable; size-capped.
+3. **Workspace** — per-run directory under `AGY_WORK_DIR` plus a sibling per-run CLI
+   state directory: content-hashed input manifests (Codex packs chapter, schema, prior summary,
+   and roster into one `input/task.md` read turn; translation likewise bundles its glossary and
+   sub-batch), direct `.agents` customizations and a minimal Git marker required
+   by AGY 1.1.2, then inputs/customizations/Git metadata are **sealed read-only**;
+   output/logs stay writable; size-capped.
 4. **Run** — `run_agy` spawns the CLI in its own process group with a
    positive-allowlist environment and a print-mode prompt; the repo's AGY plugin
    (`novelwiki-ai`, hooks `tool_gate.py`/`validate_stop.py`) denies command/web/MCP/
    subagent/outside-workspace access from inside the session. Output streams are
-   capped; timeout → grace → kill-process-group escalation; cooperative cancel checks.
+   capped. The runner parses metadata-only CLI log telemetry and fails closed if either
+   pinned hook is absent or an unexpected hook is present, a hook fails, model requests exceed 16, or more than 10
+   planner warnings occur without output-tree progress; timeout → grace → kill-process-group
+   escalation remains the outer bound. Successful AGY 1.1.2 tool steps can emit the same
+   planner warning, so its total alone is not an error. AGY token totals are unavailable in
+   print mode.
 5. **Validate** — nothing from the model is trusted: artifacts are read via
    `safe_artifact_path` (no traversal), size caps, SHA-256s from the output manifest,
    schema checks, and workload-specific validators (translation quality/glossary
@@ -79,6 +89,10 @@ The dedicated host worker (never the web process) claims `jobs` rows with
 | Permanent failure, `fallback_to_api` allowed | `_fallback_to_api`: job re-pointed to the API backend (`backend_fallback_from='agy'`), AGY translation's unused reservation refunded first so API metering can't double-charge |
 | Permanent failure, no fallback | `failed` + quota settlement (refund of unconsumed reservation) |
 | Revoked grant / bumped policy at claim time | job not executed (reauthorization loses gracefully) |
+| Codex kill switch off | `codex_extract` is rejected at scheduling and again before subprocess launch; translation remains independently available |
+| Missing/failed hooks | terminate immediately with a permanent plugin/hook failure |
+| Planner responses without output progress | reset the streak whenever the output tree changes; terminate only after the configured no-progress threshold with `agy_planner_loop` |
+| Model-request ceiling | terminate with `agy_request_limit` before an unbounded agent loop can consume more capacity |
 | Worker down | jobs queue; startup logs a warning if `AGY_ENABLED` with no healthy heartbeat; kill switch = `AGY_ENABLED=false` (queued AGY jobs stay explicit, spend nothing) |
 
 ## Read-side AI (no jobs involved)

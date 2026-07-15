@@ -84,8 +84,8 @@ keeps only what it finished charged.
 - `postgres.py::PostgresTranslationTransactionService` — glossary SQL (the owned table).
 - `runtime.py` — the engine above (provider calls via the AI Execution chat gateway in
   the runtime bundle).
-- `agy.py` — the AGY variant of a batch job: stage snapshot → build workspace input
-  manifests (chapters + glossary) → run the AGY CLI per sub-batch
+- `agy.py` — the AGY variant of a batch job: stage snapshot → build sealed workspace input
+  manifests plus a one-read `task.md` bundle (chapters + glossary) → run the AGY CLI per sub-batch
   (`AGY_TRANSLATE_BATCH_CHAPTERS`/`_MAX_CHARS`) → validate output artifacts (length/
   glossary-respect checks in `_validate_quality`) → commit through the *same*
   `commit_translation` workflow → `_resume_ready_commits` can commit completed artifacts

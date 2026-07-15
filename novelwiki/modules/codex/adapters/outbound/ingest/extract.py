@@ -168,7 +168,7 @@ async def _load_chapter_chunks(novel_id: int, chapter_number: float, conn: async
 
 
 async def _clear_extraction_chapter(conn: asyncpg.Connection, novel_id: int, chapter: float) -> None:
-    """Remove chapter-scoped material before a controlled force rebuild."""
+    """Remove chapter artifacts and invalidate dependent checkpoints before rebuild."""
     await conn.execute("DELETE FROM entity_facts WHERE novel_id=$1 AND chapter=$2;", novel_id, chapter)
     await conn.execute("DELETE FROM relationships WHERE novel_id=$1 AND chapter=$2;", novel_id, chapter)
     await conn.execute("DELETE FROM events WHERE novel_id=$1 AND chapter=$2;", novel_id, chapter)
@@ -178,9 +178,13 @@ async def _clear_extraction_chapter(conn: asyncpg.Connection, novel_id: int, cha
         "DELETE FROM entity_aliases WHERE novel_id=$1 AND revealed_at_chapter=$2 AND revealed_at_chapter<>0;",
         novel_id, chapter,
     )
-    # Later running summaries depend on this chapter. Explicitly remove stale
-    # checkpoints; chronological rebuild recreates them as it advances.
-    await conn.execute("DELETE FROM extraction_state WHERE novel_id=$1 AND chapter >= $2;", novel_id, chapter)
+    # Running summaries are prefix-derived: every later checkpoint depends on
+    # this chapter. Removing the suffix ensures a later build cannot skip stale
+    # chapters; their chapter-scoped artifacts are replaced as they are rebuilt.
+    await conn.execute(
+        "DELETE FROM extraction_state WHERE novel_id=$1 AND chapter >= $2;",
+        novel_id, chapter,
+    )
 
 
 async def commit_extraction_proposal(
@@ -254,7 +258,11 @@ class PostgresCodexExtractionTransactionService:
             return {"status": "done", "idempotent": True}
         if existing and not force:
             raise RuntimeError("chapter extraction was committed by another worker")
-        if force:
+        # A missing checkpoint can be a never-extracted chapter or a chapter whose
+        # checkpoint was invalidated by an earlier force rebuild. Clear any
+        # chapter-scoped artifacts in either case so the rebuild cannot retain
+        # output omitted by the new proposal.
+        if force or existing is None:
             await _clear_extraction_chapter(conn, novel_id, chapter_number)
         await clear_caches(conn, novel_id=novel_id, chapter_number=chapter_number)
         _marked, valid_chunk_ids, all_chunk_ids = await _load_chapter_chunks(

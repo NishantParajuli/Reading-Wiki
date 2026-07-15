@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Protocol
+from uuid import UUID
 
 from .application.contracts import (
     ArtifactRef, DisambiguationPayload, ExtractionPayload, InputManifest,
@@ -33,6 +34,7 @@ class VisionGateway(Protocol):
 
 class ResumableRunQuery(Protocol):
     async def resumable_runs(self, job_id: int, workloads: tuple[str, ...]) -> list[dict]: ...
+    async def job_run_ids(self, job_id: int, workloads: tuple[str, ...]) -> tuple[UUID, ...]: ...
 
 
 __all__ = [

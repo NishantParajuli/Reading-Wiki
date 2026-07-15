@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from novelwiki.modules.ai_execution.adapters.outbound.agy.contracts import InputManifest
 from novelwiki.modules.ai_execution.adapters.outbound.agy.preflight import run_preflight
 from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import safe_error_summary
+from novelwiki.modules.ai_execution.adapters.outbound.agy.prompts import build_task_prompt
 from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
 from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import create_run, update_run, workspace_relpath
 from novelwiki.modules.ai_execution.adapters.outbound.agy.validators import read_text_artifact, validate_output_manifest
@@ -36,7 +37,7 @@ async def run_smoke_test(job_id: int, work_service) -> dict:
                      workspace_relpath=workspace_relpath(root), started_at=datetime.now(UTC))
     try:
         result = await run_agy(
-            root, prompt="Run novelwiki-smoke for input/manifest.json and write the output manifest last.",
+            root, prompt=build_task_prompt("smoke_test"),
             model=settings.AGY_MODEL_TRANSLATE,
             cancel_check=lambda: work_service.is_canceled(job_id),
             on_spawn=lambda pgid, started: update_run(run_id, process_group_id=pgid, process_started_at=started),
@@ -49,11 +50,12 @@ async def run_smoke_test(job_id: int, work_service) -> dict:
             raise RuntimeError("AGY smoke artifact did not contain READY")
         await update_run(run_id, status="completed", output_sha256=sha256_file(root / "output" / "manifest.json"),
                          exit_code=result.exit_code, finished_at=datetime.now(UTC),
-                         metrics={"stdout_bytes": result.stdout_bytes, "stderr_bytes": result.stderr_bytes})
+                         metrics=result.metrics())
     except Exception as exc:
         await update_run(run_id, status="failed", failure_code=getattr(exc, "code", "unknown"),
-                         error_summary=safe_error_summary(exc), finished_at=datetime.now(UTC))
+                         error_summary=safe_error_summary(exc),
+                         metrics=getattr(exc, "metrics", {}), finished_at=datetime.now(UTC))
         raise
     return {"status": "success", "version": preflight.version, "model": settings.AGY_MODEL_TRANSLATE,
             "plugin_version": settings.AGY_PLUGIN_VERSION, "duration_observed": True,
-            "stdout_bytes": result.stdout_bytes, "stderr_bytes": result.stderr_bytes}
+            **result.metrics()}

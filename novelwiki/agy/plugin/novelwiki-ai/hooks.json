@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .agents/plugins/novelwiki-ai/hooks/tool_gate.py",
+            "command": "python3 hooks/tool_gate.py",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
     "Stop": [
       {
         "type": "command",
-        "command": "python3 .agents/plugins/novelwiki-ai/hooks/validate_stop.py",
+        "command": "python3 hooks/validate_stop.py",
         "timeout": 10
       }
     ]

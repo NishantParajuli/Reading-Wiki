@@ -4,6 +4,7 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
+from uuid import UUID
 
 from novelwiki.kernel.transactions import UnitOfWork
 
@@ -113,6 +114,7 @@ class CodexReadingPort(Protocol):
 
 class ResumableAiRunPort(Protocol):
     async def list(self, job_id: int, workloads: tuple[str, ...]) -> list[dict]: ...
+    async def job_run_ids(self, job_id: int, workloads: tuple[str, ...]) -> tuple[UUID, ...]: ...
 
 
 @dataclass(frozen=True)

@@ -107,7 +107,11 @@ async def chunk_chapter(
 ) -> int:
     """
     Fetches readable chapter text, chunks it, and writes chunks to the chunks table.
-    Deletes prior chunks first if force=True.
+
+    A deterministic force rebuild updates rows by ``chunk_index`` instead of
+    delete/reinsert, preserving chunk IDs and every citation that points at them.
+    If the generated text actually changed while an extraction checkpoint still
+    exists, the operation fails closed until that extraction is invalidated.
     """
     chapter = await runtime.reading.chapter_snapshot(
         novel_id, chapter_number
@@ -117,24 +121,36 @@ async def chunk_chapter(
         return 0
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-
-        # Check if chunks already exist
-        existing = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM chunks WHERE chapter = $1 AND novel_id = $2);",
-            chapter_number, novel_id
-        )
-        if existing and not force:
-            logger.info(f"Chapter {chapter_number} chunks already exist. Skipping.")
-            return 0
-
         chunks = chunk_chapter_text(chapter["content"])
-
-        # Deletion pass (idempotent overwrite)
-        if existing:
-            await conn.execute("DELETE FROM chunks WHERE chapter = $1 AND novel_id = $2;", chapter_number, novel_id)
-
-        # Insert chunks
         async with conn.transaction():
+            existing_rows = await conn.fetch(
+                "SELECT id,chunk_index,text FROM chunks "
+                "WHERE chapter=$1 AND novel_id=$2 ORDER BY chunk_index FOR UPDATE;",
+                chapter_number, novel_id,
+            )
+            if existing_rows and not force:
+                logger.info(f"Chapter {chapter_number} chunks already exist. Skipping.")
+                return 0
+
+            existing_by_index = {
+                int(row["chunk_index"]): row["text"] for row in existing_rows
+            }
+            changed = (
+                set(existing_by_index) != set(range(len(chunks)))
+                or any(existing_by_index.get(index) != text for index, text in enumerate(chunks))
+            )
+            if existing_rows and changed:
+                checkpointed = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM extraction_state "
+                    "WHERE novel_id=$1 AND chapter=$2);",
+                    novel_id, chapter_number,
+                )
+                if checkpointed:
+                    raise RuntimeError(
+                        "refusing to change checkpointed chunk text; invalidate the chapter "
+                        "extraction before re-chunking"
+                    )
+
             for idx, chunk_text in enumerate(chunks):
                 token_count = count_tokens(chunk_text)
                 await conn.execute(
@@ -142,10 +158,18 @@ async def chunk_chapter(
                     INSERT INTO chunks (novel_id, chapter, chunk_index, text, token_count)
                     VALUES ($1, $2, $3, $4, $5)
                     ON CONFLICT (novel_id, chapter, chunk_index) DO UPDATE
-                    SET text = EXCLUDED.text, token_count = EXCLUDED.token_count, embedding = NULL;
+                    SET text = EXCLUDED.text,
+                        token_count = EXCLUDED.token_count,
+                        embedding = CASE
+                          WHEN chunks.text IS NOT DISTINCT FROM EXCLUDED.text
+                          THEN chunks.embedding ELSE NULL END;
                     """,
                     novel_id, chapter_number, idx, chunk_text, token_count
                 )
+            await conn.execute(
+                "DELETE FROM chunks WHERE novel_id=$1 AND chapter=$2 AND chunk_index >= $3;",
+                novel_id, chapter_number, len(chunks),
+            )
 
         logger.info(f"Successfully chunked Chapter {chapter_number} into {len(chunks)} chunks.")
         return len(chunks)

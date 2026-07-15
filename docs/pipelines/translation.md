@@ -60,7 +60,8 @@ recomputes the range at execution time.
 Staging gives the subscription backend the same safety the API path gets from its
 in-transaction hash check: `stage_translation_batch` snapshots and marks each chapter
 with a `translation_run_id` + `translation_source_sha256` **before** any AGY work;
-workspace manifests carry chapters + glossary; the CLI runs per sub-batch
+workspace manifests retain sealed chapters + glossary for source identity while a single
+`input/task.md` bundles the exact model context into one read turn; the CLI runs per sub-batch
 (`AGY_TRANSLATE_BATCH_CHAPTERS`=3, ≤ `AGY_TRANSLATE_BATCH_MAX_CHARS`); output artifacts
 are validated (schema, length sanity, glossary respect) and committed through the *same*
 workflow keyed by the run id — a crashed/retried batch can't commit a chapter staged by
@@ -68,6 +69,9 @@ another run (`SourceChangedError`), and `_resume_ready_commits` salvages complet
 artifacts after a worker loss without re-running the model. Capacity exhaustion parks
 the job `waiting_provider`; permanent failure can fall back to the API backend
 (releasing AGY's unused reservation first). See [ai-backends.md](ai-backends.md).
+The authenticated one-chapter translation canary on pinned AGY 1.1.2 completed in five
+model requests after one task-bundle read; the runner's configured request ceiling remains
+the authoritative bound because print mode does not report provider token totals.
 
 ## Collaboration layer on top
 
