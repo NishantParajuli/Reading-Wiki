@@ -89,8 +89,12 @@ policy-version drift as typed errors the schedulers translate.
 
 - `GET /api/jobs` — filtered listing (`kind`, `status`, `novel_id`, `active`, `limit`);
   **non-admins are hard-scoped to their own jobs**, admins may pass `user_id`.
-  Rows are enriched with novel titles and AI-run metadata via injected ports
-  (`JobMetadataPort`) — Work never queries `novels` itself.
+  Rows are enriched with current AI-run metadata via injected ports
+  (`JobMetadataPort`) — Work never queries AI Execution storage itself. In the web
+  composition, an injected observation port emits a detailed `job.snapshot_changed`
+  structured log after enrichment and suppresses identical snapshots across subsequent
+  UI polls. The generic successful HTTP access record for this list route is omitted;
+  route failures retain `http.request.completed`/`failed` logging.
 - `GET /api/jobs/{id}` — same ownership rule.
 - `POST /api/jobs/{id}/cancel`.
 

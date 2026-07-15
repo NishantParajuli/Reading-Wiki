@@ -22,6 +22,10 @@ class JobMetadataPort(Protocol):
     async def current(self, job_ids: set[int]) -> dict[int, dict]: ...
 
 
+class JobObservationPort(Protocol):
+    def observe(self, jobs: list[dict]) -> None: ...
+
+
 class WorkerStateRepository(Protocol):
     async def renew_lease(self, job_id: int, token: str) -> None: ...
 

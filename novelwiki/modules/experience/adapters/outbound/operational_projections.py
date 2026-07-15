@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 
 OPERATIONAL_PROJECTION_TABLES = {
     "home": frozenset({"users", "novels", "library_entries", "reading_progress", "chapters", "sources", "chapter_audio"}),
@@ -292,15 +294,43 @@ class PostgresOperationalProjectionRepository:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(
                 """
-                SELECT DISTINCT ON (job_id) job_id,id,plugin_version
+                SELECT DISTINCT ON (job_id)
+                  job_id,id,parent_run_id,workload,backend,model,runner_version,
+                  plugin_version,plugin_sha256,status,attempt,input_sha256,
+                  output_sha256,workspace_relpath,process_group_id,
+                  process_started_at,exit_code,failure_code,error_summary,metrics,
+                  started_at,finished_at,created_at
                 FROM ai_execution_runs WHERE job_id=ANY($1::bigint[])
                 ORDER BY job_id,created_at DESC;
                 """, sorted(job_ids),
             )
-        return {
-            int(row["job_id"]): {
+        metadata = {}
+        for row in rows:
+            metrics = row["metrics"] or {}
+            if isinstance(metrics, str):
+                metrics = json.loads(metrics)
+            metadata[int(row["job_id"])] = {
                 "current_run_id": row["id"],
+                "current_run_parent_id": row["parent_run_id"],
+                "current_run_workload": row["workload"],
+                "current_run_backend": row["backend"],
+                "current_run_model": row["model"],
+                "current_run_runner_version": row["runner_version"],
                 "current_plugin_version": row["plugin_version"],
+                "current_run_plugin_sha256": row["plugin_sha256"],
+                "current_run_status": row["status"],
+                "current_run_attempt": row["attempt"],
+                "current_run_input_sha256": row["input_sha256"],
+                "current_run_output_sha256": row["output_sha256"],
+                "current_run_workspace_relpath": row["workspace_relpath"],
+                "current_run_process_group_id": row["process_group_id"],
+                "current_run_process_started_at": row["process_started_at"],
+                "current_run_exit_code": row["exit_code"],
+                "current_run_failure_code": row["failure_code"],
+                "current_run_error_summary": row["error_summary"],
+                "current_run_metrics": metrics,
+                "current_run_started_at": row["started_at"],
+                "current_run_finished_at": row["finished_at"],
+                "current_run_created_at": row["created_at"],
             }
-            for row in rows
-        }
+        return metadata

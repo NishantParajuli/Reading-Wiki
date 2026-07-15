@@ -63,7 +63,10 @@ The high-value lifecycle events are:
 
 - Generic Work: `job.created`, `job.deduplicated`, `job.started`, `job.progress`,
   `job.attempt_finished`, `job.retry_scheduled`, `job.failed`, `job.cancel_requested`,
-  `job.lease_recovered`, and `quota.refunded`.
+  `job.lease_recovered`, `quota.refunded`, and web-side `job.snapshot_changed` records.
+  A snapshot carries the durable job and current AI-run state (workload/run ID, attempts,
+  backend/model, progress, subprocess/result/failure metadata, and ownership IDs) and is
+  emitted only when one of those values changes.
 - Imports/OCR: `import_job.created`, `import_job.started`,
   `import_job.state_changed`, `import_job.parsed`,
   `import_job.awaiting_ocr_confirmation`, `import_job.ocr_paused`,
@@ -80,7 +83,10 @@ The high-value lifecycle events are:
   operation, model, attempt/retry timing, size/count metadata, HTTP status, and token
   usage when returned. Gemini also reports durable budget charges and rate-limit waits.
 - Process/request health: `worker.started`/`stopped`/`loop_failed`, application lifecycle
-  hook events, and `http.request.completed`/`failed`.
+  hook events, and `http.request.completed`/`failed`. Successful `GET /api/jobs` list
+  polls are the exception: the web process replaces that repetitive access record with
+  `job.snapshot_changed` records for returned jobs. Failed list requests still emit the
+  normal HTTP event.
 
 Messages are human-readable, but dashboards and alerts should filter on `event`, `level`,
 and structured fields rather than matching message text.
@@ -94,6 +100,9 @@ collector. Parse JSON at query time and keep high-cardinality values such as `jo
 ```logql
 # Everything for one durable job, across schedule, retries, and completion
 {container_name="novelwiki-web"} | json | job_id="42"
+
+# Detailed state mirrored by the web process when /api/jobs observes a change
+{container_name="novelwiki-web"} | json | event="job.snapshot_changed"
 
 # Failed or crashing background work
 {container_name=~"novelwiki-web|novelwiki-agy-worker"}
