@@ -144,23 +144,32 @@ class Settings(BaseSettings):
     # per-user workload grant are enabled.  The CLI keeps its own official
     # browser/keyring authentication; no AGY credential belongs in NovelWiki's env.
     AGY_ENABLED: bool = False
+    # Independent incident kill switch: translation can remain available while
+    # Codex extraction is contained or being canaried.
+    AGY_CODEX_ENABLED: bool = False
     AGY_BINARY: str = "/home/nishantp/.local/bin/agy"
-    AGY_MIN_VERSION: str = "1.1.1"
-    # Integrity pin for the locally verified 1.1.1 binary (2026-07-10).  Updating
+    AGY_MIN_VERSION: str = "1.1.2"
+    # Integrity pin for the locally verified 1.1.2 binary (2026-07-15).  Updating
     # AGY is an explicit operator action: re-run preflight/golden tests, then update
     # this hash.  Set to an empty string only for a deliberate unpinned dev setup.
-    AGY_BINARY_SHA256: str = "32e394fc0e63a41ed4e7ac05304224678d3e062d707effdc3bbff868767659f9"
+    AGY_BINARY_SHA256: str = "70bf6eaf2e82fbb243db999b9c7c61fcf7f6e537f41980650eb2341ed84b24de"
     # Keep story-bearing workspaces outside both the checkout and public ASSET_DIR.
     AGY_WORK_DIR: str = str(Path.home() / ".local" / "share" / "novelwiki" / "agy-jobs")
+    # The official CLI owns this credential directory. NovelWiki never parses the
+    # OAuth token; per-run CLI state links only the credential files needed for the
+    # authenticated CLI session and keeps mutable brain/scratch data isolated.
+    AGY_CREDENTIAL_DIR: str = str(Path.home() / ".gemini" / "antigravity-cli")
 
     # Exact display names from `agy models`; preflight hard-fails on catalog drift.
     AGY_MODEL_TRANSLATE: str = "Gemini 3.5 Flash (Medium)"
     AGY_MODEL_CODEX: str = "Gemini 3.5 Flash (High)"
     AGY_MODEL_SEGMENT: str = "Gemini 3.5 Flash (Medium)"
     AGY_MODEL_OCR: str = "Gemini 3.5 Flash (High)"
-    # Empty omits the flag.  `accept-edits` may be selected after the operator's
-    # headless-write spike; permission rules and hooks remain the safety boundary.
-    AGY_MODE: str = ""
+    # Print mode is non-interactive, so request/review workflows cannot be its
+    # control plane. Hooks and the sandbox remain the safety boundary.
+    AGY_MODE: str = "accept-edits"
+    AGY_TOOL_PERMISSION: str = "strict"
+    AGY_ARTIFACT_REVIEW_POLICY: str = "always-proceed"
 
     AGY_MAX_CONCURRENT: int = 1
     AGY_PRINT_TIMEOUT_SECONDS: int = 1200
@@ -169,6 +178,14 @@ class Settings(BaseSettings):
     AGY_STDOUT_MAX_BYTES: int = 1_048_576
     AGY_STDERR_MAX_BYTES: int = 1_048_576
     AGY_WORKSPACE_MAX_BYTES: int = 134_217_728
+    # One AGY tool turn normally produces one streamGenerateContent request. Stop
+    # a runaway agent before it can burn an unbounded subscription context.
+    AGY_MAX_MODEL_REQUESTS_PER_RUN: int = 16
+    # AGY 1.1.2 emits this warning for normal tool steps too. Only treat a run as
+    # stalled after this many consecutive warnings without output-tree progress.
+    AGY_MAX_EMPTY_PLANNER_RESPONSES: int = 10
+    # The bundled plugin currently registers a tool gate and a stop validator.
+    AGY_REQUIRED_LOADED_HOOKS: int = 2
 
     AGY_TRANSLATE_BATCH_CHAPTERS: int = 3
     AGY_TRANSLATE_BATCH_MAX_CHARS: int = 120_000
@@ -180,8 +197,8 @@ class Settings(BaseSettings):
     AGY_SUCCESS_RETENTION_HOURS: int = 24
     AGY_FAILURE_RETENTION_HOURS: int = 168
     AGY_FALLBACK_TO_API_DEFAULT: bool = False
-    AGY_PLUGIN_VERSION: str = "1.0.2"
-    AGY_PLUGIN_SHA256: str = "a37107520e1cf6d9c8cc6957712ccc950bf2f3ff94becd45b2f81211b73296bb"
+    AGY_PLUGIN_VERSION: str = "1.2.0"
+    AGY_PLUGIN_SHA256: str = "74e9873d0afb1f7cbe66d27e311ac9efcb2511c8e61783faa419891d229bfddb"
     # Worker health is considered stale after this interval for /auth/me and admin UI.
     AGY_WORKER_HEALTH_TTL_SECONDS: int = 90
 
@@ -309,6 +326,14 @@ class Settings(BaseSettings):
             raise ValueError("LOG_FORMAT must be 'json' or 'console'")
         if self.AGY_MODE not in ("", "accept-edits", "plan"):
             raise ValueError("AGY_MODE must be empty, 'accept-edits', or 'plan'")
+        if self.AGY_TOOL_PERMISSION not in {
+            "request-review", "proceed-in-sandbox", "always-proceed", "strict"
+        }:
+            raise ValueError("AGY_TOOL_PERMISSION has an unsupported value")
+        if self.AGY_ARTIFACT_REVIEW_POLICY not in {
+            "asks-for-review", "agent-decides", "always-proceed"
+        }:
+            raise ValueError("AGY_ARTIFACT_REVIEW_POLICY has an unsupported value")
         if not 1 <= self.AGY_MAX_CONCURRENT <= 4:
             raise ValueError("AGY_MAX_CONCURRENT must be between 1 and 4")
         if not 60 <= self.AGY_PRINT_TIMEOUT_SECONDS <= 7200:
@@ -325,6 +350,12 @@ class Settings(BaseSettings):
             raise ValueError("AGY stream retention limits must be at least 4096 bytes")
         if self.AGY_WORKSPACE_MAX_BYTES < 1_048_576:
             raise ValueError("AGY_WORKSPACE_MAX_BYTES must be at least 1 MiB")
+        if not 1 <= self.AGY_MAX_MODEL_REQUESTS_PER_RUN <= 100:
+            raise ValueError("AGY_MAX_MODEL_REQUESTS_PER_RUN must be between 1 and 100")
+        if not 0 <= self.AGY_MAX_EMPTY_PLANNER_RESPONSES <= 20:
+            raise ValueError("AGY_MAX_EMPTY_PLANNER_RESPONSES must be between 0 and 20")
+        if not 1 <= self.AGY_REQUIRED_LOADED_HOOKS <= 20:
+            raise ValueError("AGY_REQUIRED_LOADED_HOOKS must be between 1 and 20")
         for field in ("AGY_MODEL_TRANSLATE", "AGY_MODEL_CODEX", "AGY_MODEL_SEGMENT", "AGY_MODEL_OCR"):
             if not getattr(self, field).strip():
                 raise ValueError(f"{field} must not be empty")

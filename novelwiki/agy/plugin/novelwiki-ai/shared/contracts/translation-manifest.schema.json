@@ -9,9 +9,33 @@
     "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "source_content_version": {"type": "integer", "minimum": 1},
     "translated_title": {"type": "string", "minLength": 1, "maxLength": 500},
-    "translation_path": {"type": "string"},
-    "new_terms": {"type": "array"},
-    "self_review": {"type": "object"}
+    "translation_path": {"type": "string", "minLength": 1},
+    "new_terms": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "type": "object",
+        "required": ["source_term", "translation", "term_type"],
+        "properties": {
+          "source_term": {"type": "string", "minLength": 1, "maxLength": 200},
+          "translation": {"type": "string", "minLength": 1, "maxLength": 200},
+          "term_type": {
+            "enum": ["name", "place", "skill", "item", "term", "faction", "organization", "concept"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "self_review": {
+      "type": "object",
+      "required": ["complete", "paragraphs_preserved", "glossary_checked"],
+      "properties": {
+        "complete": {"type": "boolean"},
+        "paragraphs_preserved": {"type": "boolean"},
+        "glossary_checked": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

@@ -44,3 +44,6 @@ testpaths = ["novelwiki/eval", "tests"]
 python_files = ["*_tests.py", "test_*.py"]
 pythonpath = ["."]
 addopts = "--strict-markers"
+markers = [
+    "agy_real: consumes the locally authenticated Antigravity CLI subscription",
+]

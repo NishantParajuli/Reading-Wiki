@@ -178,9 +178,13 @@ async def _clear_extraction_chapter(conn: asyncpg.Connection, novel_id: int, cha
         "DELETE FROM entity_aliases WHERE novel_id=$1 AND revealed_at_chapter=$2 AND revealed_at_chapter<>0;",
         novel_id, chapter,
     )
-    # Later running summaries depend on this chapter. Explicitly remove stale
-    # checkpoints; chronological rebuild recreates them as it advances.
-    await conn.execute("DELETE FROM extraction_state WHERE novel_id=$1 AND chapter >= $2;", novel_id, chapter)
+    # Replace only the chapter being committed. A force retry over unchanged
+    # source must not erase later checkpoints and leave their still-visible facts
+    # in an internally contradictory half-invalidated state.
+    await conn.execute(
+        "DELETE FROM extraction_state WHERE novel_id=$1 AND chapter=$2;",
+        novel_id, chapter,
+    )
 
 
 async def commit_extraction_proposal(

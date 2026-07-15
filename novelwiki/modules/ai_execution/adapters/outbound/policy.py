@@ -51,6 +51,10 @@ def _requested(value: str | RequestedBackend) -> RequestedBackend:
         raise ValidationFailed("ai_backend must be auto, api, or agy.") from exc
 
 
+def _workload_globally_enabled(workload: Workload) -> bool:
+    return workload is not Workload.CODEX_EXTRACT or settings.AGY_CODEX_ENABLED
+
+
 def model_for(workload: Workload, backend: ExecutionBackend) -> str | None:
     if backend is ExecutionBackend.AGY:
         return {
@@ -126,6 +130,13 @@ async def resolve_backend(
     if req is RequestedBackend.API:
         return BackendDecision(req, ExecutionBackend.API, workload, "explicit_api", None, False,
                                model_for(workload, ExecutionBackend.API))
+    if not _workload_globally_enabled(workload):
+        if req is RequestedBackend.AGY:
+            raise ProviderUnavailable("Antigravity Codex extraction is temporarily disabled.")
+        return BackendDecision(
+            req, ExecutionBackend.API, workload, "workload_disabled", None, False,
+            model_for(workload, ExecutionBackend.API),
+        )
 
     if not settings.AGY_ENABLED:
         if req is RequestedBackend.AGY:
@@ -180,6 +191,8 @@ async def reauthorize_job(job: dict, user: dict) -> tuple[bool, str]:
     workload = workload_for_job_kind(job.get("kind", ""))
     if workload is None or workload not in IMPLEMENTED_AGY_WORKLOADS:
         return False, "workload_unimplemented"
+    if not _workload_globally_enabled(workload):
+        return False, "workload_disabled"
     policy = await get_policy(int(user["id"]))
     if not policy or not policy.get("agy_enabled"):
         return False, "grant_revoked"

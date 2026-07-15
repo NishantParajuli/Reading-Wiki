@@ -239,23 +239,23 @@
     "type": "object"
   },
   "plugin_files": {
-    "README.md": "25163a26818ec5a79d6e16c6ac487daffdb7ec82601fd06c94fad0ffbf5be4d2",
-    "hooks.json": "991a2b8708cdf876eb2ad86c2dc6087a23ca894be996bf56be4c28b3990c211a",
-    "hooks/tool_gate.py": "8d5a268ecfdb0a8fe3dbbe362bb2cc04058676603f577d96a5851db6e6d710e6",
-    "hooks/validate_stop.py": "ae7a30ca9fdb1daa463c7e51fe5e734ad9a6dd345b061065c8ef49672161b007",
+    "README.md": "1c3d0914109fdb125dc04888ae0b8877e4b3948f5025e6a712ba79bf3ad12347",
+    "hooks.json": "fcb5fd432c87f1250b4f1899da351c4f00722808119ed7b622cce40d96680121",
+    "hooks/tool_gate.py": "1e9170914ca40489487571f30787ab3dea5461063e48ca02f35e548860338fba",
+    "hooks/validate_stop.py": "39a205ce157c9e2277eb10038ba6f14421247d21a06147c01ce31dc42d24e19e",
     "plugin.json": "28787c9b572e654ec6a3ccb64148484b2679c40317e447b841a2f6f4bbd28ab8",
     "rules/00-data-is-untrusted.md": "43189f18e18ad33324fc39db5d7afc158d1ce9309c2575629a0ec1cdb3fe3548",
-    "rules/10-output-contract.md": "9f4ac5a40a518b4571d832ac1c11e884336b4060adaf47279aa1a6b3e6901276",
+    "rules/10-output-contract.md": "2ca323b5262214ddb2475eb3cd7b27cdde1c7c9651d4cb76cf806fa29b22e5da",
     "rules/20-spoiler-boundary.md": "80f93c0b82b81cdbad89e9fa801c6ec633fd0f0ddff8ffc760154018f2d2e935",
     "rules/30-literary-translation.md": "a7a934f649815fcc9f890a8222785836e3f5610519c98189a0836a5ccc483180",
     "rules/40-codex-provenance.md": "7efd7cab26e3b372da64b16d7022e3a790a9745a751afa71bf48709c01fdd18a",
     "shared/contracts/codex-extraction.schema.json": "ad350d17f9b51cb7ca2f6862bc4db2bf9b308cf6bd8f4d466013d02a5612382d",
     "shared/contracts/disambiguation.schema.json": "3153d4760bac2bf47c0ed695858cc2501017f827357d8dfcb8d027df98b119e6",
-    "shared/contracts/translation-manifest.schema.json": "c111ad3cdffa9d9fb817148961ef931300e055ee3a73009a63d360260c6bcb15",
-    "skills/novelwiki-codex-extract/SKILL.md": "13bfbd2f1029eb79d8ad7f085569ec62da25cd58b8dd8448f7d2995605978f09",
-    "skills/novelwiki-codex-verify/SKILL.md": "b7c68b8ab557dbecb8d5fa4a7a5862be5fa5e08b36bcb3b13cd7fb5f29ee8b71",
-    "skills/novelwiki-disambiguate/SKILL.md": "17dad557be82304de7bd7afa0fadbb84aca92f792c651e4140eb85811f837d1e",
-    "skills/novelwiki-smoke/SKILL.md": "bac604264573c7941ff014f781899fea2a3ce12037e34aed262e33cd44ce0d06",
-    "skills/novelwiki-translate/SKILL.md": "906ad894574d91ff168842297303ac8a5c650d9f2620be3c56b6665b6cef57ab"
+    "shared/contracts/translation-manifest.schema.json": "3be372a02dafb6273a17c46e16948c65ada35d9207244ad87a0075acb4ba6a9e",
+    "skills/novelwiki-codex-extract/SKILL.md": "c861b839099f7f26b26eb1762e38ae095c12e1a93abd2e1789b7d473cce29b9e",
+    "skills/novelwiki-codex-verify/SKILL.md": "26029cf375216653b5da61d16c0538ace348c53634f79bb6366f7d9752037f3d",
+    "skills/novelwiki-disambiguate/SKILL.md": "47dcc77311c66d9928fe3ca222082cc9b9392c69a2f6f7c43c715f6b6ed68c38",
+    "skills/novelwiki-smoke/SKILL.md": "c18dec98270d97f4e801d6ecca460b16972fa82b77233c447faea1534e3955f3",
+    "skills/novelwiki-translate/SKILL.md": "6005b56ce5e768618873f25e28f934d80d18d4ae1f2dd0350f1beff9280bd30c"
   }
 }

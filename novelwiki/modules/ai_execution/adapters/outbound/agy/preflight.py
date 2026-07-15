@@ -2,23 +2,33 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
+import shutil
 import stat
+import tempfile
 from pathlib import Path
 
 from novelwiki.modules.ai_execution.adapters.outbound.agy import PLUGIN_SOURCE
 from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import AgyPreflightError
 from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import child_environment
-from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import tree_sha256, validate_work_root
+from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import (
+    provision_cli_state,
+    tree_sha256,
+    validate_work_root,
+)
 from novelwiki.modules.ai_execution.application.contracts import PreflightResult
 from novelwiki.platform.config import settings
 
 
-async def _command(*argv: str, timeout: float = 20) -> tuple[int, str, str]:
+async def _command(
+    *argv: str, timeout: float = 20, cwd: Path | None = None,
+) -> tuple[int, str, str]:
     proc = await asyncio.create_subprocess_exec(
         *argv, env=child_environment(), stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -56,9 +66,12 @@ async def run_preflight(*, raise_on_error: bool = True) -> PreflightResult:
     version = digest = None
     models: tuple[str, ...] = ()
     plugin_hash = None
+    probe_state: Path | None = None
     try:
         path, digest = validate_binary()
-        validate_work_root()
+        work_root = validate_work_root()
+        work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(work_root, 0o700)
         if not PLUGIN_SOURCE.is_dir():
             raise AgyPreflightError("NovelWiki AGY plugin source is missing", code="agy_plugin_invalid")
         plugin_hash = tree_sha256(PLUGIN_SOURCE)
@@ -73,7 +86,11 @@ async def run_preflight(*, raise_on_error: bool = True) -> PreflightResult:
             raise AgyPreflightError(f"AGY {version} is older than {settings.AGY_MIN_VERSION}",
                                     code="agy_version_unsupported")
 
-        rc, out, err = await _command(str(path), "models")
+        probe_state = Path(tempfile.mkdtemp(prefix=".preflight-", dir=work_root))
+        probe_state.rmdir()
+        provision_cli_state(probe_state)
+
+        rc, out, err = await _command(str(path), f"--gemini_dir={probe_state}", "models")
         if rc:
             raise AgyPreflightError("AGY model/auth probe failed", code="agy_not_authenticated")
         models = tuple(line.strip() for line in out.splitlines() if line.strip())
@@ -83,10 +100,38 @@ async def run_preflight(*, raise_on_error: bool = True) -> PreflightResult:
             raise AgyPreflightError(f"Configured AGY model(s) missing: {', '.join(missing)}",
                                     code="agy_model_missing")
 
-        rc, _out, err = await _command(str(path), "plugin", "validate", str(PLUGIN_SOURCE))
+        active_plugin = probe_state / "config" / "plugins" / "novelwiki-ai"
+        rc, _out, err = await _command(
+            str(path), f"--gemini_dir={probe_state}",
+            "plugin", "validate", str(active_plugin),
+        )
         if rc:
             raise AgyPreflightError(f"NovelWiki AGY plugin validation failed: {err[:300]}",
                                     code="agy_plugin_invalid")
+        rc, out, err = await _command(
+            str(path), f"--gemini_dir={probe_state}", "plugin", "list",
+        )
+        if rc:
+            raise AgyPreflightError(
+                f"AGY active-plugin probe failed: {err[:300]}",
+                code="agy_plugin_inactive",
+            )
+        try:
+            imports = json.loads(out).get("imports", [])
+        except (AttributeError, json.JSONDecodeError) as exc:
+            raise AgyPreflightError(
+                "AGY active-plugin probe returned an invalid registry",
+                code="agy_plugin_inactive",
+            ) from exc
+        active = next(
+            (item for item in imports if item.get("name") == "novelwiki-ai"), None
+        )
+        components = set(active.get("components", [])) if active else set()
+        if not active or not {"skills", "hooks"}.issubset(components):
+            raise AgyPreflightError(
+                "NovelWiki AGY plugin is not actively imported with skills and hooks",
+                code="agy_plugin_inactive",
+            )
         return PreflightResult(True, version, digest, models, settings.AGY_PLUGIN_VERSION,
                                plugin_hash, True)
     except AgyPreflightError as exc:
@@ -94,6 +139,9 @@ async def run_preflight(*, raise_on_error: bool = True) -> PreflightResult:
             raise
         return PreflightResult(False, version, digest, models, settings.AGY_PLUGIN_VERSION,
                                plugin_hash, False, exc.code, str(exc))
+    finally:
+        if probe_state is not None:
+            shutil.rmtree(probe_state, ignore_errors=True)
 
 
 if __name__ == "__main__":

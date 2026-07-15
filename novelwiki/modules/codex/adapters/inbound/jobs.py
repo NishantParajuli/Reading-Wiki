@@ -28,20 +28,33 @@ async def execute_codex_job(job: dict, context) -> dict:
 async def execute_agy_codex_job(job: dict, preflight, context) -> dict:
     options = job.get("options") or {}
     job_id, novel_id = int(job["id"]), int(job["novel_id"])
+    attempt = int(job.get("attempts") or 1)
+    requested_force = bool(options.get("force"))
+    # Force is a first-attempt preprocessing instruction, not a retry
+    # instruction. Later attempts reuse the same chunks/embeddings and resume at
+    # the first chapter without a committed checkpoint for this job.
+    preprocessing_force = requested_force and attempt == 1
     cancel = lambda: context.bail_if_canceled(job_id)
     await cancel()
-    await context.set_progress(job_id, {"step": 1, "steps": 4, "stage": "chunking"}, stage="chunking")
-    await context.chunk_all_chapters(
-        novel_id, force=bool(options.get("force")),
-        from_chapter=options.get("from_chapter"), to_chapter=options.get("to_chapter"),
-        cancel_check=cancel,
-    )
-    await cancel()
-    await context.set_progress(job_id, {"step": 2, "steps": 4, "stage": "embedding"}, stage="embedding")
-    await context.embed_missing_chunks(
-        novel_id, from_chapter=options.get("from_chapter"),
-        to_chapter=options.get("to_chapter"), cancel_check=cancel,
-    )
+    if attempt == 1:
+        await context.set_progress(job_id, {"step": 1, "steps": 4, "stage": "chunking"}, stage="chunking")
+        await context.chunk_all_chapters(
+            novel_id, force=preprocessing_force,
+            from_chapter=options.get("from_chapter"), to_chapter=options.get("to_chapter"),
+            cancel_check=cancel,
+        )
+        await cancel()
+        await context.set_progress(job_id, {"step": 2, "steps": 4, "stage": "embedding"}, stage="embedding")
+        await context.embed_missing_chunks(
+            novel_id, from_chapter=options.get("from_chapter"),
+            to_chapter=options.get("to_chapter"), cancel_check=cancel,
+        )
+    else:
+        await context.set_progress(
+            job_id,
+            {"step": 2, "steps": 4, "stage": "reusing_preprocessing", "attempt": attempt},
+            stage="reusing preprocessing checkpoint",
+        )
     await cancel()
     extracted = await context.execute_codex_job(job, preflight)
     await cancel()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from uuid import UUID
 
 
 class PostgresAgyWorkerStateRepository:
@@ -47,6 +48,15 @@ class PostgresAgyWorkerStateRepository:
                 job_id, list(workloads),
             )
         return [dict(row) for row in rows]
+
+    async def job_run_ids(self, job_id: int, workloads: tuple[str, ...]) -> tuple[UUID, ...]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                "SELECT id FROM ai_execution_runs "
+                "WHERE job_id=$1 AND workload=ANY($2::text[]);",
+                job_id, list(workloads),
+            )
+        return tuple(row["id"] for row in rows)
 
     async def mark_orphan_lost(self, run_id: int) -> None:
         async with self._pool.acquire() as connection:

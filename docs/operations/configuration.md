@@ -198,20 +198,27 @@ actual generation).
 
 ## AGY (Antigravity CLI backend)
 
-Dormant unless `AGY_ENABLED=true` **and** a per-user admin grant exists. Validated at
-boot. See [../modules/ai-execution.md](../modules/ai-execution.md) and
+Dormant unless `AGY_ENABLED=true` **and** a per-user admin grant exists. Codex additionally
+requires the independent `AGY_CODEX_ENABLED=true` kill switch; keep it false until the
+authenticated real-CLI canary passes against the pinned binary. Validated at boot. See
+[../modules/ai-execution.md](../modules/ai-execution.md) and
 [../agy-operator-runbook.md](../agy-operator-runbook.md).
 
 | Setting | Default | Notes |
 |---|---|---|
 | `AGY_ENABLED` | `false` | global kill switch |
-| `AGY_BINARY` / `AGY_MIN_VERSION` / `AGY_BINARY_SHA256` | local path / `1.1.1` / pinned hash | integrity pin; updating AGY is an explicit operator action (empty hash = deliberate unpinned dev) |
+| `AGY_CODEX_ENABLED` | `false` | independent Codex kill switch, checked both when scheduling and immediately before execution; translation is unaffected |
+| `AGY_BINARY` / `AGY_MIN_VERSION` / `AGY_BINARY_SHA256` | local path / `1.1.2` / pinned hash | integrity pin; updating AGY is an explicit operator action (empty hash = deliberate unpinned dev) |
 | `AGY_WORK_DIR` | `~/.local/share/novelwiki/agy-jobs` | story-bearing workspaces outside checkout + public roots |
+| `AGY_CREDENTIAL_DIR` | `~/.gemini/antigravity-cli` | official CLI-owned login source; NovelWiki verifies ownership/mode and links files into isolated per-run state without reading token contents |
 | `AGY_MODEL_TRANSLATE` / `AGY_MODEL_CODEX` / `AGY_MODEL_SEGMENT` / `AGY_MODEL_OCR` | Gemini 3.5 Flash (Medium/High/Medium/High) | **exact display names** from `agy models`; preflight hard-fails on catalog drift |
-| `AGY_MODE` | `""` | `""` \| `accept-edits` \| `plan` |
+| `AGY_MODE` | `accept-edits` | `""` \| `accept-edits` \| `plan`; print mode cannot service interactive edit review |
+| `AGY_TOOL_PERMISSION` / `AGY_ARTIFACT_REVIEW_POLICY` | `strict` / `always-proceed` | copied into each isolated run state; hooks plus `--sandbox` remain the enforcement boundary |
 | `AGY_MAX_CONCURRENT` | 1 | 1–4 |
 | `AGY_PRINT_TIMEOUT_SECONDS` / `AGY_OUTER_TIMEOUT_GRACE_SECONDS` / `AGY_KILL_GRACE_SECONDS` | 1200 / 30 / 10 | subprocess timeout → grace → kill escalation |
 | `AGY_STDOUT_MAX_BYTES` / `AGY_STDERR_MAX_BYTES` / `AGY_WORKSPACE_MAX_BYTES` | 1 MiB / 1 MiB / 128 MiB | retention caps |
+| `AGY_MAX_MODEL_REQUESTS_PER_RUN` / `AGY_MAX_EMPTY_PLANNER_RESPONSES` | 16 / 10 | terminate runaway request/tool loops or planner warnings that continue without output progress |
+| `AGY_REQUIRED_LOADED_HOOKS` | 2 | fail closed unless exactly the tool gate and stop validator are reported active from the single pinned hook file |
 | `AGY_TRANSLATE_BATCH_CHAPTERS` / `AGY_TRANSLATE_BATCH_MAX_CHARS` | 3 / 120000 | per-invocation batch size |
 | `AGY_CODEX_BATCH_CHAPTERS` / `AGY_SEPARATE_CODEX_VERIFY` | 1 / `false` | |
 | `AGY_MAX_ATTEMPTS` / `AGY_PROVIDER_RETRY_MINUTES` | 2 / 30 | retry + `waiting_provider` park duration |

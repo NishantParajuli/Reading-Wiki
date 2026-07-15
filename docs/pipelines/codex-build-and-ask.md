@@ -17,6 +17,12 @@ Readable chapter text (Reading port) → sentence/paragraph-bounded passages of
 stored in `chunks` with `(novel_id, chapter, chunk_index)` identity. Chapter-bounded
 chunks are what make `WHERE chapter <= ceiling` airtight for retrieval.
 
+Forced re-chunking upserts that identity instead of deleting/reinserting the chapter: an
+unchanged passage keeps its row id and embedding, while changed passages clear only their
+own embeddings. If a changed chapter already has an `extraction_state` checkpoint, re-chunk
+refuses until the dependent extraction is explicitly invalidated; this prevents stored
+citations from silently becoming orphaned.
+
 ### 2. Embed
 
 Every chunk with `embedding IS NULL` → `EMBED_MODEL` (batched) → pgvector column
@@ -48,6 +54,20 @@ For each chapter ascending (never backwards — Invariant 2 of the pipeline):
    `source_changed` otherwise), then write all artifacts + the new running summary +
    `extraction_state` (run id, model label, source hash) in one transaction.
    Ceiling-relevant caches for the range are cleared.
+
+AGY durable-job retries do not repeat chunking or embedding after attempt 1. They resume at
+extraction, reuse unchanged preprocessing, skip chapters already checkpointed by that same
+job, and commit complete-but-uncommitted artifacts when available. A force extraction
+replaces only the chapter being committed; it does not erase later checkpoints.
+
+For the AGY transport, the same chapter chunks, prior summary, roster, exact source hash, and
+output shape are packed into one `input/task.md` file, eliminating the old sequence of
+separate chapter, roster, schema, and summary reads.
+Hash-pinned task instructions are inlined in the initial print prompt instead of activated as
+a workspace skill. The model writes only `extraction.json`, `running-summary.md`, and
+`audit.json`; the trusted stop hook creates `manifest.json`. This reduced the pinned
+Lord of the Mysteries chapter 1–5 canaries to 6–7 model requests each, versus historical
+34–45-request failing runs, without committing canary output to the database.
 
 ### 4. Index
 

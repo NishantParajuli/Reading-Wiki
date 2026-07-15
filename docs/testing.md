@@ -22,6 +22,30 @@ Architecture-only tests do not require PostgreSQL:
 uv run pytest -q tests
 ```
 
+AGY contract/runner/workload suites use `novelwiki/eval/fake_agy.py` and do not consume
+subscription capacity. The authenticated CLI canary is opt-in because it makes real model
+requests:
+
+```bash
+export TEST_DATABASE_URL=postgresql://test-user:password@127.0.0.1:5432/novelwiki_test
+export TEST_DB_SUPERUSER_URL=postgresql://test-admin:password@127.0.0.1:5432/postgres
+RUN_REAL_AGY_TESTS=1 uv run pytest -q novelwiki/eval/agy_real_cli_tests.py -m agy_real
+```
+
+For the pinned AGY 1.1.2 binary, the canary requires a completed `READY` artifact, a manifest
+finalized by the trusted stop hook, both loaded safety hooks, and bounded model requests. The
+runner tests separately prove that planner/tool steps with output progress are allowed while a
+no-progress loop is killed. A non-committing real-data Codex canary is available with repeated
+chapter flags sharing one preflight:
+
+```bash
+uv run python scripts/diagnose_agy_codex.py --novel-id 33 \
+  --chapter 1 --chapter 2 --chapter 3 --chapter 4 --chapter 5
+```
+
+Keep the default-off Codex kill switch until representative chapters pass on the exact pinned
+binary/plugin pair and the operator intentionally enables rollout.
+
 The blocking local release-candidate checks are:
 
 ```bash

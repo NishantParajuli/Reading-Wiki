@@ -20,6 +20,9 @@ def fake_runner(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "AGY_KILL_GRACE_SECONDS", 1)
     monkeypatch.setattr(settings, "AGY_STDOUT_MAX_BYTES", 4096)
     monkeypatch.setattr(settings, "AGY_STDERR_MAX_BYTES", 4096)
+    monkeypatch.setattr(settings, "AGY_MAX_MODEL_REQUESTS_PER_RUN", 16)
+    monkeypatch.setattr(settings, "AGY_MAX_EMPTY_PLANNER_RESPONSES", 2)
+    monkeypatch.setattr(settings, "AGY_REQUIRED_LOADED_HOOKS", 2)
     root = tmp_path / "run"
     (root / "output").mkdir(parents=True)
     (root / "logs").mkdir()
@@ -39,6 +42,7 @@ def test_argv_is_vector_and_never_contains_dangerous_flag(fake_runner):
     argv = build_argv(fake_runner, "literal ; $(touch nope)", "Gemini 3.5 Flash (Medium)")
     assert argv[0] == settings.AGY_BINARY
     assert "literal ; $(touch nope)" in argv
+    assert any(value.startswith("--gemini_dir=") for value in argv)
     assert "--dangerously-skip-permissions" not in argv
 
 
@@ -50,6 +54,7 @@ async def test_runner_closes_stdin_scrubs_env_and_uses_run_cwd(fake_runner, monk
     assert result.exit_code == 0 and observed["stdin_closed"] is True
     assert observed["cwd"] == str(fake_runner)
     assert "DATABASE_URL" not in observed["env_keys"]
+    assert result.model_requests == 1 and result.hooks_loaded == 2
 
 
 @pytest.mark.asyncio
@@ -79,3 +84,64 @@ async def test_timeout_terminates_entire_process_group(fake_runner):
     stat_path = Path(f"/proc/{child_pid}/stat")
     if stat_path.exists():
         assert stat_path.read_text().split()[2] == "Z"
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_closed_when_plugin_hooks_are_not_loaded(fake_runner):
+    with pytest.raises(AgyError) as failure:
+        await run_agy(
+            fake_runner, prompt="hooks0:now", model="Gemini 3.5 Flash (Medium)"
+        )
+    assert failure.value.code == "agy_plugin_inactive"
+    assert failure.value.metrics["agy_hooks_loaded"] == 0
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_closed_on_unexpected_extra_hooks(fake_runner):
+    with pytest.raises(AgyError) as failure:
+        await run_agy(
+            fake_runner, prompt="hooks3:now", model="Gemini 3.5 Flash (Medium)"
+        )
+    assert failure.value.code == "agy_plugin_inactive"
+    assert failure.value.metrics["agy_hooks_loaded"] == 3
+
+
+@pytest.mark.asyncio
+async def test_runner_stops_runaway_model_request_fanout(fake_runner):
+    with pytest.raises(AgyError) as failure:
+        await run_agy(
+            fake_runner, prompt="request_limit:now", model="Gemini 3.5 Flash (Medium)"
+        )
+    assert failure.value.code == "agy_request_limit"
+    assert failure.value.metrics["agy_model_requests"] > 16
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_closed_when_loaded_hook_command_breaks(fake_runner):
+    with pytest.raises(AgyError) as failure:
+        await run_agy(
+            fake_runner, prompt="hook_failure:now", model="Gemini 3.5 Flash (Medium)"
+        )
+    assert failure.value.code == "agy_hook_failure"
+    assert failure.value.metrics["agy_hook_failures"] == 1
+
+
+@pytest.mark.asyncio
+async def test_runner_stops_empty_planner_response_loop(fake_runner):
+    with pytest.raises(AgyError) as failure:
+        await run_agy(
+            fake_runner, prompt="planner_loop:now", model="Gemini 3.5 Flash (Medium)"
+        )
+    assert failure.value.code == "agy_planner_loop"
+    assert failure.value.metrics["agy_empty_planner_responses"] > 2
+
+
+@pytest.mark.asyncio
+async def test_runner_allows_planner_tool_steps_when_output_progresses(fake_runner, monkeypatch):
+    monkeypatch.setattr(settings, "AGY_PRINT_TIMEOUT_SECONDS", 8)
+    result = await run_agy(
+        fake_runner, prompt="planner_progress:now", model="Gemini 3.5 Flash (Medium)"
+    )
+    assert result.exit_code == 0
+    assert result.empty_planner_responses == 6
+    assert (fake_runner / "output" / "progress.txt").read_text() == "2"

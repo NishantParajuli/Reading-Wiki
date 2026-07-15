@@ -22,7 +22,8 @@ Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md).
   `translate_batch`, `codex_extract`, `segment_import`, `ocr_pages`, `ask`,
   `profile_synthesis`), `RequestedBackend` (`auto`/`api`/`agy`), `ExecutionBackend`
   (`api`/`agy`). `IMPLEMENTED_AGY_WORKLOADS` currently contains only
-  `translate_batch` and `codex_extract`; for the other four, automatic/default
+  `translate_batch` and `codex_extract`, but Codex selection also requires the default-off
+  `AGY_CODEX_ENABLED` kill switch; for the other four, automatic/default
   selection remains on API and an explicit AGY request is rejected, even if the name is
   stored in an admin policy.
 - **Contracts** (`application/contracts.py`): the AGY manifest dataclasses —
@@ -32,7 +33,8 @@ Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md).
   `AgyValidationError`, `AgyCanceled`, `BudgetExhausted`, and `PROVIDER_WAIT_CODES`
   (failure classes that park a job as `waiting_provider` instead of burning retries).
 - **`ResumableRunQuery`** — lets codex/translation find complete-but-uncommitted run
-  artifacts after a crash.
+  artifacts after a crash and obtain a job's run IDs without reading AI Execution's table
+  across the module boundary.
 
 ## Outbound adapters
 
@@ -72,17 +74,23 @@ so a crashed request frees its slot). **Cache hits skip every gate.**
 
 - **`preflight.py`** — refuses to run unless: the binary at `AGY_BINARY` matches
   `AGY_BINARY_SHA256`, version ≥ `AGY_MIN_VERSION`, the exact configured model display
-  names exist in `agy models`, and the plugin validates
-  (`AGY_PLUGIN_VERSION`/`AGY_PLUGIN_SHA256`).
+  names exist in `agy models`, and an isolated copied plugin validates and appears in
+  `agy plugin list` (`AGY_PLUGIN_VERSION`/`AGY_PLUGIN_SHA256`).
 - **`workspace.py`** — one directory per run under `AGY_WORK_DIR`
   (`~/.local/share/novelwiki/agy-jobs`, outside the checkout and outside public asset
-  roots): content-hashed input manifests, **sealed read-only inputs**, writable
-  output/logs, size caps (`AGY_WORKSPACE_MAX_BYTES`), retention sweeps
+  roots) and a sibling isolated CLI state. It links the validated official credential
+  files without loading token contents, writes a run-only settings file (`accept-edits`,
+  `strict`, `always-proceed`, and only that trusted workspace), materializes hash-pinned
+  hooks/rules under `.agents`, creates the Git marker AGY 1.1.2 requires for discovery, and seals
+  inputs/customizations/Git metadata read-only. Output/logs remain writable, with size caps
+  (`AGY_WORKSPACE_MAX_BYTES`) and retention sweeps
   (`AGY_SUCCESS_RETENTION_HOURS`=24 / `AGY_FAILURE_RETENTION_HOURS`=168).
 - **`runner.py`** — spawns the CLI in its own **process group** with a positive-allowlist
   environment, print-mode prompt, output caps (`AGY_STDOUT/STDERR_MAX_BYTES`), timeout +
   grace + kill escalation (`AGY_PRINT_TIMEOUT_SECONDS`/`_OUTER_TIMEOUT_GRACE`/
-  `_KILL_GRACE`), cancel checks, and identity-verified process-group termination
+  `_KILL_GRACE`), cancel checks, identity-verified process-group termination,
+  runtime proof that exactly the pinned two hooks loaded from one file, and hard ceilings for model requests, hook failures,
+  and consecutive planner warnings without output-tree progress
   (`process_identity_matches` guards against PID reuse).
 - **`validators.py`** — every artifact read back is size-capped, SHA-256-verified,
   path-traversal-safe (`safe_artifact_path`), and schema-checked against the output
@@ -91,9 +99,15 @@ so a crashed request frees its slot). **Cache hits skip every gate.**
   fatal; `safe_error_summary` keeps story text out of error strings.
 - **`runs.py`** — `ai_execution_runs` bookkeeping: one row per provider invocation
   (workload, backend, model, attempt, input/output SHA-256s, workspace relpath, process
-  identity, exit/failure codes, metrics; linked to exactly one of `job_id` /
+  identity, exit/failure codes, metrics including AGY model requests/tool confirmations/
+  sandbox blocks/hook state/planner defects; provider token usage is explicitly marked
+  unavailable; linked to exactly one of `job_id` /
   `import_job_id`, with `parent_run_id` for disambiguation/verification child runs).
 - **`smoke.py`** — the admin smoke test (`kind='agy_smoke'` job; no novel/user content).
+- **`prompts.py`** — inlines the hash-pinned workload instructions into the initial print
+  prompt. This avoids AGY 1.1.2's workspace-skill activation loop and redundant discovery
+  turns; Codex supplies one `input/task.md` bundle and the trusted stop hook creates the final
+  manifest after the model writes only its three semantic artifacts.
 - **`plugin/novelwiki-ai/`** (repo path `novelwiki/agy/plugin/novelwiki-ai`) — the AGY
   plugin whose hooks (`tool_gate.py`, `validate_stop.py`) deny command/web/MCP/subagent
   and outside-workspace access from inside the CLI session; its file hashes are pinned
@@ -127,7 +141,8 @@ Mounted in Experience's admin router, executed here through injected ports:
 ## Design invariants
 
 1. **Dormant by default** — AGY requires `AGY_ENABLED=true` *and* an explicit per-user
-   workload grant for one of the two implemented AGY workloads; neither alone suffices.
+   workload grant for one of the two implemented AGY workloads; Codex additionally requires
+   `AGY_CODEX_ENABLED=true`. Neither a role nor one switch alone suffices.
    Admin role grants nothing implicitly.
 2. **No AGY credentials in this app** — authentication belongs to the CLI's own
    keyring/browser login on the host.

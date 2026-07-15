@@ -59,7 +59,9 @@ handler (or individually from the CLI):
 
 1. **`chunk.py`** — sentence/paragraph-aware splitting within chapters:
    `CHUNK_TARGET_TOKENS` (500) with `CHUNK_OVERLAP` (80), tokenized with tiktoken; rows
-   into `chunks` keyed `(novel_id, chapter, chunk_index)`.
+   into `chunks` keyed `(novel_id, chapter, chunk_index)`. Force mode upserts by that
+   stable identity, preserving row ids and embeddings for unchanged text; changed text
+   clears its embedding and is rejected while a dependent extraction checkpoint exists.
 2. **`embed.py`** — batch-embeds every chunk with `embedding IS NULL`
    (`EMBED_MODEL`, `EMBED_DIM`-sized pgvector column; HNSW index when dim ≤ 2000).
 3. **`extract.py`** — **forward-only** structured extraction, strictly ascending by
@@ -111,12 +113,17 @@ handler (or individually from the CLI):
   Codex-owned.)
 - **Inbound `cli.py`**: `chunk`, `embed`, `extract`, `rebuild-bm25`, `merge`.
 - **Inbound `jobs.py`**: `execute_codex_job` (API backend) and `execute_agy_codex_job`.
+  For the AGY executor, attempt 1 performs chunk/embed/extract/index; retries reuse
+  preprocessing and resume at extraction so already-purchased chunk embeddings are not
+  bought again.
 - **Outbound `postgres_queries.py`** — all bounded read SQL (`WHERE … <= ceiling` on
   every statement) + `wiki_cache` read/write + `PostgresEntityMerger`.
-- **Outbound `agy.py`** — the AGY extraction job: per-chapter workspace manifests,
+- **Outbound `agy.py`** — the AGY extraction job: one per-chapter `task.md` bundle
+  (chunks, roster, prior summary, exact output shape) plus sealed workspace manifests,
   strict output validation (`validate_extraction_output` — schema, chunk-id provenance,
   ceiling-safe content), separate verification/disambiguation child runs,
-  `_resume_ready_commits` after worker loss.
+  `_resume_ready_commits` after worker loss, plus same-job chapter checkpoint skipping on
+  whole-job retry.
 - **Outbound `artifacts.py` / `cache.py` / `postgres_terms.py`** — workflow capability,
   cache invalidation, established terms.
 

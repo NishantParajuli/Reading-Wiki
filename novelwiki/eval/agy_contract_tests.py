@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import runpy
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -64,16 +66,44 @@ def test_symlink_and_hardlink_are_rejected(tmp_path):
 
 def test_workspace_copies_exact_pinned_plugin_and_seals_inputs(tmp_path, monkeypatch):
     work = tmp_path / "private-agy"
+    credentials = tmp_path / "credentials"
+    credentials.mkdir()
+    token = credentials / "antigravity-oauth-token"
+    token.write_text("fake-test-token")
+    token.chmod(0o600)
     monkeypatch.setattr(settings, "AGY_WORK_DIR", str(work))
+    monkeypatch.setattr(settings, "AGY_CREDENTIAL_DIR", str(credentials))
     monkeypatch.setattr(settings, "AGY_PLUGIN_SHA256", tree_sha256(PLUGIN_SOURCE))
     root = create_run_workspace(12, "run-safe")
     (root / "input" / "manifest.json").write_text("{}")
     seal_inputs(root)
-    copied = root / ".agents" / "plugins" / "novelwiki-ai"
+    copied = root / ".agents" / "vendor" / "novelwiki-ai"
     assert tree_sha256(copied) == settings.AGY_PLUGIN_SHA256
     assert not list(copied.rglob("*.pyc"))
     assert (root / "input" / "manifest.json").stat().st_mode & 0o777 == 0o400
     assert (root / "output").stat().st_mode & 0o777 == 0o700
+    assert (root / ".agents" / "hooks.json").is_file()
+    assert not (root / ".agents" / "skills").exists()
+    assert (root / ".git" / "HEAD").read_text() == "ref: refs/heads/novelwiki-run\n"
+    assert (root / ".git").stat().st_mode & 0o777 == 0o500
+    hooks = json.loads((root / ".agents" / "hooks.json").read_text())
+    assert hooks["novelwiki-tool-gate"]["PreToolUse"][0]["hooks"][0]["command"] == (
+        "python3 vendor/novelwiki-ai/hooks/tool_gate.py"
+    )
+    state = root.parent / ".run-safe.agy-state"
+    assert not (state / "config" / "plugins").exists()
+    assert (state / "antigravity-cli" / "antigravity-oauth-token").is_symlink()
+    cli_settings_path = state / "antigravity-cli" / "settings.json"
+    assert cli_settings_path.is_file() and not cli_settings_path.is_symlink()
+    cli_settings = json.loads(cli_settings_path.read_text())
+    assert cli_settings == {
+        "agentMode": settings.AGY_MODE or "accept-edits",
+        "artifactReviewPolicy": settings.AGY_ARTIFACT_REVIEW_POLICY,
+        "model": settings.AGY_MODEL_TRANSLATE,
+        "toolPermission": settings.AGY_TOOL_PERMISSION,
+        "trustedWorkspaces": [str(root.resolve())],
+    }
+    assert state not in root.parents and root not in state.parents
 
 
 def test_plugin_stop_hook_requires_the_complete_output_manifest_contract(tmp_path):
@@ -103,6 +133,40 @@ def test_plugin_stop_hook_requires_the_complete_output_manifest_contract(tmp_pat
     }
     manifest_path.write_text(json.dumps(complete))
     assert hook(str(tmp_path)) is None
+
+
+def test_plugin_stop_hook_finalizes_hashes_without_a_terminal(tmp_path):
+    (tmp_path / "input").mkdir()
+    (tmp_path / "output").mkdir()
+    (tmp_path / "input" / "manifest.json").write_text(json.dumps({
+        "run_id": "run-finalize", "workload": "smoke_test",
+    }))
+    (tmp_path / "output" / "smoke.txt").write_text("READY\n")
+    module = runpy.run_path(str(PLUGIN_SOURCE / "hooks" / "validate_stop.py"))
+    assert module["finalize_manifest"](str(tmp_path)) is True
+    assert module["validate"](str(tmp_path)) is None
+    manifest = json.loads((tmp_path / "output" / "manifest.json").read_text())
+    assert manifest["artifacts"][0]["sha256"] == hashlib.sha256(b"READY\n").hexdigest()
+
+
+def test_plugin_tool_gate_denies_terminal_and_outside_workspace(tmp_path):
+    hook = PLUGIN_SOURCE / "hooks" / "tool_gate.py"
+
+    def invoke(name, args):
+        result = subprocess.run(
+            [sys.executable, str(hook)],
+            input=json.dumps({
+                "toolCall": {"name": name, "args": args},
+                "workspacePaths": [str(tmp_path)],
+            }),
+            text=True, capture_output=True, check=True, cwd=tmp_path,
+        )
+        return json.loads(result.stdout)
+
+    assert invoke("Bash", {"command": "true"})["decision"] == "deny"
+    assert invoke("ListDirectory", {"DirectoryPath": "."})["decision"] == "deny"
+    assert invoke("ReadFile", {"AbsolutePath": "/etc/passwd"})["decision"] == "deny"
+    assert invoke("Edit", {"TargetFile": "output/result.txt"})["decision"] == "allow"
 
 
 def test_plugin_stop_hook_enforces_codex_source_snapshot_identity(tmp_path):
@@ -140,4 +204,60 @@ def test_plugin_stop_hook_enforces_codex_source_snapshot_identity(tmp_path):
     assert "input/schema.json source_sha256" in error
     assert "chapter.md artifact hash" in error
     write_output(2.0, expected_source_hash)
+    assert hook(str(tmp_path)) is None
+
+
+def test_plugin_stop_hook_enforces_exact_translation_metadata(tmp_path):
+    (tmp_path / "input" / "chapters").mkdir(parents=True)
+    (tmp_path / "output" / "chapters").mkdir(parents=True)
+    source_hash = "a" * 64
+    input_meta = {
+        "chapter_ref": "c000001", "source_sha256": source_hash,
+        "source_content_version": 2,
+    }
+    input_meta_path = tmp_path / "input" / "chapters" / "c000001.meta.json"
+    input_meta_path.write_text(json.dumps(input_meta))
+    (tmp_path / "input" / "manifest.json").write_text(json.dumps({
+        "run_id": "run-translation", "workload": "translate_batch",
+        "inputs": [{"role": "chapter_metadata", "path": "chapters/c000001.meta.json"}],
+    }))
+    translation = b"Translated text.\n"
+    translation_path = tmp_path / "output" / "chapters" / "c000001.translation.txt"
+    translation_path.write_bytes(translation)
+    meta_path = tmp_path / "output" / "chapters" / "c000001.meta.json"
+
+    def write_output(metadata):
+        content = json.dumps(metadata).encode()
+        meta_path.write_bytes(content)
+        artifacts = [
+            {
+                "path": "chapters/c000001.translation.txt",
+                "sha256": hashlib.sha256(translation).hexdigest(), "bytes": len(translation),
+                "media_type": "text/plain; charset=utf-8", "role": "translation",
+            },
+            {
+                "path": "chapters/c000001.meta.json",
+                "sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content),
+                "media_type": "application/json", "role": "translation_meta",
+            },
+        ]
+        (tmp_path / "output" / "manifest.json").write_text(json.dumps({
+            "schema_version": "1.0", "run_id": "run-translation",
+            "workload": "translate_batch", "status": "complete", "artifacts": artifacts,
+            "warnings": [], "completed_at": datetime.now(UTC).isoformat(),
+            "failure_reason": None,
+        }))
+
+    valid = {
+        "schema_version": "1.0", "chapter_ref": "c000001",
+        "source_sha256": source_hash, "source_content_version": 2,
+        "translated_title": "Chapter 1", "translation_path": "c000001.translation.txt",
+        "new_terms": [], "self_review": {
+            "complete": True, "paragraphs_preserved": True, "glossary_checked": True,
+        },
+    }
+    hook = runpy.run_path(str(PLUGIN_SOURCE / "hooks" / "validate_stop.py"))["validate"]
+    write_output({**valid, "number": 1.0})
+    assert "missing or extra" in hook(str(tmp_path))
+    write_output(valid)
     assert hook(str(tmp_path)) is None

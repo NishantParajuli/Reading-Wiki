@@ -76,8 +76,10 @@ Runs on the **host**, not in Docker — it needs the operator's authenticated `a
 keyring session. Install `deploy/novelwiki-agy-worker.service` as a `systemd --user`
 unit (`loginctl enable-linger` if it must survive logout) and follow
 [../agy-operator-runbook.md](../agy-operator-runbook.md) step by step (binary hash pin,
-model catalog check, plugin validation, permission-rule verification, explicit per-user
-grants). Kill switch: `AGY_ENABLED=false` + restart consumers.
+model catalog check, plugin validation, authenticated smoke/representative workload canaries,
+runtime hook proof, and explicit per-user grants). Global kill switch:
+`AGY_ENABLED=false`; Codex-only containment: `AGY_CODEX_ENABLED=false`. Restart settings
+consumers after changing either switch.
 
 ## Automated deployment after CI
 
