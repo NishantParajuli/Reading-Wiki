@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from novelwiki.kernel.errors import NotFound
 
-from .ports import JobMetadataPort, WorkRepository
+from .ports import JobMetadataPort, JobObservationPort, WorkRepository
 
 
 @dataclass(frozen=True)
@@ -14,9 +14,15 @@ class WorkPrincipal:
 
 
 class WorkService:
-    def __init__(self, repository: WorkRepository, metadata: JobMetadataPort):
+    def __init__(
+        self,
+        repository: WorkRepository,
+        metadata: JobMetadataPort,
+        observer: JobObservationPort | None = None,
+    ):
         self._repository = repository
         self._metadata = metadata
+        self._observer = observer
 
     async def _enrich(self, jobs: list[dict]) -> list[dict]:
         details = await self._metadata.current({int(job["id"]) for job in jobs})
@@ -52,6 +58,8 @@ class WorkService:
             active_only=active, limit=limit,
         )
         await self._enrich(jobs)
+        if self._observer is not None:
+            self._observer.observe(jobs)
         return [
             self._repository.job_view(job)
             for job in jobs
@@ -60,6 +68,8 @@ class WorkService:
     async def get_job(self, job_id: int, principal: WorkPrincipal) -> dict:
         job = await self._owned_job(job_id, principal)
         await self._enrich([job])
+        if self._observer is not None:
+            self._observer.observe([job])
         return self._repository.job_view(job)
 
     async def cancel_job(self, job_id: int, principal: WorkPrincipal) -> bool:

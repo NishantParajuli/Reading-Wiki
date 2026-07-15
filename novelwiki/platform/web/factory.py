@@ -28,10 +28,20 @@ _PUBLIC_AUTH_MUTATIONS = {
 _REQUEST_HEADER = "x-tideglass-request"
 _CSRF_HEADERS = ("x-tideglass-csrf", "x-csrf-token")
 _REQUEST_ID_HEADER = "X-Request-ID"
+_JOB_LIST_PATH = "/api/jobs"
 
 
 def _normalized_path(path: str) -> str:
     return path.rstrip("/") or "/"
+
+
+def _log_completed_request(method: str, path: str, status_code: int) -> bool:
+    """Drop successful job-list polling after the route emits state-change records."""
+    return not (
+        method.upper() == "GET"
+        and _normalized_path(path) == _JOB_LIST_PATH
+        and status_code < 400
+    )
 
 
 def _csrf_rejection(request):
@@ -93,24 +103,25 @@ def create_web_app(*, lifespan, seed_csrf_cookie) -> FastAPI:
             if settings.LOG_HTTP_REQUESTS:
                 route = request.scope.get("route")
                 status = int(response.status_code)
-                level = logging.WARNING if status >= 400 else logging.INFO
-                content_length = response.headers.get("content-length")
-                log_event(
-                    logger, level, "http.request.completed",
-                    f"{request.method} {request.url.path} completed with {status}.",
-                    request_id=request_id,
-                    method=request.method,
-                    path=request.url.path,
-                    route=getattr(route, "path", None),
-                    status_code=status,
-                    client_ip=request.client.host if request.client else None,
-                    duration_ms=round((time.monotonic() - started) * 1000, 2),
-                    response_bytes=(
-                        int(content_length)
-                        if content_length and content_length.isdigit()
-                        else None
-                    ),
-                )
+                if _log_completed_request(request.method, request.url.path, status):
+                    level = logging.WARNING if status >= 400 else logging.INFO
+                    content_length = response.headers.get("content-length")
+                    log_event(
+                        logger, level, "http.request.completed",
+                        f"{request.method} {request.url.path} completed with {status}.",
+                        request_id=request_id,
+                        method=request.method,
+                        path=request.url.path,
+                        route=getattr(route, "path", None),
+                        status_code=status,
+                        client_ip=request.client.host if request.client else None,
+                        duration_ms=round((time.monotonic() - started) * 1000, 2),
+                        response_bytes=(
+                            int(content_length)
+                            if content_length and content_length.isdigit()
+                            else None
+                        ),
+                    )
         finally:
             audit.reset_request_id(token)
         response.headers[_REQUEST_ID_HEADER] = request_id

@@ -29,6 +29,9 @@ async def build_work_service():
         PostgresOperationalProjectionRepository,
     )
     from novelwiki.modules.work.adapters.outbound.postgres import PostgresWorkRepository
+    from novelwiki.modules.work.adapters.outbound.structured_logging import (
+        web_job_observer,
+    )
     from novelwiki.modules.work.application import WorkService
     from novelwiki.platform.database import init_db_pool
 
@@ -38,4 +41,4 @@ async def build_work_service():
         async def current(self, job_ids):
             return await projections.job_run_metadata(job_ids)
 
-    return WorkService(PostgresWorkRepository(), Metadata())
+    return WorkService(PostgresWorkRepository(), Metadata(), web_job_observer)
