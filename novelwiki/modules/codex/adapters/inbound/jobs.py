@@ -29,32 +29,33 @@ async def execute_agy_codex_job(job: dict, preflight, context) -> dict:
     options = job.get("options") or {}
     job_id, novel_id = int(job["id"]), int(job["novel_id"])
     attempt = int(job.get("attempts") or 1)
-    requested_force = bool(options.get("force"))
-    # Force is a first-attempt preprocessing instruction, not a retry
-    # instruction. Later attempts reuse the same chunks/embeddings and resume at
-    # the first chapter without a committed checkpoint for this job.
-    preprocessing_force = requested_force and attempt == 1
+    preprocessing_force = bool(options.get("force"))
     cancel = lambda: context.bail_if_canceled(job_id)
     await cancel()
-    if attempt == 1:
-        await context.set_progress(job_id, {"step": 1, "steps": 4, "stage": "chunking"}, stage="chunking")
-        await context.chunk_all_chapters(
-            novel_id, force=preprocessing_force,
-            from_chapter=options.get("from_chapter"), to_chapter=options.get("to_chapter"),
-            cancel_check=cancel,
-        )
-        await cancel()
-        await context.set_progress(job_id, {"step": 2, "steps": 4, "stage": "embedding"}, stage="embedding")
-        await context.embed_missing_chunks(
-            novel_id, from_chapter=options.get("from_chapter"),
-            to_chapter=options.get("to_chapter"), cancel_check=cancel,
-        )
-    else:
-        await context.set_progress(
-            job_id,
-            {"step": 2, "steps": 4, "stage": "reusing_preprocessing", "attempt": attempt},
-            stage="reusing preprocessing checkpoint",
-        )
+    # Both preprocessing stages are idempotent. Repeat them on every attempt so
+    # a worker loss partway through chunking or embedding cannot strand the job
+    # without the inputs required by AGY extraction. Missing embeddings are the
+    # only ones purchased again, and force re-chunking preserves unchanged rows.
+    await context.set_progress(
+        job_id,
+        {"step": 1, "steps": 4, "stage": "chunking", "attempt": attempt},
+        stage="chunking",
+    )
+    await context.chunk_all_chapters(
+        novel_id, force=preprocessing_force,
+        from_chapter=options.get("from_chapter"), to_chapter=options.get("to_chapter"),
+        cancel_check=cancel,
+    )
+    await cancel()
+    await context.set_progress(
+        job_id,
+        {"step": 2, "steps": 4, "stage": "embedding", "attempt": attempt},
+        stage="embedding",
+    )
+    await context.embed_missing_chunks(
+        novel_id, from_chapter=options.get("from_chapter"),
+        to_chapter=options.get("to_chapter"), cancel_check=cancel,
+    )
     await cancel()
     extracted = await context.execute_codex_job(job, preflight)
     await cancel()

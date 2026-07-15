@@ -50,7 +50,7 @@ async def test_agy_codex_dispatch_forwards_preflight_to_codex(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_agy_codex_retry_reuses_chunks_and_embeddings():
+async def test_agy_codex_retry_reruns_idempotent_preprocessing():
     from novelwiki.modules.codex.adapters.inbound.jobs import execute_agy_codex_job
 
     calls = []
@@ -82,6 +82,19 @@ async def test_agy_codex_retry_reuses_chunks_and_embeddings():
         "options": {"force": True, "from_chapter": 1, "to_chapter": 5},
     }
     result = await execute_agy_codex_job(job, object(), Context())
-    assert [call[0] for call in calls].count("chunk") == 0
-    assert [call[0] for call in calls].count("embed") == 0
+    chunk_call = next(call for call in calls if call[0] == "chunk")
+    embed_call = next(call for call in calls if call[0] == "embed")
+    assert chunk_call[1] == 33
+    assert {key: value for key, value in chunk_call[2].items() if key != "cancel_check"} == {
+        "force": True,
+        "from_chapter": 1,
+        "to_chapter": 5,
+    }
+    assert callable(chunk_call[2]["cancel_check"])
+    assert embed_call[1] == 33
+    assert {key: value for key, value in embed_call[2].items() if key != "cancel_check"} == {
+        "from_chapter": 1,
+        "to_chapter": 5,
+    }
+    assert callable(embed_call[2]["cancel_check"])
     assert result["checkpointed_chapters"] == 1

@@ -55,10 +55,14 @@ For each chapter ascending (never backwards — Invariant 2 of the pipeline):
    `extraction_state` (run id, model label, source hash) in one transaction.
    Ceiling-relevant caches for the range are cleared.
 
-AGY durable-job retries do not repeat chunking or embedding after attempt 1. They resume at
-extraction, reuse unchanged preprocessing, skip chapters already checkpointed by that same
-job, and commit complete-but-uncommitted artifacts when available. A force extraction
-replaces only the chapter being committed; it does not erase later checkpoints.
+AGY durable-job retries repeat the idempotent chunking and missing-embedding passes before
+they resume extraction. Unchanged chunks retain their embeddings, so only still-missing
+vectors are purchased; a retry can therefore finish preprocessing interrupted by worker or
+database failure. Extraction skips chapters already checkpointed by that same job and commits
+complete-but-uncommitted artifacts when available. A force extraction replaces the chapter
+being committed and invalidates its checkpoint plus the downstream checkpoint suffix, whose
+running summaries depend on it. Later builds replace any orphaned chapter artifacts while
+recreating those checkpoints in chronological order.
 
 For the AGY transport, the same chapter chunks, prior summary, roster, exact source hash, and
 output shape are packed into one `input/task.md` file, eliminating the old sequence of

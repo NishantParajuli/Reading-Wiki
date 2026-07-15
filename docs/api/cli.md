@@ -40,7 +40,7 @@ clean Ctrl-C).
 |---|---|
 | `chunk NOVEL_ID [--force] [--from F] [--to T]` | Paragraph/sentence-aware chunking into `chunks`; force upserts stable chunk identities, preserves unchanged embeddings, and refuses changed text with a live extraction checkpoint. |
 | `embed NOVEL_ID [--from F] [--to T]` | Batch-embeds all chunks missing vectors. |
-| `extract NOVEL_ID [--force] [--from F] [--to T]` | Forward-only entity/fact/relationship/event extraction in strict chapter order; force transactionally replaces only each selected chapter's extraction artifacts/checkpoint. |
+| `extract NOVEL_ID [--force] [--from F] [--to T]` | Forward-only entity/fact/relationship/event extraction in strict chapter order; force transactionally replaces each selected chapter and invalidates its downstream running-summary checkpoints for chronological rebuild. |
 | `rebuild-bm25 NOVEL_ID` | Rebuilds + persists the per-novel BM25 index. |
 | `merge NOVEL_ID --keep ID --drop ID` | Merges duplicate entities (re-points facts/relations/aliases, clears caches). |
 

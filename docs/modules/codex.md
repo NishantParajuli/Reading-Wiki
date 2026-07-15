@@ -113,9 +113,9 @@ handler (or individually from the CLI):
   Codex-owned.)
 - **Inbound `cli.py`**: `chunk`, `embed`, `extract`, `rebuild-bm25`, `merge`.
 - **Inbound `jobs.py`**: `execute_codex_job` (API backend) and `execute_agy_codex_job`.
-  For the AGY executor, attempt 1 performs chunk/embed/extract/index; retries reuse
-  preprocessing and resume at extraction so already-purchased chunk embeddings are not
-  bought again.
+  The AGY executor repeats idempotent chunking and missing-embedding passes on retries,
+  then resumes extraction; unchanged vectors are retained, while interrupted preprocessing
+  is completed before extraction requires its chunks.
 - **Outbound `postgres_queries.py`** — all bounded read SQL (`WHERE … <= ceiling` on
   every statement) + `wiki_cache` read/write + `PostgresEntityMerger`.
 - **Outbound `agy.py`** — the AGY extraction job: one per-chapter `task.md` bundle
