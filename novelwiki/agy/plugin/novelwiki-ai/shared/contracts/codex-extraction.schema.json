@@ -2,14 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "NovelWiki codex extraction",
   "type": "object",
-  "required": ["schema_version", "chapter", "source_sha256", "mentions", "facts", "relationships", "events", "identity_reveals", "new_aliases", "warnings"],
+  "required": ["schema_version", "chapter", "source_sha256", "mentions", "facts", "relationships", "events", "identity_reveals", "new_aliases", "state_changes", "relationship_state_changes", "thread_updates", "memory_updates", "warnings"],
   "properties": {
-    "schema_version": {"const": "1.0"},
+    "schema_version": {"const": "2.0"},
     "chapter": {"type": "number", "description": "Copy input/manifest.json chapter_ceiling exactly."},
     "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Copy input/schema.json source_sha256 exactly; this is not the chapter.md artifact hash."},
     "mentions": {"type": "array"}, "facts": {"type": "array"},
     "relationships": {"type": "array"}, "events": {"type": "array"},
     "identity_reveals": {"type": "array"}, "new_aliases": {"type": "array"},
+    "state_changes": {"type": "array"},
+    "relationship_state_changes": {"type": "array"},
+    "thread_updates": {"type": "array"},
+    "memory_updates": {"type": "array", "maxItems": 2},
     "warnings": {"type": "array"}
   },
   "additionalProperties": false

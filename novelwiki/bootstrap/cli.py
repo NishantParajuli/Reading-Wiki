@@ -50,6 +50,6 @@ by_name = {
 baseline_order = (
     "add-novel", "scrape", "chunk", "embed", "extract", "translate",
     "import", "import-batch", "import-series", "import-worker",
-    "rebuild-bm25", "merge", "reset-db",
+    "rebuild-bm25", "merge", "reset-codex", "reset-db",
 )
 app.registered_commands.extend(by_name[name] for name in baseline_order)

@@ -43,9 +43,11 @@ async def find_resolution_candidates(
         SELECT e.id FROM entities e
         LEFT JOIN entity_aliases a ON e.id=a.entity_id AND a.revealed_at_chapter <= $2
         WHERE (lower(e.canonical_name)=lower($1) OR lower(a.alias)=lower($1))
-          AND e.first_seen_chapter <= $2 AND e.novel_id=$3 LIMIT 1;
+          AND e.first_seen_chapter <= $2 AND e.novel_id=$3
+          AND (e.type=$4 OR (e.type IN ('faction','organization') AND $4 IN ('faction','organization')))
+        ORDER BY e.id LIMIT 1;
         """,
-        name, chapter, novel_id,
+        name, chapter, novel_id, entity_type,
     )
     if row:
         return EntityResolutionProposal(int(row["id"]))
@@ -56,11 +58,12 @@ async def find_resolution_candidates(
         FROM entities e
         LEFT JOIN entity_aliases a ON e.id=a.entity_id AND a.revealed_at_chapter <= $2
         WHERE e.first_seen_chapter <= $2 AND e.novel_id=$4
+          AND (e.type=$5 OR (e.type IN ('faction','organization') AND $5 IN ('faction','organization')))
         GROUP BY e.id, e.canonical_name
         HAVING GREATEST(similarity(e.canonical_name,$1), COALESCE(MAX(similarity(a.alias,$1)),0)) > $3
         ORDER BY sim DESC LIMIT 5;
         """,
-        name, chapter, settings.FUZZY_MATCH_THRESHOLD, novel_id,
+        name, chapter, settings.FUZZY_MATCH_THRESHOLD, novel_id, entity_type,
     )
     candidates = tuple({"id": int(r["id"]), "canonical_name": r["canonical_name"],
                         "sim": float(r["sim"])} for r in rows)
@@ -75,9 +78,10 @@ async def find_resolution_candidates(
             """
             SELECT id, 1-(name_embedding <=> $1::vector) AS sim FROM entities
             WHERE first_seen_chapter <= $2 AND novel_id=$3 AND name_embedding IS NOT NULL
+              AND (type=$4 OR (type IN ('faction','organization') AND $4 IN ('faction','organization')))
             ORDER BY name_embedding <=> $1::vector LIMIT 1;
             """,
-            vector, chapter, novel_id,
+            vector, chapter, novel_id, entity_type,
         )
         if row and row["sim"] is not None and float(row["sim"]) > settings.SEMANTIC_MATCH_THRESHOLD:
             return EntityResolutionProposal(int(row["id"]))
@@ -108,9 +112,9 @@ async def create_entity(
     await conn.execute(
         """
         INSERT INTO entity_aliases (novel_id,entity_id,alias,revealed_at_chapter)
-        VALUES ($1,$2,$3,0.0) ON CONFLICT DO NOTHING;
+        VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING;
         """,
-        novel_id, entity_id, name,
+        novel_id, entity_id, name, chapter,
     )
     return int(entity_id)
 
@@ -153,9 +157,10 @@ async def resolve_entity(
         LEFT JOIN entity_aliases a ON e.id = a.entity_id AND a.revealed_at_chapter <= $2
         WHERE (LOWER(e.canonical_name) = LOWER($1) OR LOWER(a.alias) = LOWER($1))
           AND e.first_seen_chapter <= $2 AND e.novel_id = $3
-        LIMIT 1;
+          AND (e.type=$4 OR (e.type IN ('faction','organization') AND $4 IN ('faction','organization')))
+        ORDER BY e.id LIMIT 1;
         """,
-        name_clean, chapter, novel_id
+        name_clean, chapter, novel_id, entity_type
     )
     if row:
         return int(row["id"])
@@ -164,15 +169,18 @@ async def resolve_entity(
     # Fetch top candidates above the configured similarity floor.
     rows = await conn.fetch(
         """
-        SELECT DISTINCT e.id, e.canonical_name, similarity(e.canonical_name, $1) AS sim
+        SELECT e.id, e.canonical_name,
+               GREATEST(similarity(e.canonical_name,$1),COALESCE(MAX(similarity(a.alias,$1)),0)) AS sim
         FROM entities e
         LEFT JOIN entity_aliases a ON e.id = a.entity_id AND a.revealed_at_chapter <= $2
         WHERE (similarity(e.canonical_name, $1) > $3 OR similarity(a.alias, $1) > $3)
           AND e.first_seen_chapter <= $2 AND e.novel_id = $4
+          AND (e.type=$5 OR (e.type IN ('faction','organization') AND $5 IN ('faction','organization')))
+        GROUP BY e.id,e.canonical_name
         ORDER BY sim DESC
         LIMIT 5;
         """,
-        name_clean, chapter, settings.FUZZY_MATCH_THRESHOLD, novel_id
+        name_clean, chapter, settings.FUZZY_MATCH_THRESHOLD, novel_id, entity_type
     )
 
     candidates = [dict(r) for r in rows]
@@ -216,7 +224,8 @@ async def resolve_entity(
                 logger.warning(f"Standard JSON decoding failed for disambiguation: {json_err}. Attempting json-repair...")
                 match_data = json_repair.loads(clean_resp)
             match_id = match_data.get("match_id")
-            if match_id != "NEW" and match_id is not None:
+            allowed_candidate_ids = {int(candidate["id"]) for candidate in candidates}
+            if match_id != "NEW" and match_id is not None and int(match_id) in allowed_candidate_ids:
                 logger.info(f"Disambiguator matched '{name_clean}' to ID {match_id}. Reason: {match_data.get('reason')}")
                 return int(match_id)
         except Exception as e:
@@ -231,10 +240,11 @@ async def resolve_entity(
             SELECT id, 1 - (name_embedding <=> $1::vector) AS sim
             FROM entities
             WHERE first_seen_chapter <= $2 AND novel_id = $3
+              AND (type=$4 OR (type IN ('faction','organization') AND $4 IN ('faction','organization')))
             ORDER BY name_embedding <=> $1::vector
             LIMIT 1;
             """,
-            emb_str, chapter, novel_id
+            emb_str, chapter, novel_id, entity_type
         )
         if row and row["sim"] > settings.SEMANTIC_MATCH_THRESHOLD:
             logger.info(f"Semantic match resolved '{name_clean}' to ID {row['id']} (similarity {row['sim']:.3f})")
@@ -256,10 +266,10 @@ async def resolve_entity(
     await conn.execute(
         """
         INSERT INTO entity_aliases (novel_id, entity_id, alias, revealed_at_chapter)
-        VALUES ($1, $2, $3, 0.0)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT DO NOTHING;
         """,
-        novel_id, entity_id, name_clean
+        novel_id, entity_id, name_clean, chapter,
     )
     
     logger.info(f"Unresolved mention. Created new Entity '{name_clean}' (ID: {entity_id}) at Chapter {chapter}.")
@@ -271,8 +281,20 @@ async def merge_entities(novel_id: int, keep_id: int, drop_id: int, conn: asyncp
     updating facts, relations, timelines, events, and aliases.
     """
     logger.info(f"Merging entity ID {drop_id} into keep ID {keep_id}...")
-    
+
+    if keep_id == drop_id:
+        raise ValueError("keep and drop entity ids must differ")
     async with conn.transaction():
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock($1::bigint);",
+            7_200_000_000_000_000 + int(novel_id),
+        )
+        rows = await conn.fetch(
+            "SELECT id FROM entities WHERE novel_id=$1 AND id=ANY($2::bigint[]) FOR UPDATE;",
+            novel_id, [keep_id, drop_id],
+        )
+        if {int(row["id"]) for row in rows} != {keep_id, drop_id}:
+            raise ValueError("both entities must belong to the supplied novel")
         # 1. Update facts
         await conn.execute(
             "UPDATE entity_facts SET entity_id = $1 WHERE entity_id = $2;", 
@@ -291,7 +313,7 @@ async def merge_entities(novel_id: int, keep_id: int, drop_id: int, conn: asyncp
         
         # 3. Update events participants (participants is a BIGINT array)
         await conn.execute(
-            "UPDATE events SET participants = array_replace(participants, $2, $1) WHERE $2 = ANY(participants);", 
+            "UPDATE events SET participants=ARRAY(SELECT DISTINCT value FROM unnest(array_replace(participants,$2,$1)) value ORDER BY value) WHERE $2=ANY(participants);",
             keep_id, drop_id
         )
         
@@ -299,6 +321,62 @@ async def merge_entities(novel_id: int, keep_id: int, drop_id: int, conn: asyncp
         await conn.execute(
             "UPDATE events SET location_id = $1 WHERE location_id = $2;", 
             keep_id, drop_id
+        )
+
+        # 4b. Move bounded-memory temporal references. Activity has a composite
+        # key, so aggregate collisions before deleting the dropped rows.
+        activity_rows = await conn.fetch(
+            """
+            SELECT novel_id,chapter,mention_count,claim_count,event_count,salience,
+                   source_chunk_ids,pipeline_version
+            FROM entity_activity WHERE entity_id=$1;
+            """,
+            drop_id,
+        )
+        for row in activity_rows:
+            await conn.execute(
+                """
+                INSERT INTO entity_activity
+                  (novel_id,entity_id,chapter,mention_count,claim_count,event_count,salience,
+                   source_chunk_ids,pipeline_version)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                ON CONFLICT (novel_id,entity_id,chapter,pipeline_version) DO UPDATE SET
+                  mention_count=entity_activity.mention_count+EXCLUDED.mention_count,
+                  claim_count=entity_activity.claim_count+EXCLUDED.claim_count,
+                  event_count=entity_activity.event_count+EXCLUDED.event_count,
+                  salience=entity_activity.salience+EXCLUDED.salience,
+                  source_chunk_ids=ARRAY(
+                    SELECT DISTINCT value FROM unnest(
+                      entity_activity.source_chunk_ids || EXCLUDED.source_chunk_ids
+                    ) value ORDER BY value
+                  );
+                """,
+                row["novel_id"], keep_id, row["chapter"], row["mention_count"],
+                row["claim_count"], row["event_count"], row["salience"],
+                row["source_chunk_ids"], row["pipeline_version"],
+            )
+        await conn.execute("DELETE FROM entity_activity WHERE entity_id=$1;", drop_id)
+        await conn.execute(
+            "UPDATE entity_state_transitions SET entity_id=$1 WHERE entity_id=$2;",
+            keep_id, drop_id,
+        )
+        await conn.execute(
+            "UPDATE entity_state_transitions SET perspective_entity_id=$1 WHERE perspective_entity_id=$2;",
+            keep_id, drop_id,
+        )
+        await conn.execute(
+            "UPDATE relationship_state_transitions SET source_id=$1 WHERE source_id=$2;",
+            keep_id, drop_id,
+        )
+        await conn.execute(
+            "UPDATE relationship_state_transitions SET target_id=$1 WHERE target_id=$2;",
+            keep_id, drop_id,
+        )
+        await conn.execute(
+            "UPDATE plot_thread_updates SET participants=ARRAY(SELECT DISTINCT value FROM "
+            "unnest(array_replace(participants,$2,$1)) value ORDER BY value) "
+            "WHERE $2=ANY(participants);",
+            keep_id, drop_id,
         )
         
         # 5. Union entity aliases
@@ -309,27 +387,29 @@ async def merge_entities(novel_id: int, keep_id: int, drop_id: int, conn: asyncp
         for row in aliases:
             await conn.execute(
                 """
-                INSERT INTO entity_aliases (entity_id, alias, revealed_at_chapter)
-                VALUES ($1, $2, $3)
+                INSERT INTO entity_aliases (novel_id,entity_id,alias,revealed_at_chapter)
+                VALUES ($1,$2,$3,$4)
                 ON CONFLICT (entity_id, alias) DO UPDATE
                 SET revealed_at_chapter = LEAST(entity_aliases.revealed_at_chapter, EXCLUDED.revealed_at_chapter);
                 """,
-                keep_id, row["alias"], row["revealed_at_chapter"]
+                novel_id, keep_id, row["alias"], row["revealed_at_chapter"]
             )
             
         # 5b. Move per-chapter descriptions (keep the surviving entity's on conflict)
         await conn.execute(
             """
-            INSERT INTO entity_descriptions (entity_id, chapter, description)
-            SELECT $1, chapter, description FROM entity_descriptions WHERE entity_id = $2
+            INSERT INTO entity_descriptions (novel_id,entity_id,chapter,description)
+            SELECT $1,$2,chapter,description FROM entity_descriptions WHERE entity_id=$3
             ON CONFLICT (entity_id, chapter) DO NOTHING;
             """,
-            keep_id, drop_id
+            novel_id, keep_id, drop_id
         )
 
-        # 6. Delete old aliases & identity links (descriptions cascade with the entity)
+        # 6. Fold identity links, remove self-links, then delete old aliases.
+        await conn.execute("UPDATE identity_links SET entity_a=$1 WHERE entity_a=$2;", keep_id, drop_id)
+        await conn.execute("UPDATE identity_links SET entity_b=$1 WHERE entity_b=$2;", keep_id, drop_id)
+        await conn.execute("DELETE FROM identity_links WHERE entity_a=entity_b;")
         await conn.execute("DELETE FROM entity_aliases WHERE entity_id = $1;", drop_id)
-        await conn.execute("DELETE FROM identity_links WHERE entity_a = $1 OR entity_b = $1;", drop_id)
         
         # 7. Delete old entity
         await conn.execute("DELETE FROM entities WHERE id = $1;", drop_id)

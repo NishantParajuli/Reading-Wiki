@@ -27,9 +27,11 @@ class CodexExtractionTransactionApi(Protocol):
     """Codex-owned half of the atomic Reading/Codex extraction commit."""
 
     async def commit_extraction(
-        self, novel_id: int, chapter: float, data: dict, running_summary: str,
+        self, novel_id: int, chapter: float, data: dict, chapter_summary: str,
         *, chapter_snapshot: dict, expected_source_hash: str,
         resolved_refs: dict[str, int | None], roster_refs: dict[str, int],
+        thread_refs: dict[str, int], memory_targets: list[dict],
+        context_manifest: dict, context_sha256: str, context_token_count: int,
         run_id: Any | None, model_label: str | None, force: bool,
     ) -> dict: ...
 

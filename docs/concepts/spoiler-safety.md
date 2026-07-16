@@ -35,13 +35,14 @@ allowed the full chapter span (it's their text). The UI slider is a convenience 
 
 | Layer | Mechanism |
 |---|---|
-| **Schema** | every codex-owned row carries a chapter key: `entity_facts.chapter`, `relationships.chapter`, `events.chapter`, `chunks.chapter`, `entities.first_seen_chapter`, `entity_aliases.revealed_at_chapter`, `identity_links.revealed_at_chapter`, `entity_descriptions.chapter` |
+| **Schema** | every generated claim/state/memory row carries a chapter or `through_chapter`: facts, relationships, events, chunks, entities, aliases, identities, descriptions, summaries, transitions, threads, and context manifests |
 | **SQL** | every read in `postgres_queries.py` / `retrieval/tools.py` filters `<= ceiling` — entities you haven't met don't exist; aliases/identities resolve only past their reveal chapter; profiles show the description *as of* your ceiling |
 | **Retrieval** | BM25 and dense search both take the ceiling; fusion/rerank operate only on already-filtered candidates; `get_chunk` returns `None` beyond the bound (hard refusal, not a filtered result) |
 | **Agent** | `novel_id` and `ceiling` are injected server-side into every tool call — the model's own arguments cannot name a different novel or a higher ceiling |
 | **Identity folding** | `get_connected_personas` walks identity links *revealed within the ceiling* only, so "the masked swordsman" and the protagonist unify exactly when the story says so |
 | **Caches** | `wiki_cache` and `query_cache` are **keyed by ceiling** — an answer computed for ceiling 40 can never be served to a ceiling-20 reader |
-| **Forward-only extraction** | chapters are extracted in ascending order; each chapter's facts are stamped with that chapter; the running summary through chapter K contains only chapters ≤ K |
+| **Forward-only extraction** | chapters are extracted ascending; facts/transitions are chapter-stamped; chapter/checkpoint/volume memory carries exact through/source hashes and contains only grounded children ≤ K |
+| **Bounded context** | extraction sees selected pre-chapter entities/current state, three recent summaries, completed hierarchical memory, relevant open threads, and current chunks; the full entity table is never put in a prompt |
 | **Recap** | same trusted ceiling, same cache keying (`(novel, ceiling)`), same filtered evidence |
 
 ## Adjacent integrity guards (same philosophy)

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -44,6 +45,35 @@ def _expected_artifacts(root, input_manifest):
             ])
         return expected
     return []
+
+
+def _codex_chapter_text(root, input_manifest):
+    """Read only the final current-chapter section of the sealed task bundle."""
+    refs = [
+        ref for ref in input_manifest.get("inputs", [])
+        if ref.get("role") == "codex_task_bundle"
+    ]
+    if len(refs) != 1:
+        return None, "codex input must contain exactly one task bundle"
+    input_root = os.path.realpath(os.path.join(root, "input"))
+    path = os.path.realpath(os.path.join(input_root, str(refs[0].get("path") or "")))
+    if (
+        os.path.commonpath([input_root, path]) != input_root
+        or not os.path.isfile(path)
+        or os.path.islink(path)
+    ):
+        return None, "codex task bundle is missing or unsafe"
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            task = handle.read()
+    except OSError:
+        return None, "codex task bundle is unreadable"
+    marker = "\n\n## Current chapter chunks\n\n"
+    if marker not in task:
+        return None, "codex task bundle lacks the current chapter section"
+    # rsplit fails closed if hostile chapter text repeats the heading: it can
+    # shrink the accepted suffix, but cannot admit text from schema/memory/drafts.
+    return task.rsplit(marker, 1)[1], None
 
 
 def finalize_manifest(root):
@@ -213,6 +243,7 @@ def validate(root):
     if manifest.get("status") != "complete" or not isinstance(manifest.get("artifacts"), list):
         return "the final manifest is not complete"
     artifacts_by_role = {}
+    artifact_contract = set()
     for ref in manifest["artifacts"]:
         if not isinstance(ref, dict) or set(ref) != {"path", "sha256", "bytes", "media_type", "role"}:
             return "an artifact reference has missing or extra fields"
@@ -236,6 +267,11 @@ def validate(root):
         if len(data) != ref.get("bytes") or hashlib.sha256(data).hexdigest() != ref.get("sha256"):
             return "a listed artifact size or hash is wrong"
         artifacts_by_role.setdefault(ref["role"], []).append(path)
+        artifact_contract.add((rel, ref["role"], ref["media_type"]))
+    expected_contract = set(_expected_artifacts(root, input_manifest))
+    if (artifact_contract != expected_contract
+            or len(manifest["artifacts"]) != len(expected_contract)):
+        return "the final manifest artifact paths, roles, or media types do not match the workload contract"
     if input_manifest.get("workload") in {"codex_extract", "codex_verify"}:
         extraction_paths = artifacts_by_role.get("codex_extraction", [])
         if len(extraction_paths) != 1:
@@ -256,6 +292,92 @@ def validate(root):
                 "codex source_sha256 must copy input/schema.json source_sha256 exactly; "
                 "do not use the chapter.md artifact hash from input/manifest.json"
             )
+        required_groups = schema.get("required_groups") or []
+        required_fields = {
+            "schema_version", "chapter", "source_sha256", "warnings", *required_groups,
+        }
+        if set(extraction) != required_fields or extraction.get("schema_version") != "2.0":
+            return "codex extraction must match the complete v2 top-level shape"
+        if any(not isinstance(extraction.get(group), list) for group in required_groups):
+            return "every codex extraction group must be an array"
+        allowed_chunks = set(schema.get("allowed_chunk_ids", []))
+        allowed_entities = set(schema.get("allowed_entity_refs", []))
+        allowed_threads = set(schema.get("allowed_thread_refs", []))
+        chapter_text, chapter_error = _codex_chapter_text(root, input_manifest)
+        if chapter_error:
+            return chapter_error
+        mention_refs = set()
+        for mention in extraction.get("mentions", []):
+            if not isinstance(mention, dict):
+                return "codex mentions must be objects"
+            ref = mention.get("entity_ref")
+            if (not isinstance(ref, str) or not re.fullmatch(r"m[1-9][0-9]*", ref)
+                    or ref in mention_refs or ref in allowed_entities):
+                return "codex mention refs must be unique new mN refs"
+            surface = mention.get("surface_form")
+            if (
+                not isinstance(surface, str)
+                or not surface.strip()
+                or re.search(
+                    rf"(?<!\w){re.escape(surface.strip())}(?!\w)",
+                    chapter_text,
+                    re.IGNORECASE,
+                ) is None
+            ):
+                return "codex mention surface must occur literally in the current chapter chunks"
+            mention_refs.add(ref)
+        permitted_entities = allowed_entities | mention_refs
+        ref_keys = {
+            "entity_ref", "source_ref", "target_ref", "persona_ref", "true_entity_ref",
+            "location_ref", "value_entity_ref", "perspective_ref",
+        }
+        material_groups = (
+            "facts", "relationships", "events", "identity_reveals", "new_aliases",
+            "state_changes", "relationship_state_changes", "thread_updates",
+        )
+        seen_thread_refs = set()
+        for group in material_groups:
+            for item in extraction.get(group, []):
+                if not isinstance(item, dict):
+                    return f"codex {group} entries must be objects"
+                chunks = item.get("source_chunk_ids")
+                if (not isinstance(chunks, list) or not chunks
+                        or not all(isinstance(value, int) and value in allowed_chunks for value in chunks)):
+                    return f"codex {group} entry must cite only supplied chunks"
+                refs = [item.get(key) for key in ref_keys if item.get(key) is not None]
+                refs.extend(item.get("participant_refs") or [])
+                if not all(isinstance(ref, str) and ref in permitted_entities for ref in refs):
+                    return f"codex {group} entry contains an unresolved entity ref"
+                if group == "thread_updates":
+                    thread_ref = item.get("thread_ref")
+                    if thread_ref in seen_thread_refs:
+                        return "a codex thread can have at most one update per chapter"
+                    seen_thread_refs.add(thread_ref)
+                    if thread_ref not in allowed_threads and (
+                        not isinstance(thread_ref, str)
+                        or not re.fullmatch(r"p[1-9][0-9]*", thread_ref)
+                        or item.get("operation") != "open"
+                        or not item.get("title")
+                    ):
+                        return "a new codex thread must use pN, operation open, and a title"
+
+        targets = schema.get("memory_targets", [])
+        updates = extraction.get("memory_updates", [])
+        if not all(isinstance(item, dict) for item in [*targets, *updates]):
+            return "codex memory targets and updates must be objects"
+        target_kinds = [target.get("kind") for target in targets]
+        update_kinds = [update.get("kind") for update in updates]
+        if not all(isinstance(kind, str) for kind in [*target_kinds, *update_kinds]):
+            return "codex memory target and update kinds must be strings"
+        target_kinds.sort()
+        update_kinds.sort()
+        if update_kinds != target_kinds:
+            return "codex memory updates must exactly match the supplied targets"
+        for update in updates:
+            chunks = update.get("evidence_chunk_ids")
+            if (not isinstance(chunks, list) or not chunks
+                    or not all(isinstance(value, int) and value in allowed_chunks for value in chunks)):
+                return "codex memory updates must cite only supplied chunks"
     if input_manifest.get("workload") == "translate_batch":
         error = _validate_translation_artifacts(root, input_manifest, artifacts_by_role)
         if error:

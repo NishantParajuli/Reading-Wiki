@@ -128,6 +128,34 @@ class CodexQueryService:
             evidence = {
                 "fact_ids": [fact["id"] for fact in profile["facts"]],
                 "rel_ids": [rel["id"] for rel in relationships],
+                "state_transition_ids": sorted({
+                    int(entry["transition_id"])
+                    for state in (profile.get("current_state") or {}).values()
+                    for value in state.values()
+                    for entry in (value if isinstance(value, list) else [value])
+                    if isinstance(entry, dict) and entry.get("transition_id") is not None
+                }),
+                "relationship_state_transition_ids": [
+                    int(item["id"]) for item in profile.get("relationship_state") or []
+                ],
+                "thread_update_ids": [
+                    int(item["update_id"]) for item in profile.get("open_threads") or []
+                ],
+                "chunk_ids": sorted({
+                    int(chunk_id)
+                    for state in (profile.get("current_state") or {}).values()
+                    for value in state.values()
+                    for entry in (value if isinstance(value, list) else [value])
+                    if isinstance(entry, dict)
+                    for chunk_id in entry.get("source_chunk_ids") or []
+                } | {
+                    int(chunk_id)
+                    for item in (
+                        (profile.get("relationship_state") or [])
+                        + (profile.get("open_threads") or [])
+                    )
+                    for chunk_id in item.get("source_chunk_ids") or []
+                }),
             }
             await self._queries.save_profile(
                 novel_id, entity_id, boundary.ceiling, rendered,
@@ -222,7 +250,7 @@ class CodexCommandService:
     def __init__(
         self, catalog: CatalogEditPort, backend: BackendResolutionPort,
         work: CodexWorkPort, quota: CodexQuotaPort, merger: EntityMergePort,
-        agy_max_attempts: int,
+        agy_max_attempts: int, pipeline_version: str = "2.0",
     ):
         self._catalog = catalog
         self._backend = backend
@@ -230,6 +258,7 @@ class CodexCommandService:
         self._quota = quota
         self._merger = merger
         self._agy_max_attempts = agy_max_attempts
+        self._pipeline_version = pipeline_version
 
     async def schedule_build(
         self, novel_id: int, principal: Principal, command: BuildCodex
@@ -242,10 +271,9 @@ class CodexCommandService:
             raise ValidationFailed(
                 "from_chapter must be less than or equal to to_chapter."
             )
-        idem = (
-            f"codex:novel{novel_id}:{command.from_chapter}:"
-            f"{command.to_chapter}:{int(command.force)}"
-        )
+        # A bounded context for chapter N depends on commits through N-1. One
+        # active build per novel prevents overlapping ranges from racing.
+        idem = f"codex:{self._pipeline_version}:novel{novel_id}"
         existing = await self._work.find_active(idem)
         if existing is not None:
             return {
@@ -265,6 +293,7 @@ class CodexCommandService:
                     "force": command.force,
                     "from_chapter": command.from_chapter,
                     "to_chapter": command.to_chapter,
+                    "pipeline_version": self._pipeline_version,
                 },
                 idempotency_key=idem, decision=decision,
                 max_attempts=(

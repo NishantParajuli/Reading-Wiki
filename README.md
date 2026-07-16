@@ -217,7 +217,7 @@ Full topology + first boot + release/rollback:
 | AI-assisted changes | [AGENTS.md](AGENTS.md) (documentation-impact and review policy) |
 | Product & setup | [what-is-tideglass](docs/getting-started/what-is-tideglass.md) · [local-setup](docs/getting-started/local-setup.md) · [repo-tour](docs/getting-started/repo-tour.md) |
 | Concepts | [primer](docs/concepts/primer.md) · [spoiler-safety](docs/concepts/spoiler-safety.md) · [glossary](docs/concepts/glossary.md) |
-| Architecture | [overview](docs/architecture/overview.md) · [module-anatomy](docs/architecture/module-anatomy.md) · [composition-root](docs/architecture/composition-root.md) · [workflows](docs/architecture/workflows-and-transactions.md) · [platform](docs/architecture/platform.md) · [enforcement](docs/architecture/enforcement.md) |
+| Architecture | [overview](docs/architecture/overview.md) · [ADRs](docs/README.md#architecture) · [module-anatomy](docs/architecture/module-anatomy.md) · [composition-root](docs/architecture/composition-root.md) · [workflows](docs/architecture/workflows-and-transactions.md) · [platform](docs/architecture/platform.md) · [enforcement](docs/architecture/enforcement.md) |
 | Future implementation | [PostgreSQL-centered platform evolution plan](implementation-plan/postgres-platform-evolution-plan.md) *(proposal, not current behavior)* |
 | Modules | [map](docs/modules/README.md) + one doc per module |
 | Pipelines | [jobs & quota](docs/pipelines/background-jobs-and-quota.md) · [scraping](docs/pipelines/scraping.md) · [import](docs/pipelines/file-import.md) · [translation](docs/pipelines/translation.md) · [codex](docs/pipelines/codex-build-and-ask.md) · [narration](docs/pipelines/narration.md) · [AI backends](docs/pipelines/ai-backends.md) |

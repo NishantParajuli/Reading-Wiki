@@ -12,7 +12,7 @@ when production SQL violates it. Keep this page and that registry in the same ch
 | Reading | `chapters`, `reading_progress`, `bookmarks`, `chapter_overlays`, `contributions` |
 | Acquisition | `sources`, `import_jobs`, `assets` |
 | Translation | `translation_glossary` |
-| Codex | `chunks`, `entities`, `entity_descriptions`, `entity_aliases`, `identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state`, `wiki_cache`, `query_cache` |
+| Codex | `chunks`, `entities`, `entity_descriptions`, `entity_aliases`, `identity_links`, `entity_facts`, `relationships`, `events`, `chapter_summaries`, `memory_segments`, `entity_activity`, `entity_state_transitions`, `relationship_state_transitions`, `plot_threads`, `plot_thread_updates`, `extraction_contexts`, `extraction_state`, `wiki_cache`, `query_cache` |
 | Narration | `tts_jobs`, `chapter_audio` |
 | Work | `jobs` |
 | AI Execution | `user_ai_backend_policies`, `ai_request_locks`, `provider_budget`, `ai_execution_runs`, `ai_worker_heartbeats` |

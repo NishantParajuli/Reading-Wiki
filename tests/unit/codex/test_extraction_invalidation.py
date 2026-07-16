@@ -36,12 +36,12 @@ async def test_rebuilding_invalidated_checkpoint_clears_orphaned_artifacts(monke
     async def no_op(*_args, **_kwargs):
         return None
 
-    async def no_chunks(*_args, **_kwargs):
-        return "", set(), []
+    async def one_chunk(*_args, **_kwargs):
+        return "[chunk 1]\nChapter text.", {1}, [1]
 
     monkeypatch.setattr(extract, "_clear_extraction_chapter", clear_chapter)
     monkeypatch.setattr(extract, "clear_caches", no_op)
-    monkeypatch.setattr(extract, "_load_chapter_chunks", no_chunks)
+    monkeypatch.setattr(extract, "_load_chapter_chunks", one_chunk)
 
     class Connection:
         async def fetchrow(self, *_args, **_kwargs):

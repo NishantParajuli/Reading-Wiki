@@ -12,7 +12,8 @@ range-limitable; a rebuild after new chapters only processes the new range.
 
 ### 1. Chunk
 
-Readable chapter text (Reading port) → sentence/paragraph-bounded passages of
+Readable narrative text (`chapter`/`interlude`; front/back matter is cleanup-only) →
+sentence/paragraph-bounded passages of
 ~`CHUNK_TARGET_TOKENS` (500) with `CHUNK_OVERLAP` (80) token overlap (tiktoken-counted),
 stored in `chunks` with `(novel_id, chapter, chunk_index)` identity. Chapter-bounded
 chunks are what make `WHERE chapter <= ceiling` airtight for retrieval.
@@ -22,56 +23,99 @@ unchanged passage keeps its row id and embedding, while changed passages clear o
 own embeddings. If a changed chapter already has an `extraction_state` checkpoint, re-chunk
 refuses until the dependent extraction is explicitly invalidated; this prevents stored
 citations from silently becoming orphaned.
+Stale front/back-matter chunks are removed during a v2 build. If legacy structured
+claims still depend on one of those sections, chunking fails closed and asks the operator
+to run `reset-codex` before rebuilding.
 
 ### 2. Embed
 
 Every chunk with `embedding IS NULL` → `EMBED_MODEL` (batched) → pgvector column
 (HNSW cosine index when `EMBED_DIM ≤ 2000`).
 
-### 3. Extract — forward-only, in strict chapter order
+### 3. Extract — bounded memory v2, forward-only in strict chapter order
 
 For each chapter ascending (never backwards — Invariant 2 of the pipeline):
 
-1. Inputs: the chapter's chunks (id-marked so the model can cite them), the **running
-   story-so-far summary** through the previous chapter (`extraction_state`), and a
-   compact **roster of already-known entities** (so the model links "the young master"
-   to an existing entity instead of minting a duplicate).
-2. `MODEL_FLASH` returns JSON: new/updated entities (+ per-chapter descriptions),
-   facts (typed, chunk-cited), relationships, events, aliases, and **identity reveals**
-   with the chapter they're revealed in. Parsing is fence/`json-repair`-tolerant with
-   one temperature-bumped re-ask on malformed output; model-supplied provenance chunk
-   ids are filtered to the chapter's real ids.
-3. **Verification pass** (`EXTRACTION_VERIFY`, default on): a second call over the same
-   chapter catches missed facts and — critically — missed identity reveals. (+1 call
-   per chapter.)
-4. **Entity linking** (`link.py`) per mention: exact name/alias match → trigram fuzzy
-   (considered ≥ `FUZZY_MATCH_THRESHOLD` 0.35; a *single* candidate auto-accepts only
-   ≥ `FUZZY_AUTO_ACCEPT` 0.6) → name-embedding similarity
-   (≥ `SEMANTIC_MATCH_THRESHOLD` 0.85) → LLM disambiguation for the gray zone → create
-   a new entity. Wrong merges are repairable later (`merge-entities`).
-5. **Atomic commit** — the `commit_codex_extraction` workflow: re-read the chapter *with
-   a row lock*, verify `sha256(content)` equals what the model actually read (abort
-   `source_changed` otherwise), then write all artifacts + the new running summary +
-   `extraction_state` (run id, model label, source hash) in one transaction.
-   Ceiling-relevant caches for the range are cleared.
+1. `context.py` deterministically builds a spoiler-safe bundle from only data before the
+   chapter: the last three chapter summaries (or their containing open-block children),
+   the latest completed 25-chapter checkpoint
+   and completed volume; folded entity and relationship state; relevant unresolved plot threads; and at
+   most `CODEX_CONTEXT_MAX_ENTITIES` entities. Candidates combine exact chapter
+   names/aliases, recent activity, unresolved-thread participants, graph neighbors,
+   trigram title spans, and exact pgvector similarity. Identity, state, thread, and total
+   token caps are independent; low-ranked entities are dropped first. The full entity
+   database remains available to deterministic linking but is never dumped into a prompt.
+2. `MODEL_FLASH` returns strict v2 JSON: entities, facts, relationships, events, aliases,
+   identity reveals, entity/relationship **state transitions**, important plot-thread
+   updates, and only the supplied hierarchical-memory targets. Every material item must
+   cite a real current-chapter chunk. Empty/invalid provenance is rejected rather than
+   replaced with every chapter chunk. Claims may use only supplied `eN` refs or declared
+   `mN` refs; arbitrary IDs and undeclared references never reach linking. Each new
+   mention's `surface_form` must also be a literal word-bounded current-chapter span—an
+   inferred role such as “the hero's father” is rejected even when the inference is plausible.
+3. **Review/verification:** the direct API transport makes a best-effort second extraction
+   call when `EXTRACTION_VERIFY=true` (default), retaining the valid first proposal if that
+   verifier itself fails. The AGY extraction task must self-review before writing its
+   artifacts; `AGY_SEPARATE_CODEX_VERIFY=true` adds a separate AGY verification child run
+   but is off by default. Both paths still pass the v2 proposal through trusted validation
+   and the same atomic commit checks.
+4. **Entity linking** (`link.py`) per declared mention: type-compatible exact name/alias
+   match → trigram fuzzy (`FUZZY_MATCH_THRESHOLD`; one candidate auto-accepts only above
+   `FUZZY_AUTO_ACCEPT`) → name-embedding similarity → validated gray-case decision → new
+   entity. A model can select only a supplied candidate.
+5. **Atomic commit** — `commit_codex_extraction` takes a per-novel advisory lock, re-reads
+   the chapter with a row lock, verifies `sha256(content)`, recomputes the deterministic
+   context and verifies its hash, then writes historical claims, temporal transitions,
+   activity, threads, the chapter summary, memory reducers, the context manifest, and
+   `extraction_state` together. A changed source aborts as `source_changed`; changed
+   context aborts as `stale_extraction_context` rather than reinterpreting `eN` refs.
 
-AGY durable-job retries repeat the idempotent chunking and missing-embedding passes before
-they resume extraction. Unchanged chunks retain their embeddings, so only still-missing
-vectors are purchased; a retry can therefore finish preprocessing interrupted by worker or
-database failure. Extraction skips chapters already checkpointed by that same job and commits
-complete-but-uncommitted artifacts when available. A force extraction replaces the chapter
-being committed and invalidates its checkpoint plus the downstream checkpoint suffix, whose
-running summaries depend on it. Later builds replace any orphaned chapter artifacts while
-recreating those checkpoints in chronological order.
+#### Hierarchical summaries and current state
 
-For the AGY transport, the same chapter chunks, prior summary, roster, exact source hash, and
-output shape are packed into one `input/task.md` file, eliminating the old sequence of
-separate chapter, roster, schema, and summary reads.
+- Chapter summaries use that chapter text only, target 150–250 tokens, and are rejected
+  above `CODEX_CHAPTER_SUMMARY_MAX_TOKENS` (300 by default).
+- Checkpoints are emitted only after 25 narrative chapters (`chapter`/`interlude`) inside
+  one `part_label` boundary. A real labeled part ending also closes its final short block.
+  Each immutable completed row is recomputed from grounded child summaries plus the
+  current chapter; partial/open checkpoint summaries are never generated or fed back
+  into themselves. Up to 24 grounded summaries in the current open block remain available
+  as bounded context, so chapters between checkpoint boundaries do not lose the active arc.
+- A volume summary is generated only on the final narrative chapter of a non-empty,
+  database-supplied `part_label`. AI never infers boundaries. The immutable row stores
+  start/end/through chapters, label, source and checkpoint hashes, evidence, model/run,
+  and pipeline version. Books without real labels simply have no volume summaries.
+- Historical facts remain append-only. Mutable truth uses ordered `set`/`clear`/`add`/
+  `remove`/`confirm`/`contradict` transitions with certainty, perspective, narrative
+  scope, provenance, and supersession. Reads fold only transitions within the requested
+  ceiling, so an old location is not equally current after a move.
+
+AGY retries repeat idempotent chunking and missing-embedding work, then resume only when
+the saved context hash still matches. Force extraction invalidates all derived v2 state,
+summaries, contexts, and memory from the changed chapter onward. Builds recreate the suffix
+chronologically and prune omitted entities only when a completed v2 first-chapter extraction
+exists and nothing references the entity. One active job key per novel/pipeline version and
+the commit advisory lock prevent overlapping ranges from racing.
+Starting in the middle of an unbuilt v2 checkpoint block fails closed: every prior child
+summary and completed preceding checkpoint must exist before extraction continues. This is
+why the initial v1→v2 rollout starts at the book's first narrative chapter.
+
+The two transports are semantically equivalent, not call-for-call identical. Both use the
+same deterministic bounded context, v2 proposal schema, reducer targets, provenance/ref
+rules, temporal/thread semantics, linking constraints, source/context revalidation, and
+`commit_codex_extraction` transaction. Direct API normally performs extraction → optional
+verification → separate chapter summary, with individual gray-case linking calls when
+needed. AGY normally performs extraction + self-review + chapter summary in one isolated
+artifact run, then batches ambiguous mentions into one child run; its separate verifier is
+optional. For AGY, the chapter chunks, bounded-memory JSON, exact source hash, and output
+shape are packed into one `input/task.md` file.
 Hash-pinned task instructions are inlined in the initial print prompt instead of activated as
 a workspace skill. The model writes only `extraction.json`, `running-summary.md`, and
-`audit.json`; the trusted stop hook creates `manifest.json`. This reduced the pinned
-Lord of the Mysteries chapter 1–5 canaries to 6–7 model requests each, versus historical
-34–45-request failing runs, without committing canary output to the database.
+`audit.json`; the trusted stop hook creates `manifest.json`. Plugin `1.3.1` was qualified
+with a real Lord of the Mysteries chapter-1 v2 run that passed trusted validation and
+committed atomically in a disposable database under an eight-request ceiling. That is an
+early canary, not evidence that late/checkpoint/final-volume chapters have passed; those
+remain required rollout gates. The dated evidence is recorded in
+[../testing.md](../testing.md).
 
 ### 4. Index
 
@@ -88,7 +132,8 @@ into **every** query; all SQL filters by it (`first_seen_chapter`,
 `revealed_at_chapter`, fact/relationship/event `chapter`, chunk `chapter`).
 
 Surfaces: stats, entity browse/search, entity profile (per-chapter description history +
-facts + relationships + timeline + identity banners — profiles synthesize via LLM on
+bounded recent facts + folded current/relationship state + relevant open threads +
+relationships/timeline/identity banners — profiles synthesize via LLM on
 first view and cache in `wiki_cache` per `(entity, ceiling)`), timelines, and Ask.
 
 ## Ask (agentic Q&A)
@@ -112,7 +157,10 @@ first view and cache in `wiki_cache` per `(entity, ceiling)`), timelines, and As
    `get_entity_profile`, `get_relationships`, `get_identity_links`, `get_timeline`,
    `list_entities`, `get_connected_personas` (recursive persona folding across
    *revealed* identity links only).
-5. **Citations** — inline markers resolved to structured
+5. **Hard read budgets** — facts, relationships, timelines, and entity browse have SQL
+   limits; raw retrieval evidence and distilled evidence have separate total token budgets.
+   Exhaustion stops tool expansion and synthesizes from what was gathered.
+6. **Citations** — inline markers resolved to structured
    `{kind, id, chapter, snippet}` (popover-backed in the UI); evidence ids + answer
    cached in `query_cache`.
 
@@ -129,6 +177,10 @@ trusted ceiling, a story-so-far synthesis with citations, cached per
   guard); import commits invalidate affected ranges.
 - **Duplicate entities** ⇒ `POST …/merge-entities` / CLI `merge` (re-points everything,
   clears caches).
+- **Full structured rebuild** ⇒ `reset-codex NOVEL_ID` (confirmation required unless
+  `--force`). It refuses while a Codex job is active and deletes derived knowledge/caches
+  while preserving chunks and embeddings; then run the full Build (or `chunk` before
+  `extract`) so stale non-narrative chunks are cleaned before indexing.
 - Spoiler regression suites: `eval/spoiler_tests.py`,
   `eval/spoiler_boundary_tests.py`; cost-control suite:
   `eval/ai_cost_controls_tests.py`.

@@ -9,6 +9,7 @@
   "import-worker",
   "merge",
   "rebuild-bm25",
+  "reset-codex",
   "reset-db",
   "scrape",
   "translate"

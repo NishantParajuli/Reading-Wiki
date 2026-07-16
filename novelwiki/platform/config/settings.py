@@ -85,11 +85,6 @@ class Settings(BaseSettings):
     ASK_MAX_TOOL_CALLS_PER_ITER: int = 4          # tool calls processed per planner iteration
 
     # ── Extraction accuracy knobs ──
-    # The running "story-so-far" summary is rebuilt each chapter from this many
-    # leading characters of the chapter. Keep it large enough to cover a whole
-    # chapter (an 8k-word chapter is ~44k chars) so late-chapter developments
-    # still feed forward; lower it only to trade continuity for cost.
-    SUMMARY_INPUT_MAX_CHARS: int = 48000
     # Entity linking thresholds (pg_trgm similarity, 0..1). A fuzzy candidate must
     # clear FUZZY_MATCH_THRESHOLD to be considered at all; a *single* candidate is
     # auto-accepted only at/above FUZZY_AUTO_ACCEPT — anything in between is sent to
@@ -103,6 +98,36 @@ class Settings(BaseSettings):
     # and (critically) identity reveals the first extraction missed. Costs one
     # extra call per chapter; accuracy-first default is on.
     EXTRACTION_VERIFY: bool = True
+
+    # ── Bounded Codex memory (pipeline v2) ────────────────────────────────
+    # The provider context window is emergency headroom, not an application
+    # budget.  Every extraction is packed under these deterministic limits so
+    # chapter 1,400 costs and attends like chapter 40.
+    CODEX_PIPELINE_VERSION: str = "2.0"
+    CODEX_CONTEXT_MAX_TOKENS: int = 48_000
+    CODEX_CONTEXT_MAX_ENTITIES: int = 80
+    CODEX_CONTEXT_VECTOR_MIN_SIMILARITY: float = 0.45
+    CODEX_CONTEXT_ENTITY_TOKENS: int = 6_000
+    CODEX_CONTEXT_STATE_TOKENS: int = 2_000
+    CODEX_CONTEXT_THREAD_TOKENS: int = 1_000
+    CODEX_RECENT_SUMMARY_CHAPTERS: int = 3
+    CODEX_CHECKPOINT_CHAPTERS: int = 25
+    CODEX_CHAPTER_SUMMARY_MAX_TOKENS: int = 300
+    CODEX_CHECKPOINT_SUMMARY_MAX_TOKENS: int = 1_500
+    CODEX_VOLUME_SUMMARY_MAX_TOKENS: int = 2_000
+    CODEX_RECENT_ACTIVITY_CHAPTERS: int = 15
+    CODEX_CONTEXT_MAX_THREADS: int = 10
+
+    # UI history is paginated independently, while model-facing tools receive
+    # much smaller bounded slices.  These caps prevent a long-running
+    # protagonist from turning one profile/timeline call into a book-sized
+    # prompt.
+    CODEX_READ_MAX_FACTS: int = 200
+    CODEX_READ_MAX_RELATIONSHIPS: int = 120
+    CODEX_READ_MAX_TIMELINE_ITEMS: int = 250
+    CODEX_READ_MAX_ENTITIES: int = 200
+    CODEX_ASK_TOTAL_EVIDENCE_TOKENS: int = 30_000
+    CODEX_ASK_MAX_DIGEST_TOKENS: int = 8_000
 
     # Scraper: pick a site adapter by key (see scraper/adapters.py registry).
     SCRAPER_ADAPTER: str = "fenrirealm"
@@ -197,8 +222,8 @@ class Settings(BaseSettings):
     AGY_SUCCESS_RETENTION_HOURS: int = 24
     AGY_FAILURE_RETENTION_HOURS: int = 168
     AGY_FALLBACK_TO_API_DEFAULT: bool = False
-    AGY_PLUGIN_VERSION: str = "1.2.0"
-    AGY_PLUGIN_SHA256: str = "74e9873d0afb1f7cbe66d27e311ac9efcb2511c8e61783faa419891d229bfddb"
+    AGY_PLUGIN_VERSION: str = "1.3.1"
+    AGY_PLUGIN_SHA256: str = "f2bfaa3343a08e4a4600b99c7151b4755bfc7d105c0e406c3012e110622a9240"
     # Worker health is considered stale after this interval for /auth/me and admin UI.
     AGY_WORKER_HEALTH_TTL_SECONDS: int = 90
 

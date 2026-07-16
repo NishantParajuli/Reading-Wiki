@@ -13,9 +13,18 @@ from novelwiki.modules.codex.domain.prompts import (
     SYNTHESIS_SYSTEM, SYNTHESIS_USER, VERIFY_SYSTEM, VERIFY_USER,
     REPAIR_SYSTEM, REPAIR_USER
 )
+from novelwiki.modules.codex.adapters.outbound.ingest.chunk import get_encoder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _truncate_tokens(text: str, maximum: int) -> tuple[str, int]:
+    encoder = get_encoder()
+    tokens = encoder.encode(text or "")
+    if len(tokens) <= maximum:
+        return text, len(tokens)
+    return encoder.decode(tokens[:maximum]) + "\n[truncated at evidence token budget]", maximum
 
 # Matches inline citations in two shapes the models actually produce:
 #   keyword-first  → [Chunk 12, Chapter 5] / [Fact 29] / [Event 7, Chapter 3]   (group 1 = kind, 2 = id)
@@ -270,6 +279,9 @@ async def answer_question(
 
     digests: list[str] = []
     evidence = {"chunk_ids": set(), "fact_ids": set(), "rel_ids": set(), "event_ids": set()}
+    evidence_input_tokens = 0
+    digest_tokens = 0
+    budget_exhausted = False
 
     # 1. Pro produces an initial plan (subgoals + entities to resolve)
     try:
@@ -351,6 +363,13 @@ async def answer_question(
             raw_result = await execute_tool(
                 novel_id, tool_name, args, chapter_ceiling, runtime=runtime
             )
+
+            remaining_evidence = settings.CODEX_ASK_TOTAL_EVIDENCE_TOKENS - evidence_input_tokens
+            if remaining_evidence <= 0:
+                budget_exhausted = True
+                break
+            raw_result, used_input = _truncate_tokens(raw_result, remaining_evidence)
+            evidence_input_tokens += used_input
             _accumulate_evidence(tool_name, raw_result, evidence)
 
             distill = await runtime.ai.call_chat_completion(
@@ -361,7 +380,18 @@ async def answer_question(
                 ],
                 temperature=0.0,
             )
-            digests.append(f"Source Tool: {tool_name}({args})\nDigest:\n{distill}")
+            remaining_digest = settings.CODEX_ASK_MAX_DIGEST_TOKENS - digest_tokens
+            if remaining_digest <= 0:
+                budget_exhausted = True
+                break
+            digest_entry, used_digest = _truncate_tokens(
+                f"Source Tool: {tool_name}({args})\nDigest:\n{distill}", remaining_digest
+            )
+            digests.append(digest_entry)
+            digest_tokens += used_digest
+        if budget_exhausted:
+            logger.info("Ask retrieval stopped at the configured evidence token budget.")
+            break
 
     # 3. Pro synthesizes from the cited digests
     logger.info("Synthesizing final answer via Pro...")

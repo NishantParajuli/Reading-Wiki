@@ -57,7 +57,7 @@ not promises about a later checkout.
 | [platform](architecture/platform.md) | settings, pool/UoW, web factory (CSRF/CSP), static, audit, checker |
 | [enforcement](architecture/enforcement.md) | every automated gate + pre-merge checklist |
 | [module-ownership](architecture/module-ownership.md) | human-readable table-writer and workflow-participant map; executable authority is `TABLE_OWNERS` |
-| ADRs [001](architecture/adr-001-modular-monolith.md) · [002](architecture/adr-002-baseline-defects.md) · [003](architecture/adr-003-ai-scheduling-consistency.md) | decisions: the architecture, baseline defects, AI scheduling consistency |
+| ADRs [001](architecture/adr-001-modular-monolith.md) · [002](architecture/adr-002-baseline-defects.md) · [003](architecture/adr-003-ai-scheduling-consistency.md) · [004](architecture/adr-004-bounded-codex-memory.md) | decisions: architecture, baseline defects, AI scheduling consistency, bounded Codex memory |
 | [migration-completion](architecture/migration-completion.md) · [migration-equivalence-final](architecture/migration-equivalence-final.md) · [architecture-debt](architecture/architecture-debt.md) | dated migration evidence and debt burn-down *(historical)* |
 | [performance-baseline.json](architecture/performance-baseline.json) | executable query/endpoint/worker budgets consumed by `tools/benchmark_queries.py` |
 | [stable-compatibility-entrypoints](architecture/stable-compatibility-entrypoints.md) | the sanctioned legacy import paths |
@@ -95,11 +95,11 @@ against `HEAD` and the living references above before implementation.
 
 | Doc | Contents |
 |---|---|
-| [data/database-schema](data/database-schema.md) | all 39 created tables, table-by-table column semantics, including the intentional 38-table reset-list quirk |
+| [data/database-schema](data/database-schema.md) | all 47 created tables, table-by-table column semantics, including the intentional 46-table reset-list quirk |
 | [data/filesystem-layout](data/filesystem-layout.md) | on-disk roots, serving rules, cleanup, backup |
 | [api/http-api](api/http-api.md) | annotated route families + auth/CSRF/error conventions |
 | [api/http-route-inventory](api/http-route-inventory.md) | exact method/path/endpoint-name inventory for all 119 routes |
-| [api/cli](api/cli.md) | all 13 commands + module entrypoints + recipes |
+| [api/cli](api/cli.md) | all 14 commands + module entrypoints + recipes |
 
 ## Frontend
 

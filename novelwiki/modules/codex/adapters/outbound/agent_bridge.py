@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+
+from novelwiki.platform.config import settings
+from .ingest.chunk import get_encoder
+
 from ...domain.prompts import (
     WIKI_PROFILE_SYNTHESIS_SYSTEM, WIKI_PROFILE_SYNTHESIS_USER,
 )
@@ -53,22 +58,37 @@ class CodexAgentGateway:
             f"{rel['target_name']}: {rel['content'] or ''}"
             for rel in relationships
         ) if relationships else "No relationships recorded."
+        state = json.dumps(profile.get("current_state") or {}, ensure_ascii=False)
+        relationship_state = json.dumps(
+            profile.get("relationship_state") or [], ensure_ascii=False, default=str
+        )
+        threads = json.dumps(profile.get("open_threads") or [], ensure_ascii=False, default=str)
+        system_prompt = WIKI_PROFILE_SYNTHESIS_SYSTEM.format(
+            chapter_ceiling=ceiling.value
+        )
+        user_prompt = WIKI_PROFILE_SYNTHESIS_USER.format(
+            canonical_name=profile["canonical_name"],
+            type=profile["type"], chapter_ceiling=ceiling.value,
+            aliases=aliases, facts=facts, relationships=rels,
+            current_state=state, relationship_state=relationship_state,
+            open_threads=threads,
+        )
+        encoder = get_encoder()
+        system_tokens = len(encoder.encode(system_prompt))
+        maximum_user_tokens = max(1, settings.CODEX_CONTEXT_MAX_TOKENS - system_tokens)
+        user_tokens = encoder.encode(user_prompt)
+        if len(user_tokens) > maximum_user_tokens:
+            user_prompt = encoder.decode(user_tokens[:maximum_user_tokens]) + "\n[bounded profile input]"
         return await self._runtime.ai.call_chat_completion(
             model=model,
             messages=[
                 {
                     "role": "system",
-                    "content": WIKI_PROFILE_SYNTHESIS_SYSTEM.format(
-                        chapter_ceiling=ceiling.value
-                    ),
+                    "content": system_prompt,
                 },
                 {
                     "role": "user",
-                    "content": WIKI_PROFILE_SYNTHESIS_USER.format(
-                        canonical_name=profile["canonical_name"],
-                        type=profile["type"], chapter_ceiling=ceiling.value,
-                        aliases=aliases, facts=facts, relationships=rels,
-                    ),
+                    "content": user_prompt,
                 },
             ],
             temperature=0.0,

@@ -85,10 +85,23 @@ content.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `SUMMARY_INPUT_MAX_CHARS` | 48000 | chars of the chapter feeding the running summary rebuild |
 | `FUZZY_MATCH_THRESHOLD` / `FUZZY_AUTO_ACCEPT` | 0.35 / 0.6 | pg_trgm entity-linking bands (between them → LLM disambiguation) |
 | `SEMANTIC_MATCH_THRESHOLD` | 0.85 | cosine floor for the vector fallback fold-in |
-| `EXTRACTION_VERIFY` | `true` | second LLM pass per chapter (catches missed facts/identity reveals; +1 call/chapter) |
+| `EXTRACTION_VERIFY` | `true` | direct API only: best-effort second extraction call per chapter; AGY review is controlled separately |
+
+## Bounded Codex memory v2
+
+| Setting | Default | Notes |
+|---|---|---|
+| `CODEX_PIPELINE_VERSION` | `2.0` | generated-row/context version; v1 checkpoints are rebuilt in place |
+| `CODEX_CONTEXT_MAX_TOKENS` / `CODEX_CONTEXT_MAX_ENTITIES` | 48000 / 80 | hard total input ceiling and entity-count cap |
+| `CODEX_CONTEXT_VECTOR_MIN_SIMILARITY` | 0.45 | floor below which name/chapter vector candidates are ignored |
+| `CODEX_CONTEXT_ENTITY_TOKENS` / `CODEX_CONTEXT_STATE_TOKENS` / `CODEX_CONTEXT_THREAD_TOKENS` | 6000 / 2000 / 1000 | independent section budgets |
+| `CODEX_RECENT_SUMMARY_CHAPTERS` / `CODEX_CHECKPOINT_CHAPTERS` | 3 / 25 | local continuity and grounded reducer width |
+| `CODEX_CHAPTER_SUMMARY_MAX_TOKENS` / `CODEX_CHECKPOINT_SUMMARY_MAX_TOKENS` / `CODEX_VOLUME_SUMMARY_MAX_TOKENS` | 300 / 1500 / 2000 | fail-closed summary output limits |
+| `CODEX_RECENT_ACTIVITY_CHAPTERS` / `CODEX_CONTEXT_MAX_THREADS` | 15 / 10 | relevance windows |
+| `CODEX_READ_MAX_FACTS` / `CODEX_READ_MAX_RELATIONSHIPS` / `CODEX_READ_MAX_TIMELINE_ITEMS` / `CODEX_READ_MAX_ENTITIES` | 200 / 120 / 250 / 200 | hard structured-tool SQL limits |
+| `CODEX_ASK_TOTAL_EVIDENCE_TOKENS` / `CODEX_ASK_MAX_DIGEST_TOKENS` | 30000 / 8000 | whole-request raw and distilled evidence budgets |
 
 ## Translation
 
@@ -220,7 +233,7 @@ authenticated real-CLI canary passes against the pinned binary. Validated at boo
 | `AGY_MAX_MODEL_REQUESTS_PER_RUN` / `AGY_MAX_EMPTY_PLANNER_RESPONSES` | 16 / 10 | terminate runaway request/tool loops or planner warnings that continue without output progress |
 | `AGY_REQUIRED_LOADED_HOOKS` | 2 | fail closed unless exactly the tool gate and stop validator are reported active from the single pinned hook file |
 | `AGY_TRANSLATE_BATCH_CHAPTERS` / `AGY_TRANSLATE_BATCH_MAX_CHARS` | 3 / 120000 | per-invocation batch size |
-| `AGY_CODEX_BATCH_CHAPTERS` / `AGY_SEPARATE_CODEX_VERIFY` | 1 / `false` | |
+| `AGY_CODEX_BATCH_CHAPTERS` / `AGY_SEPARATE_CODEX_VERIFY` | 1 / `false` | one chapter per primary AGY run; the primary run must self-review, while `true` adds a separate verification child run |
 | `AGY_MAX_ATTEMPTS` / `AGY_PROVIDER_RETRY_MINUTES` | 2 / 30 | retry + `waiting_provider` park duration |
 | `AGY_SUCCESS_RETENTION_HOURS` / `AGY_FAILURE_RETENTION_HOURS` | 24 / 168 | workspace sweep |
 | `AGY_FALLBACK_TO_API_DEFAULT` | `false` | default fallback stance |

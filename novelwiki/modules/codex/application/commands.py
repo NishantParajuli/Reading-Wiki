@@ -3,12 +3,13 @@ from __future__ import annotations
 
 
 class CodexCommands:
-    def __init__(self, *, chunk, embed, extract, rebuild, merge):
+    def __init__(self, *, chunk, embed, extract, rebuild, merge, reset):
         self._chunk = chunk
         self._embed = embed
         self._extract = extract
         self._rebuild = rebuild
         self._merge = merge
+        self._reset = reset
 
     async def chunk(self, novel_id, force=False, start=None, end=None):
         return await self._chunk(novel_id, force=force, from_chapter=start, to_chapter=end)
@@ -24,3 +25,6 @@ class CodexCommands:
 
     async def merge(self, novel_id, keep_id, drop_id):
         return await self._merge(novel_id, keep_id, drop_id)
+
+    async def reset(self, novel_id):
+        return await self._reset(novel_id)
