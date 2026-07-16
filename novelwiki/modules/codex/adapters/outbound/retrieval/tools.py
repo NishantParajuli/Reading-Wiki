@@ -1,5 +1,11 @@
+import json
 import logging
+from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
+from novelwiki.modules.codex.adapters.outbound.context import (
+    current_entity_state,
+    current_relationship_state,
+)
 from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
 from novelwiki.modules.codex.adapters.outbound.retrieval.dense import dense_search
 from novelwiki.modules.codex.adapters.outbound.retrieval.fuse import reciprocal_rank_fusion
@@ -7,6 +13,7 @@ from novelwiki.modules.codex.adapters.outbound.retrieval.rerank import rerank_hi
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 # ── Passage Retrieval Tools ───────────────────────────────────────────────
 
@@ -114,9 +121,10 @@ async def resolve_entity(novel_id: int, name: str, chapter_ceiling: float) -> li
             FROM entities e
             LEFT JOIN entity_aliases a ON e.id = a.entity_id AND a.revealed_at_chapter <= $2
             WHERE (LOWER(e.canonical_name) = LOWER($1) OR LOWER(a.alias) = LOWER($1))
-              AND e.first_seen_chapter <= $2 AND e.novel_id = $3;
+              AND e.first_seen_chapter <= $2 AND e.novel_id = $3
+            ORDER BY e.id LIMIT $4;
             """,
-            name_clean, chapter_ceiling, novel_id
+            name_clean, chapter_ceiling, novel_id, settings.CODEX_READ_MAX_ENTITIES,
         )
 
         # 2. Fuzzy match fallback
@@ -182,9 +190,10 @@ async def get_entity_profile(novel_id: int, entity_id: int, chapter_ceiling: flo
             SELECT id, chapter, fact_type, content, data
             FROM entity_facts
             WHERE entity_id = ANY($1) AND chapter <= $2 AND novel_id = $3
-            ORDER BY chapter ASC, id ASC;
+            ORDER BY chapter DESC, id DESC
+            LIMIT $4;
             """,
-            linked_ids, chapter_ceiling, novel_id
+            linked_ids, chapter_ceiling, novel_id, settings.CODEX_READ_MAX_FACTS,
         )
 
         # 4. Retrieve aliases <= ceiling
@@ -192,7 +201,8 @@ async def get_entity_profile(novel_id: int, entity_id: int, chapter_ceiling: flo
             """
             SELECT alias, revealed_at_chapter
             FROM entity_aliases
-            WHERE entity_id = ANY($1) AND revealed_at_chapter <= $2 AND novel_id = $3;
+            WHERE entity_id = ANY($1) AND revealed_at_chapter <= $2 AND novel_id = $3
+            ORDER BY revealed_at_chapter DESC,alias LIMIT 200;
             """,
             linked_ids, chapter_ceiling, novel_id
         )
@@ -205,20 +215,50 @@ async def get_entity_profile(novel_id: int, entity_id: int, chapter_ceiling: flo
                 "content": r["content"],
                 "data": r["data"]
             }
-            for r in facts_rows
+            for r in reversed(facts_rows)
         ]
 
         aliases = [r["alias"] for r in aliases_rows]
 
+        state_by_entity = await current_entity_state(
+            conn, novel_id, linked_ids, chapter_ceiling
+        )
+        relationship_state_rows = await current_relationship_state(
+            conn, novel_id, linked_ids, chapter_ceiling,
+        )
+        thread_rows = await conn.fetch(
+            """
+            SELECT t.id,t.stable_title,u.id update_id,u.operation,u.summary,u.chapter,
+                   u.source_chunk_ids
+            FROM plot_threads t
+            JOIN LATERAL (
+              SELECT operation,summary,participants,chapter,id,source_chunk_ids
+              FROM plot_thread_updates
+              WHERE thread_id=t.id AND novel_id=$1 AND chapter <= $2
+                AND pipeline_version=$3
+              ORDER BY chapter DESC,id DESC LIMIT 1
+            ) u ON TRUE
+            WHERE t.novel_id=$1 AND t.pipeline_version=$3
+              AND u.participants && $4::bigint[]
+              AND u.operation NOT IN ('resolve','mark_dormant')
+            ORDER BY u.chapter DESC LIMIT $5;
+            """,
+            novel_id, chapter_ceiling, settings.CODEX_PIPELINE_VERSION, linked_ids,
+            settings.CODEX_CONTEXT_MAX_THREADS,
+        )
         return {
             "id": int(entity["id"]),
             "canonical_name": entity["canonical_name"],
             "type": entity["type"],
             "description": entity["description"],
             "first_seen_chapter": float(entity["first_seen_chapter"]),
-            "aliases": list(set(aliases)),
+            "aliases": sorted(set(aliases), key=str.casefold),
             "facts": facts,
-            "linked_personas": linked_ids
+            "linked_personas": linked_ids,
+            "current_state": state_by_entity,
+            "relationship_state": relationship_state_rows,
+            "open_threads": [dict(row) for row in thread_rows],
+            "limits": {"facts": settings.CODEX_READ_MAX_FACTS},
         }
 
 async def get_relationships(
@@ -254,9 +294,10 @@ async def get_relationships(
                   AND r.chapter <= $3 AND r.novel_id = $4
                   AND e1.novel_id = $4 AND e2.novel_id = $4
                   AND e1.first_seen_chapter <= $3 AND e2.first_seen_chapter <= $3
-                ORDER BY r.chapter ASC;
+                ORDER BY r.chapter DESC,r.id DESC LIMIT $5;
                 """,
-                linked_ids, other_linked_ids, chapter_ceiling, novel_id
+                linked_ids, other_linked_ids, chapter_ceiling, novel_id,
+                settings.CODEX_READ_MAX_RELATIONSHIPS,
             )
         else:
             rows = await conn.fetch(
@@ -270,9 +311,10 @@ async def get_relationships(
                 WHERE (r.source_id = ANY($1) OR r.target_id = ANY($1)) AND r.chapter <= $2 AND r.novel_id = $3
                   AND e1.novel_id = $3 AND e2.novel_id = $3
                   AND e1.first_seen_chapter <= $2 AND e2.first_seen_chapter <= $2
-                ORDER BY r.chapter ASC;
+                ORDER BY r.chapter DESC,r.id DESC LIMIT $4;
                 """,
-                linked_ids, chapter_ceiling, novel_id
+                linked_ids, chapter_ceiling, novel_id,
+                settings.CODEX_READ_MAX_RELATIONSHIPS,
             )
 
         return [
@@ -290,7 +332,7 @@ async def get_relationships(
                 "content": r["content"],
                 "data": r["data"]
             }
-            for r in rows
+            for r in reversed(rows)
         ]
 
 
@@ -353,9 +395,9 @@ async def get_timeline(novel_id: int, entity_id: int, chapter_ceiling: float) ->
             SELECT id, chapter, fact_type, content, 'fact' AS type
             FROM entity_facts
             WHERE entity_id = ANY($1) AND chapter <= $2 AND novel_id = $3
-            ORDER BY chapter ASC;
+            ORDER BY chapter DESC,id DESC LIMIT $4;
             """,
-            linked_ids, chapter_ceiling, novel_id
+            linked_ids, chapter_ceiling, novel_id, settings.CODEX_READ_MAX_TIMELINE_ITEMS,
         )
 
         # Fetch events
@@ -364,9 +406,9 @@ async def get_timeline(novel_id: int, entity_id: int, chapter_ceiling: float) ->
             SELECT id, chapter, description, 'event' AS type
             FROM events
             WHERE (participants && $1 OR location_id = ANY($1)) AND chapter <= $2 AND novel_id = $3
-            ORDER BY chapter ASC;
+            ORDER BY chapter DESC,id DESC LIMIT $4;
             """,
-            linked_ids, chapter_ceiling, novel_id
+            linked_ids, chapter_ceiling, novel_id, settings.CODEX_READ_MAX_TIMELINE_ITEMS,
         )
 
         timeline = []
@@ -389,7 +431,7 @@ async def get_timeline(novel_id: int, entity_id: int, chapter_ceiling: float) ->
 
         # Sort chronologically, then by ID
         timeline.sort(key=lambda x: (x["chapter"], x["id"]))
-        return timeline
+        return timeline[-settings.CODEX_READ_MAX_TIMELINE_ITEMS:]
 
 async def list_entities(
     novel_id: int,
@@ -431,7 +473,8 @@ async def list_entities(
             """
             args.append(f"%{name_query}%")
 
-        query += " ORDER BY canonical_name ASC;"
+        query += f" ORDER BY canonical_name ASC LIMIT ${len(args)+1};"
+        args.append(settings.CODEX_READ_MAX_ENTITIES)
         rows = await conn.fetch(query, *args)
 
         return [

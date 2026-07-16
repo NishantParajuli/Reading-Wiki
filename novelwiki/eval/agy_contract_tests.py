@@ -174,25 +174,60 @@ def test_plugin_stop_hook_enforces_codex_source_snapshot_identity(tmp_path):
     (tmp_path / "output").mkdir()
     expected_source_hash = "a" * 64
     transport_file_hash = "b" * 64
+    (tmp_path / "input" / "task.md").write_text(
+        "# NovelWiki codex task data\n\n## Current chapter chunks\n\n"
+        "[chunk 10]\nKlein woke in the room.\n"
+    )
     (tmp_path / "input" / "manifest.json").write_text(json.dumps({
         "run_id": "run-codex", "workload": "codex_extract", "chapter_ceiling": 2.0,
+        "inputs": [{"role": "codex_task_bundle", "path": "task.md"}],
     }))
+    groups = [
+        "mentions", "facts", "relationships", "events", "identity_reveals",
+        "new_aliases", "state_changes", "relationship_state_changes",
+        "thread_updates", "memory_updates",
+    ]
     (tmp_path / "input" / "schema.json").write_text(json.dumps({
-        "source_sha256": expected_source_hash,
+        "source_sha256": expected_source_hash, "required_groups": groups,
+        "memory_targets": [],
     }))
     extraction_path = tmp_path / "output" / "extraction.json"
+    summary_path = tmp_path / "output" / "running-summary.md"
+    audit_path = tmp_path / "output" / "audit.json"
+    summary_path.write_text("Grounded chapter summary.\n")
+    audit_path.write_text('{"reviewed":true}')
     manifest_path = tmp_path / "output" / "manifest.json"
 
-    def write_output(chapter, source_hash):
-        content = json.dumps({"chapter": chapter, "source_sha256": source_hash}).encode()
+    def write_output(chapter, source_hash, surface=None):
+        group_values = {group: [] for group in groups}
+        if surface is not None:
+            group_values["mentions"] = [{
+                "entity_ref": "m1", "surface_form": surface, "type": "character",
+            }]
+        content = json.dumps({
+            "schema_version": "2.0", "chapter": chapter,
+            "source_sha256": source_hash, "warnings": [],
+            **group_values,
+        }).encode()
         extraction_path.write_bytes(content)
+        artifacts = [{
+            "path": "extraction.json", "sha256": hashlib.sha256(content).hexdigest(),
+            "bytes": len(content), "media_type": "application/json",
+            "role": "codex_extraction",
+        }]
+        for path, role, media_type in (
+            (summary_path, "running_summary", "text/markdown; charset=utf-8"),
+            (audit_path, "codex_audit", "application/json"),
+        ):
+            payload = path.read_bytes()
+            artifacts.append({
+                "path": path.name, "sha256": hashlib.sha256(payload).hexdigest(),
+                "bytes": len(payload), "media_type": media_type, "role": role,
+            })
         manifest_path.write_text(json.dumps({
             "schema_version": "1.0", "run_id": "run-codex", "workload": "codex_extract",
-            "status": "complete", "artifacts": [{
-                "path": "extraction.json", "sha256": hashlib.sha256(content).hexdigest(),
-                "bytes": len(content), "media_type": "application/json",
-                "role": "codex_extraction",
-            }], "warnings": [], "completed_at": datetime.now(UTC).isoformat(),
+            "status": "complete", "artifacts": artifacts,
+            "warnings": [], "completed_at": datetime.now(UTC).isoformat(),
             "failure_reason": None,
         }))
 
@@ -204,6 +239,10 @@ def test_plugin_stop_hook_enforces_codex_source_snapshot_identity(tmp_path):
     assert "input/schema.json source_sha256" in error
     assert "chapter.md artifact hash" in error
     write_output(2.0, expected_source_hash)
+    assert hook(str(tmp_path)) is None
+    write_output(2.0, expected_source_hash, "Klein's father")
+    assert "occur literally" in hook(str(tmp_path))
+    write_output(2.0, expected_source_hash, "Klein")
     assert hook(str(tmp_path)) is None
 
 

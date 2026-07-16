@@ -114,8 +114,9 @@ monthly, per user, admin-overridable per row.
 
 **RRF** — Reciprocal Rank Fusion, the tuning-free merge of BM25 + dense rankings.
 
-**Running summary** — the story-so-far text through chapter K
-(`extraction_state.running_summary`), feeding chapter K+1's extraction.
+**Chapter summary** — a grounded, approximately 150–250-token recap of one chapter.
+The compatibility column `extraction_state.running_summary` mirrors this value; it is
+not recursively fed forward as a story-so-far summary.
 
 **Shelf** — per-user reading status (`to_read`/`reading`/`completed`) in
 `library_entries`.

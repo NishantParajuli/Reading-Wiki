@@ -202,6 +202,7 @@ async def build_codex_migration_service(agent_gateway=None):
     commands = CodexCommandService(
         CatalogEditBridge(), BackendBridge(), WorkBridge(), QuotaBridge(),
         PostgresEntityMerger(pool), settings.AGY_MAX_ATTEMPTS,
+        pipeline_version=settings.CODEX_PIPELINE_VERSION,
     )
     return CodexMigrationService(queries, commands)
 

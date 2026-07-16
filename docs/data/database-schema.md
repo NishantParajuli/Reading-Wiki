@@ -3,7 +3,7 @@
 > **Source of truth:** `novelwiki/db/schema.py` — a list of idempotent DDL statements
 > applied on every startup (and via `python -m novelwiki.db.schema`). The normalized DDL
 > is contract-frozen in `tests/contracts/snapshots/schema.json`. This page documents all
-> **39 tables**, grouped by owning module, with the reasoning behind the non-obvious
+> **47 tables**, grouped by owning module, with the reasoning behind the non-obvious
 > columns. Single-writer ownership is enforced by the architecture checker
 > ([../architecture/enforcement.md](../architecture/enforcement.md)).
 
@@ -219,7 +219,7 @@ Per-novel name/term consistency anchor. `UNIQUE (novel_id, source_term)`;
 `term_type` (`name`|`place`|`skill`|`item`|`term`), `notes`, **`locked`** (user-pinned
 renderings the auto-glossary never overwrites).
 
-## Codex-owned (11 tables — every row chapter-keyed for spoiler safety)
+## Codex-owned (19 tables — every generated row is ceiling-safe)
 
 ### `chunks`
 
@@ -244,7 +244,9 @@ description *as of the reader's ceiling*, not the latest.
 ### `entity_aliases`
 
 Alternate names with **`revealed_at_chapter`** — an alias only resolves once its reveal
-chapter is within the ceiling. Trigram-indexed.
+chapter is within the ceiling. Extracted aliases (including a new entity's self-alias) are
+timestamped at their source chapter; the schema's chapter-0 default is reserved for explicit
+pre-story/owner-seeded terms. Trigram-indexed.
 
 ### `identity_links`
 
@@ -268,19 +270,63 @@ The atomic knowledge unit: `entity_id`, **`chapter` (the spoiler key)**, `fact_t
 `chapter`, `description`, `participants BIGINT[]` (entity ids), `location_id`,
 `significance`, `data`, `source_chunk_ids`.
 
+### `chapter_summaries`
+
+Grounded, current-chapter-only memory keyed by `(novel_id, chapter, pipeline_version)`.
+Stores summary/token count, exact source hash, evidence chunks, model, and run.
+
+### `memory_segments`
+
+Immutable hierarchical versions: `kind` (`checkpoint`|`volume`), start/end/through
+chapters, optional `part_label`, summary/token count, source hash, child evidence hashes,
+pipeline version, model, and run. The unique key includes all range/through coordinates.
+Every row is complete (`through_chapter=end_chapter`); a volume additionally requires a
+real non-empty label.
+
+### `entity_activity`
+
+Per `(novel, entity, chapter, pipeline_version)` mention/claim/event counts, salience,
+and source chunks. It powers recent-entity selection and is aggregated on entity merge.
+
+### `entity_state_transitions`
+
+Temporal current-world changes: constrained state key, `set`/`clear`/`add`/`remove`/
+`confirm`/`contradict`, JSON value, optional perspective entity, certainty, narrative
+scope, `supersedes_id`, provenance, pipeline version, and run. Reads replay transitions
+through the ceiling instead of treating every historical value as current.
+
+### `relationship_state_transitions`
+
+The equivalent log for a source/target pair (status, affiliation, family, romantic,
+trust, hostility, or hierarchy), with operation, value, certainty, and provenance.
+
+### `plot_threads` / `plot_thread_updates`
+
+Stable thread titles plus append-only open/advance/clarify/resolve/reopen/dormant/
+contradict updates. Updates carry cumulative participants/keywords, certainty,
+provenance, pipeline version, and run.
+
+### `extraction_contexts`
+
+Reproducibility record keyed by `(novel, chapter, pipeline_version)`: source hash,
+deterministic context hash, token count, selected/dropped candidate manifest, optional
+prompt hash, and run. Commit recomputes the context under the per-novel lock and rejects
+a mismatch.
+
 ### `extraction_state`
 
-Per-chapter pipeline state: PK `(novel_id, chapter)`; **`running_summary`** (the
-story-so-far text that feeds the next chapter's extraction), `run_id UUID`,
-`model_label`, **`source_sha256`** (hash of the exact text extracted — the
-`commit_codex_extraction` workflow verifies it under lock), `processed_at`. Because each
-running summary depends on every earlier chapter, force rebuilding chapter N deletes the
-checkpoint suffix from N onward; chronological builds recreate it.
+Per-chapter compatibility/checkpoint state: PK `(novel_id, chapter)`;
+`running_summary` now mirrors the grounded chapter summary for older readers, plus
+`run_id`, `model_label`, exact `source_sha256`, `pipeline_version`, `context_sha256`, and
+`processed_at`. Force/source invalidation deletes the derived v2 suffix from chapter N;
+chronological builds recreate it from grounded children.
 
 ### `wiki_cache`
 
 Synthesized entity profiles, cached per ceiling: PK `(novel_id, entity_id,
 chapter_ceiling)`; `rendered_md`, `model`, `evidence_ids JSONB`.
+Profile evidence includes fact/relationship ids plus current state-transition,
+thread-update, and supporting chunk ids.
 
 ### `query_cache`
 
@@ -342,6 +388,8 @@ users ─┬─< sessions / oauth_accounts / email_tokens / quota_usage / ai_req
                                       │              ├─< relationships / identity_links
                                       │              └─< wiki_cache
                                       ├─< events / extraction_state / query_cache
+                                      ├─< chapter_summaries / memory_segments / extraction_contexts
+                                      ├─< entity/relationship state + plot-thread updates
                                       └─< assets / tag_suggestions
 jobs ─< ai_execution_runs >─ import_jobs        audit_events (user_id, novel_id, request_id)
 ```

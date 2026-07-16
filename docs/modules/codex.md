@@ -7,9 +7,11 @@ the caches that make repeat reads free. Every read is bounded by the server-trus
 chapter ceiling — see [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md).
 Pipeline walkthrough: [../pipelines/codex-build-and-ask.md](../pipelines/codex-build-and-ask.md).
 
-**Owned tables (11):** `chunks`, `entities`, `entity_descriptions`, `entity_aliases`,
-`identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state`,
-`wiki_cache`, `query_cache`.
+**Owned tables (19):** `chunks`, `entities`, `entity_descriptions`, `entity_aliases`,
+`identity_links`, `entity_facts`, `relationships`, `events`, `chapter_summaries`,
+`memory_segments`, `entity_activity`, `entity_state_transitions`,
+`relationship_state_transitions`, `plot_threads`, `plot_thread_updates`,
+`extraction_contexts`, `extraction_state`, `wiki_cache`, `query_cache`.
 **Owned filesystem root:** `BM25_INDEX_PATH` (`./data/bm25_index/<novel_id>/`).
 
 ---
@@ -22,7 +24,8 @@ Pipeline walkthrough: [../pipelines/codex-build-and-ask.md](../pipelines/codex-b
   bound in the `update_source_offset` and `commit_import` workflows.
 - **`CodexExtractionTransactionApi`** — the Codex half of the atomic extraction commit
   (`commit_codex_extraction` workflow): writes entities/facts/relationships/events/
-  aliases/identity links/descriptions + `extraction_state` against a row-locked,
+  aliases/identity links/descriptions, activity, temporal state, threads, hierarchical
+  memory, context manifest, and `extraction_state` against a row-locked, source/context-
   hash-verified Reading snapshot.
 - **`EstablishedTermsApi`** — canonical `(name, type)` pairs for glossary seeding.
 - **`GetCodexMeta`, `Ask`, `ResolveEntity`, `MergeEntities`, `CodexRecapApi`** — the
@@ -50,7 +53,7 @@ Pipeline walkthrough: [../pipelines/codex-build-and-ask.md](../pipelines/codex-b
     quota reserve (`codex_builds`) → durable job create/dedupe → refund-on-failure;
     enables `novels.codex_enabled` on first build) and `merge_entities`.
 - **`commands.py::CodexCommands`** — the CLI/worker command bundle (chunk/embed/extract/
-  rebuild/merge) built by Bootstrap with the runtime injected.
+  rebuild/merge/reset) built by Bootstrap with the runtime injected.
 
 ## Build pipeline (outbound `ingest/`)
 
@@ -64,21 +67,21 @@ handler (or individually from the CLI):
    clears its embedding and is rejected while a dependent extraction checkpoint exists.
 2. **`embed.py`** — batch-embeds every chunk with `embedding IS NULL`
    (`EMBED_MODEL`, `EMBED_DIM`-sized pgvector column; HNSW index when dim ≤ 2000).
-3. **`extract.py`** — **forward-only** structured extraction, strictly ascending by
-   chapter (the running story-so-far summary from `extraction_state` feeds each next
-   chapter, capped at `SUMMARY_INPUT_MAX_CHARS`): Flash reads the chunk-marked chapter +
-   known-entity roster → JSON of entities/facts/relationships/events/aliases/reveals
-   (json-repair-tolerant parsing, one temperature-bumped re-ask on malformed output);
-   optional second verification pass (`EXTRACTION_VERIFY`, on by default) catches missed
-   facts and identity reveals; model-supplied provenance chunk ids are validated against
-   the chapter's real ids. Commit is atomic + source-hash-guarded via the
-   `commit_codex_extraction` workflow.
+3. **`context.py` + `extract.py`** — **forward-only** v2 extraction, strictly ascending.
+   The shared direct/AGY context builder scores exact names/aliases, recent activity,
+   unresolved threads, graph neighbors, trigram spans, and exact vector matches; packs at
+   most 80 entities plus current state, three recent summaries, completed memory, and ten
+   threads under hard section/total token limits; and emits a reproducible context hash.
+   Flash returns strict, provenance-required entities/facts/relationships/events/aliases/
+   reveals plus state transitions, thread updates, and trusted reducer targets. Commit
+   takes a per-novel advisory lock and verifies both source and freshly recomputed context
+   hashes before the entire chapter artifact set lands atomically.
 4. **`link.py`** — entity resolution for every mention: exact → trigram fuzzy
    (`FUZZY_MATCH_THRESHOLD` 0.35 to consider, single candidate ≥ `FUZZY_AUTO_ACCEPT`
    0.6 auto-accepts) → embedding similarity (`SEMANTIC_MATCH_THRESHOLD` 0.85) → LLM
    disambiguation for gray cases → create new entity. `merge_entities` repairs
-   duplicates after the fact (re-pointing facts/relationships/aliases/events, folding
-   descriptions, clearing caches).
+   duplicates after the fact (re-pointing historical and temporal references, aggregating
+   activity, folding descriptions/aliases/identity links, clearing caches).
 5. **BM25 index** — `retrieval/bm25.py::BM25Manager`: per-novel bm25s index persisted
    under `data/bm25_index/`, staleness-checked against a cheap DB signature, lazily
    loaded, rebuilt by the job/CLI; blocking tokenize/search offloaded to a thread
@@ -97,7 +100,8 @@ handler (or individually from the CLI):
   tools execute (novel_id + ceiling **injected server-side**, never model-supplied;
   every model-chosen arg clamped by the `ASK_TOOL_MAX_*` settings) → Flash distills
   evidence → Pro reasons; loops up to `MAX_ITERATIONS` (5) with
-  `ASK_MAX_TOOL_CALLS_PER_ITER` (4). Answers carry inline citations resolved to
+  `ASK_MAX_TOOL_CALLS_PER_ITER` (4), a total raw-evidence token budget, and a separate
+  digest budget. Structured tools also enforce SQL row ceilings. Answers carry inline citations resolved to
   structured `{kind, id, chapter, snippet}` (`build_citations`); evidence provenance and
   the answer are cached in `query_cache` keyed `(novel_id, md5(normalized question),
   ceiling)`.
@@ -111,7 +115,8 @@ handler (or individually from the CLI):
   `POST …/codex/build`, `POST …/merge-entities`. (`POST …/recap` is mounted by
   Experience's product router but executes `CodexRecapApi` — recap execution is
   Codex-owned.)
-- **Inbound `cli.py`**: `chunk`, `embed`, `extract`, `rebuild-bm25`, `merge`.
+- **Inbound `cli.py`**: `chunk`, `embed`, `extract`, `rebuild-bm25`, `merge`,
+  `reset-codex` (derived structured data only; chunks/embeddings remain).
 - **Inbound `jobs.py`**: `execute_codex_job` (API backend) and `execute_agy_codex_job`.
   The AGY executor repeats idempotent chunking and missing-embedding passes on retries,
   then resumes extraction; unchanged vectors are retained, while interrupted preprocessing
@@ -119,13 +124,16 @@ handler (or individually from the CLI):
 - **Outbound `postgres_queries.py`** — all bounded read SQL (`WHERE … <= ceiling` on
   every statement) + `wiki_cache` read/write + `PostgresEntityMerger`.
 - **Outbound `agy.py`** — the AGY extraction job: one per-chapter `task.md` bundle
-  (chunks, roster, prior summary, exact output shape) plus sealed workspace manifests,
-  strict output validation (`validate_extraction_output` — schema, chunk-id provenance,
-  ceiling-safe content), separate verification/disambiguation child runs,
-  `_resume_ready_commits` after worker loss, plus same-job chapter checkpoint skipping on
-  whole-job retry.
-- **Outbound `artifacts.py` / `cache.py` / `postgres_terms.py`** — workflow capability,
-  cache invalidation, established terms.
+  (chunks, bounded memory, exact v2 output shape) plus sealed workspace manifests,
+  strict output validation (`validate_extraction_output` — schema, refs, exact reducer
+  targets, summary/token limits, literal mention spans, chunk provenance), required
+  self-review inside the primary run, an optional separate verification child when
+  `AGY_SEPARATE_CODEX_VERIFY=true`, one batched disambiguation child for ambiguous
+  mentions, `_resume_ready_commits` after worker loss, and same-job chapter checkpoint
+  skipping on whole-job retry.
+- **Outbound `artifacts.py` / `cache.py` / `maintenance.py` / `postgres_terms.py`** —
+  workflow capability, suffix-aware invalidation, structured reset/orphan pruning,
+  established terms.
 
 ## Collaboration notes
 
@@ -136,3 +144,5 @@ handler (or individually from the CLI):
   AI Execution's cost controls instead of monthly quota.
 - Caches (`wiki_cache`, `query_cache`) are keyed by ceiling — a reader advancing
   chapters naturally repopulates; extraction/merges clear affected ranges.
+- `CODEX_PIPELINE_VERSION` isolates generated v2 rows. Existing v1 checkpoints are not
+  considered complete by a v2 build; scheduling/building the range migrates it in place.

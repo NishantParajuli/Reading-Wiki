@@ -62,6 +62,31 @@ the output manifest so the model does not waste turns listing, verifying, or has
 Use `loginctl enable-linger <user>` if the user service must survive logout. The service must
 retain access to the authenticated user's DBus/keyring session.
 
+## Codex v2 rollout
+
+The bundled NovelWiki plugin contract is version `1.3.1` and emits Codex schema `2.0`.
+Its stop hook rejects inferred mention labels before exit: every `surface_form` must be a
+literal word-bounded span in the sealed current-chapter section. The host validator repeats
+that check before linking, and the atomic commit remains the final enforcement boundary.
+After deploying, follow the backend-neutral
+[release rollout](release-runbook.md#first-codex-v2-production-rollout), apply the additive
+startup DDL before enabling workers, and update both
+`AGY_PLUGIN_VERSION` and `AGY_PLUGIN_SHA256` to the values shipped by the release. Drain
+workers before changing the pin; v1 extraction artifacts cannot resume under v2.
+
+A Build treats v1 checkpoints as incomplete and migrates chronologically while retaining
+narrative chunks/embeddings. The initial v1→v2 range must start at the first narrative
+chapter; later incremental ranges are allowed only after their preceding v2 summaries and
+checkpoints exist. If legacy extraction touched front/back matter, chunk cleanup deliberately
+requires the clean reset path. For a clean whole-book regeneration, cancel/drain active jobs,
+run `reset-codex NOVEL_ID --force`, then Build from the first narrative chapter. Multiple
+ranges for one novel are intentionally serialized by both the active-job key and a database
+commit lock.
+
+Before enabling `AGY_CODEX_ENABLED`, canary schema 2.0 output on early, late,
+checkpoint-end, and (when present) final-volume chapters. Confirm context-token/entity
+counts, exact reducer targets, source/context hashes, and provenance validation.
+
 ## Pinned CLI option audit
 
 The 1.1.2 `agy --help` surface was reviewed as part of qualification. NovelWiki deliberately

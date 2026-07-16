@@ -46,6 +46,34 @@ uv run python scripts/diagnose_agy_codex.py --novel-id 33 \
 Keep the default-off Codex kill switch until representative chapters pass on the exact pinned
 binary/plugin pair and the operator intentionally enables rollout.
 
+`agy_workload_tests.py::test_chapter_1200_context_stays_bounded_and_ignores_historical_fact_bloat`
+is the provider-free long-book qualification. It creates a synthetic LOTM-shaped chapter/volume
+layout, 500 entities, temporal state, threads, and more than 20,000 historical facts in the
+disposable database; then it proves chapter 1,200 context is deterministic, ceiling-safe, and
+within every configured entity/section/total budget. Run with `-s` to print the measured context
+tokens, selected/dropped entity counts, and packing time.
+
+### Dated Codex v2 provider qualification (2026-07-16)
+
+These paid canaries used real Lord of the Mysteries chapter 1 in disposable databases; production
+was read-only and the disposable databases were removed afterward.
+
+- Direct API (`deepseek/deepseek-v4-flash`) completed extraction, verification, and the
+  grounded chapter summary in exactly three chat calls. The committed proposal had valid
+  source/context hashes and provenance; rerunning the completed chapter made no provider call.
+- One real `perplexity/pplx-embed-v1-0.6b` smoke call returned a normalized 1,024-dimensional
+  vector.
+- AGY plugin `1.3.1` (`Gemini 3.5 Flash (High)`) completed a real chapter-1 v2 run under an
+  eight-request ceiling: trusted artifact validation passed, the proposal committed atomically,
+  and the run persisted `completed`. A disposable diagnostic wrapper then failed while formatting
+  a nonexistent reporting-only preflight field; this occurred after application completion and was
+  not rerun to avoid unnecessary paid usage.
+
+This evidence qualifies the early chapter path, shared commit contract, and bounded context. It
+does **not** claim that late, checkpoint-end, or final-volume AGY canaries have passed; those remain
+explicit production rollout gates in the
+[AGY operator runbook](agy-operator-runbook.md#codex-v2-rollout).
+
 The blocking local release-candidate checks are:
 
 ```bash

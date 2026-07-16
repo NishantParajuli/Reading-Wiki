@@ -1,6 +1,6 @@
 # NovelWiki AI plugin
 
-Version 1.2.0. Preflight imports this plugin into disposable isolated CLI state to validate
+Version 1.3.1. Preflight imports this plugin into disposable isolated CLI state to validate
 the registry. Workload runs copy the same hash-pinned assets into the private workspace's
 direct `.agents` customization paths because AGY 1.1.2 does not activate imported hooks in
 print mode. It has no database, MCP, network, unrestricted terminal, or secret-bearing

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
 
 class StrictModel(BaseModel):
@@ -87,17 +87,143 @@ class TranslationMeta(StrictModel):
     self_review: TranslationSelfReview
 
 
+ENTITY_TYPES = {"character", "location", "faction", "item", "concept", "organization"}
+STATE_KEYS = {
+    "last_known_location", "life_status", "occupation", "rank", "affiliation",
+    "possession", "ability", "identity", "title", "goal", "knowledge",
+    "condition", "custody",
+}
+RELATIONSHIP_STATE_KEYS = {
+    "status", "affiliation", "family", "romantic", "trust", "hostility", "hierarchy",
+}
+EntityRef = Annotated[str, Field(pattern=r"^(?:e|m)[1-9][0-9]*$", max_length=80)]
+MentionRef = Annotated[str, Field(pattern=r"^m[1-9][0-9]*$", max_length=80)]
+ThreadRef = Annotated[str, Field(pattern=r"^(?:t|p)[1-9][0-9]*$", max_length=80)]
+Keyword = Annotated[str, Field(min_length=1, max_length=100)]
+WarningText = Annotated[str, Field(max_length=500)]
+
+
+class ExtractionMention(StrictModel):
+    entity_ref: MentionRef
+    surface_form: str = Field(min_length=1, max_length=300)
+    type: str = Field(min_length=1, max_length=40)
+    description: str = Field(default="", max_length=1000)
+    provisional: bool = False
+
+    @field_validator("type")
+    @classmethod
+    def valid_entity_type(cls, value: str) -> str:
+        if value not in ENTITY_TYPES:
+            raise ValueError("unknown entity type")
+        return value
+
+
+class ExtractionFact(StrictModel):
+    entity_ref: EntityRef
+    fact_type: str = Field(default="", max_length=80)
+    content: str = Field(min_length=1, max_length=4000)
+    source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
+
+
+class ExtractionRelationship(StrictModel):
+    source_ref: EntityRef
+    target_ref: EntityRef
+    relation_type: str = Field(default="", max_length=80)
+    directed: bool = True
+    content: str = Field(default="", max_length=4000)
+    source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
+
+
+class ExtractionEvent(StrictModel):
+    description: str = Field(min_length=1, max_length=4000)
+    participant_refs: list[EntityRef] = Field(default_factory=list, max_length=100)
+    location_ref: EntityRef | None = None
+    significance: str = Field(default="", max_length=1000)
+    source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
+
+
+class ExtractionIdentityReveal(StrictModel):
+    persona_ref: EntityRef
+    true_entity_ref: EntityRef
+    note: str = Field(default="", max_length=2000)
+    source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
+
+
+class ExtractionAlias(StrictModel):
+    entity_ref: EntityRef
+    alias: str = Field(min_length=1, max_length=300)
+    is_reveal: bool = False
+    source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
+
+
+class StateTransitionProposal(StrictModel):
+    entity_ref: EntityRef
+    state_key: str
+    operation: Literal["set", "clear", "add", "remove", "confirm", "contradict"]
+    value: Any = None
+    value_entity_ref: EntityRef | None = None
+    perspective_ref: EntityRef | None = None
+    certainty: Literal["uncertain", "alleged", "presumed", "confirmed", "contradicted"] = "confirmed"
+    narrative_scope: Literal["current", "historical", "dream", "prophecy", "alternate"] = "current"
+    source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
+
+    @field_validator("state_key")
+    @classmethod
+    def valid_state_key(cls, value: str) -> str:
+        if value not in STATE_KEYS:
+            raise ValueError("unknown state key")
+        return value
+
+
+class RelationshipStateTransitionProposal(StrictModel):
+    source_ref: EntityRef
+    target_ref: EntityRef
+    state_key: str
+    operation: Literal["set", "clear", "add", "remove", "confirm", "contradict"]
+    value: Any = None
+    certainty: Literal["uncertain", "alleged", "presumed", "confirmed", "contradicted"] = "confirmed"
+    source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
+
+    @field_validator("state_key")
+    @classmethod
+    def valid_state_key(cls, value: str) -> str:
+        if value not in RELATIONSHIP_STATE_KEYS:
+            raise ValueError("unknown relationship state key")
+        return value
+
+
+class PlotThreadUpdateProposal(StrictModel):
+    thread_ref: ThreadRef
+    title: str | None = Field(default=None, max_length=300)
+    operation: Literal["open", "advance", "clarify", "resolve", "reopen", "mark_dormant", "contradict"]
+    summary: str = Field(min_length=1, max_length=3000)
+    participant_refs: list[EntityRef] = Field(default_factory=list, max_length=100)
+    keywords: list[Keyword] = Field(default_factory=list, max_length=50)
+    certainty: Literal["uncertain", "alleged", "presumed", "confirmed", "contradicted"] = "confirmed"
+    source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
+
+
+class MemoryUpdateProposal(StrictModel):
+    kind: Literal["checkpoint", "volume"]
+    summary: str = Field(min_length=1, max_length=12_000)
+    evidence_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=500)
+
+
 class ExtractionPayload(StrictModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     chapter: float
     source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    mentions: list[dict] = Field(default_factory=list, max_length=2000)
-    facts: list[dict] = Field(default_factory=list, max_length=5000)
-    relationships: list[dict] = Field(default_factory=list, max_length=3000)
-    events: list[dict] = Field(default_factory=list, max_length=3000)
-    identity_reveals: list[dict] = Field(default_factory=list, max_length=1000)
-    new_aliases: list[dict] = Field(default_factory=list, max_length=2000)
-    warnings: list[str] = Field(default_factory=list, max_length=100)
+    mentions: list[ExtractionMention] = Field(default_factory=list, max_length=200)
+    facts: list[ExtractionFact] = Field(default_factory=list, max_length=500)
+    relationships: list[ExtractionRelationship] = Field(default_factory=list, max_length=300)
+    events: list[ExtractionEvent] = Field(default_factory=list, max_length=300)
+    identity_reveals: list[ExtractionIdentityReveal] = Field(default_factory=list, max_length=100)
+    new_aliases: list[ExtractionAlias] = Field(default_factory=list, max_length=200)
+    state_changes: list[StateTransitionProposal] = Field(default_factory=list, max_length=500)
+    relationship_state_changes: list[RelationshipStateTransitionProposal] = Field(default_factory=list, max_length=300)
+    thread_updates: list[PlotThreadUpdateProposal] = Field(default_factory=list, max_length=100)
+    memory_updates: list[MemoryUpdateProposal] = Field(default_factory=list, max_length=2)
+    warnings: list[WarningText] = Field(default_factory=list, max_length=100)
 
 
 class DisambiguationDecision(StrictModel):

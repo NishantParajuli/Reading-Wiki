@@ -18,7 +18,11 @@ TABLE_OWNERS = {
     "contributions": "reading", "translation_glossary": "translation", "chunks": "codex",
     "entities": "codex", "entity_descriptions": "codex", "entity_aliases": "codex",
     "identity_links": "codex", "entity_facts": "codex", "relationships": "codex",
-    "events": "codex", "extraction_state": "codex", "wiki_cache": "codex",
+    "events": "codex", "chapter_summaries": "codex", "memory_segments": "codex",
+    "entity_activity": "codex", "entity_state_transitions": "codex",
+    "relationship_state_transitions": "codex", "plot_threads": "codex",
+    "plot_thread_updates": "codex", "extraction_contexts": "codex",
+    "extraction_state": "codex", "wiki_cache": "codex",
     "query_cache": "codex", "tts_jobs": "narration", "chapter_audio": "narration",
     "jobs": "work",
 }

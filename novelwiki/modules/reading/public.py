@@ -136,7 +136,7 @@ class ReadingCodexApi(Protocol):
     async def chapter_snapshot(self, novel_id: int, chapter: float) -> dict | None: ...
     async def chapter_numbers(
         self, novel_id: int, start: float | None = None, end: float | None = None,
-        require_content: bool = False,
+        require_content: bool = False, narrative_only: bool = False,
     ) -> list[float]: ...
     async def chapter_at_or_before(
         self, novel_id: int, ceiling: float

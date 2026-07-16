@@ -7,7 +7,8 @@ from uuid import UUID
 
 from .application.contracts import (
     ArtifactRef, DisambiguationPayload, ExtractionPayload, InputManifest,
-    OutputManifest, PreflightResult, TranslationMeta,
+    MemoryUpdateProposal, OutputManifest, PlotThreadUpdateProposal, PreflightResult,
+    RelationshipStateTransitionProposal, StateTransitionProposal, TranslationMeta,
 )
 from .application.errors import (
     AgyCanceled, AgyError, AgyPreflightError, AgyValidationError, BudgetExhausted,
@@ -40,7 +41,9 @@ class ResumableRunQuery(Protocol):
 __all__ = [
     "AgyCanceled", "AgyError", "AgyPreflightError", "AgyValidationError", "BudgetExhausted",
     "ArtifactRef", "ChatGateway", "DisambiguationPayload", "EmbeddingGateway",
-    "ExecutionBackend", "ExtractionPayload", "InputManifest", "OutputManifest", "PreflightResult",
+    "ExecutionBackend", "ExtractionPayload", "InputManifest", "MemoryUpdateProposal",
+    "OutputManifest", "PlotThreadUpdateProposal", "PreflightResult",
     "PROVIDER_WAIT_CODES", "RequestedBackend", "RerankGateway", "ResumableRunQuery",
-    "TranslationMeta", "VisionGateway", "Workload",
+    "RelationshipStateTransitionProposal", "StateTransitionProposal", "TranslationMeta",
+    "VisionGateway", "Workload",
 ]

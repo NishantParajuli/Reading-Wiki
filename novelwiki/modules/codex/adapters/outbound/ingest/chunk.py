@@ -120,6 +120,47 @@ async def chunk_chapter(
         logger.error(f"Chapter {chapter_number} not found (or has no content) in DB.")
         return 0
     pool = await get_db_pool()
+    if (chapter.get("kind") or "chapter") not in {"chapter", "interlude"}:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                dependent = await conn.fetchval(
+                    """
+                    SELECT
+                      EXISTS (SELECT 1 FROM extraction_state WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM entities WHERE novel_id=$1 AND first_seen_chapter=$2)
+                      OR EXISTS (SELECT 1 FROM entity_descriptions WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM entity_aliases WHERE novel_id=$1 AND revealed_at_chapter=$2)
+                      OR EXISTS (SELECT 1 FROM identity_links WHERE novel_id=$1 AND revealed_at_chapter=$2)
+                      OR EXISTS (SELECT 1 FROM entity_facts WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM relationships WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM events WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM chapter_summaries WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM entity_activity WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM entity_state_transitions WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM relationship_state_transitions WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM plot_thread_updates WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM extraction_contexts WHERE novel_id=$1 AND chapter=$2)
+                      OR EXISTS (SELECT 1 FROM memory_segments WHERE novel_id=$1
+                                    AND $2 BETWEEN start_chapter AND through_chapter);
+                    """,
+                    novel_id, chapter_number,
+                )
+                if dependent:
+                    raise RuntimeError(
+                        "non-narrative chapter has structured Codex dependencies; "
+                        "run reset-codex before the v2 rebuild"
+                    )
+                result = await conn.execute(
+                    "DELETE FROM chunks WHERE novel_id=$1 AND chapter=$2;",
+                    novel_id, chapter_number,
+                )
+        removed = int(result.rsplit(" ", 1)[-1])
+        if removed:
+            logger.info(
+                "Removed %s stale non-narrative chunks for chapter %s.",
+                removed, chapter_number,
+            )
+        return 0
     async with pool.acquire() as conn:
         chunks = chunk_chapter_text(chapter["content"])
         async with conn.transaction():
@@ -190,7 +231,7 @@ async def chunk_all_chapters(
     worker's cancellation exception.
     """
     numbers = await runtime.reading.chapter_numbers(
-        novel_id, from_chapter, to_chapter
+        novel_id, from_chapter, to_chapter, True, False
     )
 
     total_chunks = 0

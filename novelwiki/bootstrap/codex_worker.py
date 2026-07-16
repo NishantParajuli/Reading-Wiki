@@ -34,10 +34,11 @@ def build_codex_runtime():
             return PostgresReadingCodexGateway(await init_db_pool())
 
         async def chapter_numbers(
-            self, novel_id, from_chapter=None, to_chapter=None, include_all=False,
+            self, novel_id, from_chapter=None, to_chapter=None,
+            require_content=False, narrative_only=False,
         ):
             return await (await self._gateway()).chapter_numbers(
-                novel_id, from_chapter, to_chapter, include_all
+                novel_id, from_chapter, to_chapter, require_content, narrative_only
             )
 
         async def chapter_snapshot(self, novel_id, chapter_number):

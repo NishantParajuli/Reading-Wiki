@@ -1,6 +1,6 @@
 # CLI reference
 
-> **Source of truth:** `tests/contracts/snapshots/cli.json` + `cli_help.json` (the 13
+> **Source of truth:** `tests/contracts/snapshots/cli.json` + `cli_help.json` (the 14
 > commands and every help surface are contract-frozen — semantically normalized, so
 > wording/options/order may not drift silently). Run from the repo root:
 
@@ -40,9 +40,10 @@ clean Ctrl-C).
 |---|---|
 | `chunk NOVEL_ID [--force] [--from F] [--to T]` | Paragraph/sentence-aware chunking into `chunks`; force upserts stable chunk identities, preserves unchanged embeddings, and refuses changed text with a live extraction checkpoint. |
 | `embed NOVEL_ID [--from F] [--to T]` | Batch-embeds all chunks missing vectors. |
-| `extract NOVEL_ID [--force] [--from F] [--to T]` | Forward-only entity/fact/relationship/event extraction in strict chapter order; force transactionally replaces each selected chapter and invalidates its downstream running-summary checkpoints for chronological rebuild. |
+| `extract NOVEL_ID [--force] [--from F] [--to T]` | Forward-only v2 extraction; force replaces selected chapters and invalidates downstream state/context/hierarchical memory for chronological rebuild. |
 | `rebuild-bm25 NOVEL_ID` | Rebuilds + persists the per-novel BM25 index. |
 | `merge NOVEL_ID --keep ID --drop ID` | Merges duplicate entities (re-points facts/relations/aliases, clears caches). |
+| `reset-codex NOVEL_ID [--force]` | Deletes derived structured Codex knowledge/caches while preserving chunks/embeddings; refuses during an active build. |
 
 The web UI's codex **Build** button runs `chunk → embed → extract → rebuild-bm25` as one
 durable job; the CLI exposes the stages individually (all idempotent, all range-limitable).

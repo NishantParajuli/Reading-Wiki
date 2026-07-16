@@ -82,7 +82,7 @@ python -m novelwiki.cli chunk 1 && python -m novelwiki.cli embed 1 && \
 python -m novelwiki.cli extract 1 && python -m novelwiki.cli rebuild-bm25 1
 ```
 
-All 13 commands: [../api/cli.md](../api/cli.md).
+All 14 commands: [../api/cli.md](../api/cli.md).
 
 ## 6. Run the tests
 

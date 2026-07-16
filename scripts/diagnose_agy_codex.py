@@ -33,6 +33,7 @@ from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import (
 from novelwiki.modules.codex.adapters.outbound.agy import (
     _chapter_input,
     _codex_task_document,
+    _extraction_schema_input,
     validate_extraction_output,
 )
 from novelwiki.platform.config import settings
@@ -79,18 +80,10 @@ async def run(args: argparse.Namespace) -> dict:
         runtime = build_codex_runtime()
         source = await _chapter_input(args.novel_id, args.chapter, runtime)
         root = create_run_workspace(1, str(run_id))
-        schema = {
-            "schema_version": "1.0",
-            "required_groups": [
-                "mentions", "facts", "relationships", "events",
-                "identity_reveals", "new_aliases",
-            ],
-            "mention_rules": (
-                "one unique m-ref per distinct new entity; roster e-refs are not mentions"
-            ),
-            "allowed_chunk_ids": sorted(source["chunk_ids"]),
-            "source_sha256": source["source_sha256"],
-        }
+        # Keep the diagnostic canary on the exact same contract as the worker.
+        # Duplicating this shape previously left the canary advertising schema
+        # 1.0 after the production path had moved to bounded-memory v2.
+        schema = _extraction_schema_input(source)
         inputs = [
             add_input(
                 root, "task.md",
@@ -108,7 +101,12 @@ async def run(args: argparse.Namespace) -> dict:
             plugin_version=settings.AGY_PLUGIN_VERSION,
             model=settings.AGY_MODEL_CODEX, novel_ref="novel",
             chapter_ceiling=args.chapter, inputs=inputs,
-            limits={"allowed_chunk_ids": sorted(source["chunk_ids"]), "max_items": 5000},
+            limits={
+                "allowed_chunk_ids": sorted(source["chunk_ids"]),
+                "max_items": 5000,
+                "context_tokens": source["context_token_count"],
+                "context_sha256": source["context_sha256"],
+            },
             created_at=datetime.now(UTC),
         )
         write_json(root / "input" / "manifest.json", manifest.model_dump(mode="json"))
@@ -124,6 +122,12 @@ async def run(args: argparse.Namespace) -> dict:
         )
         report.update(
             status="passed",
+            schema_version=schema["schema_version"],
+            context_tokens=source["context_token_count"],
+            selected_entities=len(source["roster_map"]),
+            dropped_entities=len(
+                source["context_manifest"].get("dropped_entities", [])
+            ),
             items={key: len(value) for key, value in data.items()},
             summary_chars=len(summary),
         )

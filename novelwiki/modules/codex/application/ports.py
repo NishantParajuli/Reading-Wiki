@@ -107,7 +107,8 @@ class EntityMergePort(Protocol):
 class CodexReadingPort(Protocol):
     async def chapter_numbers(
         self, novel_id: int, from_chapter: float | None = None,
-        to_chapter: float | None = None, include_all: bool = False,
+        to_chapter: float | None = None, require_content: bool = False,
+        narrative_only: bool = False,
     ) -> list[float]: ...
     async def chapter_snapshot(self, novel_id: int, chapter_number: float) -> dict | None: ...
 

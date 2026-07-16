@@ -17,7 +17,24 @@
 | Cost model | per-token, metered by user quotas | subscription capacity (rate/quota windows) |
 | Executor | in-process (routes, generic worker) | dedicated host worker only (`python -m novelwiki.agy.worker`, systemd) |
 | Default | default selection; requires the configured provider credentials | dormant unless `AGY_ENABLED` **and** an admin grant; Codex also requires `AGY_CODEX_ENABLED` |
-| Workloads | all six policy workloads | implemented adapters: `translate_batch`, `codex_extract`; `codex_extract` remains globally disabled by default for controlled rollout even though the pinned first-five canary now passes, while the other four reserved vocabulary values remain API-only |
+| Workloads | all six policy workloads | implemented adapters: `translate_batch`, `codex_extract`; `codex_extract` remains globally disabled by default while plugin `1.3.1` has only an early real-LOTM chapter-1 v2 canary, and the other four reserved vocabulary values remain API-only |
+
+### Codex equivalence and call topology
+
+For `codex_extract`, backend choice changes transport and provider-call shape, not the
+stored meaning or integrity boundary:
+
+| Property | API | AGY |
+|---|---|---|
+| Context and proposal | shared deterministic bounded context and v2 schema | same |
+| Review | optional best-effort second call, default on via `EXTRACTION_VERIFY` | mandatory self-review in the primary artifact run; optional separate child via `AGY_SEPARATE_CODEX_VERIFY` |
+| Chapter summary | separate API call | emitted with the reviewed extraction artifacts |
+| Ambiguous linking | direct per-mention gray-case calls when needed | gray cases batched into one disambiguation child run |
+| Validation and storage | trusted proposal/provenance/ref validation, then source/context-checked atomic commit | same semantic validators and the same `commit_codex_extraction` workflow |
+
+Model output is still nondeterministic, so two backends need not produce byte-identical
+claims. They are required to obey the same ceiling, memory, provenance, temporal, and
+commit contract.
 
 ## Backend selection (at scheduling time)
 
@@ -53,8 +70,8 @@ The dedicated host worker (never the web process) claims `jobs` rows with
 2. **Orphan reaping** — kill *identity-verified* stale process groups (pid + start-time
    match from `ai_execution_runs`) before new work.
 3. **Workspace** — per-run directory under `AGY_WORK_DIR` plus a sibling per-run CLI
-   state directory: content-hashed input manifests (Codex packs chapter, schema, prior summary,
-   and roster into one `input/task.md` read turn; translation likewise bundles its glossary and
+   state directory: content-hashed input manifests (Codex packs chapter, strict v2 schema,
+   and bounded memory into one `input/task.md` read turn; translation likewise bundles its glossary and
    sub-batch), direct `.agents` customizations and a minimal Git marker required
    by AGY 1.1.2, then inputs/customizations/Git metadata are **sealed read-only**;
    output/logs stay writable; size-capped.

@@ -98,7 +98,7 @@ reference: [../modules/README.md](../modules/README.md)):
 | **Experience** | cross-module *read-only* projections: home, activity feed, discover, library cards, profiles, health, cost estimates, admin dashboards | none (registered read-only projections only) |
 
 Platform Database/Observability owns the two remaining tables: `app_migrations`,
-`audit_events`. **Every one of the 39 tables has exactly one writer module** — the
+`audit_events`. **Every one of the 47 tables has exactly one writer module** — the
 human-readable map is [module-ownership.md](module-ownership.md), and the executable
 registry/checker in `tools/check_architecture.py` fails the build if any module's SQL touches a table it
 doesn't own (reads across owners are only allowed inside Experience's registered

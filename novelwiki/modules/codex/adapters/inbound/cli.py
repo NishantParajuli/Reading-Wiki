@@ -84,3 +84,23 @@ def merge(
         typer.echo(typer.style(f"✔ Entity {drop_id} successfully merged into {keep_id}.", fg=typer.colors.GREEN, bold=True))
     run_cli(run())
 
+
+@app.command("reset-codex")
+def reset_codex(
+    novel_id: int = typer.Argument(..., help="The novel id"),
+    force: bool = typer.Option(False, "--force", "-f", help="Reset without confirmation"),
+):
+    """Deletes derived structured Codex data but preserves chapter chunks/embeddings."""
+    if not force and not typer.confirm(
+        "Delete all structured Codex knowledge for this novel? Chunks are preserved."
+    ):
+        raise typer.Abort()
+
+    async def run():
+        await _commands().reset(novel_id)
+        typer.echo(typer.style(
+            "✔ Structured Codex reset; chunks and embeddings were preserved.",
+            fg=typer.colors.GREEN, bold=True,
+        ))
+
+    run_cli(run())
