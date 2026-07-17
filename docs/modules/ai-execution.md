@@ -107,8 +107,10 @@ so a crashed request frees its slot). **Cache hits skip every gate.**
 - **`prompts.py`** — inlines the hash-pinned workload instructions into the initial print
   prompt. This avoids AGY 1.1.2's workspace-skill activation loop and redundant discovery
   turns; Codex supplies one bounded-memory `input/task.md` bundle with strict extraction
-  schema 2.0 and exact reducer targets. The trusted stop hook creates the final manifest
-  after the model writes only its three semantic artifacts.
+  schema 2.0 and exact reducer targets, while disambiguation inlines its complete decision
+  object and supplied-candidate rule. The trusted stop hook creates the final manifest after
+  the model writes only its semantic artifacts and validates exact disambiguation case
+  coverage before allowing the child run to stop.
 - **`plugin/novelwiki-ai/`** (repo path `novelwiki/agy/plugin/novelwiki-ai`) — the AGY
   plugin whose hooks (`tool_gate.py`, `validate_stop.py`) deny command/web/MCP/subagent
   and outside-workspace access from inside the CLI session; its file hashes are pinned

@@ -246,6 +246,111 @@ def test_plugin_stop_hook_enforces_codex_source_snapshot_identity(tmp_path):
     assert hook(str(tmp_path)) is None
 
 
+def test_plugin_stop_hook_enforces_exact_disambiguation_decisions(tmp_path):
+    (tmp_path / "input").mkdir()
+    (tmp_path / "output").mkdir()
+    (tmp_path / "input" / "cases.json").write_text(json.dumps({
+        "schema_version": "1.0",
+        "cases": [
+            {
+                "case_ref": "d1",
+                "candidates": [
+                    {"candidate_ref": "candidate1"},
+                    {"candidate_ref": "candidate2"},
+                ],
+            },
+            {
+                "case_ref": "d2",
+                "candidates": [{"candidate_ref": "candidate1"}],
+            },
+        ],
+    }))
+    (tmp_path / "input" / "manifest.json").write_text(json.dumps({
+        "run_id": "run-disambiguation", "workload": "entity_disambiguation",
+    }))
+    decisions_path = tmp_path / "output" / "decisions.json"
+
+    def write_output(decisions):
+        content = json.dumps({"schema_version": "1.0", "decisions": decisions}).encode()
+        decisions_path.write_bytes(content)
+        (tmp_path / "output" / "manifest.json").write_text(json.dumps({
+            "schema_version": "1.0", "run_id": "run-disambiguation",
+            "workload": "entity_disambiguation", "status": "complete",
+            "artifacts": [{
+                "path": "decisions.json", "sha256": hashlib.sha256(content).hexdigest(),
+                "bytes": len(content), "media_type": "application/json",
+                "role": "disambiguation",
+            }],
+            "warnings": [], "completed_at": datetime.now(UTC).isoformat(),
+            "failure_reason": None,
+        }))
+
+    hook = runpy.run_path(str(PLUGIN_SOURCE / "hooks" / "validate_stop.py"))["validate"]
+    write_output([
+        {
+            "case_ref": "d1", "decision": "NEW", "candidate_ref": "NEW",
+            "evidence": "No supplied candidate matches.",
+        },
+        {
+            "case_ref": "d2", "decision": "NEW", "candidate_ref": "NEW",
+            "evidence": "No supplied candidate matches.",
+        },
+    ])
+    assert "missing or extra fields" in hook(str(tmp_path))
+    write_output([
+        {"case_ref": "d1", "candidate_ref": "candidate1"},
+        {"case_ref": "d2", "candidate_ref": "NEW"},
+    ])
+    assert "missing or extra fields" in hook(str(tmp_path))
+    write_output([
+        {
+            "case_ref": "d1", "decision": "candidate3", "confidence": "high",
+            "evidence": "Observable context.",
+        },
+        {
+            "case_ref": "d2", "decision": "NEW", "confidence": "medium",
+            "evidence": "No supplied candidate matches.",
+        },
+    ])
+    assert "unsupplied candidate" in hook(str(tmp_path))
+    write_output([{
+        "case_ref": "d1", "decision": "candidate1", "confidence": "high",
+        "evidence": "Observable context.",
+    }])
+    assert "missing or extra cases" in hook(str(tmp_path))
+    write_output([
+        {
+            "case_ref": "d1", "decision": "candidate1", "confidence": "certain",
+            "evidence": "Observable context.",
+        },
+        {
+            "case_ref": "d2", "decision": "NEW", "confidence": "medium",
+            "evidence": "No supplied candidate matches.",
+        },
+    ])
+    assert "confidence is invalid" in hook(str(tmp_path))
+    write_output([
+        {
+            "case_ref": "d1", "decision": "candidate1", "confidence": "high",
+            "evidence": "Observable context.",
+        },
+        {
+            "case_ref": "d2", "decision": "NEW", "confidence": "medium",
+            "evidence": "No supplied candidate matches.",
+        },
+    ])
+    assert hook(str(tmp_path)) is None
+
+
+def test_disambiguation_prompt_inlines_the_exact_decision_shape():
+    skill = (PLUGIN_SOURCE / "skills" / "novelwiki-disambiguate" / "SKILL.md").read_text()
+
+    assert '"decision": "candidate1"' in skill
+    assert '"confidence": "high"' in skill
+    assert "exactly `low`, `medium`, or `high`" in skill
+    assert "never write a `candidate_ref` field" in skill
+
+
 def test_plugin_stop_hook_enforces_exact_translation_metadata(tmp_path):
     (tmp_path / "input" / "chapters").mkdir(parents=True)
     (tmp_path / "output" / "chapters").mkdir(parents=True)

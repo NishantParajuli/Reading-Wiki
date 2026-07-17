@@ -17,7 +17,7 @@
 | Cost model | per-token, metered by user quotas | subscription capacity (rate/quota windows) |
 | Executor | in-process (routes, generic worker) | dedicated host worker only (`python -m novelwiki.agy.worker`, systemd) |
 | Default | default selection; requires the configured provider credentials | dormant unless `AGY_ENABLED` **and** an admin grant; Codex also requires `AGY_CODEX_ENABLED` |
-| Workloads | all six policy workloads | implemented adapters: `translate_batch`, `codex_extract`; `codex_extract` remains globally disabled by default while plugin `1.3.1` has only an early real-LOTM chapter-1 v2 canary, and the other four reserved vocabulary values remain API-only |
+| Workloads | all six policy workloads | implemented adapters: `translate_batch`, `codex_extract`; `codex_extract` remains globally disabled by default while plugin `1.3.2` has only the early real-LOTM chapter-1 v2 provider evidence recorded for `1.3.1`, and the other four reserved vocabulary values remain API-only |
 
 ### Codex equivalence and call topology
 
@@ -88,7 +88,10 @@ The dedicated host worker (never the web process) claims `jobs` rows with
 5. **Validate** — nothing from the model is trusted: artifacts are read via
    `safe_artifact_path` (no traversal), size caps, SHA-256s from the output manifest,
    schema checks, and workload-specific validators (translation quality/glossary
-   respect; extraction schema + chunk-id provenance).
+   respect; extraction schema + chunk-id provenance; exact batched-disambiguation case
+   coverage and supplied-candidate decisions). The stop hook performs the same
+   disambiguation shape/candidate checks early so malformed output gets its bounded repair
+   turn before process exit.
 6. **Commit** — through the **same workflows** the API path uses
    (`commit_translation`, `commit_codex_extraction`) with run-id identity, so a crashed
    batch can't double-commit and `_resume_ready_commits` can salvage completed

@@ -5,7 +5,20 @@
   "required": ["schema_version", "decisions"],
   "properties": {
     "schema_version": {"const": "1.0"},
-    "decisions": {"type": "array", "items": {"type": "object", "required": ["case_ref", "decision", "confidence", "evidence"]}}
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["case_ref", "decision", "confidence", "evidence"],
+        "properties": {
+          "case_ref": {"type": "string", "minLength": 1},
+          "decision": {"type": "string", "minLength": 1},
+          "confidence": {"enum": ["low", "medium", "high"]},
+          "evidence": {"type": "string", "maxLength": 500}
+        },
+        "additionalProperties": false
+      }
+    }
   },
   "additionalProperties": false
 }

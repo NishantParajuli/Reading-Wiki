@@ -64,10 +64,13 @@ retain access to the authenticated user's DBus/keyring session.
 
 ## Codex v2 rollout
 
-The bundled NovelWiki plugin contract is version `1.3.1` and emits Codex schema `2.0`.
+The bundled NovelWiki plugin contract is version `1.3.2` and emits Codex schema `2.0`.
 Its stop hook rejects inferred mention labels before exit: every `surface_form` must be a
-literal word-bounded span in the sealed current-chapter section. The host validator repeats
-that check before linking, and the atomic commit remains the final enforcement boundary.
+literal word-bounded span in the sealed current-chapter section. For batched entity
+disambiguation, it also requires exactly one decision per input case, the complete
+`case_ref`/`decision`/`confidence`/`evidence` shape, and only `NEW` or a supplied candidate.
+The host validator repeats those checks before linking, and the atomic commit remains the
+final enforcement boundary.
 After deploying, follow the backend-neutral
 [release rollout](release-runbook.md#first-codex-v2-production-rollout), apply the additive
 startup DDL before enabling workers, and update both

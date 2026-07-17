@@ -209,6 +209,82 @@ def _validate_translation_artifacts(root, input_manifest, artifacts_by_role):
     return None
 
 
+def _validate_disambiguation_artifact(root, artifacts_by_role):
+    cases_path = os.path.join(root, "input", "cases.json")
+    decision_paths = artifacts_by_role.get("disambiguation", [])
+    if not os.path.isfile(cases_path) or os.path.islink(cases_path):
+        return "input/cases.json is missing or unsafe"
+    if len(decision_paths) != 1:
+        return "disambiguation output must list exactly one decision artifact"
+    try:
+        with open(cases_path, "r", encoding="utf-8") as handle:
+            case_payload = json.load(handle)
+        with open(decision_paths[0], "r", encoding="utf-8") as handle:
+            decision_payload = json.load(handle)
+    except (OSError, ValueError):
+        return "disambiguation input or output is not valid JSON"
+    if (
+        not isinstance(case_payload, dict)
+        or case_payload.get("schema_version") != "1.0"
+        or not isinstance(case_payload.get("cases"), list)
+    ):
+        return "input/cases.json has an invalid contract"
+    candidates_by_case = {}
+    for case in case_payload["cases"]:
+        if not isinstance(case, dict):
+            return "a disambiguation input case is invalid"
+        case_ref = case.get("case_ref")
+        candidates = case.get("candidates")
+        if (
+            not isinstance(case_ref, str)
+            or not case_ref
+            or case_ref in candidates_by_case
+            or not isinstance(candidates, list)
+        ):
+            return "a disambiguation input case ref or candidate list is invalid"
+        candidate_refs = set()
+        for candidate in candidates:
+            candidate_ref = (
+                candidate.get("candidate_ref") if isinstance(candidate, dict) else None
+            )
+            if (
+                not isinstance(candidate_ref, str)
+                or not candidate_ref
+                or candidate_ref == "NEW"
+                or candidate_ref in candidate_refs
+            ):
+                return "a disambiguation input candidate ref is invalid"
+            candidate_refs.add(candidate_ref)
+        candidates_by_case[case_ref] = candidate_refs
+    if (
+        not isinstance(decision_payload, dict)
+        or set(decision_payload) != {"schema_version", "decisions"}
+        or decision_payload.get("schema_version") != "1.0"
+        or not isinstance(decision_payload.get("decisions"), list)
+    ):
+        return "disambiguation output must match the complete v1 top-level shape"
+    required_fields = {"case_ref", "decision", "confidence", "evidence"}
+    seen = set()
+    for decision in decision_payload["decisions"]:
+        if not isinstance(decision, dict) or set(decision) != required_fields:
+            return "a disambiguation decision has missing or extra fields"
+        case_ref = decision.get("case_ref")
+        if not isinstance(case_ref, str) or case_ref not in candidates_by_case or case_ref in seen:
+            return "a disambiguation decision has an unknown or duplicate case_ref"
+        selected = decision.get("decision")
+        if selected != "NEW" and selected not in candidates_by_case[case_ref]:
+            return "a disambiguation decision selected an unsupplied candidate"
+        if decision.get("confidence") not in {"low", "medium", "high"}:
+            return "a disambiguation decision confidence is invalid"
+        evidence = decision.get("evidence")
+        if not isinstance(evidence, str) or len(evidence) > 500:
+            return "a disambiguation decision evidence field is invalid"
+        seen.add(case_ref)
+    if seen != set(candidates_by_case):
+        return "disambiguation decisions are missing or extra cases"
+    return None
+
+
 def validate(root):
     root = os.path.realpath(root)
     input_manifest_path = os.path.join(root, "input", "manifest.json")
@@ -380,6 +456,10 @@ def validate(root):
                 return "codex memory updates must cite only supplied chunks"
     if input_manifest.get("workload") == "translate_batch":
         error = _validate_translation_artifacts(root, input_manifest, artifacts_by_role)
+        if error:
+            return error
+    if input_manifest.get("workload") == "entity_disambiguation":
+        error = _validate_disambiguation_artifact(root, artifacts_by_role)
         if error:
             return error
     return None

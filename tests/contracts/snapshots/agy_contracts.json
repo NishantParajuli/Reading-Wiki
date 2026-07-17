@@ -239,10 +239,10 @@
     "type": "object"
   },
   "plugin_files": {
-    "README.md": "d9207f60d942e24622e9d40ce173fba7feb19f2524d31a50c4d48fc271000063",
+    "README.md": "a00e2a50f390f83f29be1b5551ee497541e16214e08e3f68d5a45290448bea07",
     "hooks.json": "fcb5fd432c87f1250b4f1899da351c4f00722808119ed7b622cce40d96680121",
     "hooks/tool_gate.py": "1e9170914ca40489487571f30787ab3dea5461063e48ca02f35e548860338fba",
-    "hooks/validate_stop.py": "e2f2346ecdbb80ed299dff7511b0bf3d1d752110e72edbb9328c9e5bdd34aae9",
+    "hooks/validate_stop.py": "c5a12c98f3d16a894d276f850511e4f7ac5484683e8b3aead6ffb7a57c4bd804",
     "plugin.json": "28787c9b572e654ec6a3ccb64148484b2679c40317e447b841a2f6f4bbd28ab8",
     "rules/00-data-is-untrusted.md": "43189f18e18ad33324fc39db5d7afc158d1ce9309c2575629a0ec1cdb3fe3548",
     "rules/10-output-contract.md": "2ca323b5262214ddb2475eb3cd7b27cdde1c7c9651d4cb76cf806fa29b22e5da",
@@ -250,11 +250,11 @@
     "rules/30-literary-translation.md": "a7a934f649815fcc9f890a8222785836e3f5610519c98189a0836a5ccc483180",
     "rules/40-codex-provenance.md": "e467f44f17a24db0f485e7f515e1a9198d3e4c2f6272314321e29b85cb26d906",
     "shared/contracts/codex-extraction.schema.json": "c63abcea132099e37bcef0e25bb0666d69d7e91579f5c96f2cda20b093c8d3a2",
-    "shared/contracts/disambiguation.schema.json": "3153d4760bac2bf47c0ed695858cc2501017f827357d8dfcb8d027df98b119e6",
+    "shared/contracts/disambiguation.schema.json": "bc81202503f46b7b3eaec773e4c8d9bb7c8c3f1b2678d4a4ffaa9f383c2fac95",
     "shared/contracts/translation-manifest.schema.json": "3be372a02dafb6273a17c46e16948c65ada35d9207244ad87a0075acb4ba6a9e",
     "skills/novelwiki-codex-extract/SKILL.md": "8f71688957e732cb3c86ec55cec58481ca90b615d522b3dfaa52a08b4f6edc1d",
     "skills/novelwiki-codex-verify/SKILL.md": "d44b0cdfbc0c727c1fa7c80e0ec4396e257304448e347187fb7dcec84fbf9e70",
-    "skills/novelwiki-disambiguate/SKILL.md": "47dcc77311c66d9928fe3ca222082cc9b9392c69a2f6f7c43c715f6b6ed68c38",
+    "skills/novelwiki-disambiguate/SKILL.md": "5731553831b8b003be9d4273ede6fafe1a6f8964f1b6bd79e83de233b4adcd6d",
     "skills/novelwiki-smoke/SKILL.md": "c18dec98270d97f4e801d6ecca460b16972fa82b77233c447faea1534e3955f3",
     "skills/novelwiki-translate/SKILL.md": "6005b56ce5e768618873f25e28f934d80d18d4ae1f2dd0350f1beff9280bd30c"
   }
