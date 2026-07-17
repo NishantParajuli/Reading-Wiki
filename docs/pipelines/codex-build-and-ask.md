@@ -110,11 +110,14 @@ optional. For AGY, the chapter chunks, bounded-memory JSON, exact source hash, a
 shape are packed into one `input/task.md` file.
 Hash-pinned task instructions are inlined in the initial print prompt instead of activated as
 a workspace skill. The model writes only `extraction.json`, `running-summary.md`, and
-`audit.json`; the trusted stop hook creates `manifest.json`. Plugin `1.3.1` was qualified
-with a real Lord of the Mysteries chapter-1 v2 run that passed trusted validation and
-committed atomically in a disposable database under an eight-request ceiling. That is an
-early canary, not evidence that late/checkpoint/final-volume chapters have passed; those
-remain required rollout gates. The dated evidence is recorded in
+`audit.json`; the trusted stop hook creates `manifest.json`. Plugin `1.3.2` additionally
+inlines and validates the exact batched-disambiguation decision shape before exit; malformed
+or incomplete case decisions receive the bounded hook repair turn instead of becoming failed
+child runs. The underlying plugin `1.3.1` was qualified with a real Lord of the Mysteries
+chapter-1 v2 run that passed trusted validation and committed atomically in a disposable
+database under an eight-request ceiling. That is an early canary, not evidence that the
+`1.3.2` hardening or late/checkpoint/final-volume chapters have passed a provider canary;
+those remain required rollout gates. The dated evidence is recorded in
 [../testing.md](../testing.md).
 
 ### 4. Index

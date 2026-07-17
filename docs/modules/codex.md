@@ -129,8 +129,9 @@ handler (or individually from the CLI):
   targets, summary/token limits, literal mention spans, chunk provenance), required
   self-review inside the primary run, an optional separate verification child when
   `AGY_SEPARATE_CODEX_VERIFY=true`, one batched disambiguation child for ambiguous
-  mentions, `_resume_ready_commits` after worker loss, and same-job chapter checkpoint
-  skipping on whole-job retry.
+  mentions with exact case coverage and supplied-candidate validation in both the stop hook
+  and host, conservative `NEW` fallback if that child still fails, `_resume_ready_commits`
+  after worker loss, and same-job chapter checkpoint skipping on whole-job retry.
 - **Outbound `artifacts.py` / `cache.py` / `maintenance.py` / `postgres_terms.py`** —
   workflow capability, suffix-aware invalidation, structured reset/orphan pruning,
   established terms.
