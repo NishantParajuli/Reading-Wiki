@@ -5665,9 +5665,14 @@
             "content": {
               "application/json": {
                 "schema": {}
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "A JSON recap, or newline-delimited progress events followed by the recap when the client requests application/x-ndjson."
           },
           "422": {
             "content": {

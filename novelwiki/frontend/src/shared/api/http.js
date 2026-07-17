@@ -37,6 +37,45 @@ async function parseError(res) {
   return error;
 }
 
+async function parseJSONStream(res) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result;
+
+  function consume(line) {
+    if (!line.trim()) return;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch (error) {
+      throw new Error("The recap service returned an invalid streamed response.");
+    }
+    if (event.event === "result") result = event.data;
+    if (event.event === "error") {
+      const streamError = new Error(event.detail || "Recap generation failed.");
+      streamError.status = event.status;
+      throw streamError;
+    }
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      lines.forEach(consume);
+      if (done) break;
+    }
+    consume(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+  if (result !== undefined) return result;
+  throw new Error("The recap connection ended before a result was returned. Please try again.");
+}
+
 export async function req(method, url, body) {
   const opts = { method, credentials: "include", headers: { Accept: "application/json" } };
   if (!SAFE_METHODS.has(method.toUpperCase())) mutationHeaders(opts.headers);
@@ -59,6 +98,30 @@ export const getJSON = (url) => req("GET", url);
 export const postJSON = (url, body) => req("POST", url, body || {});
 export const putJSON = (url, body) => req("PUT", url, body);
 export const delJSON = (url) => req("DELETE", url);
+
+export async function postJSONStream(url, body) {
+  const headers = mutationHeaders({
+    Accept: "application/x-ndjson",
+    "Content-Type": "application/json",
+  });
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers,
+    body: JSON.stringify(body || {}),
+  });
+  if (!res.ok) {
+    if (res.status === 401 && !url.includes("/auth/") && onUnauthorized) {
+      try { onUnauthorized(); } catch (error) { /* re-gating is best-effort */ }
+    }
+    throw await parseError(res);
+  }
+  const contentType = res.headers?.get?.("content-type") || "";
+  if (!contentType.includes("application/x-ndjson") || !res.body?.getReader) {
+    return res.json();
+  }
+  return parseJSONStream(res);
+}
 
 export async function postMultipart(url, formData) {
   const res = await fetch(url, {

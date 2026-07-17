@@ -58,7 +58,7 @@ inputs), `admin_users` (accounts + month usage + effective limits), `admin_usage
 | `GET /api/users/{username}` | public profile |
 | `GET /api/novels/{id}/health` | owner-facing pipeline health: codex missing/stale, untranslated raws, missing narration per voice, source freshness, recent pipeline errors |
 | `GET /api/novels/{id}/cost-estimate` | units an action (codex build / batch translation / whole-book narration) would consume vs. the caller's remaining monthly quota — shown before any spend |
-| `POST /api/novels/{id}/recap` | mounted here, but execution is **Codex-owned** (`CodexRecapApi` injected) — same trusted ceiling and cache as Ask |
+| `POST /api/novels/{id}/recap` | mounted here, but execution is **Codex-owned** (`CodexRecapApi` injected) — same trusted ceiling and cache as Ask; the SPA negotiates a heartbeat NDJSON stream so long cache misses survive the proxy read timeout |
 
 Cover/asset URLs in projections are rewritten onto the access-controlled asset routes
 (`_rewrite`), so historical public URLs can't bypass permission checks.

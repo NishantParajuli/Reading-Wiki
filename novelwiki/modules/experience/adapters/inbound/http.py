@@ -21,11 +21,13 @@ caller can read.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from novelwiki.platform.auth import current_user
@@ -38,6 +40,9 @@ from .dependencies import operational_projection_dependency, quota_projection_de
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_RECAP_STREAM_MEDIA_TYPE = "application/x-ndjson"
+_RECAP_HEARTBEAT_SECONDS = 15.0
 
 async def codex_recap_service_dependency() -> CodexRecapApi:
     raise RuntimeError("CodexRecapService was not wired by the composition root")
@@ -500,10 +505,77 @@ class RecapRequest(BaseModel):
     ceiling: float | None = None
 
 
-@router.post("/novels/{novel_id}/recap")
+def _recap_stream_frame(event: str, **payload) -> str:
+    return json.dumps({"event": event, **payload}, ensure_ascii=False) + "\n"
+
+
+async def _stream_recap(
+    service: CodexRecapApi,
+    novel_id: int,
+    ceiling: float | None,
+    principal: Principal,
+    *,
+    heartbeat_seconds: float = _RECAP_HEARTBEAT_SECONDS,
+):
+    """Keep a long recap request alive through proxies until its final JSON is ready."""
+    task = asyncio.create_task(service.recap(novel_id, ceiling, principal))
+    try:
+        # Send response bytes before the agent starts its potentially multi-minute run.
+        yield _recap_stream_frame("started")
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=heartbeat_seconds)
+            if task not in done:
+                yield _recap_stream_frame("heartbeat")
+                continue
+            if task.cancelled():
+                yield _recap_stream_frame(
+                    "error", detail="Recap generation was canceled.", status=499
+                )
+                return
+            try:
+                result = task.result()
+            except HTTPException as exc:
+                yield _recap_stream_frame(
+                    "error", detail=str(exc.detail), status=exc.status_code
+                )
+            except Exception:
+                logger.exception("Recap generation error")
+                yield _recap_stream_frame(
+                    "error",
+                    detail="The AI service failed to build a recap. Please try again.",
+                    status=502,
+                )
+            else:
+                yield _recap_stream_frame("result", data=result)
+            return
+    finally:
+        # A closed tab or interrupted connection must not leave provider work running.
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+@router.post(
+    "/novels/{novel_id}/recap",
+    responses={
+        200: {
+            "description": (
+                "A JSON recap, or newline-delimited progress events followed by the "
+                "recap when the client requests application/x-ndjson."
+            ),
+            "content": {
+                _RECAP_STREAM_MEDIA_TYPE: {"schema": {"type": "string"}},
+            },
+        }
+    },
+)
 async def api_recap(
     novel_id: int,
     req: RecapRequest,
+    request: Request,
     user: dict = Depends(current_user),
     service: CodexRecapApi = Depends(codex_recap_service_dependency),
     principal_factory=Depends(codex_recap_principal_factory_dependency),
@@ -517,6 +589,15 @@ async def api_recap(
     """
     try:
         principal: Principal = principal_factory(user)
+        if _RECAP_STREAM_MEDIA_TYPE in request.headers.get("accept", "").lower():
+            return StreamingResponse(
+                _stream_recap(service, novel_id, req.ceiling, principal),
+                media_type=_RECAP_STREAM_MEDIA_TYPE,
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         return await service.recap(novel_id, req.ceiling, principal)
     except HTTPException:
         raise

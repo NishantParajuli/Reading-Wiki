@@ -1,4 +1,4 @@
-import { API_BASE, getJSON, postJSON } from "../../shared/api/http.js";
+import { API_BASE, getJSON, postJSONStream } from "../../shared/api/http.js";
 const novel = (id) => `${API_BASE}/novels/${id}`;
 export const experienceApi = {
   home: () => getJSON(`${API_BASE}/home`),
@@ -9,7 +9,7 @@ export const experienceApi = {
     const query = params.toString();
     return getJSON(`${API_BASE}/activity${query ? `?${query}` : ""}`);
   },
-  recap: (id, ceiling) => postJSON(`${novel(id)}/recap`, ceiling != null ? { ceiling } : {}),
+  recap: (id, ceiling) => postJSONStream(`${novel(id)}/recap`, ceiling != null ? { ceiling } : {}),
   novelHealth: (id, voiceId) => getJSON(`${novel(id)}/health${voiceId ? `?voice_id=${encodeURIComponent(voiceId)}` : ""}`),
   discover(opts) {
     const input = (typeof opts === "string" || opts == null) ? { q: opts } : opts;
