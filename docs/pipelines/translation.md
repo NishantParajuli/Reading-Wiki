@@ -26,10 +26,11 @@ spend.
    established spellings (soft guidance). `--seed`/`POST …/glossary/seed` pre-populates
    English spellings from codex entities so a source switch (fan TL site → raw) keeps
    names identical.
-3. **Model call** — `MODEL_TRANSLATE` via OpenRouter with the domain prompt; input
-   capped at `TRANSLATE_MAX_INPUT_CHARS` (48k chars). The response is delimiter-framed:
-   translated title, translation body, and a `new_terms` list (terms the model
-   encountered and how it rendered them).
+3. **Model call** — `MODEL_TRANSLATE` via native DeepSeek V4 when
+   `DEEPSEEK_API_KEY` is configured, otherwise OpenRouter, with the domain prompt;
+   input is capped at `TRANSLATE_MAX_INPUT_CHARS` (48k chars). The response is
+   delimiter-framed: translated title, translation body, and a `new_terms` list (terms
+   the model encountered and how it rendered them).
 4. **Atomic commit** — the **`commit_translation` workflow** (Reading + Translation +
    Work in one transaction):
    - Reading: row-locked optimistic commit — the chapter's current

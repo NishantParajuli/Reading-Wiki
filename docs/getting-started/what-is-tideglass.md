@@ -47,8 +47,11 @@ Full explanation: [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md)
 ## The cast of external services
 
 - **PostgreSQL** (with `pgvector` + `pg_trgm`) — the one database.
-- **OpenRouter** — all LLM work by default: translation, extraction, Q&A, embeddings,
-  reranking ("Flash reads, Pro thinks" two-model split).
+- **DeepSeek** (optional) — native V4 Flash/Pro generation for translation, extraction,
+  segmentation, and Q&A when `DEEPSEEK_API_KEY` is set.
+- **OpenRouter** — embeddings and reranking always; also the generation fallback when
+  native DeepSeek is not configured or a non-DeepSeek model id is selected ("Flash
+  reads, Pro thinks" two-model split by default).
 - **Gemini** (optional) — vision OCR escalation for scanned PDFs, held inside its free
   tier by persistent budget counters.
 - **GPU sidecars** (optional) — PaddleOCR (`:8077`) and OmniVoice TTS (`:8078`), each a

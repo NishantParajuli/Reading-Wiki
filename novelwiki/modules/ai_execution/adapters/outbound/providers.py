@@ -39,16 +39,25 @@ def _http_status(error: Exception) -> int | None:
     response = getattr(error, "response", None)
     return getattr(response, "status_code", None)
 
-# Lazy initialized OpenAI client for Chat and Embeddings
-_openai_client = None
 
-def get_openai_client() -> AsyncOpenAI:
-    global _openai_client
-    if _openai_client is None:
+# Both providers expose OpenAI-compatible APIs. Keep separate lazy clients so native
+# DeepSeek can own text generation without changing OpenRouter embedding traffic.
+_openrouter_client = None
+_deepseek_client = None
+
+_NATIVE_DEEPSEEK_MODELS = {
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+}
+
+
+def get_openrouter_client() -> AsyncOpenAI:
+    global _openrouter_client
+    if _openrouter_client is None:
         api_key = settings.OPENROUTER_API_KEY
         if not api_key:
             logger.warning("OPENROUTER_API_KEY is not set in environments. API calls will fail.")
-        _openai_client = AsyncOpenAI(
+        _openrouter_client = AsyncOpenAI(
             api_key=api_key,
             base_url=settings.OPENROUTER_BASE_URL,
             default_headers={
@@ -56,7 +65,36 @@ def get_openai_client() -> AsyncOpenAI:
                 "X-OpenRouter-Title": settings.OPENROUTER_TITLE,
             }
         )
-    return _openai_client
+    return _openrouter_client
+
+
+def get_deepseek_client() -> AsyncOpenAI:
+    global _deepseek_client
+    if _deepseek_client is None:
+        api_key = settings.DEEPSEEK_API_KEY
+        if not api_key.strip():
+            logger.warning("DEEPSEEK_API_KEY is not set; native DeepSeek calls will fail.")
+        _deepseek_client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=settings.DEEPSEEK_BASE_URL,
+        )
+    return _deepseek_client
+
+
+def _native_deepseek_model(model: str) -> str | None:
+    """Maps OpenRouter's DeepSeek V4 ids to the native provider's model ids."""
+    candidate = model.removeprefix("deepseek/")
+    return candidate if candidate in _NATIVE_DEEPSEEK_MODELS else None
+
+
+def _chat_route(model: str) -> tuple[AsyncOpenAI, str, str]:
+    """Returns (client, provider label, provider-specific model id)."""
+    native_model = _native_deepseek_model(model)
+    if settings.DEEPSEEK_API_KEY.strip() and native_model:
+        return get_deepseek_client(), "deepseek", native_model
+    openrouter_model = f"deepseek/{native_model}" if native_model else model
+    return get_openrouter_client(), "openrouter", openrouter_model
+
 
 def normalize_vector(v: list[float]) -> list[float]:
     """Applies L2 normalization to a vector for cosine similarity operations."""
@@ -64,6 +102,7 @@ def normalize_vector(v: list[float]) -> list[float]:
     if norm == 0:
         return v
     return [x / norm for x in v]
+
 
 def _validate_dim(vec: list[float]) -> list[float]:
     """Guards the EMBED_DIM <-> pgvector column invariant: a wrong-dimension
@@ -76,21 +115,28 @@ def _validate_dim(vec: list[float]) -> list[float]:
         )
     return vec
 
+
 async def call_chat_completion(
-    model: str, 
-    messages: list[dict], 
-    temperature: float = 0.0, 
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.0,
     response_format: dict = None,
     reasoning: str = "high"
 ) -> str:
-    """Invokes OpenRouter Chat Completions API with exponential backoff retries."""
-    client = get_openai_client()
+    """Invokes the selected text provider with exponential backoff retries.
+
+    Native DeepSeek wins for its V4 model ids when DEEPSEEK_API_KEY is configured.
+    Other models, and all calls when the key is absent, continue through OpenRouter.
+    """
+    client, provider, provider_model = _chat_route(model)
+    provider_name = "DeepSeek" if provider == "deepseek" else "OpenRouter"
     backoff = 1.0
     started = time.monotonic()
     log_event(
         logger, logging.INFO, "ai.provider_call_started",
-        f"Starting OpenRouter chat completion with model {model}.",
-        provider="openrouter", operation="chat_completion", model=model,
+        f"Starting {provider_name} chat completion with model {provider_model}.",
+        provider=provider, operation="chat_completion", model=provider_model,
+        configured_model=model,
         messages=len(messages), input_chars=_payload_chars(messages),
         temperature=temperature, reasoning_effort=reasoning, max_attempts=5,
         structured_response=bool(response_format),
@@ -99,20 +145,21 @@ async def call_chat_completion(
         attempt_started = time.monotonic()
         try:
             kwargs = {
-                "model": model,
+                "model": provider_model,
                 "messages": messages,
                 "temperature": temperature,
                 "reasoning_effort": reasoning,
             }
             if response_format:
                 kwargs["response_format"] = response_format
-                
+
             response = await client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content or ""
             log_event(
                 logger, logging.INFO, "ai.provider_call_completed",
-                f"OpenRouter chat completion with model {model} succeeded on attempt {attempt + 1}.",
-                provider="openrouter", operation="chat_completion", model=model,
+                f"{provider_name} chat completion with model {provider_model} succeeded on attempt {attempt + 1}.",
+                provider=provider, operation="chat_completion", model=provider_model,
+                configured_model=model,
                 attempt=attempt + 1, max_attempts=5, output_chars=len(content),
                 attempt_duration_ms=round((time.monotonic() - attempt_started) * 1000, 2),
                 duration_ms=round((time.monotonic() - started) * 1000, 2),
@@ -124,9 +171,10 @@ async def call_chat_completion(
             log_event(
                 logger, logging.ERROR if terminal else logging.WARNING,
                 "ai.provider_call_failed",
-                f"OpenRouter chat completion with model {model} failed on attempt {attempt + 1}.",
+                f"{provider_name} chat completion with model {provider_model} failed on attempt {attempt + 1}.",
                 exc_info=True if terminal else None,
-                provider="openrouter", operation="chat_completion", model=model,
+                provider=provider, operation="chat_completion", model=provider_model,
+                configured_model=model,
                 attempt=attempt + 1, max_attempts=5, retry_scheduled=not terminal,
                 retry_delay_seconds=None if terminal else backoff,
                 http_status=_http_status(e), error_type=type(e).__name__, error=str(e),
@@ -139,6 +187,7 @@ async def call_chat_completion(
             backoff *= 2.0
     return ""
 
+
 def _embed_kwargs(inp) -> dict:
     kwargs = {"model": settings.EMBED_MODEL, "input": inp}
     if settings.EMBED_REQUEST_DIMENSIONS:
@@ -148,7 +197,7 @@ def _embed_kwargs(inp) -> dict:
 
 async def get_embedding(text: str) -> list[float]:
     """Generates a single normalized vector embedding."""
-    client = get_openai_client()
+    client = get_openrouter_client()
     backoff = 1.0
     started = time.monotonic()
     log_event(
@@ -199,7 +248,7 @@ async def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
     """Generates a batch of normalized vector embeddings, preserving original order."""
     if not texts:
         return []
-    client = get_openai_client()
+    client = get_openrouter_client()
     backoff = 1.0
     started = time.monotonic()
     log_event(
@@ -248,10 +297,10 @@ async def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
             backoff *= 2.0
     return []
 
-# ── Unified provider routing (text → OpenRouter, pixels → Gemini) ───────────
-# The codex/translation/segmentation work is text and goes to OpenRouter (above).
-# Vision work (scanned-PDF OCR escalation) goes to Gemini's free tier through its
-# OpenAI-compatible endpoint, guarded by a persistent daily budget + an RPM limiter.
+# ── Unified provider routing (text → DeepSeek/OpenRouter, pixels → Gemini) ──
+# Codex/translation/segmentation text prefers native DeepSeek V4 when configured
+# and otherwise goes to OpenRouter. Vision work (scanned-PDF OCR escalation) goes
+# to Gemini's free tier, guarded by a persistent daily budget + an RPM limiter.
 
 _gemini_client = None
 # One in-process limiter for the whole app: serialize a minimum interval between
@@ -398,7 +447,8 @@ async def call_llm(
     response_format: dict = None,
 ) -> str:
     """The provider router: pixels go to Gemini vision; everything else goes to
-    OpenRouter (defaulting to the segmentation model). Callers don't pick a provider."""
+    the configured text route (defaulting to the segmentation model). Callers don't
+    pick a provider directly."""
     if needs_vision:
         return await call_vision_completion(messages, model=model, temperature=temperature)
     return await call_chat_completion(

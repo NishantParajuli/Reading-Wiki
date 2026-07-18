@@ -17,7 +17,7 @@ process is divided into ten independently-owned **business modules**, organized 
    systemd AGY worker  ──▶│  3 in-process workers (import / TTS / generic jobs)  │    (pgvector + pg_trgm)
                           │                                                      │
                           │  identity  catalog  reading  acquisition  translation│──▶ filesystem (./data)
-                          │  codex  narration  work  ai_execution  experience    │──▶ OpenRouter / Gemini
+                          │  codex  narration  work  ai_execution  experience    │──▶ AI provider APIs
                           │        + platform + bootstrap + kernel + workflows   │──▶ OCR/TTS GPU sidecars
                           └──────────────────────────────────────────────────────┘
 ```

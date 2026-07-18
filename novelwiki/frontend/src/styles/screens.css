@@ -293,9 +293,49 @@
 }
 .ceiling-pill:hover { border-color: var(--accent); }
 .ceiling-pill b { font-family: var(--mono); font-weight: 600; }
-.ceiling-panel { width: min(340px, 92vw); padding: 16px; }
-.ceiling-stat { font-size: var(--text-sm); color: var(--muted); }
+.ceiling-panel { width: min(380px, calc(100vw - 32px)); padding: 18px; }
+.ceiling-jump { display: flex; flex-direction: column; gap: 7px; }
+.ceiling-jump > label {
+  color: var(--ink-2); font-size: var(--text-sm); font-weight: 700;
+}
+.ceiling-jump-row { display: flex; align-items: stretch; gap: 8px; }
+.ceiling-jump-row .btn { min-width: 58px; }
+.ceiling-number-input {
+  min-width: 0; flex: 1; display: flex; align-items: center; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.ceiling-number-input:focus-within {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.ceiling-number-input.has-error { border-color: var(--danger); }
+.ceiling-number-input > span {
+  align-self: stretch; display: grid; place-items: center; padding: 0 0 0 12px;
+  color: var(--muted); font-family: var(--mono); font-size: var(--text-sm); font-weight: 600;
+}
+.ceiling-number-input input {
+  min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: var(--ink);
+  padding: 9px 12px 9px 7px; font-family: var(--mono); font-size: 16px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ceiling-jump-help, .ceiling-jump-error { font-size: var(--text-xs); }
+.ceiling-jump-help { color: var(--muted); }
+.ceiling-jump-error { color: var(--danger); }
+.ceiling-slider { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
+.ceiling-slider-labels {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  color: var(--muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums;
+}
+.ceiling-slider-labels span:first-child, .ceiling-slider-labels span:last-child { font-family: var(--mono); }
+.ceiling-slider .slider { margin: 0; }
+.ceiling-stat { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-sm); color: var(--muted); }
 .ceiling-stat b { color: var(--ok); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 420px) {
+  .ceiling-panel { padding: 16px; }
+  .ceiling-jump-row .btn { min-height: 42px; }
+  .ceiling-number-input input { min-height: 42px; }
+}
 
 .filters { display: flex; gap: 6px; flex-wrap: wrap; }
 .filter {

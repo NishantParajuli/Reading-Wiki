@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     OPENROUTER_REFERER: str = "https://github.com/epick/novelwiki"
     OPENROUTER_TITLE: str = "Spoiler-Aware Webnovel Wiki"
 
+    # Native DeepSeek is preferred for the V4 text models whenever this key is set.
+    # OpenRouter remains the embedding/rerank provider (and the chat route for
+    # non-DeepSeek model ids), so its credential is still required.
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+
     # Presentation metadata for the UI hero/home surface. These are display-only
     # and never gate content — purely the title/blurb the reader sees.
     NOVEL_TITLE: str = "The Codex"
@@ -36,9 +42,10 @@ class Settings(BaseSettings):
     MODEL_FLASH: str = "deepseek/deepseek-v4-flash"
     MODEL_PRO: str = "deepseek/deepseek-v4-pro"
 
-    # Model used to translate raw (foreign-language) chapters. Point this at your
-    # preferred DeepSeek "pro" model on OpenRouter. Used by the Phase 2 translation
-    # pipeline (on-demand when a raw chapter is opened, + background prefetch).
+    # Model used to translate raw (foreign-language) chapters. The default OpenRouter
+    # id is normalized to DeepSeek's native id when DEEPSEEK_API_KEY is set. Used by
+    # the Phase 2 translation pipeline (on-demand when a raw chapter is opened, +
+    # background prefetch).
     MODEL_TRANSLATE: str = "deepseek/deepseek-v4-pro"
     # How many upcoming raw chapters to translate in the background after one is opened.
     TRANSLATE_PREFETCH: int = 3
@@ -227,7 +234,7 @@ class Settings(BaseSettings):
     # Worker health is considered stale after this interval for /auth/me and admin UI.
     AGY_WORKER_HEALTH_TTL_SECONDS: int = 90
 
-    # Text segmentation/cleanup LLM (routed through OpenRouter alongside the codex models).
+    # Text segmentation/cleanup LLM (native DeepSeek when configured, otherwise OpenRouter).
     SEGMENT_MODEL: str = "deepseek/deepseek-v4-pro"
 
     # Vision provider — Gemini via its OpenAI-compatible endpoint. Used for scanned-PDF OCR

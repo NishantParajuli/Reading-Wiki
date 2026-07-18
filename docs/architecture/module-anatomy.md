@@ -209,10 +209,10 @@ Everything with a real-world side effect:
   - **connection-bound transaction services** (take one `connection`; constructed only by
     the unit-of-work binder for workflow participation), e.g.
     `PostgresReadingTranslationTransactionService`.
-- **Provider gateways** — AI Execution's `providers.py` (OpenRouter chat/embed/rerank,
-  Gemini vision), the OCR client, narration's `sidecar.py` (OmniVoice HTTP client with the
-  shared service token), identity's `oauth.py` (hand-rolled Google/Discord code exchange)
-  and `email.py` (aiosmtplib).
+- **Provider gateways** — AI Execution's `providers.py` (native DeepSeek/OpenRouter chat,
+  OpenRouter embed/rerank, Gemini vision), the OCR client, narration's `sidecar.py`
+  (OmniVoice HTTP client with the shared service token), identity's `oauth.py`
+  (hand-rolled Google/Discord code exchange) and `email.py` (aiosmtplib).
 - **Filesystem adapters** — identity's `avatars.py`, acquisition's importer `storage.py`,
   codex BM25 index persistence, AGY `workspace.py`.
 - **Cross-module bridges** — small classes adapting another module's public capability to

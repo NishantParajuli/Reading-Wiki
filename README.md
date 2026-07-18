@@ -129,8 +129,8 @@ evidence: [docs/architecture/](docs/README.md#architecture).
 **DB** PostgreSQL + pgvector (HNSW) + pg_trgm ·
 **Auth** server-side sessions, argon2-cffi, hand-rolled OAuth (httpx), aiosmtplib ·
 **Retrieval** bm25s ⊕ pgvector → RRF → reranker ·
-**LLM** OpenRouter ("Flash reads, Pro thinks"), Gemini vision for OCR escalation;
-optional AGY CLI backend ·
+**LLM** native DeepSeek V4 when configured, with OpenRouter for embeddings/reranking
+and other generation; Gemini vision for OCR escalation; optional AGY CLI backend ·
 **Scraping** curl-cffi + selectolax/lxml, json-repair ·
 **Import** ebooklib, pymupdf, nh3, pillow, ftfy ·
 **TTS** OmniVoice sidecar, ffmpeg → Opus ·
@@ -146,6 +146,7 @@ Full guide: [docs/getting-started/local-setup.md](docs/getting-started/local-set
 ```bash
 uv sync
 cp .env.example .env    # set DATABASE_URL, DB_SUPERUSER_URL, OPENROUTER_API_KEY,
+                        # optionally DEEPSEEK_API_KEY for native V4 generation;
                         # SESSION_SECRET, ADMIN_EMAIL/ADMIN_PASSWORD; COOKIE_SECURE=false for dev
 cd novelwiki/frontend && npm ci && npm run build && cd ../..
 uvicorn novelwiki.api.app:app --reload --port 8000     # or: python main.py

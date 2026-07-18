@@ -29,8 +29,9 @@ The engine, shared by every trigger (reader open, prefetch, batch job, CLI):
 1. **Per-chapter lock** (`_lock_for(novel_id, number)`) — no duplicate concurrent work.
 2. **Glossary load & split** — `locked`/confirmed mappings ("translate 林轩 as Lin Xuan")
    vs. established spellings (soft guidance).
-3. **Prompted call** — `domain/prompts.py` templates + `MODEL_TRANSLATE` via OpenRouter;
-   input capped at `TRANSLATE_MAX_INPUT_CHARS` (48k chars).
+3. **Prompted call** — `domain/prompts.py` templates + `MODEL_TRANSLATE` via native
+   DeepSeek V4 when `DEEPSEEK_API_KEY` is configured, otherwise OpenRouter; input capped
+   at `TRANSLATE_MAX_INPUT_CHARS` (48k chars).
 4. **Delimiter-framed parse** — `(translated_title, translation_text, new_terms)`.
 5. **Atomic commit** — the `commit_translation` workflow: Reading's row-locked,
    optimistic commit (`expected_source_hash` = SHA-256 of the `original_text` actually
