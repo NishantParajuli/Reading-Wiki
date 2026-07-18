@@ -76,6 +76,8 @@ async def api_cost_estimate(
 
 async def api_recap(novel_id: int, req: RecapRequest, user: dict):  # noqa: F405
     """Compose explicit Codex dependencies for legacy direct-call fixtures."""
+    from starlette.requests import Request
+
     from novelwiki.bootstrap.codex_migration import (
         build_codex_migration_service,
         codex_principal_from_user,
@@ -96,6 +98,7 @@ async def api_recap(novel_id: int, req: RecapRequest, user: dict):  # noqa: F405
     return await _native.api_recap(
         novel_id,
         req,
+        Request({"type": "http", "method": "POST", "path": "", "headers": []}),
         user=user,
         service=service,
         principal_factory=codex_principal_from_user,

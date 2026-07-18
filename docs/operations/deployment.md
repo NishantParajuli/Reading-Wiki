@@ -27,6 +27,11 @@ Key properties:
 - Persistent state: PostgreSQL (host) + the named volume `novelwiki_data` mounted at
   `/app/data` (BM25 indexes, assets, audio, import artifacts — see
   [../data/filesystem-layout.md](../data/filesystem-layout.md)).
+- Uncached story recaps may outlast Cloudflare's 120-second proxy read timeout. The SPA
+  negotiates the recap endpoint's NDJSON mode, which sends an immediate event plus 15-second
+  heartbeats until completion; keep streaming responses enabled through any replacement
+  reverse proxy. Plain JSON API clients retain the original synchronous behavior and therefore
+  remain subject to their own/proxy timeout.
 
 ## The web image (`Dockerfile`, three stages)
 

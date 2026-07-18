@@ -82,7 +82,10 @@ prefs) · `POST /api/me/avatar`.
 `GET /api/novels/{id}/cost-estimate` (`action=codex_build|translate|audiobook`, range
 params — estimated units vs remaining quota, shown before spending) ·
 `POST /api/novels/{id}/recap` (spoiler-safe story-so-far; executed by Codex, cached per
-(novel, ceiling)).
+(novel, ceiling)). The SPA requests `Accept: application/x-ndjson`; the response emits an
+immediate `started` event, periodic `heartbeat` events, then one `result` or `error` event so
+a cache-miss recap can run beyond the reverse proxy's 120-second read timeout. Clients that
+do not request the stream continue to receive the original JSON response.
 
 ## Reading (`/api`, auth)
 

@@ -4,6 +4,7 @@ import { acquisitionApi } from "../modules/acquisition/api.js";
 import { catalogApi } from "../modules/catalog/api.js";
 import { authApi } from "../modules/identity/api.js";
 import { readingApi } from "../modules/reading/api.js";
+import { experienceApi } from "../modules/experience/api.js";
 import { setUnauthorizedHandler } from "../shared/api/http.js";
 
 function response(body, { status = 200, statusText = "OK" } = {}) {
@@ -12,6 +13,24 @@ function response(body, { status = 200, statusText = "OK" } = {}) {
     status,
     statusText,
     json: vi.fn().mockResolvedValue(body),
+  };
+}
+
+function streamResponse(chunks) {
+  const reads = chunks.map((chunk) => ({
+    done: false,
+    value: new TextEncoder().encode(chunk),
+  }));
+  const reader = {
+    read: vi.fn(async () => reads.shift() || ({ done: true })),
+    releaseLock: vi.fn(),
+  };
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: vi.fn().mockReturnValue("application/x-ndjson") },
+    body: { getReader: vi.fn().mockReturnValue(reader) },
+    json: vi.fn(),
   };
 }
 
@@ -73,6 +92,28 @@ describe("HTTP compatibility transport", () => {
       "Content-Type": "application/octet-stream",
       "X-Tideglass-CSRF": "reader-token",
       "X-Tideglass-Request": "1",
+    });
+  });
+
+  it("keeps long recap requests alive and returns the streamed result", async () => {
+    fetch.mockResolvedValue(streamResponse([
+      '{"event":"started"}\n{"event":"heart',
+      'beat"}\n{"event":"result","data":{"answer":"So far.","citations":[]}}\n',
+    ]));
+
+    await expect(experienceApi.recap(7, 19)).resolves.toEqual({
+      answer: "So far.", citations: [],
+    });
+    expect(fetch).toHaveBeenCalledWith("/api/novels/7/recap", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        Accept: "application/x-ndjson",
+        "Content-Type": "application/json",
+        "X-Tideglass-CSRF": "reader-token",
+        "X-Tideglass-Request": "1",
+      },
+      body: JSON.stringify({ ceiling: 19 }),
     });
   });
 });

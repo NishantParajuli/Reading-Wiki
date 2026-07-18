@@ -102,6 +102,11 @@ function RecapCard({ novelId, ceiling }) {
           {state.status === "loading" ? "Building recap…" : state.status === "ready" ? "Refresh recap" : "Recap the story so far"}
         </Button>
       </div>
+      {state.status === "loading" && (
+        <p className="muted" style={{ fontSize: "var(--text-xs)", margin: "8px 0 0" }}>
+          A fresh recap can take a few minutes. Keep this tab open while it finishes.
+        </p>
+      )}
     </div>
   );
 }

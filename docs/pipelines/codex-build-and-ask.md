@@ -171,7 +171,10 @@ first view and cache in `wiki_cache` per `(entity, ceiling)`), timelines, and As
 
 `POST /api/novels/{id}/recap` (mounted by Experience, executed by Codex): the same
 trusted ceiling, a story-so-far synthesis with citations, cached per
-`(novel, ceiling)` — the model never sees a chapter beyond the reader's ceiling.
+`(novel, ceiling)` — the model never sees a chapter beyond the reader's ceiling. Because a
+cache miss can take several minutes, the browser negotiates an NDJSON response that sends an
+immediate start event and 15-second heartbeats until the final recap arrives; ordinary JSON
+clients retain the synchronous response shape. Closing the stream cancels the provider work.
 
 ## Maintenance
 
