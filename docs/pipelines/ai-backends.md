@@ -1,7 +1,7 @@
 # Pipeline: AI execution backends (API vs AGY)
 
-> Tideglass can execute AI workloads two ways: the metered **API backend** (OpenRouter/
-> Gemini, pay-per-token) or the **AGY backend** (the Antigravity CLI, driving a
+> Tideglass can execute AI workloads two ways: the metered **API backend** (DeepSeek/
+> OpenRouter/Gemini, pay-per-token) or the **AGY backend** (the Antigravity CLI, driving a
 > subscription account on the host). This page follows one job through backend
 > selection, execution, and every failure path. Module reference:
 > [../modules/ai-execution.md](../modules/ai-execution.md); operator procedures:
@@ -12,8 +12,8 @@
 
 | | API | AGY |
 |---|---|---|
-| Transport | HTTPS to OpenRouter / Gemini | local subprocess: the `agy` CLI in print mode |
-| Auth | `OPENROUTER_API_KEY` / `GEMINI_API_KEY` in app env | the CLI's own official browser/keyring login on the host — **never** an app credential |
+| Transport | HTTPS to DeepSeek / OpenRouter / Gemini | local subprocess: the `agy` CLI in print mode |
+| Auth | `DEEPSEEK_API_KEY` (optional native V4), `OPENROUTER_API_KEY` (embedding/rerank + other generation), `GEMINI_API_KEY` (optional vision) in app env | the CLI's own official browser/keyring login on the host — **never** an app credential |
 | Cost model | per-token, metered by user quotas | subscription capacity (rate/quota windows) |
 | Executor | in-process (routes, generic worker) | dedicated host worker only (`python -m novelwiki.agy.worker`, systemd) |
 | Default | default selection; requires the configured provider credentials | dormant unless `AGY_ENABLED` **and** an admin grant; Codex also requires `AGY_CODEX_ENABLED` |

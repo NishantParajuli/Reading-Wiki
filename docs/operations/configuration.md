@@ -38,11 +38,20 @@ sensitive-data boundary.
 | `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/novelwiki` | plain `postgresql://` scheme (asyncpg direct — **not** `postgresql+asyncpg://`) |
 | `DB_SUPERUSER_URL` | `postgresql://postgres:postgres@localhost:5432/postgres` | used once at startup to auto-create the app DB if missing |
 
-## LLM provider routing (OpenRouter)
+## LLM provider routing (DeepSeek, OpenRouter, Gemini)
+
+When `DEEPSEEK_API_KEY` is non-empty, the configured V4 ids
+(`deepseek/deepseek-v4-flash` or `deepseek-v4-flash`, and the equivalent Pro id) are
+sent directly to DeepSeek as `deepseek-v4-flash` / `deepseek-v4-pro`. With no native
+key, those calls use OpenRouter as before. A configured non-DeepSeek model always uses
+OpenRouter. Embeddings and reranking always use OpenRouter regardless of the DeepSeek
+key, so `OPENROUTER_API_KEY` remains required.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `OPENROUTER_API_KEY` | `""` | one key for chat, translation, embeddings, rerank |
+| `DEEPSEEK_API_KEY` | `""` | enables native DeepSeek V4 text generation when non-empty |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible native endpoint |
+| `OPENROUTER_API_KEY` | `""` | embeddings and rerank; chat/translation when native DeepSeek is not selected |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | |
 | `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | repo URL / app title | attribution headers |
 | `MODEL_FLASH` | `deepseek/deepseek-v4-flash` | cheap reader/distiller ("Flash reads…") |
@@ -242,7 +251,8 @@ authenticated real-CLI canary passes against the pinned binary. Validated at boo
 
 ## Minimal production checklist
 
-`DATABASE_URL`, `DB_SUPERUSER_URL`, `OPENROUTER_API_KEY`, a long random
+`DATABASE_URL`, `DB_SUPERUSER_URL`, `OPENROUTER_API_KEY`, optionally
+`DEEPSEEK_API_KEY` for native V4 generation, a long random
 `SESSION_SECRET`, a long random `SIDECAR_AUTH_TOKEN` (if any sidecar runs),
 `ALLOWED_ORIGINS`/`PUBLIC_BASE_URL` for your domain, `COOKIE_SECURE=true`,
 `LOG_ENVIRONMENT=production`, `ADMIN_EMAIL`/`ADMIN_PASSWORD` for first boot, SMTP if you

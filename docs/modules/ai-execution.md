@@ -1,7 +1,8 @@
 # AI Execution module (`novelwiki/modules/ai_execution/`)
 
 **Responsibility:** *how* AI work runs, as opposed to *what* it does. This module owns:
-the provider gateways (OpenRouter chat/embeddings/rerank, Gemini vision), the read-side
+the provider gateways (native DeepSeek/OpenRouter chat, OpenRouter embeddings/rerank,
+Gemini vision), the read-side
 **cost controls** (denial-of-wallet guards on Ask/profile synthesis), the admin-granted
 **backend policy** deciding whether a user's job runs on the metered **API** or the
 subscription-based **AGY CLI**, the hardened AGY runner/workspace/validators, the
@@ -40,12 +41,13 @@ Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md).
 
 ### `providers.py` — the API backend
 
-OpenRouter-backed implementations of the four gateways (model ids from settings:
-`MODEL_FLASH`/`MODEL_PRO`/`MODEL_TRANSLATE`/`SEGMENT_MODEL`, `EMBED_MODEL`(+`EMBED_DIM`,
-`EMBED_REQUEST_DIMENSIONS`), `RERANK_MODEL`) plus Gemini vision via its OpenAI-compatible
-endpoint with the persistent **daily budget** (`provider_budget` rows per (provider,
-day), `GEMINI_DAILY_BUDGET`, `GEMINI_RPM`) so a multi-day OCR run can't blow the free
-tier after a restart.
+Implementations of the four gateways. Text generation uses native DeepSeek for the V4
+model ids when `DEEPSEEK_API_KEY` is non-empty, otherwise OpenRouter; non-DeepSeek model
+ids remain on OpenRouter. Embeddings (`EMBED_MODEL`, `EMBED_DIM`,
+`EMBED_REQUEST_DIMENSIONS`) and reranking (`RERANK_MODEL`) always use OpenRouter. Gemini
+vision uses its OpenAI-compatible endpoint with the persistent **daily budget**
+(`provider_budget` rows per (provider, day), `GEMINI_DAILY_BUDGET`, `GEMINI_RPM`) so a
+multi-day OCR run can't blow the free tier after a restart.
 
 ### `limits.py` — read-side cost controls
 

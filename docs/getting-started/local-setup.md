@@ -10,7 +10,10 @@ From zero to a running instance with one novel in it. (Production deployment is
   works too)
 - **PostgreSQL** with the `vector` (pgvector) and `pg_trgm` extensions available
 - **Node 20+** (to build the frontend)
-- An **OpenRouter API key** — translation, extraction, embeddings, rerank, Q&A
+- An **OpenRouter API key** — always used for embeddings and reranking, and used for
+  generation when native DeepSeek is not configured
+- Optional: a **DeepSeek API key** — routes the default V4 Flash/Pro translation,
+  extraction, segmentation, and Q&A models directly to DeepSeek
 - Optional: a **Gemini API key** (scanned-PDF OCR escalation), an **NVIDIA GPU**
   (OCR/TTS sidecars), Docker
 
@@ -35,6 +38,7 @@ Minimum edits for dev:
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/novelwiki
 DB_SUPERUSER_URL=postgresql://postgres:postgres@localhost:5432/postgres
 OPENROUTER_API_KEY=sk-or-...
+DEEPSEEK_API_KEY=sk-...                # optional native V4 generation
 SESSION_SECRET=any-long-random-string
 COOKIE_SECURE=false                  # plain-HTTP localhost
 ADMIN_EMAIL=you@example.com

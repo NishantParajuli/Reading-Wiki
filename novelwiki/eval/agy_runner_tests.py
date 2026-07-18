@@ -31,11 +31,13 @@ def fake_runner(tmp_path, monkeypatch):
 
 def test_child_environment_is_positive_allowlist(monkeypatch):
     source = {"HOME": "/tmp/home", "PATH": "/bin", "LANG": "C", "DATABASE_URL": "secret",
-              "OPENROUTER_API_KEY": "secret", "GOOGLE_CLIENT_SECRET": "secret", "RANDOM_TOKEN": "secret"}
+              "OPENROUTER_API_KEY": "secret", "DEEPSEEK_API_KEY": "secret",
+              "GOOGLE_CLIENT_SECRET": "secret", "RANDOM_TOKEN": "secret"}
     env = child_environment(source)
     assert env["HOME"] == "/tmp/home"
     assert env["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
-    assert not ({"DATABASE_URL", "OPENROUTER_API_KEY", "GOOGLE_CLIENT_SECRET", "RANDOM_TOKEN"} & set(env))
+    assert not ({"DATABASE_URL", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY",
+                 "GOOGLE_CLIENT_SECRET", "RANDOM_TOKEN"} & set(env))
 
 
 def test_argv_is_vector_and_never_contains_dangerous_flag(fake_runner):

@@ -36,8 +36,9 @@ Highlights of the structure (the full annotated reference is
 - **Database** (`DATABASE_URL`, `DB_SUPERUSER_URL`) — plain `postgresql://` scheme; asyncpg
   connects directly (not the SQLAlchemy dialect form).
 - **Model routing** — `MODEL_FLASH`/`MODEL_PRO` ("Flash reads, Pro thinks"),
-  `MODEL_TRANSLATE`, `SEGMENT_MODEL`, `EMBED_MODEL`+`EMBED_DIM`, `RERANK_MODEL`, all via
-  OpenRouter; Gemini vision settings for OCR escalation.
+  `MODEL_TRANSLATE`, `SEGMENT_MODEL`, `EMBED_MODEL`+`EMBED_DIM`, `RERANK_MODEL`; native
+  DeepSeek V4 generation when its key is configured, OpenRouter for other generation
+  plus embeddings/reranking, and Gemini vision settings for OCR escalation.
 - **Retrieval knobs** — chunk sizes, RRF constant, rerank depth, agent iteration cap,
   BM25 index path and thread offload.
 - **Cost controls** — the `ASK_*` denial-of-wallet family, quotas (`DEFAULT_QUOTA_*`),

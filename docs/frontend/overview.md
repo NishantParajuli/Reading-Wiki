@@ -103,6 +103,12 @@ future codex data.
 custom property, spacing, type scale); the other sheets consume tokens only. Theme
 toggling sets `data-theme` and persists to localStorage (`nw-theme`, `nw-accent-h`).
 
+The Codex ceiling popover accepts an exact chapter number (including fractional chapter
+numbers) and validates it against the reader's available range. Its range slider remains
+available for coarse browsing, while “Follow my reading” restores the trusted latest-read
+ceiling. The number field uses the mobile decimal keyboard so long books do not require
+precise slider dragging.
+
 ## Testing
 
 - `src/app-contract.test.js` + `src/lib/api.test.js` — Vitest suites asserting the app's
