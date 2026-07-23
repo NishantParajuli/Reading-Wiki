@@ -123,8 +123,9 @@ Small non-secret health record from the dedicated AGY host worker: `worker_id PK
 The library aggregate. `title`, `author`, `cover_url`, `description`,
 `original_language`, `codex_enabled` (opt-in pipeline), `shelf` + `status_tags`
 (legacy/owner defaults — per-user values live in `library_entries`), `series` (multi-
-volume import grouping: a later volume of a detected series appends instead of creating
-a duplicate novel), `owner_id` (SET NULL on user delete — moderation is deliberate),
+volume import identity: the import UI can match a later detected volume to the editable
+novel and append it rather than create a duplicate), `owner_id` (SET NULL on user delete
+— moderation is deliberate),
 `visibility` (`private`|`public`|`global`), `contribution_policy` (`manual`|`auto` —
 how contribute-back offers merge), timestamps. Indexed by shelf/series/owner/visibility.
 
@@ -161,8 +162,10 @@ status + the small editable plan). `novel_id` (null until target chosen), `sourc
 `commit_running`, `committed`, `failed`, `canceled`), `stage` (human-readable step),
 `detected_meta JSONB`, **`plan JSONB`** (the editable segmentation plan the user reviews),
 `stats`, `cost_estimate`, `progress` (`{done,total,unit}`), `options`
-(`{gemini_first, target, is_raw, …}`), `error`, `user_id` (uploader), and the lease pair
-`claim_token`/`claimed_at` (multi-worker safety).
+(`{gemini_first, target, is_raw, metadata_override, …}`; the override holds saved
+title/author/description/language/series/volume review values and wins at commit),
+`error`, `user_id` (uploader), and the lease pair `claim_token`/`claimed_at`
+(multi-worker safety).
 
 ### `assets`
 

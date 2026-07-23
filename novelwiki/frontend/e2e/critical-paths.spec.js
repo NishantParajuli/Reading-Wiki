@@ -104,7 +104,9 @@ test("import upload and review surface is operational", async ({ page }) => {
   await mockApi(page);
   await page.goto("/import");
   await expect(page.getByRole("heading", { name: "Import a book" })).toBeVisible();
-  await expect(page.getByText(/Drop an EPUB or PDF/i)).toBeVisible();
+  await expect(page.getByText(/Drop one or more EPUB\/PDF books/i)).toBeVisible();
+  await expect(page.locator('input[type="file"][accept=".epub,.pdf"]'))
+    .toHaveAttribute("multiple", "");
   await expect(page.getByText("Recent imports")).toBeVisible();
 });
 

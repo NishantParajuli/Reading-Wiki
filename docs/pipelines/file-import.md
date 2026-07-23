@@ -32,6 +32,8 @@ lease-expiry-based.
 Three entry paths, all ending at status `uploaded` with the blob under `IMPORT_DIR`:
 
 - **Single-shot** `POST /api/import/upload` (multipart, ≤ `MAX_UPLOAD_MB` = 50).
+  The browser picker accepts several EPUB/PDF files and queues each as its own reviewable
+  job; large files independently switch to the chunked path below.
 - **Resumable chunked upload** for big files (client switches above
   `UPLOAD_CHUNKED_THRESHOLD_MB` = 40): `init` (declares size, capped at
   `MAX_CHUNKED_UPLOAD_MB` = 1024; job starts as `receiving`) → `PUT …/chunk` repeatedly —
@@ -44,9 +46,10 @@ Three entry paths, all ending at status `uploaded` with the blob under `IMPORT_D
 - **Watched folder** — drop into `IMPORT_INCOMING_DIR`, then
   `POST /api/import/scan-incoming`.
 
-Plus batch forms: `POST /api/import/batch` (a folder of books; `--series`-style grouping)
-and `POST /api/import/commit-series` (several volumes → one multi-volume novel,
-`novels.series` recorded so later volumes auto-append).
+Plus batch forms: `POST /api/import/batch` (a server folder of books;
+`--series`-style grouping) and `POST /api/import/commit-series`. The latter accepts
+`job_ids` plus an optional `novel_id`: omit the target to create one multi-volume novel,
+or provide an editable target to append the ordered batch after its current final chapter.
 
 ## 2. Parse → block-stream IR
 
@@ -57,7 +60,14 @@ not in the DB):
 - **EPUB** (`parsers/epub.py`, ebooklib) — spine order, XHTML → blocks, images extracted
   as content-addressed assets, metadata (title/author/language/series) detected.
 - **Digital PDF** (`parsers/pdf_text.py`, pymupdf) — text spans → blocks with heading
-  heuristics from font geometry.
+  heuristics from font geometry. Cleanup rejoins a paragraph split only by a physical
+  page, dehyphenates/reflows hard-wrapped lines, and strips running page chrome. The
+  parser ignores tiny bitmap rules/masks that would otherwise become empty reader
+  figures, removes malformed outline-page footer glyphs, keeps full-page illustrations
+  in reading order, and promotes the first full-page image to the cover. When embedded
+  metadata is empty, a release filename such as `Series_02 [Publisher].pdf` supplies the
+  series, index, and `Volume 2` label. A bare `Vol 2.pdf` safely supplies only the index
+  and label—the parser does not invent a series name.
 - **Scanned PDF** (`parsers/pdf_ocr.py`) — pages rasterized and OCR'd. Route: local
   **PaddleOCR sidecar** first (`OCR_SIDECAR_URL`, PP-StructureV3); any page whose mean
   confidence < `OCR_CONFIDENCE_ESCALATE` (0.80) escalates to **Gemini vision**
@@ -82,9 +92,25 @@ looks off". Status: `awaiting_review`.
 
 ## 4. Review
 
-The user edits the plan in the Import UI (`PUT /api/import/jobs/{id}/plan`):
-rename/renumber, include/exclude, regroup volumes, override raw/language, choose target
-(new novel vs append to an existing one with an offset). Nothing is committed yet.
+The user edits the plan and book details in the Import UI
+(`PUT /api/import/jobs/{id}/plan`). Title, author, description, language, series name,
+volume number, and volume/group label are all user-editable; saved values are durable
+job metadata overrides and take precedence over embedded EPUB/PDF metadata and filename
+guesses in both single-job and multi-job commits. Segment title/number/kind/include and
+each segment's `part_label` are editable too, so an unusual file can be corrected without
+renaming or rebuilding it. Raw status and the target (new novel vs append/replace) remain
+commit choices.
+
+A detected series defaults to **group as volume**:
+creating volume 1 uses the series as the novel title and writes its `part_label`; a later
+matching upload preselects that editable novel, computes the next global numbers, and
+uses the detected volume label. Turn volume grouping off to use the manual append offset.
+Volume mode applies only to new and append commits. Replacement deliberately preserves
+the selected source's offset numbering and segment labels, and rejects
+`as_volume=true` rather than silently ignoring it.
+For files named only `Vol 1`, `Vol 2`, and so on, enter and save the intended common
+series name on each review; those jobs can then be selected and committed as a new series
+or appended as one ordered batch. Nothing is committed until that action.
 
 ## 5. Commit (atomic)
 

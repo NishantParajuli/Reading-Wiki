@@ -1,9 +1,5 @@
-/* ============================================================
-   Import (§6.9) — upload an EPUB/PDF, review the segmentation plan, commit.
-   The multi-step nature is now a visible stepper: Upload → Parse → [OCR] →
-   Review → Commit. Heavy work runs in the server-side import worker.
-   ============================================================ */
-import React, { useCallback, useEffect, useRef, useState } from "react";
+/* EPUB/PDF wizard: Upload → Parse → [OCR] → Review → Commit. */
+import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { acquisitionApi } from "../../modules/acquisition/api.js";
@@ -19,6 +15,34 @@ import {
   OcrProgress, PlanEditor, QualityBadge, Stepper, UploadDrop,
 } from "../../modules/acquisition/ImportParts.jsx";
 
+function editableMetadata(meta, jobId) {
+  const source = meta || {};
+  return {
+    title: source.title || "",
+    author: source.author || "",
+    description: source.description || "",
+    language: source.language || "",
+    series: source.series || "",
+    series_index: source.series_index == null ? "" : String(source.series_index),
+    volume_label: source.volume_label || "",
+    _forJob: jobId,
+  };
+}
+
+function metadataPayload(metadata) {
+  const text = value => String(value || "").trim() || null;
+  const index = String(metadata.series_index ?? "").trim();
+  return {
+    title: text(metadata.title),
+    author: text(metadata.author),
+    description: text(metadata.description),
+    language: text(metadata.language),
+    series: text(metadata.series),
+    series_index: index === "" ? null : Number(index),
+    volume_label: text(metadata.volume_label),
+  };
+}
+
 export function ImportView() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -27,10 +51,12 @@ export function ImportView() {
   const [sel, setSel] = useState(null);
   const [job, setJob] = useState(null);
   const [plan, setPlan] = useState(null);
+  const [metadata, setMetadata] = useState(null);
   const [busy, setBusy] = useState(false);
   const [dupWarn, setDupWarn] = useState(null);
   const [seriesSel, setSeriesSel] = useState({});
-  const novelsRef = useRef([]);
+  const [seriesTarget, setSeriesTarget] = useState("");
+  const [novelChoices, setNovelChoices] = useState([]);
   useTitle("Import");
 
   const openNovel = (id) => navigate(`/n/${id}`);
@@ -40,21 +66,28 @@ export function ImportView() {
   }, []);
   useEffect(() => {
     loadJobs();
-    catalogApi.novels().then(n => { novelsRef.current = n; }).catch(() => {});
+    catalogApi.novels().then(n => {
+      setNovelChoices(n.filter(novel => novel.can_edit));
+    }).catch(() => {});
   }, [loadJobs]);
 
   // Load + poll the selected job while it's being worked on server-side.
   useEffect(() => {
-    if (sel == null) { setJob(null); setPlan(null); return; }
+    if (sel == null) { setJob(null); setPlan(null); setMetadata(null); return; }
     let cancel = false, timer = null;
     const tick = () => {
       acquisitionApi.importJob(sel).then(j => {
         if (cancel) return;
-        j._novels = novelsRef.current;
         setJob(j);
         setPlan(prev => {
           if (j.plan && (!prev || prev._forJob !== j.id || j.status === "committed")) {
             return { ...j.plan, _forJob: j.id };
+          }
+          return prev;
+        });
+        setMetadata(prev => {
+          if (!prev || prev._forJob !== j.id || j.status === "committed") {
+            return editableMetadata(j.detected_meta, j.id);
           }
           return prev;
         });
@@ -76,19 +109,54 @@ export function ImportView() {
     if (ids.length < 2) return;
     setBusy(true);
     try {
-      const r = await acquisitionApi.commitSeries(ids);
-      toast(`Committed ${ids.length} volumes into one novel.`, { tone: "ok" });
-      setSeriesSel({}); loadJobs();
+      if (plan && metadata && ids.includes(sel)) {
+        await acquisitionApi.updateImportPlan(
+          sel,
+          { version: plan.version || 1, segments: plan.segments },
+          metadataPayload(metadata),
+        );
+      }
+      const r = await acquisitionApi.commitSeries(
+        ids, seriesTarget ? Number(seriesTarget) : null,
+      );
+      toast(
+        seriesTarget
+          ? `Appended ${ids.length} volumes to the novel.`
+          : `Committed ${ids.length} volumes into one novel.`,
+        { tone: "ok" },
+      );
+      setSeriesSel({}); setSeriesTarget(""); loadJobs();
       if (r.novel_id) openNovel(r.novel_id);
     } catch (e) { toast(e.message || "Series commit failed.", { tone: "danger" }); }
     finally { setBusy(false); }
   }
   const seriesCount = Object.values(seriesSel).filter(Boolean).length;
 
+  async function saveReview() {
+    if (!plan || !metadata) return;
+    setBusy(true);
+    try {
+      await acquisitionApi.updateImportPlan(
+        sel,
+        { version: plan.version || 1, segments: plan.segments },
+        metadataPayload(metadata),
+      );
+      toast("Import details saved.", { tone: "ok" });
+      loadJobs();
+    } catch (e) { toast(e.message || "Could not save import details.", { tone: "danger" }); }
+    finally { setBusy(false); }
+  }
+
   async function commit(body) {
     setBusy(true);
     try {
-      if (plan) await acquisitionApi.updateImportPlan(sel, { version: plan.version || 1, segments: plan.segments });
+      if (plan && metadata) {
+        await acquisitionApi.updateImportPlan(
+          sel,
+          { version: plan.version || 1, segments: plan.segments },
+          metadataPayload(metadata),
+        );
+      }
       await acquisitionApi.commitImport(sel, body);
       toast("Commit started…", { tone: "ok" });
     } catch (e) { toast(e.message || "Commit failed.", { tone: "danger" }); }
@@ -108,7 +176,7 @@ export function ImportView() {
     loadJobs();
   }
 
-  const meta = (job && job.detected_meta) || {};
+  const meta = metadata || (job && job.detected_meta) || {};
   const committedNovel = job && job.status === "committed" && job.novel_id;
 
   return (
@@ -125,9 +193,18 @@ export function ImportView() {
         <div>
           <p className="section-eyebrow">Recent imports</p>
           {seriesCount >= 2 && (
-            <div className="card" style={{ padding: "8px 10px", marginBottom: 8, display: "flex", gap: 8, alignItems: "center" }}>
+            <div className="card" style={{ padding: "8px 10px", marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <span className="grow" style={{ fontSize: "var(--text-sm)" }}>{seriesCount} selected</span>
-              <Button variant="primary" size="sm" icon="layers" loading={busy} onClick={commitSeriesNow}>Commit as series</Button>
+              <select className="input" style={{ width: "auto", minWidth: 150 }} value={seriesTarget}
+                      onChange={e => setSeriesTarget(e.target.value)}>
+                <option value="">Create new novel</option>
+                {novelChoices.map(novel => (
+                  <option key={novel.id} value={novel.id}>Append to {novel.title}</option>
+                ))}
+              </select>
+              <Button variant="primary" size="sm" icon="layers" loading={busy} onClick={commitSeriesNow}>
+                {seriesTarget ? "Append volumes" : "Commit as series"}
+              </Button>
             </div>
           )}
           {jobs == null ? (
@@ -206,8 +283,11 @@ export function ImportView() {
                 ? <OcrConfirm job={job} onConfirm={confirmOcr} busy={busy} />
                 : ["ocr_pending", "ocr_running", "ocr_paused"].includes(job.status)
                   ? <OcrProgress job={job} />
-                  : job.status === "awaiting_review" && plan
-                    ? <PlanEditor job={job} plan={plan} setPlan={setPlan} onCommit={commit} busy={busy} />
+                  : job.status === "awaiting_review" && plan && metadata
+                    ? <PlanEditor key={job.id} job={{ ...job, _novels: novelChoices }}
+                                  plan={plan} setPlan={setPlan}
+                                  metadata={metadata} setMetadata={setMetadata}
+                                  onSave={saveReview} onCommit={commit} busy={busy} />
                     : IMPORT_BUSY.includes(job.status)
                       ? <Loading label={IMPORT_STATUS_LABEL[job.status] || "Working…"} />
                       : null}

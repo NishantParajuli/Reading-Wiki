@@ -39,10 +39,12 @@ shape.
     resumable chunked uploads — `init` → `PUT …/{job_id}/chunk` (contiguous,
     size-capped, append-only) → `complete` (streamed hash verification) → `status`;
     `POST /api/import/scan-incoming` (watched-folder pickup);
-    `POST /api/import/batch`, `POST /api/import/commit-series`.
+    `POST /api/import/batch`, `POST /api/import/commit-series` (create a new grouped
+    series or append the ordered jobs to an existing editable novel).
   - job lifecycle: `GET /api/import/jobs`, `GET/DELETE …/jobs/{id}`,
-    `PUT …/jobs/{id}/plan` (edit the segmentation plan), `POST …/confirm-ocr` (the paid
-    OCR cost-confirm gate), `POST …/commit`, `POST …/cancel`.
+    `PUT …/jobs/{id}/plan` (edit the segmentation plan and authoritative book/series/
+    volume metadata), `POST …/confirm-ocr` (the paid OCR cost-confirm gate),
+    `POST …/commit`, `POST …/cancel`.
   - assets: `GET /api/assets/novels/{novel_id}/{filename}` and
     `GET /api/assets/import-jobs/{job_id}/{filename}` — **access-controlled** streaming
     (Catalog readable-check / job ownership) so private-novel images never leak via a
@@ -58,7 +60,8 @@ shape.
 - **`sources.py` / `commands.py`** — source CRUD + scrape orchestration/scheduling
   (idempotency key per novel/source; stops cleanly at premium walls).
 - **`imports.py`** — upload session state machine (`receiving` → `uploaded`), plan
-  editing, cost estimation, commit preparation, series grouping.
+  and validated metadata-override editing, cost estimation, commit preparation, series
+  grouping, and target authorization for single- or multi-volume appends.
 - **`import_worker.py`** — the durable import state machine (docstring is the canonical
   spec): trigger statuses `uploaded`/`ocr_pending`/`committing` are claimed atomically
   (`FOR UPDATE SKIP LOCKED`) into distinct in-progress markers
@@ -74,7 +77,8 @@ shape.
 
 `document.py` (the normalized block-stream IR every parser emits: headings, paragraphs,
 images, page markers), `quality.py` (segmentation quality scoring), `cleanup.py` (text
-normalization: ftfy, encoding repair, boilerplate stripping).
+normalization: ftfy, encoding repair, boilerplate stripping, and geometry-aware PDF
+cross-page paragraph rejoining).
 
 ### Outbound adapters
 
@@ -86,13 +90,15 @@ normalization: ftfy, encoding repair, boilerplate stripping).
   DNS pinning, redirect re-validation, response size caps, same-host binding with
   adapter-declared `allowed_hosts` exceptions).
 - **`importer/`** — `parsers/epub.py` (ebooklib; spine + XHTML + images),
-  `parsers/pdf_text.py` (pymupdf digital-PDF spans), `parsers/pdf_ocr.py` (rasterize →
+  `parsers/pdf_text.py` (pymupdf digital-PDF spans, release-filename volume metadata,
+  safe bare-`Vol N` detection, cover/illustration anchoring, tiny-decoration filtering),
+  `parsers/pdf_ocr.py` (rasterize →
   PaddleOCR sidecar → Gemini-vision escalation for pages under
   `OCR_CONFIDENCE_ESCALATE`), `segment.py` (heuristic spine/heading segmentation +
   optional LLM refinement of kinds/titles/numbers), `storage.py` (job directories,
-  block-stream persistence, `ensure_dirs`), `commit.py` (the prepared operation handed to
-  the `commit_import` workflow), `ocr_client.py` (sidecar HTTP with the shared service
-  token + provider budget).
+  block-stream persistence, `ensure_dirs`), `commit.py` (applies saved user metadata,
+  then prepares the operation handed to the `commit_import` workflow), `ocr_client.py`
+  (sidecar HTTP with the shared service token + provider budget).
 - **`postgres.py`** — the owned-tables repository (import jobs, sources, assets).
 - **`catalog_workflows.py`** — `PostgresAcquisitionTransactionService` (the
   `AcquisitionTransactionApi` implementation).

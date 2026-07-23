@@ -132,7 +132,10 @@ def _import_files_in(folder: str) -> list[str]:
 @app.command(name="import-batch")
 def import_batch(
     folder: str = typer.Argument(..., help="Folder to scan recursively for .epub/.pdf (e.g. a Calibre library)"),
-    series: bool = typer.Option(False, "--series", help="Group EPUB volumes that share a series into single novels"),
+    series: bool = typer.Option(
+        False, "--series",
+        help="Group detected EPUB/PDF volumes that share a series into single novels",
+    ),
     codex: bool = typer.Option(False, "--codex", help="Build the codex over each imported novel afterward"),
 ):
     """Bulk-imports every EPUB/digital-PDF under a folder. With --series, books sharing a

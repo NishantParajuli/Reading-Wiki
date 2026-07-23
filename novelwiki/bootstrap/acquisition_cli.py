@@ -74,9 +74,11 @@ class AcquisitionCliGateway:
         from novelwiki.modules.acquisition.adapters.outbound.importer.commit import commit_job
         return await commit_job(job, runtime=self._runtime)
 
-    async def commit_series(self, job_ids):
+    async def commit_series(self, job_ids, novel_id=None):
         from novelwiki.modules.acquisition.adapters.outbound.importer.commit import commit_series
-        return await commit_series(job_ids, runtime=self._runtime)
+        return await commit_series(
+            job_ids, target_novel_id=novel_id, runtime=self._runtime
+        )
 
     async def build_codex(self, novel_id, start, end):
         from novelwiki.modules.codex.adapters.outbound.ingest.chunk import chunk_all_chapters

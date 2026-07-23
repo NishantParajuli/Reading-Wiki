@@ -24,7 +24,7 @@ clean Ctrl-C).
 | `add-novel TITLE START_URL [--adapter K] [--language L] [--raw] [--chapter-offset F] [--codex]` | Creates a novel + its first source and prints both ids. CLI novels are **system-owned** (`SystemPrincipal("cli")`, no owner — intentional, ADR 002); runs the `create_novel_with_source` workflow. |
 | `scrape NOVEL_ID [--source ID] [--force] [--max N]` | Scrapes a novel's sources chapter by chapter, resuming where each source left off; stops cleanly at premium/paywalled chapters. |
 | `import PATH [--novel ID] [--offset F] [--codex]` | Imports an EPUB or **digital** PDF end-to-end (parse → heuristic segment → commit), mirroring the web import worker but with no interactive review. Scanned PDFs need the OCR cost-confirm gate — use the web UI for those. `--novel/--offset` appends to an existing novel. |
-| `import-batch FOLDER [--series] [--codex]` | Bulk-imports every EPUB/digital-PDF under a folder. With `--series`, books sharing a detected series become one multi-volume novel. |
+| `import-batch FOLDER [--series] [--codex]` | Bulk-imports every EPUB/digital-PDF under a folder. With `--series`, detected EPUB/PDF volumes sharing a series become one multi-volume novel. |
 | `import-series PATH... [--codex]` | Several volumes → one multi-volume novel (one source per volume, offsets computed). |
 | `import-worker` | Runs the durable import worker as a **standalone process** (claims parse/OCR/commit jobs from the DB queue). Use to split the worker off the web image; leased claims make it safe alongside the in-process worker. Ctrl-C stops cleanly. |
 

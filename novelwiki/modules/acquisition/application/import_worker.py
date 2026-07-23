@@ -446,6 +446,7 @@ def _public_meta(meta: dict, job_id: int, *, runtime) -> dict:
         "description": meta.get("description"),
         "series": meta.get("series"),
         "series_index": meta.get("series_index"),
+        "volume_label": meta.get("volume_label"),
     }
     cover_sha = meta.get("cover_sha")
     assets = meta.get("assets") or {}

@@ -9,8 +9,8 @@ import io
 import pytest
 
 from novelwiki.config.settings import settings
-from novelwiki.importer import cleanup, segment, ocr_client
-from novelwiki.importer.ir import Block, Document, HEADING, PARAGRAPH
+from novelwiki.importer import cleanup, segment, ocr_client, storage
+from novelwiki.importer.ir import Block, Document, HEADING, PARAGRAPH, IMAGE
 from novelwiki.importer.parsers import pdf_text, pdf_ocr
 
 
@@ -84,6 +84,62 @@ def test_strip_running_headers_and_page_numbers():
     assert sum("Body paragraph" in t for t in texts) == 5
 
 
+def test_pdf_cleanup_rejoins_paragraph_split_across_pages():
+    doc = Document(
+        [
+            Block(
+                kind=PARAGRAPH, text="The sentence carried", page=0,
+                loc={
+                    "page": 0, "bbox": [36, 740, 563, 800],
+                    "last_line_bbox": [36, 780, 563, 800],
+                    "page_width": 595, "page_height": 842,
+                },
+            ),
+            Block(
+                kind=PARAGRAPH, text="across the physical page.", page=1,
+                loc={
+                    "page": 1, "bbox": [36, 36, 300, 55],
+                    "last_line_bbox": [36, 36, 300, 55],
+                    "page_width": 595, "page_height": 842,
+                },
+            ),
+        ],
+        {"language": "en"}, "pdf",
+    )
+    cleanup.clean_document(doc)
+    assert len(doc.blocks) == 1
+    assert doc.blocks[0].text == "The sentence carried across the physical page."
+    assert doc.blocks[0].loc["end_page"] == 1
+
+
+def test_pdf_cleanup_keeps_real_paragraph_break_across_pages():
+    doc = Document(
+        [
+            Block(
+                kind=PARAGRAPH, text="The first paragraph ended.", page=0,
+                loc={
+                    "page": 0, "bbox": [36, 740, 300, 800],
+                    "last_line_bbox": [36, 780, 300, 800],
+                    "page_width": 595, "page_height": 842,
+                },
+            ),
+            Block(
+                kind=PARAGRAPH, text="A new paragraph began.", page=1,
+                loc={
+                    "page": 1, "bbox": [36, 36, 300, 55],
+                    "last_line_bbox": [36, 36, 300, 55],
+                    "page_width": 595, "page_height": 842,
+                },
+            ),
+        ],
+        {"language": "en"}, "pdf",
+    )
+    cleanup.clean_document(doc)
+    assert [block.text for block in doc.blocks] == [
+        "The first paragraph ended.", "A new paragraph began.",
+    ]
+
+
 # ── Digital PDF parse + segmentation ─────────────────────────────────────────
 
 @pytest.fixture()
@@ -112,6 +168,68 @@ def test_pdf_digital_cleanup_and_segment(digital_pdf):
     chapters = [s for s in plan["segments"] if s["kind"] == "chapter"]
     assert [s["title"] for s in chapters] == ["Chapter 1", "Chapter 2"]
     assert [s["number"] for s in chapters] == [1.0, 2.0]
+
+
+def test_pdf_filename_infers_series_and_volume():
+    meta = pdf_text._filename_metadata(
+        "/books/Starbound Tales_02 [Publisher]_[R].pdf"
+    )
+    assert meta == {
+        "title": "Starbound Tales — Volume 2",
+        "series": "Starbound Tales",
+        "series_index": 2.0,
+        "volume_label": "Volume 2",
+    }
+
+
+def test_pdf_bare_volume_filename_infers_only_safe_metadata():
+    meta = pdf_text._filename_metadata("/books/Vol 2.pdf")
+    assert meta == {
+        "title": "Vol 2",
+        "series_index": 2.0,
+        "volume_label": "Volume 2",
+    }
+    assert "series" not in meta
+
+
+def test_pdf_filters_micro_decoration_images(tmp_path):
+    import fitz
+    path = str(tmp_path / "decorations.pdf")
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "Enough searchable body text for a digital PDF.", fontsize=11)
+    page.insert_image(fitz.Rect(20, 20, 80, 40), stream=_png(2, 2))
+    page.insert_image(fitz.Rect(100, 150, 220, 270), stream=_png(64, 64))
+    doc.save(path)
+    doc.close()
+    job_id = 991004
+    try:
+        parsed = pdf_text.parse_pdf_text(path, job_id)
+        assert len([block for block in parsed.blocks if block.kind == IMAGE]) == 1
+        assert len(parsed.meta["assets"]) == 1
+        assert parsed.meta["pdf_decorations_skipped"] == 1
+    finally:
+        storage.cleanup_job(job_id)
+
+
+def test_pdf_uses_first_full_page_image_as_cover(tmp_path):
+    import fitz
+    path = str(tmp_path / "cover.pdf")
+    doc = fitz.open()
+    cover = doc.new_page(width=300, height=400)
+    cover.insert_image(cover.rect, stream=_png(300, 400))
+    body = doc.new_page(width=300, height=400)
+    body.insert_text((30, 80), "Enough searchable text to keep this a digital PDF.", fontsize=11)
+    doc.save(path)
+    doc.close()
+    job_id = 991005
+    try:
+        parsed = pdf_text.parse_pdf_text(path, job_id)
+        assert parsed.meta["scanned"] is False
+        assert parsed.meta.get("cover_sha") in parsed.meta["assets"]
+        assert parsed.meta["assets"][parsed.meta["cover_sha"]]["kind"] == "cover"
+    finally:
+        storage.cleanup_job(job_id)
 
 
 def test_pdf_scanned_detection(tmp_path):

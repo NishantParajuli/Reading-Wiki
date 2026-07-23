@@ -450,6 +450,17 @@
             },
             "title": "Job Ids",
             "type": "array"
+          },
+          "novel_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Novel Id"
           }
         },
         "required": [
@@ -567,6 +578,11 @@
       },
       "ImportCommit": {
         "properties": {
+          "as_volume": {
+            "default": false,
+            "title": "As Volume",
+            "type": "boolean"
+          },
           "is_raw": {
             "anyOf": [
               {
@@ -630,6 +646,89 @@
           "filename"
         ],
         "title": "ImportInit",
+        "type": "object"
+      },
+      "ImportMetadataUpdate": {
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "series": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series"
+          },
+          "series_index": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Index"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "volume_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume Label"
+          }
+        },
+        "title": "ImportMetadataUpdate",
         "type": "object"
       },
       "LoginPayload": {
@@ -857,6 +956,16 @@
       },
       "PlanUpdate": {
         "properties": {
+          "metadata": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportMetadataUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "plan": {
             "additionalProperties": true,
             "title": "Plan",
@@ -2500,7 +2609,7 @@
     },
     "/api/import/batch": {
       "post": {
-        "description": "Bulk-import a folder (e.g. a Calibre library). Recurses by default, can auto-commit\neach book without review, and can group EPUB volumes of one series into a single novel.",
+        "description": "Bulk-import a folder (e.g. a Calibre library). Recurses by default, can auto-commit\neach book without review, and can group detected EPUB/PDF volumes of one series into\na single novel.",
         "operationId": "api_import_batch_api_import_batch_post",
         "requestBody": {
           "content": {
@@ -2537,7 +2646,7 @@
     },
     "/api/import/commit-series": {
       "post": {
-        "description": "Fold several parsed jobs into one multi-volume novel (ordered by series index).",
+        "description": "Fold several parsed jobs into one multi-volume novel (ordered by series index), or\nappend the ordered volume batch to an editable existing novel.",
         "operationId": "api_import_commit_series_api_import_commit_series_post",
         "requestBody": {
           "content": {
@@ -2700,7 +2809,7 @@
     },
     "/api/import/jobs/{job_id}/commit": {
       "post": {
-        "description": "Hand the job to the worker for commit: stamp the target into options and flip the\nstatus to 'committing'. The worker writes chapters via the scraper persist path.",
+        "description": "Hand the job to the worker for commit.\n\nVolume grouping/automatic numbering is supported for new and append targets.\nReplacement preserves the selected source's numbering and labels, so a replace\nrequest with ``as_volume=true`` is rejected.",
         "operationId": "api_import_commit_api_import_jobs__job_id__commit_post",
         "parameters": [
           {
@@ -2796,7 +2905,7 @@
     },
     "/api/import/jobs/{job_id}/plan": {
       "put": {
-        "description": "Replace the editable segmentation plan (merge/split/rename/include/number/kind are\nall client-side edits that produce a new plan). Block ranges are validated against the\nstored block stream so a bad edit can't point off the end of the document.",
+        "description": "Replace the editable segmentation plan and optional book metadata overrides.\n\nMerge/split/rename/include/number/kind/group edits produce a new plan. User-supplied\ntitle, author, description, language, series, volume index, and volume label take\nprecedence over embedded metadata and filename guesses when the job is committed.\nBlock ranges are validated against the stored block stream so a bad edit can't point\noff the end of the document.",
         "operationId": "api_import_update_plan_api_import_jobs__job_id__plan_put",
         "parameters": [
           {
