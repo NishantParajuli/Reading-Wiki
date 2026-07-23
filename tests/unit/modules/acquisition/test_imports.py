@@ -115,6 +115,29 @@ async def test_review_rejects_non_finite_volume_number():
         )
 
 
+@pytest.mark.asyncio
+async def test_replace_commit_rejects_volume_mode_instead_of_ignoring_it():
+    gateway = _Gateway()
+
+    with pytest.raises(
+        ImportRequestError,
+        match="supported only for new and append commits",
+    ) as error:
+        await _service(gateway).commit(
+            31,
+            PRINCIPAL,
+            mode="replace",
+            novel_id=None,
+            source_id=9,
+            offset=0,
+            is_raw=False,
+            as_volume=True,
+        )
+
+    assert error.value.status_code == 422
+    assert gateway.updated is None
+
+
 def test_commit_applies_only_editable_metadata_overrides():
     document = Document(
         blocks=[],

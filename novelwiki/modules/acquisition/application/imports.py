@@ -334,6 +334,12 @@ class ImportService:
                      novel_id: int | None, source_id: int | None, offset: float,
                      is_raw: bool | None, as_volume: bool = False) -> dict:
         job = await self._own_job(job_id, principal)
+        if mode == "replace" and as_volume:
+            raise ImportRequestError(
+                422,
+                "as_volume=true is supported only for new and append commits; "
+                "replacement commits preserve source numbering and labels.",
+            )
         if mode == "append" and novel_id:
             await self._catalog.require_editable(novel_id, principal)
         elif mode == "replace" and source_id:

@@ -485,8 +485,12 @@ async def api_import_commit(
         acquisition_principal_factory_dependency
     ),
 ):
-    """Hand the job to the worker for commit: stamp the target into options and flip the
-    status to 'committing'. The worker writes chapters via the scraper persist path."""
+    """Hand the job to the worker for commit.
+
+    Volume grouping/automatic numbering is supported for new and append targets.
+    Replacement preserves the selected source's numbering and labels, so a replace
+    request with ``as_volume=true`` is rejected.
+    """
     service, principal_factory = await _import_dependencies(service, principal_factory)
     try:
         return await service.commit(

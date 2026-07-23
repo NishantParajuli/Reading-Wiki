@@ -105,6 +105,9 @@ A detected series defaults to **group as volume**:
 creating volume 1 uses the series as the novel title and writes its `part_label`; a later
 matching upload preselects that editable novel, computes the next global numbers, and
 uses the detected volume label. Turn volume grouping off to use the manual append offset.
+Volume mode applies only to new and append commits. Replacement deliberately preserves
+the selected source's offset numbering and segment labels, and rejects
+`as_volume=true` rather than silently ignoring it.
 For files named only `Vol 1`, `Vol 2`, and so on, enter and save the intended common
 series name on each review; those jobs can then be selected and committed as a new series
 or appended as one ordered batch. Nothing is committed until that action.

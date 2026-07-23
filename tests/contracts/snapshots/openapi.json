@@ -2809,7 +2809,7 @@
     },
     "/api/import/jobs/{job_id}/commit": {
       "post": {
-        "description": "Hand the job to the worker for commit: stamp the target into options and flip the\nstatus to 'committing'. The worker writes chapters via the scraper persist path.",
+        "description": "Hand the job to the worker for commit.\n\nVolume grouping/automatic numbering is supported for new and append targets.\nReplacement preserves the selected source's numbering and labels, so a replace\nrequest with ``as_volume=true`` is rejected.",
         "operationId": "api_import_commit_api_import_jobs__job_id__commit_post",
         "parameters": [
           {

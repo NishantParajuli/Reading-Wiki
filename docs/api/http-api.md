@@ -118,9 +118,10 @@ Jobs: `GET /api/import/jobs` · `GET|DELETE /api/import/jobs/{id}` ·
 `PUT …/plan` (`plan` plus optional `metadata`: `title`, `author`, `description`,
 `language`, `series`, numeric `series_index`, and `volume_label`; supplied metadata
 overrides parser/filename values at commit) · `POST …/confirm-ocr` (paid-OCR consent
-gate) · `POST …/commit` (`mode=new|append|replace`; `as_volume=true` groups under the
-saved or detected volume label and computes append numbering automatically; otherwise
-`offset` is used) · `POST …/cancel`.
+gate) · `POST …/commit` (`mode=new|append|replace`; for `new`/`append`,
+`as_volume=true` groups under the saved or detected volume label and computes numbering
+automatically; `replace` preserves the source's labels/offset numbering and rejects
+`as_volume=true` with 422) · `POST …/cancel`.
 Assets (access-controlled streaming): `GET /api/assets/novels/{novel_id}/{filename}` ·
 `GET /api/assets/import-jobs/{job_id}/{filename}`.
 
