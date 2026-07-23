@@ -118,6 +118,10 @@ class ImportRuntimeGateway:
         except Exception:
             return None
 
-    async def commit_series(self, job_ids: list[int]) -> dict:
+    async def commit_series(
+        self, job_ids: list[int], novel_id: int | None = None
+    ) -> dict:
         from novelwiki.modules.acquisition.adapters.outbound.importer import commit
-        return await commit.commit_series(job_ids, runtime=self._runtime)
+        return await commit.commit_series(
+            job_ids, target_novel_id=novel_id, runtime=self._runtime
+        )

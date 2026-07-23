@@ -98,8 +98,11 @@ uv run python scripts/test_real_browser.py
 The architecture checker enforces table writers/readers, an acyclic module graph, SQL-free inbound
 adapters, removal of the frontend API facade, cross-module frontend import surfaces, and reviewed
 screen-size limits. PostgreSQL integration tests cover locks, claims, quota races, offset renumbering,
-import replacement, overlay conflicts, audio indexes, and spoiler ceilings. Playwright covers ten
-critical browser paths with fetch-level fixtures.
+import replacement, single- and batch-volume appends, overlay conflicts, audio indexes, and spoiler
+ceilings. The PDF import suite also covers cross-page paragraph rejoining, decorative-image
+filtering, inferred and bare-filename volume metadata, and cover selection. Focused application
+and frontend tests cover user metadata precedence, multi-file queueing, and manual series/volume
+review controls. Playwright covers ten critical browser paths with fetch-level fixtures.
 
 To rehearse a backup and restore using two hard-coded disposable databases:
 

@@ -57,16 +57,42 @@ export function UploadDrop({ onUploaded }) {
   const inputRef = useRef(null);
   const { toast } = useToast();
 
-  async function send(file) {
-    if (!file || busy) return;
-    if (!/\.(epub|pdf)$/i.test(file.name)) { toast("Only .epub and .pdf files are supported.", { tone: "danger" }); return; }
-    setBusy(true); setProgress(0);
-    try {
-      const r = await acquisitionApi.importFile(file, setProgress);
-      onUploaded(r.id, r.duplicate_of);
+  async function send(input) {
+    if (!input || busy) return;
+    const files = Array.from(input instanceof File ? [input] : input);
+    if (!files.length) return;
+    const unsupported = files.filter(file => !/\.(epub|pdf)$/i.test(file.name));
+    if (unsupported.length) {
+      toast("Only .epub and .pdf files are supported.", { tone: "danger" });
+      return;
     }
-    catch (e) { toast(e.message || "Upload failed.", { tone: "danger" }); }
-    finally { setBusy(false); setProgress(0); }
+    setBusy(true); setProgress(0);
+    let queued = 0;
+    const failures = [];
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      try {
+        const r = await acquisitionApi.importFile(
+          file,
+          value => setProgress((index + value) / files.length),
+        );
+        queued += 1;
+        onUploaded(r.id, r.duplicate_of);
+      } catch (error) {
+        failures.push({ file, error });
+      }
+    }
+    if (files.length > 1 && queued) {
+      toast(
+        failures.length
+          ? `Queued ${queued} of ${files.length} books; ${failures.length} failed.`
+          : `Queued ${queued} books for import.`,
+        { tone: failures.length ? "warn" : "ok" },
+      );
+    } else if (failures.length) {
+      toast(failures[0].error.message || "Upload failed.", { tone: "danger" });
+    }
+    setBusy(false); setProgress(0);
   }
 
   return (
@@ -75,21 +101,21 @@ export function UploadDrop({ onUploaded }) {
            onClick={() => !busy && inputRef.current && inputRef.current.click()}
            onDragOver={e => { e.preventDefault(); setDrag(true); }}
            onDragLeave={() => setDrag(false)}
-           onDrop={e => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files[0]); }}>
+           onDrop={e => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files); }}>
         <Icon name="upload" size={28} className="muted" />
         <div className="import-drop-text">
           <b>{busy
             ? (progress > 0 && progress < 1 ? `Uploading… ${Math.round(progress * 100)}%` : "Uploading…")
-            : "Drop an EPUB or PDF here, or click to choose"}</b>
+            : "Drop one or more EPUB/PDF books here, or click to choose"}</b>
           <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
-            We parse it (scanned PDFs are OCR'd), you review the chapters, then commit.
+            Upload several volumes together, review them, then commit or append them as one series.
           </span>
         </div>
         <div className="row" style={{ marginLeft: "auto", gap: 6 }}>
           <Chip>.epub</Chip><Chip>.pdf</Chip>
         </div>
-        <input ref={inputRef} type="file" accept=".epub,.pdf" style={{ display: "none" }}
-               onChange={e => send(e.target.files[0])} />
+        <input ref={inputRef} type="file" accept=".epub,.pdf" multiple style={{ display: "none" }}
+               onChange={e => { send(e.target.files); e.target.value = ""; }} />
       </div>
       {busy && progress > 0 && <ProgressBar size="sm" value={progress * 100} style={{ marginTop: 8 }} />}
     </div>
@@ -135,7 +161,7 @@ export function FolderImport({ onQueued }) {
       </label>
       <label className="check" style={{ marginTop: 6 }}>
         <input type="checkbox" checked={groupSeries} onChange={e => setGroupSeries(e.target.checked)} />
-        Group EPUB volumes of one series into a single novel
+        Group detected EPUB/PDF volumes of one series into a single novel
       </label>
       <div className="row" style={{ gap: 10, marginTop: 12 }}>
         <Button variant="primary" icon="play" loading={busy} onClick={run}>Scan & import</Button>
@@ -187,7 +213,11 @@ export function SegmentRow({ seg, onPatch, onMerge, onSplit, canMerge }) {
                  onChange={e => { const v = e.target.value.trim(); onPatch({ number: v === "" ? null : parseFloat(v) }); }} />
         </div>
         <div className="seg-line2 muted">
-          {seg.part_label && <Chip style={{ marginRight: 6 }}>{seg.part_label}</Chip>}
+          <input className="input" value={seg.part_label || ""}
+                 aria-label={`Volume/group for ${seg.title || "untitled segment"}`}
+                 onChange={e => onPatch({ part_label: e.target.value || null })}
+                 placeholder="Volume/group"
+                 style={{ width: 125, height: 25, marginRight: 8, padding: "2px 7px", fontSize: "var(--text-xs)" }} />
           <span className="mono" style={{ marginRight: 8 }}>[{seg.block_range[0]}–{seg.block_range[1]}]</span>
           {wc && <span style={{ marginRight: 8 }}>{wc}</span>}
           {seg.first_line && <span className="seg-first">{seg.first_line}</span>}
@@ -205,7 +235,9 @@ export function SegmentRow({ seg, onPatch, onMerge, onSplit, canMerge }) {
   );
 }
 
-export function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
+export function PlanEditor({
+  job, plan, setPlan, metadata, setMetadata, onSave, onCommit, busy,
+}) {
   const segs = plan.segments || [];
   const novels = job._novels || [];
   const [mode, setMode] = useState("new");
@@ -213,8 +245,29 @@ export function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
   const [offset, setOffset] = useState("0");
   const [sourceId, setSourceId] = useState("");
   const [sources, setSources] = useState([]);
-  const detectedLang = (job.detected_meta && job.detected_meta.language) || "";
+  const editableMeta = metadata || {};
+  const detectedSeries = editableMeta.series || "";
+  const detectedVolume = editableMeta.volume_label
+    || (editableMeta.series_index !== "" && editableMeta.series_index != null
+      ? `Volume ${editableMeta.series_index}`
+      : "");
+  const [asVolume, setAsVolume] = useState(
+    !!(detectedSeries || editableMeta.series_index !== "" && editableMeta.series_index != null),
+  );
+  const detectedLang = editableMeta.language || "";
   const [isRaw, setIsRaw] = useState(!!(job.options && job.options.is_raw));
+
+  useEffect(() => {
+    if (!asVolume || !detectedSeries || novelId) return;
+    const normalize = value => String(value || "").trim().toLocaleLowerCase();
+    const match = novels.find(
+      novel => novel.can_edit && normalize(novel.title) === normalize(detectedSeries),
+    );
+    if (match) {
+      setMode("append");
+      setNovelId(String(match.id));
+    }
+  }, [asVolume, detectedSeries, novelId, novels]);
 
   useEffect(() => {
     if (mode !== "replace" || !novelId) { setSources([]); return; }
@@ -224,9 +277,15 @@ export function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
   }, [mode, novelId]);
 
   const buildBody = () => {
-    if (mode === "append") return { mode: "append", novel_id: parseInt(novelId), offset: parseFloat(offset) || 0, is_raw: isRaw };
-    if (mode === "replace") return { mode: "replace", source_id: parseInt(sourceId), offset: parseFloat(offset) || 0, is_raw: isRaw };
-    return { mode: "new", is_raw: isRaw };
+    if (mode === "append") return {
+      mode: "append", novel_id: parseInt(novelId), offset: parseFloat(offset) || 0,
+      is_raw: isRaw, as_volume: asVolume,
+    };
+    if (mode === "replace") return {
+      mode: "replace", source_id: parseInt(sourceId), offset: parseFloat(offset) || 0,
+      is_raw: isRaw, as_volume: false,
+    };
+    return { mode: "new", is_raw: isRaw, as_volume: asVolume };
   };
   const includedCount = segs.filter(s => s.include).length;
   const warnings = segs.filter(s => s.include && s.kind === "chapter" && s.number == null).length;
@@ -235,6 +294,7 @@ export function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
     || (mode === "replace" && !sourceId);
 
   const patchSeg = (i, body) => setPlan(p => ({ ...p, segments: p.segments.map((s, j) => j === i ? { ...s, ...body } : s) }));
+  const patchMeta = body => setMetadata(p => ({ ...p, ...body }));
   const mergePrev = (i) => setPlan(p => {
     if (i <= 0) return p;
     const segments = p.segments.slice();
@@ -258,6 +318,61 @@ export function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
 
   return (
     <div>
+      <div className="card pad" style={{ marginBottom: 10 }}>
+        <p className="section-eyebrow" style={{ marginTop: 0 }}>Book details</p>
+        <p className="muted" style={{ margin: "0 0 10px", fontSize: "var(--text-xs)" }}>
+          These saved values override PDF/EPUB metadata and filename guesses.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+          <label>
+            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Book title</span>
+            <input className="input" aria-label="Book title" value={editableMeta.title || ""}
+                   onChange={e => patchMeta({ title: e.target.value })} placeholder="Enter the exact title" />
+          </label>
+          <label>
+            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Author</span>
+            <input className="input" aria-label="Author" value={editableMeta.author || ""}
+                   onChange={e => patchMeta({ author: e.target.value })} placeholder="Optional" />
+          </label>
+          <label>
+            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Series / novel name</span>
+            <input className="input" aria-label="Series / novel name" value={editableMeta.series || ""}
+                   onChange={e => patchMeta({ series: e.target.value })}
+                   placeholder="e.g. Mushoku Tensei" />
+          </label>
+          <label>
+            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Volume number</span>
+            <input className="input" aria-label="Volume number" type="number" step="any"
+                   value={editableMeta.series_index ?? ""}
+                   onChange={e => patchMeta({ series_index: e.target.value })}
+                   placeholder="e.g. 2" inputMode="decimal" />
+          </label>
+          <label>
+            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Volume/group label</span>
+            <input className="input" aria-label="Volume/group label" value={editableMeta.volume_label || ""}
+                   onChange={e => patchMeta({ volume_label: e.target.value })}
+                   placeholder="e.g. Volume 2" />
+          </label>
+          <label>
+            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Language code</span>
+            <input className="input" aria-label="Language code" value={editableMeta.language || ""}
+                   onChange={e => patchMeta({ language: e.target.value })}
+                   placeholder="e.g. en, ja" />
+          </label>
+        </div>
+        <label style={{ display: "block", marginTop: 10 }}>
+          <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Description</span>
+          <textarea className="input" aria-label="Description" value={editableMeta.description || ""}
+                    onChange={e => patchMeta({ description: e.target.value })}
+                    placeholder="Optional book description" rows={3}
+                    style={{ resize: "vertical", minHeight: 70 }} />
+        </label>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+          <Button variant="ghost" size="sm" icon="check" loading={busy} onClick={onSave}>
+            Save review
+          </Button>
+        </div>
+      </div>
       <div className="card plan-head">
         <div>
           <b>{segs.length} segments</b>
@@ -276,6 +391,15 @@ export function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
         <input type="checkbox" checked={isRaw} onChange={e => setIsRaw(e.target.checked)} />
         These are raws — translate on read
         {detectedLang && <span className="muted" style={{ fontSize: "var(--text-xs)" }}>(detected: {detectedLang})</span>}
+      </label>
+      <label className="check" style={{ margin: "8px 2px 0" }}>
+        <input type="checkbox" checked={asVolume} onChange={e => setAsVolume(e.target.checked)} />
+        Group this book as {detectedVolume || "a volume"}
+        {detectedSeries && (
+          <span className="muted" style={{ fontSize: "var(--text-xs)" }}>
+            in {detectedSeries}; append numbering is automatic
+          </span>
+        )}
       </label>
       <div className="card commit-bar">
         <div className="seg fit" role="group" aria-label="Commit target">
@@ -296,7 +420,7 @@ export function PlanEditor({ job, plan, setPlan, onCommit, busy }) {
             {sources.map(s => <option key={s.id} value={s.id}>{(s.label || s.adapter) + ` (#${s.id})`}</option>)}
           </select>
         )}
-        {(mode === "append" || mode === "replace") && (
+        {((mode === "append" && !asVolume) || mode === "replace") && (
           <input className="input" style={{ flex: "0 0 110px", width: "auto" }} value={offset}
                  onChange={e => setOffset(e.target.value)} placeholder="offset" inputMode="decimal" title="Chapter offset" />
         )}
@@ -361,5 +485,3 @@ export function OcrProgress({ job }) {
     </div>
   );
 }
-
-

@@ -47,10 +47,12 @@ unlock future codex data. Full model:
   paywalls; per-site adapters (`fenrirealm`, `readhive`, `boti-translations`,
   `69shuba`, `wetriedtls` — new sites are a small subclass); SSRF-hardened fetching.
 - **📥 File import** — EPUB and digital/scanned PDF as **durable, resumable jobs**:
-  chunked uploads for big files, local PaddleOCR + Gemini-vision escalation (with a
-  cost-confirm gate), an **editable segmentation plan** you review before committing,
-  quality scoring, batch/series import. Committed chapters flow through the same funnel
-  as scraped ones — codex/translation/narration need zero extra wiring.
+  multi-file + chunked uploads, local PaddleOCR + Gemini-vision escalation (with a
+  cost-confirm gate), PDF paragraph reflow and illustration cleanup, fully editable
+  book/series/volume metadata plus a **segmentation plan** you review before committing,
+  quality scoring, and volume-aware series creation/appends. Committed chapters flow
+  through the same funnel as scraped ones — codex/translation/narration need zero extra
+  wiring.
 - **🌐 Translation** — on-demand + background prefetch; a per-novel **glossary** keeps
   names consistent across chapters and source switches (`林轩 → Lin Xuan` everywhere,
   user-pinned terms never overwritten); per-reader **overlays** on shared novels with

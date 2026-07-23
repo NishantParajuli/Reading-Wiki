@@ -78,6 +78,7 @@ _LIGATURES = {
     "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st",
 }
 _PAGE_NUM_RE = re.compile(r"^[\s\-—–]*(?:\d{1,4}|[ivxlcdm]{1,7})[\s\-—–.]*$", re.IGNORECASE)
+_PARAGRAPH_TERMINAL_RE = re.compile(r"""[.!?…]["'”’)\]]*$""")
 
 
 def fix_ligatures(text: str) -> str:
@@ -146,9 +147,70 @@ def strip_running_headers(document: Document) -> None:
     document.blocks = kept
 
 
+def _pdf_page_continuation(previous, current) -> bool:
+    """True when two PDF paragraph blocks are one paragraph split by a physical page.
+
+    A continuation must be the last/first adjacent prose block on consecutive pages and
+    reach the page edges. A non-terminal final character is enough; when a sentence happens
+    to end exactly at the page boundary, a full-width final line is the stronger geometry
+    signal. Headings, scene breaks, and illustrations naturally interrupt adjacency.
+    """
+    if previous.kind != "paragraph" or current.kind != "paragraph":
+        return False
+    previous_page = previous.page if previous.page is not None else previous.loc.get("page")
+    current_page = current.page if current.page is not None else current.loc.get("page")
+    if previous_page is None or current_page != previous_page + 1:
+        return False
+    previous_box = previous.loc.get("bbox") or []
+    current_box = current.loc.get("bbox") or []
+    page_height = float(previous.loc.get("page_height") or 0)
+    current_height = float(current.loc.get("page_height") or page_height or 0)
+    if (
+        len(previous_box) != 4
+        or len(current_box) != 4
+        or not page_height
+        or not current_height
+        or previous_box[3] < page_height * 0.88
+        or current_box[1] > current_height * 0.16
+    ):
+        return False
+    previous_text = previous.text.rstrip()
+    current_text = current.text.lstrip()
+    if not previous_text or not current_text:
+        return False
+    if not _PARAGRAPH_TERMINAL_RE.search(previous_text):
+        return True
+    last_line = previous.loc.get("last_line_bbox") or []
+    page_width = float(previous.loc.get("page_width") or 0)
+    return (
+        len(last_line) == 4
+        and page_width > 0
+        and float(last_line[2]) >= page_width * 0.88
+    )
+
+
+def merge_pdf_page_continuations(document: Document) -> None:
+    """Join paragraph blocks split only because the PDF crossed a physical page."""
+    merged = []
+    for block in document.blocks:
+        if merged and _pdf_page_continuation(merged[-1], block):
+            previous = merged[-1]
+            previous.text = previous.text.rstrip() + "\n" + block.text.lstrip()
+            previous.loc["end_page"] = (
+                block.page if block.page is not None else block.loc.get("page")
+            )
+            previous.loc["last_line_bbox"] = block.loc.get(
+                "last_line_bbox", previous.loc.get("last_line_bbox")
+            )
+            continue
+        merged.append(block)
+    document.blocks = merged
+
+
 def _clean_pdf_document(document: Document) -> Document:
     from novelwiki.modules.acquisition.domain.document import Block, PARAGRAPH
     strip_running_headers(document)
+    merge_pdf_page_continuations(document)
     kept = []
     for b in document.blocks:
         if b.kind == PARAGRAPH:

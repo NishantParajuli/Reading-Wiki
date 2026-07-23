@@ -16,10 +16,16 @@ export const acquisitionApi = {
   batchImport: (body) => postJSON(`${API_BASE}/import/batch`, body || {}),
   importJobs: () => getJSON(`${API_BASE}/import/jobs`),
   importJob: (id) => getJSON(`${API_BASE}/import/jobs/${id}`),
-  updateImportPlan: (id, plan) => putJSON(`${API_BASE}/import/jobs/${id}/plan`, { plan }),
+  updateImportPlan: (id, plan, metadata = null) => putJSON(
+    `${API_BASE}/import/jobs/${id}/plan`,
+    { plan, metadata },
+  ),
   confirmOcr: (id, body) => postJSON(`${API_BASE}/import/jobs/${id}/confirm-ocr`, body || {}),
   commitImport: (id, body) => postJSON(`${API_BASE}/import/jobs/${id}/commit`, body || {}),
-  commitSeries: (jobIds) => postJSON(`${API_BASE}/import/commit-series`, { job_ids: jobIds }),
+  commitSeries: (jobIds, novelId = null) => postJSON(
+    `${API_BASE}/import/commit-series`,
+    { job_ids: jobIds, novel_id: novelId },
+  ),
   cancelImport: (id) => postJSON(`${API_BASE}/import/jobs/${id}/cancel`, {}),
   deleteImport: (id) => delJSON(`${API_BASE}/import/jobs/${id}`),
   CHUNKED_THRESHOLD: 40 * 1024 * 1024,

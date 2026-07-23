@@ -125,9 +125,11 @@ def build_acquisition_runtime():
             from novelwiki.modules.acquisition.adapters.outbound.importer.segment import refine_plan
             return await refine_plan(plan, document, runtime=self)
 
-        async def commit_series(self, job_ids):
+        async def commit_series(self, job_ids, novel_id=None):
             from novelwiki.modules.acquisition.adapters.outbound.importer.commit import commit_series
-            return await commit_series(job_ids, runtime=self)
+            return await commit_series(
+                job_ids, target_novel_id=novel_id, runtime=self
+            )
 
         def estimate_ocr_cost(self, pages, gemini_first, remaining):
             from novelwiki.modules.acquisition.adapters.outbound.importer.parsers.pdf_ocr import estimate_cost

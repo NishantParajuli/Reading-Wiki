@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import uuid
 from dataclasses import dataclass
@@ -11,6 +12,18 @@ from novelwiki.modules.identity.public import Principal
 from .ports import CatalogAccessPort, ImportGateway, SpendPolicyPort
 
 IMPORT_FORMATS = {".epub": "epub", ".pdf": "pdf"}
+_EDITABLE_METADATA = (
+    "title", "author", "description", "language", "series",
+    "series_index", "volume_label",
+)
+_METADATA_TEXT_LIMITS = {
+    "title": 500,
+    "author": 500,
+    "description": 20_000,
+    "language": 32,
+    "series": 500,
+    "volume_label": 500,
+}
 
 
 class ImportRequestError(Exception):
@@ -217,9 +230,13 @@ class ImportService:
         return {"id": job_id, "status": "uploaded", "format": job["format"],
                 "duplicate_of": duplicates}
 
-    async def commit_series(self, job_ids: list[int], principal: Principal) -> dict:
+    async def commit_series(
+        self, job_ids: list[int], principal: Principal, novel_id: int | None = None
+    ) -> dict:
         if len(job_ids) < 1:
             raise ImportRequestError(422, "Provide at least one job id.")
+        if novel_id is not None:
+            await self._catalog.require_editable(novel_id, principal)
         for job_id in job_ids:
             job = await self._own_job(job_id, principal)
             if job["status"] not in ("awaiting_review", "failed"):
@@ -227,7 +244,7 @@ class ImportService:
                     409, f"Job {job_id} is '{job['status']}', not ready to commit."
                 )
         try:
-            return await self._gateway.commit_series(job_ids)
+            return await self._gateway.commit_series(job_ids, novel_id)
         except ValueError as exc:
             raise ImportRequestError(409, str(exc)) from exc
 
@@ -238,7 +255,51 @@ class ImportService:
     async def get_job(self, job_id: int, principal: Principal) -> dict:
         return job_view(await self._own_job(job_id, principal))
 
-    async def update_plan(self, job_id: int, plan: dict, principal: Principal) -> dict:
+    @staticmethod
+    def _metadata_override(metadata: dict | None) -> dict | None:
+        if metadata is None:
+            return None
+        normalized = {}
+        unknown = set(metadata) - set(_EDITABLE_METADATA)
+        if unknown:
+            raise ImportRequestError(
+                422, f"Unsupported metadata field(s): {', '.join(sorted(unknown))}."
+            )
+        for key, value in metadata.items():
+            if key == "series_index":
+                if value in (None, ""):
+                    normalized[key] = None
+                    continue
+                try:
+                    number = float(value)
+                except (TypeError, ValueError) as exc:
+                    raise ImportRequestError(
+                        422, "Volume number must be numeric."
+                    ) from exc
+                if not math.isfinite(number):
+                    raise ImportRequestError(
+                        422, "Volume number must be a finite number."
+                    )
+                normalized[key] = number
+                continue
+            if value is None:
+                normalized[key] = None
+                continue
+            if not isinstance(value, str):
+                raise ImportRequestError(422, f"Metadata field '{key}' must be text.")
+            value = value.strip()
+            limit = _METADATA_TEXT_LIMITS[key]
+            if len(value) > limit:
+                raise ImportRequestError(
+                    422, f"Metadata field '{key}' exceeds {limit} characters."
+                )
+            normalized[key] = value or None
+        return normalized
+
+    async def update_plan(
+        self, job_id: int, plan: dict, principal: Principal, *,
+        metadata: dict | None = None,
+    ) -> dict:
         job = await self._own_job(job_id, principal)
         if job["status"] in ("committing", "committed"):
             raise ImportRequestError(409, "This job has already been committed.")
@@ -256,12 +317,22 @@ class ImportService:
                     422, f"Segment '{segment.get('id')}' has an invalid block_range."
                 )
         plan.setdefault("version", 1)
-        await self._gateway.update_job(job_id, plan=plan)
+        fields = {"plan": plan}
+        override = self._metadata_override(metadata)
+        if override is not None:
+            options = dict(job.get("options") or {})
+            saved_override = dict(options.get("metadata_override") or {})
+            saved_override.update(override)
+            options["metadata_override"] = saved_override
+            detected_meta = dict(job.get("detected_meta") or {})
+            detected_meta.update(saved_override)
+            fields.update(options=options, detected_meta=detected_meta)
+        await self._gateway.update_job(job_id, **fields)
         return {"status": "success"}
 
     async def commit(self, job_id: int, principal: Principal, *, mode: str,
                      novel_id: int | None, source_id: int | None, offset: float,
-                     is_raw: bool | None) -> dict:
+                     is_raw: bool | None, as_volume: bool = False) -> dict:
         job = await self._own_job(job_id, principal)
         if mode == "append" and novel_id:
             await self._catalog.require_editable(novel_id, principal)
@@ -283,7 +354,11 @@ class ImportService:
             target = {"source_id": source_id, "offset": offset}
         else:
             target = "new"
-        options = {**(job.get("options") or {}), "target": target}
+        options = {
+            **(job.get("options") or {}),
+            "target": target,
+            "as_volume": bool(as_volume),
+        }
         if is_raw is not None:
             options["is_raw"] = is_raw
         await self._gateway.update_job(

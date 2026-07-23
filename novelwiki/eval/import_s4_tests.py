@@ -180,6 +180,122 @@ async def test_series_commit_end_to_end(tmp_path, db_ready):
 
 
 @pytest.mark.asyncio
+async def test_single_volume_auto_appends_and_groups(tmp_path, db_ready):
+    from novelwiki.importer import commit, jobs as import_jobs
+    from novelwiki.db.connection import get_db_pool
+
+    v1 = str(tmp_path / "v1.epub"); v2 = str(tmp_path / "v2.epub")
+    make_series_epub(v1, title="Saga Vol One", series="The Saga", index=1, chapters=2)
+    make_series_epub(v2, title="Saga Vol Two", series="The Saga", index=2, chapters=2)
+    jid1 = await _parse_job(v1)
+    jid2 = await _parse_job(v2)
+    novel_id = None
+    try:
+        await import_jobs.update_job(
+            jid1, options={"target": "new", "as_volume": True},
+        )
+        first = await commit.commit_job(await import_jobs.get_job(jid1))
+        novel_id = first["novel_id"]
+
+        await import_jobs.update_job(
+            jid2,
+            options={
+                "target": {"novel_id": novel_id, "offset": 0},
+                "as_volume": True,
+            },
+        )
+        second = await commit.commit_job(await import_jobs.get_job(jid2))
+        assert second["novel_id"] == novel_id
+
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            novel = await conn.fetchrow(
+                "SELECT title, series FROM novels WHERE id=$1;", novel_id,
+            )
+            rows = await conn.fetch(
+                "SELECT number, part_label FROM chapters "
+                "WHERE novel_id=$1 ORDER BY number;", novel_id,
+            )
+            sources = await conn.fetch(
+                "SELECT chapter_offset, label FROM sources "
+                "WHERE novel_id=$1 ORDER BY id;", novel_id,
+            )
+        assert dict(novel) == {"title": "The Saga", "series": "The Saga"}
+        assert [float(row["number"]) for row in rows] == [1.0, 2.0, 3.0, 4.0]
+        assert [row["part_label"] for row in rows] == [
+            "Saga Vol One", "Saga Vol One", "Saga Vol Two", "Saga Vol Two",
+        ]
+        assert [row["label"] for row in sources] == [
+            "Saga Vol One", "Saga Vol Two",
+        ]
+        assert float(sources[1]["chapter_offset"]) == 2.0
+    finally:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            if novel_id is not None:
+                await conn.execute("DELETE FROM novels WHERE id=$1;", novel_id)
+            await conn.execute(
+                "DELETE FROM import_jobs WHERE id = ANY($1::bigint[]);",
+                [jid1, jid2],
+            )
+        if novel_id is not None:
+            storage.cleanup_novel_assets(novel_id)
+        storage.cleanup_job(jid1); storage.cleanup_job(jid2)
+
+
+@pytest.mark.asyncio
+async def test_series_batch_appends_to_existing_novel(tmp_path, db_ready):
+    from novelwiki.importer import commit, jobs as import_jobs
+    from novelwiki.db.connection import get_db_pool
+
+    v1 = str(tmp_path / "v1.epub")
+    v2 = str(tmp_path / "v2.epub")
+    v3 = str(tmp_path / "v3.epub")
+    make_series_epub(v1, title="Saga Vol One", series="The Saga", index=1, chapters=2)
+    make_series_epub(v2, title="Saga Vol Two", series="The Saga", index=2, chapters=2)
+    make_series_epub(v3, title="Saga Vol Three", series="The Saga", index=3, chapters=2)
+    jid1 = await _parse_job(v1)
+    jid2 = await _parse_job(v2)
+    jid3 = await _parse_job(v3)
+    novel_id = None
+    try:
+        initial = await commit.commit_series([jid1])
+        novel_id = initial["novel_id"]
+        appended = await commit.commit_series(
+            [jid3, jid2], target_novel_id=novel_id,
+        )
+        assert appended["novel_id"] == novel_id
+        assert appended["appended"] is True
+
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT number, part_label FROM chapters "
+                "WHERE novel_id=$1 ORDER BY number;", novel_id,
+            )
+        assert [float(row["number"]) for row in rows] == [
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
+        ]
+        assert [row["part_label"] for row in rows] == [
+            "Saga Vol One", "Saga Vol One",
+            "Saga Vol Two", "Saga Vol Two",
+            "Saga Vol Three", "Saga Vol Three",
+        ]
+    finally:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            if novel_id is not None:
+                await conn.execute("DELETE FROM novels WHERE id=$1;", novel_id)
+            await conn.execute(
+                "DELETE FROM import_jobs WHERE id = ANY($1::bigint[]);",
+                [jid1, jid2, jid3],
+            )
+        if novel_id is not None:
+            storage.cleanup_novel_assets(novel_id)
+        storage.cleanup_job(jid1); storage.cleanup_job(jid2); storage.cleanup_job(jid3)
+
+
+@pytest.mark.asyncio
 async def test_replace_source_end_to_end(tmp_path, db_ready):
     from novelwiki.importer import commit, jobs as import_jobs
     from novelwiki.db.connection import get_db_pool

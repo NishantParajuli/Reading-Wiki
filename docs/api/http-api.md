@@ -112,10 +112,15 @@ Upload: `POST /api/import/upload` (≤ `MAX_UPLOAD_MB`) · chunked:
 `POST /api/import/upload/init` → `PUT /api/import/upload/{job}/chunk` (contiguous,
 capped) → `POST …/complete` (streamed hash verify) · `GET …/status` ·
 `POST /api/import/scan-incoming` · `POST /api/import/batch` ·
-`POST /api/import/commit-series`.
+`POST /api/import/commit-series` (`job_ids`; optional editable `novel_id` appends the
+ordered volumes instead of creating a novel).
 Jobs: `GET /api/import/jobs` · `GET|DELETE /api/import/jobs/{id}` ·
-`PUT …/plan` (edit segmentation before commit) · `POST …/confirm-ocr` (paid-OCR consent
-gate) · `POST …/commit` · `POST …/cancel`.
+`PUT …/plan` (`plan` plus optional `metadata`: `title`, `author`, `description`,
+`language`, `series`, numeric `series_index`, and `volume_label`; supplied metadata
+overrides parser/filename values at commit) · `POST …/confirm-ocr` (paid-OCR consent
+gate) · `POST …/commit` (`mode=new|append|replace`; `as_volume=true` groups under the
+saved or detected volume label and computes append numbering automatically; otherwise
+`offset` is used) · `POST …/cancel`.
 Assets (access-controlled streaming): `GET /api/assets/novels/{novel_id}/{filename}` ·
 `GET /api/assets/import-jobs/{job_id}/{filename}`.
 

@@ -83,6 +83,13 @@ Signed-in, inside `Shell` (top nav + toasts):
   (e.g. a translate job start invalidates activity + chapter lists).
 - Job-progress surfaces (Jobs page, import view, audiobook status) poll their endpoints
   while a job is active.
+- The Import screen accepts multi-file EPUB/PDF selection. Each file remains an
+  independently reviewable job; ready jobs can be folded into a new series or appended
+  as an ordered volume batch. The review exposes title, author, description, language,
+  series, volume number/label, and per-section group labels; saving makes those values
+  authoritative for commit. A later file with detected or user-supplied series metadata
+  preselects the matching editable novel and defaults to automatic volume grouping/
+  numbering.
 
 ## Reader specifics
 

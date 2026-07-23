@@ -60,8 +60,19 @@ class ScrapeTrigger(BaseModel):
     source_id: int | None = None
 
 
+class ImportMetadataUpdate(BaseModel):
+    title: str | None = None
+    author: str | None = None
+    description: str | None = None
+    language: str | None = None
+    series: str | None = None
+    series_index: float | None = None
+    volume_label: str | None = None
+
+
 class PlanUpdate(BaseModel):
     plan: dict
+    metadata: ImportMetadataUpdate | None = None
 
 
 class ImportCommit(BaseModel):
@@ -70,6 +81,7 @@ class ImportCommit(BaseModel):
     source_id: int | None = None
     offset: float = 0
     is_raw: bool | None = None
+    as_volume: bool = False
 
 
 class OcrConfirm(BaseModel):
@@ -90,6 +102,7 @@ class ImportBatch(BaseModel):
 
 class CommitSeries(BaseModel):
     job_ids: list[int]
+    novel_id: int | None = None
 
 
 def _raise_http(exc: Exception) -> None:
@@ -297,7 +310,8 @@ async def api_import_batch(
     ),
 ):
     """Bulk-import a folder (e.g. a Calibre library). Recurses by default, can auto-commit
-    each book without review, and can group EPUB volumes of one series into a single novel."""
+    each book without review, and can group detected EPUB/PDF volumes of one series into
+    a single novel."""
     service, principal_factory = await _import_dependencies(service, principal_factory)
     try:
         return await service.batch(
@@ -393,10 +407,13 @@ async def api_import_commit_series(
         acquisition_principal_factory_dependency
     ),
 ):
-    """Fold several parsed jobs into one multi-volume novel (ordered by series index)."""
+    """Fold several parsed jobs into one multi-volume novel (ordered by series index), or
+    append the ordered volume batch to an editable existing novel."""
     service, principal_factory = await _import_dependencies(service, principal_factory)
     try:
-        return await service.commit_series(payload.job_ids, principal_factory(user))
+        return await service.commit_series(
+            payload.job_ids, principal_factory(user), payload.novel_id
+        )
     except (ImportRequestError, NotFound, Forbidden, Conflict, QuotaExceeded) as exc:
         _raise_import_http(exc)
 
@@ -436,13 +453,25 @@ async def api_import_update_plan(
         acquisition_principal_factory_dependency
     ),
 ):
-    """Replace the editable segmentation plan (merge/split/rename/include/number/kind are
-    all client-side edits that produce a new plan). Block ranges are validated against the
-    stored block stream so a bad edit can't point off the end of the document."""
+    """Replace the editable segmentation plan and optional book metadata overrides.
+
+    Merge/split/rename/include/number/kind/group edits produce a new plan. User-supplied
+    title, author, description, language, series, volume index, and volume label take
+    precedence over embedded metadata and filename guesses when the job is committed.
+    Block ranges are validated against the stored block stream so a bad edit can't point
+    off the end of the document.
+    """
     service, principal_factory = await _import_dependencies(service, principal_factory)
     try:
         return await service.update_plan(
-            job_id, payload.plan, principal_factory(user)
+            job_id,
+            payload.plan,
+            principal_factory(user),
+            metadata=(
+                payload.metadata.model_dump(exclude_unset=True)
+                if payload.metadata is not None
+                else None
+            ),
         )
     except (ImportRequestError, NotFound, Forbidden, Conflict, QuotaExceeded) as exc:
         _raise_import_http(exc)
@@ -464,6 +493,7 @@ async def api_import_commit(
             job_id, principal_factory(user), mode=payload.mode,
             novel_id=payload.novel_id, source_id=payload.source_id,
             offset=payload.offset, is_raw=payload.is_raw,
+            as_volume=payload.as_volume,
         )
     except (ImportRequestError, NotFound, Forbidden, Conflict, QuotaExceeded) as exc:
         _raise_import_http(exc)

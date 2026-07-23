@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
@@ -25,6 +26,10 @@ logger = logging.getLogger(__name__)
 # Languages whose word count is character-based; also which we leave flagged for the
 # on-demand translator. EPUB import text is the reader text, so is_raw stays False.
 _CJK = ("zh", "ja", "ko")
+_METADATA_OVERRIDE_FIELDS = {
+    "title", "author", "description", "language", "series",
+    "series_index", "volume_label",
+}
 
 
 def _assign_global_numbers(included: list[dict], offset: float) -> None:
@@ -49,6 +54,7 @@ def _assign_global_numbers(included: list[dict], offset: float) -> None:
 async def _resolve_target(apis, job: dict, meta: dict):
     options = job.get("options") or {}
     target = options.get("target", "new")
+    as_volume = bool(options.get("as_volume"))
     language = (meta.get("language") or "en")[:8]
     fmt = job["format"]
     is_raw = bool(options.get("is_raw"))
@@ -82,15 +88,23 @@ async def _resolve_target(apis, job: dict, meta: dict):
 
     if isinstance(target, dict) and target.get("novel_id"):
         novel_id = int(target["novel_id"])
-        offset = float(target.get("offset", 0) or 0)
         if not await apis.catalog.novel_exists(novel_id):
             raise ValueError(f"Append target novel {novel_id} does not exist.")
+        if as_volume:
+            existing = await apis.reading.other_source_numbers(novel_id, -1)
+            offset = float(math.floor(max(existing))) if existing else 0.0
+        else:
+            offset = float(target.get("offset", 0) or 0)
         cover_pending = None
     else:
         from novelwiki.modules.acquisition.public import ImportNovelDraft
         owner_id = job.get("user_id")
         novel_id = await apis.catalog.create_imported_novel(ImportNovelDraft(
-            title=meta.get("title") or "Imported book",
+            title=(
+                meta.get("series")
+                if as_volume and meta.get("series")
+                else meta.get("title")
+            ) or "Imported book",
             author=meta.get("author"), description=meta.get("description"),
             original_language=language,
             codex_enabled=settings.IMPORT_AUTO_BUILD_CODEX,
@@ -100,10 +114,15 @@ async def _resolve_target(apis, job: dict, meta: dict):
         offset = 0.0
         cover_pending = meta.get("cover_sha")
 
+    source_label = (
+        _volume_label(_series_index(meta), meta)
+        if as_volume
+        else f"Imported {fmt.upper()}"
+    )
     source_id = await apis.acquisition.create_import_source(
         novel_id, adapter=fmt, start_url=job["original_path"],
         language=language, is_raw=is_raw, offset=offset,
-        label=f"Imported {fmt.upper()}",
+        label=source_label,
     )
     source = {
         "id": source_id, "novel_id": novel_id,
@@ -141,6 +160,21 @@ async def _preserve_replaced_content_version(
     )
 
 
+def _apply_metadata_override(document, options: dict) -> None:
+    """Apply the user's saved review values to the parsed document.
+
+    The on-disk block stream deliberately remains immutable after parsing. Overrides live
+    on the durable job row, so this step is required for both ordinary and series commits.
+    Restricting the keys keeps clients from replacing parser-owned asset/cover metadata.
+    """
+    override = options.get("metadata_override") or {}
+    if not isinstance(override, dict):
+        return
+    for key in _METADATA_OVERRIDE_FIELDS:
+        if key in override:
+            document.meta[key] = override[key]
+
+
 async def _load_for_commit(job: dict) -> tuple:
     """Load the on-disk block stream + re-read the (possibly edited) plan/options/status from
     the row. Refuses an already-committed job (would duplicate the novel). Returns
@@ -160,6 +194,7 @@ async def _load_for_commit(job: dict) -> tuple:
         job["options"] = json.loads(row["options"])
     elif row["options"] is not None:
         job["options"] = row["options"]
+    _apply_metadata_override(document, job.get("options") or {})
 
     included = [s for s in plan.get("segments", []) if s.get("include")]
     included.sort(key=lambda s: s["block_range"][0])
@@ -254,9 +289,23 @@ async def commit_job(job: dict, *, runtime) -> dict:
         novel_id, source, offset, cover_pending, invalidate = await _resolve_target(
             apis, job, meta
         )
+        options = job.get("options") or {}
+        target = options.get("target")
+        as_volume = bool(options.get("as_volume"))
+        volume_commit = (
+            as_volume
+            and not (
+                isinstance(target, dict)
+                and bool(target.get("source_id"))
+            )
+        )
         written, lo, hi = await _write_segments(
             apis, job_id, blocks, meta, included, novel_id, source, offset,
             cover_pending,
+            force_part_label=(
+                _volume_label(_series_index(meta), meta) if volume_commit else None
+            ),
+            sequential=volume_commit,
         )
         if invalidate is not None:
             await apis.codex.invalidate_chapter_range(
@@ -304,6 +353,9 @@ def _series_index(meta: dict) -> float | None:
 
 def _volume_label(idx: float | None, meta: dict) -> str:
     """The TOC group heading / source label for one volume of a series."""
+    explicit = (meta.get("volume_label") or "").strip()
+    if explicit:
+        return explicit
     title = (meta.get("title") or "").strip()
     if title and title not in ("Imported book", "Imported PDF"):
         return title
@@ -312,11 +364,15 @@ def _volume_label(idx: float | None, meta: dict) -> str:
     return "Volume"
 
 
-async def commit_series(job_ids: list[int], *, runtime) -> dict:
+async def commit_series(
+    job_ids: list[int], target_novel_id: int | None = None, *, runtime
+) -> dict:
     """Commit several parsed EPUB/PDF jobs as the volumes of ONE novel: ordered by detected
     series index, each volume becomes its own source, chapters are stacked into a single
     continuous global sequence, and every volume is grouped under its own ``part_label`` in
-    the reader's TOC. The cover + book metadata come from the first volume."""
+    the reader's TOC. With ``target_novel_id`` the volumes append after that novel's current
+    final chapter; otherwise a new novel is created. The first volume supplies missing cover
+    + book metadata for a new novel."""
     loaded = []
     for jid in job_ids:
         job = await runtime.import_job(int(jid))
@@ -342,13 +398,20 @@ async def commit_series(job_ids: list[int], *, runtime) -> dict:
     state = {}
 
     async def operation(apis):
-        novel_id = await apis.catalog.create_imported_novel(ImportNovelDraft(
-            title=series_name, author=first_meta.get("author"),
-            description=first_meta.get("description"), original_language=language,
-            codex_enabled=settings.IMPORT_AUTO_BUILD_CODEX, series=series_name,
-            owner_id=owner_id, visibility=visibility,
-        ))
-        running = 0.0
+        if target_novel_id is not None:
+            novel_id = int(target_novel_id)
+            if not await apis.catalog.novel_exists(novel_id):
+                raise ValueError(f"Append target novel {novel_id} does not exist.")
+            existing = await apis.reading.other_source_numbers(novel_id, -1)
+            running = float(math.floor(max(existing))) if existing else 0.0
+        else:
+            novel_id = await apis.catalog.create_imported_novel(ImportNovelDraft(
+                title=series_name, author=first_meta.get("author"),
+                description=first_meta.get("description"), original_language=language,
+                codex_enabled=settings.IMPORT_AUTO_BUILD_CODEX, series=series_name,
+                owner_id=owner_id, visibility=visibility,
+            ))
+            running = 0.0
         lo_all = hi_all = None
         for index, item in enumerate(loaded):
             job, document, included = item["job"], item["doc"], item["included"]
@@ -375,6 +438,7 @@ async def commit_series(job_ids: list[int], *, runtime) -> dict:
                     "from_chapter": lo, "to_chapter": hi, "series": series_name,
                 },
             )
+        await apis.catalog.touch_novel(novel_id)
         state.update(
             novel_id=novel_id, lo=lo_all, hi=hi_all,
             codex_enabled=await apis.catalog.codex_enabled(novel_id),
@@ -396,6 +460,7 @@ async def commit_series(job_ids: list[int], *, runtime) -> dict:
     logger.info(f"Committed series '{series_name}' → novel {novel_id} ({len(loaded)} volumes, "
                 f"ch. {lo_all}–{hi_all}).")
     return {"novel_id": novel_id, "volumes": len(loaded),
+            "appended": target_novel_id is not None,
             "stats": {"from_chapter": lo_all, "to_chapter": hi_all, "series": series_name}}
 
 
