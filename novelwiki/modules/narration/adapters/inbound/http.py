@@ -197,7 +197,8 @@ async def api_chapter_audio_status(
     ),
 ):
     """Whether this reader has playable audio for the chapter in the given voice (drives the
-    player's generate-vs-play state and the TOC speaker icons)."""
+    player's generate-vs-play state and the TOC speaker icons). Cached audio includes an
+    optional paragraph timing manifest; legacy audio reports ``timing: null``."""
     service, principal_factory = await _dependencies(service, principal_factory)
     return await _result(service.chapter_status(
         novel_id, number, voice_id, principal_factory(user)

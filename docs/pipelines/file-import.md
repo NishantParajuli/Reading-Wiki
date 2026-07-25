@@ -121,6 +121,10 @@ import source; register content-addressed assets), Reading (upsert every include
 segment through the same funnel the scraper uses — `kind`, `part_label`, version
 preservation, overlay-conflict marking on replaced chapters), Codex (invalidate
 chapter-range artifacts). Then `finalize_import_job` stamps stats → `committed`.
+Automatic single- and batch-volume appends take a transaction-scoped advisory lock for
+the target novel before reading its current maximum chapter number. The lock remains held
+through source creation, chapter writes, and job finalization, so concurrent appends
+allocate disjoint ranges instead of overwriting one another.
 Because committed chapters are ordinary chapters, codex/translation/narration work on
 imported books with zero extra wiring. (`IMPORT_AUTO_BUILD_CODEX=true` additionally
 schedules a codex build.)

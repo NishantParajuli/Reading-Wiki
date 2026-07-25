@@ -60,6 +60,7 @@ class NarrationSidecarPort(Protocol):
 
 class AudioFilePort(Protocol):
     def exists(self, path: str) -> bool: ...
+    def read_timing_manifest(self, audio_path: str) -> dict | None: ...
 
 
 class NarrationWorkerRepository(Protocol):

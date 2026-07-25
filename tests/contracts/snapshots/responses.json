@@ -113,6 +113,38 @@
       "status": 200
     }
   },
+  "narration_timing": {
+    "error": {
+      "json": {
+        "detail": "Novel not found"
+      },
+      "status": 404
+    },
+    "legacy": {
+      "json": {
+        "cached": true,
+        "timing": null
+      },
+      "status": 200
+    },
+    "request": {
+      "method": "GET",
+      "path": "/api/novels/{novel_id}/chapter/{number}/audio/status"
+    },
+    "success": {
+      "json": {
+        "cached": true,
+        "timing": {
+          "duration_ms": "<milliseconds>",
+          "paragraphs": [
+            "<timed-paragraph>"
+          ],
+          "version": 1
+        }
+      },
+      "status": 200
+    }
+  },
   "platform": {
     "error": {
       "json": {

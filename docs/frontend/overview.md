@@ -98,7 +98,14 @@ on the root, CSS token-driven), column width, auto-scroll, scroll-position recov
 volume-grouped TOC (`toc.jsx`), bookmarks, per-chapter translation editing (overlay
 editor + base-vs-mine diff via `lib/diff.jsx`), provenance badges, the audiobook
 transport (narration slice), and codex citation popovers (`lib/markdown.jsx` renders
-answer markdown with `CiteProvider` so `[c:…]` markers open evidence popovers).
+answer markdown with `CiteProvider` so `[c:…]` markers open evidence popovers). During
+audiobook playback, the reader selects the active paragraph from its actual
+generation-time boundaries by comparing the player clock directly with manifest
+milliseconds. It estimates the active one-or-two-sentence group only within that
+paragraph, highlights it with the configured accent, and scrolls at group
+transitions when needed to keep it visible. Legacy cached audio without a timing
+manifest remains playable with highlighting disabled. Timed highlighting works for both
+plain and imported rich chapters.
 Resume writes are debounced `PUT /progress` calls and update `last_chapter`/`scroll_pct`
 only. The trusted spoiler ceiling advances separately when the authenticated
 `GET /chapter/{number}` response is served, so a fabricated progress PUT cannot unlock
@@ -120,7 +127,9 @@ precise slider dragging.
 
 - `src/app-contract.test.js` + `src/lib/api.test.js` — Vitest suites asserting the app's
   route table and API bindings match the frozen contracts.
+- `src/modules/reading/narrationGuide.test.js` — sentence grouping, rich-markup
+  preservation, timed-paragraph mapping, and the legacy-audio fallback.
 - `e2e/critical-paths.spec.js` — Playwright against a mocked/real backend
   (`e2e/real-backend.spec.js`, `scripts/test_real_browser.py` fixture): register→read→
-  codex critical journeys.
+  codex critical journeys, including mobile narration highlighting and reveal behavior.
 - The production build itself is a release gate (`npm run build`).

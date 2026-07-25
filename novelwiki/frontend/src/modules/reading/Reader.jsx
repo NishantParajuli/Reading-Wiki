@@ -4,7 +4,7 @@
    next-chapter prefetch, translation tools, TOC drawer, audio player with
    ±15s skips. Progress (chapter + scroll fraction) still lives server-side.
    ============================================================ */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -19,6 +19,7 @@ import { Drawer, Popover } from "../../components/overlay.jsx";
 import { ProvenanceBadges } from "../../components/ProvenanceBadges.jsx";
 import { DiffView } from "../../lib/diff.jsx";
 import { VolumeTOC } from "./toc.jsx";
+import { NarratedProse } from "./NarratedProse.jsx";
 import { VoicePicker, readTtsPrefs } from "../narration/index.js";
 import { useNovelQuery } from "../../modules/catalog/queries.js";
 import { useAudioCoverageQuery, useVoicesQuery } from "../../modules/narration/queries.js";
@@ -29,6 +30,7 @@ import {
   AUTOSCROLL_PX_PER_SEC, AudioPlayer, EndOfChapterCard, ReaderSettings,
   RichContent, TranslationTools, loadReaderPrefs,
 } from "../../modules/reading/ReaderParts.jsx";
+import { useNarrationGuide } from "./useNarrationGuide.js";
 
 export function Reader() {
   const { novelId: novelIdParam, number: numberParam } = useParams();
@@ -61,6 +63,9 @@ export function Reader() {
   const prefetched = useRef(null);
 
   const listen = sp.get("listen") === "1";
+  const {
+    readerRef, narrationGuide, preparedNarration, setNarrationGuide,
+  } = useNarrationGuide({ ch, novelId, number, chrome });
 
   useTitle(ch ? `Ch. ${fmtChapter(number)}` : null, novel ? novel.title : null);
 
@@ -172,7 +177,10 @@ export function Reader() {
 
   // Auto-scroll engine.
   useEffect(() => {
-    if (!prefs.autoScroll || status !== "ok" || !ch || (!ch.content && !ch.rich_html)) return;
+    if (
+      !prefs.autoScroll || narrationGuide.engaged
+      || status !== "ok" || !ch || (!ch.content && !ch.rich_html)
+    ) return;
     let raf, last = performance.now(), acc = 0;
     const step = (now) => {
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -190,7 +198,7 @@ export function Reader() {
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [prefs.autoScroll, prefs.autoSpeed, status, ch, openReader]);
+  }, [prefs.autoScroll, prefs.autoSpeed, narrationGuide.engaged, status, ch, openReader]);
 
   // Keyboard prev/next.
   useEffect(() => {
@@ -242,7 +250,7 @@ export function Reader() {
   };
 
   return (
-    <div className={"reader tone-" + prefs.tone + (chrome ? "" : " chrome-hidden")} onClick={tapToggle}>
+    <div ref={readerRef} className={"reader tone-" + prefs.tone + (chrome ? "" : " chrome-hidden")} onClick={tapToggle}>
       <div className="reader-rail" aria-hidden><div style={{ width: (readPct * 100) + "%" }} /></div>
 
       {/* top chrome */}
@@ -293,7 +301,9 @@ export function Reader() {
       {status === "ok" && ch && (ch.content || ch.rich_html) && (
         <AudioPlayer novelId={novelId} number={number} ch={ch} user={user} onUserUpdate={onUserUpdate}
                      openReader={(n) => openReader(n, { listen: true })}
-                     onAudioChange={refetchCoverage} autoEngage={listen} />
+                     onAudioChange={refetchCoverage} autoEngage={listen}
+                     narrationChunks={preparedNarration.chunks}
+                     onNarrationGuideChange={setNarrationGuide} />
       )}
 
       {/* body */}
@@ -338,13 +348,12 @@ export function Reader() {
                 <Button variant="ghost" icon="refresh" onClick={() => setReloadKey(k => k + 1)}>Retry</Button>
               </div>
             </div>
-          ) : ch.rich_html ? (
+          ) : preparedNarration.kind === "rich" ? (
             // Imported chapters ship sanitized rich HTML (server-side nh3).
-            <RichContent html={ch.rich_html} />
+            <RichContent html={preparedNarration.html} />
           ) : (
-            <div className={"reader-text" + (prefs.justify ? " justify" : "") + (prefs.indent ? " indent" : "")}>
-              {(ch.content || "").split(/\n{2,}/).map((para, i) => <p key={i}>{para}</p>)}
-            </div>
+            <NarratedProse prepared={preparedNarration}
+                           justify={prefs.justify} indent={prefs.indent} />
           )}
 
           {(ch.content || ch.rich_html) && (

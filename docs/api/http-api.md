@@ -120,8 +120,9 @@ Jobs: `GET /api/import/jobs` · `GET|DELETE /api/import/jobs/{id}` ·
 overrides parser/filename values at commit) · `POST …/confirm-ocr` (paid-OCR consent
 gate) · `POST …/commit` (`mode=new|append|replace`; for `new`/`append`,
 `as_volume=true` groups under the saved or detected volume label and computes numbering
-automatically; `replace` preserves the source's labels/offset numbering and rejects
-`as_volume=true` with 422) · `POST …/cancel`.
+automatically, serializing concurrent automatic appends per target novel; `replace`
+preserves the source's labels/offset numbering and rejects `as_volume=true` with 422) ·
+`POST …/cancel`.
 Assets (access-controlled streaming): `GET /api/assets/novels/{novel_id}/{filename}` ·
 `GET /api/assets/import-jobs/{job_id}/{filename}`.
 
@@ -151,6 +152,11 @@ free; else durable job) · `GET …/chapter/{n}/audio/status` ·
 `POST /api/novels/{id}/audiobook` (bounded book batch) · `GET …/audiobook/status` ·
 `GET /api/novels/{id}/audio/chapters` (`voice_id`) · `GET …/audio/coverage` ·
 `GET /api/tts/jobs/{id}` · `POST /api/tts/jobs/{id}/cancel`.
+
+For cached audio, `audio/status` includes `timing`. Newly generated audio returns a
+versioned manifest with actual `start_ms`, `speech_end_ms`, and `end_ms` boundaries per
+generated paragraph plus its visible `source_index`. Legacy audio returns `timing: null`;
+clients must keep playback available and disable synchronized highlighting.
 
 ## Work (`/api`, auth)
 

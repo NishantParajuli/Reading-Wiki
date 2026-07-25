@@ -4143,7 +4143,7 @@
     },
     "/api/novels/{novel_id}/chapter/{number}/audio/status": {
       "get": {
-        "description": "Whether this reader has playable audio for the chapter in the given voice (drives the\nplayer's generate-vs-play state and the TOC speaker icons).",
+        "description": "Whether this reader has playable audio for the chapter in the given voice (drives the\nplayer's generate-vs-play state and the TOC speaker icons). Cached audio includes an\noptional paragraph timing manifest; legacy audio reports ``timing: null``.",
         "operationId": "api_chapter_audio_status_api_novels__novel_id__chapter__number__audio_status_get",
         "parameters": [
           {

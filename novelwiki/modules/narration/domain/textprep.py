@@ -118,21 +118,39 @@ def normalize(text: str) -> str:
     return text.strip()
 
 
-def to_paragraphs(content: str, title: str | None = None, number=None, intro: bool = True) -> list[str]:
-    """Split chapter ``content`` into normalized paragraphs (blank-line separated), optionally
-    prepending a spoken chapter-title intro. Empty paragraphs are dropped."""
-    paras = []
+def to_paragraph_records(
+    content: str, title: str | None = None, number=None, intro: bool = True,
+) -> list[dict]:
+    """Return normalized narration paragraphs with their visible-source paragraph indexes.
+
+    The optional spoken intro has ``source_index=None`` because it has no prose paragraph
+    to highlight. Source indexes are retained across normalized-away empty blocks so timing
+    metadata can map the generated audio back to the displayed chapter deterministically.
+    """
+    records = []
     if intro:
         label = f"Chapter {_fmt_number(number)}" if number is not None else "Chapter"
         if title and str(title).strip():
-            paras.append(normalize(f"{label}. {title}."))
+            records.append({
+                "text": normalize(f"{label}. {title}."),
+                "source_index": None,
+            })
         else:
-            paras.append(normalize(f"{label}."))
-    for block in re.split(r"\n\s*\n", content or ""):
+            records.append({"text": normalize(f"{label}."), "source_index": None})
+    for source_index, block in enumerate(re.split(r"\n\s*\n", content or "")):
         norm = normalize(block)
         if norm:
-            paras.append(norm)
-    return paras
+            records.append({"text": norm, "source_index": source_index})
+    return records
+
+
+def to_paragraphs(content: str, title: str | None = None, number=None, intro: bool = True) -> list[str]:
+    """Split chapter ``content`` into normalized paragraphs (blank-line separated), optionally
+    prepending a spoken chapter-title intro. Empty paragraphs are dropped."""
+    return [
+        record["text"]
+        for record in to_paragraph_records(content, title=title, number=number, intro=intro)
+    ]
 
 
 def _fmt_number(number) -> str:

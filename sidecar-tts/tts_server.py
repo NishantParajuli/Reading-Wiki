@@ -9,9 +9,10 @@ and exposes a tiny HTTP surface the web app's ``tts_client`` talks to::
     POST /synthesize             → 24 kHz mono PCM WAV bytes (+ X-Duration-Seconds header)   (token)
         {"text": str, "voice_id": str, "language": str|null, "speed": float|null,
          "num_step": int|null}
-    POST /narrate                → Ogg/Opus bytes for a whole chapter (+ X-Duration-Seconds) (token)
+    POST /narrate                → Ogg/Opus, optionally multipart paragraph timings + Opus (token)
         {"paragraphs": [str], "voice_id": str, "language": str|null, "speed": float|null,
-         "num_step": int|null, "silence_ms": int|null, "opus_bitrate": str|null}
+         "num_step": int|null, "silence_ms": int|null, "opus_bitrate": str|null,
+         "include_timing_manifest": bool}
         Each paragraph is synthesized with the SAME cached clone prompt (stable voice) and
         concatenated with a short silence between them, then encoded to Opus via ffmpeg.
 
@@ -36,6 +37,7 @@ import io
 import json
 import logging
 import os
+import secrets
 import threading
 import wave
 from pathlib import Path
@@ -112,6 +114,7 @@ class NarrateRequest(BaseModel):
     num_step: int | None = None
     silence_ms: int | None = None
     opus_bitrate: str | None = None
+    include_timing_manifest: bool = False
 
 
 def _load_voices() -> list[dict]:
@@ -214,6 +217,36 @@ def _pcm_to_opus(pcm, sr: int, bitrate: str) -> bytes:
     return proc.stdout
 
 
+def _timed_narration_response(opus: bytes, manifest: dict, duration: float) -> Response:
+    """Return timing JSON and Opus as a standard multipart response.
+
+    The opt-in keeps older web workers compatible with a newer sidecar, while a newer
+    worker can still accept the legacy audio/ogg response during a rolling deployment.
+    """
+    boundary = f"novelwiki-{secrets.token_hex(16)}"
+    manifest_bytes = json.dumps(manifest, separators=(",", ":")).encode("utf-8")
+    marker = boundary.encode("ascii")
+    body = b"".join([
+        b"--", marker, b"\r\n",
+        b"Content-Type: application/json\r\n",
+        b'Content-Disposition: form-data; name="manifest"\r\n\r\n',
+        manifest_bytes, b"\r\n",
+        b"--", marker, b"\r\n",
+        b"Content-Type: audio/ogg\r\n",
+        b'Content-Disposition: form-data; name="audio"; filename="chapter.opus"\r\n',
+        b"Content-Transfer-Encoding: binary\r\n\r\n",
+        opus, b"\r\n",
+        b"--", marker, b"--\r\n",
+    ])
+    return Response(
+        content=body, media_type=f"multipart/mixed; boundary={boundary}",
+        headers={
+            "X-Duration-Seconds": f"{duration:.3f}",
+            "X-Sample-Rate": str(_sr),
+        },
+    )
+
+
 def _norm_lang(lang: str | None) -> str | None:
     """OmniVoice wants a base language id ('en', 'zh', 'ja', …), not a BCP-47 tag. Chapters
     store tags like 'en-GB'/'zh-CN', so strip the region subtag. (Accent comes from the voice
@@ -288,7 +321,8 @@ def synthesize(req: SynthRequest, _: None = Depends(require_token)):
 @app.post("/narrate")
 def narrate(req: NarrateRequest, _: None = Depends(require_token)):
     """A whole chapter: synthesize each paragraph with the SAME cached clone prompt (stable
-    narrator), concatenate with a short silence between them, encode Opus. Returns Ogg/Opus."""
+    narrator), concatenate with a short silence between them, encode Opus. When requested,
+    returns each generated paragraph's actual PCM duration beside the audio."""
     import numpy as np
     paras = [p.strip() for p in (req.paragraphs or []) if p and p.strip()]
     if not paras:
@@ -306,8 +340,13 @@ def narrate(req: NarrateRequest, _: None = Depends(require_token)):
         try:
             gap = np.zeros(int(_sr * silence_ms / 1000), dtype=np.int16)
             chunks = []
+            paragraph_durations_ms = []
             for i, para in enumerate(paras):
-                chunks.append(_generate(para, voice, req.language, req.speed, req.num_step))
+                paragraph_pcm = _generate(
+                    para, voice, req.language, req.speed, req.num_step
+                )
+                chunks.append(paragraph_pcm)
+                paragraph_durations_ms.append(round(len(paragraph_pcm) * 1000 / _sr))
                 if silence_ms and i < len(paras) - 1:
                     chunks.append(gap)
             pcm = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
@@ -318,6 +357,17 @@ def narrate(req: NarrateRequest, _: None = Depends(require_token)):
             logger.exception("Narration failed.")
             raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
     duration = len(pcm) / float(_sr) if _sr else 0.0
+    if req.include_timing_manifest:
+        return _timed_narration_response(
+            opus,
+            {
+                "version": 1,
+                "duration_ms": round(duration * 1000),
+                "silence_ms": silence_ms,
+                "paragraph_durations_ms": paragraph_durations_ms,
+            },
+            duration,
+        )
     return Response(content=opus, media_type="audio/ogg",
                     headers={"X-Duration-Seconds": f"{duration:.3f}", "X-Sample-Rate": str(_sr)})
 

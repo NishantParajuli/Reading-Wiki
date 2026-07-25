@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from datetime import UTC, datetime
@@ -9,7 +10,12 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from novelwiki.platform.observability import audit as audit_log
-from novelwiki.modules.ai_execution.public import DisambiguationPayload, ExtractionPayload, InputManifest
+from novelwiki.modules.ai_execution.public import (
+    DisambiguationPayload,
+    ExtractionPayload,
+    InputManifest,
+    normalize_extraction_candidate,
+)
 from novelwiki.modules.ai_execution.public import AgyCanceled, AgyValidationError
 from novelwiki.modules.ai_execution.public import PreflightResult
 from novelwiki.platform.config import settings
@@ -30,6 +36,7 @@ _EXTRACTION_GROUPS = (
     "mentions", "facts", "relationships", "events", "identity_reveals", "new_aliases",
     "state_changes", "relationship_state_changes", "thread_updates", "memory_updates",
 )
+logger = logging.getLogger(__name__)
 
 
 def _bounded_task_document(source: dict, chapter_number: float, **kwargs) -> str:
@@ -224,6 +231,11 @@ def _codex_task_document(
             "literal word-bounded span copied from the current chapter, never an inferred "
             "kinship label, role, description, or normalized name."
         ),
+        "state_key_rules": (
+            "state keys are closed vocabularies exactly as listed in output_shape; "
+            "never invent age, parent, sibling, attitude, affection, or another key. "
+            "Use a supported fact or relationship when appropriate, otherwise omit it."
+        ),
         "allowed_chunk_ids": sorted(source["chunk_ids"]),
         "allowed_entity_refs": sorted(source["roster_map"]),
         "allowed_thread_refs": sorted(source["thread_map"]),
@@ -266,8 +278,19 @@ def validate_extraction_output(
     expected_hashes = {(run_root / "output" / ref.path).resolve(): ref.sha256 for ref in manifest.artifacts}
     try:
         extraction_path = roles["codex_extraction"][0]
+        candidate, repairs = normalize_extraction_candidate(
+            runtime.ai.load_json(
+                extraction_path,
+                expected_sha256=expected_hashes[extraction_path.resolve()],
+            )
+        )
+        if repairs:
+            logger.warning(
+                "Applied safe AGY extraction contract normalization: %s.",
+                "; ".join(repairs),
+            )
         payload = ExtractionPayload.model_validate(
-            runtime.ai.load_json(extraction_path, expected_sha256=expected_hashes[extraction_path.resolve()])
+            candidate
         )
     except ValidationError as exc:
         raise AgyValidationError("codex extraction schema is invalid") from exc

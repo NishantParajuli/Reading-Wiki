@@ -33,6 +33,10 @@ class NarrationService:
     def _voice(self, requested: str | None) -> str:
         return (requested or self._default_voice or "").strip()
 
+    def _timing(self, row: dict) -> dict | None:
+        path = self._jobs.absolute_audio_path(row["audio_path"])
+        return self._files.read_timing_manifest(path)
+
     @staticmethod
     def _job_view(job: dict) -> dict:
         return {
@@ -72,6 +76,7 @@ class NarrationService:
                 return {
                     "status": "ready", "cached": True,
                     "duration": cached.get("duration_seconds"), "voice_id": voice,
+                    "timing": self._timing(cached),
                 }
         active = await self._jobs.find_active_chapter_job(
             novel_id, number, voice, info["content_version"], user_id
@@ -223,6 +228,7 @@ class NarrationService:
                 "cached": True, "voice_id": voice,
                 "duration": row.get("duration_seconds"), "any_cached": True,
                 "available_voices": available,
+                "timing": self._timing(row),
             }
         active = await self._jobs.find_active_chapter_job(
             novel_id, number, voice, info["content_version"], user_id
@@ -249,4 +255,3 @@ class NarrationService:
         if not self._files.exists(path):
             raise AudioFileGone("Audio file missing (regenerate it).")
         return AudioFile(path)
-

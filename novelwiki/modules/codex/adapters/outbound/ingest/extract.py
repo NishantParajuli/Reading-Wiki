@@ -8,6 +8,8 @@ import uuid
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 
+from pydantic import ValidationError
+
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool, close_db_pool
 from novelwiki.modules.codex.adapters.outbound.cache import clear_caches
@@ -19,7 +21,12 @@ from novelwiki.modules.codex.domain.prompts import (
     EXTRACTION_VERIFY_SYSTEM,
     EXTRACTION_VERIFY_USER,
 )
-from novelwiki.modules.ai_execution.public import ExtractionPayload
+from novelwiki.modules.ai_execution.public import (
+    ExtractionPayload,
+    RELATIONSHIP_STATE_KEYS,
+    STATE_KEYS,
+    normalize_extraction_candidate,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -77,6 +84,12 @@ def _coerce_extraction(data) -> dict:
         raise ValueError(f"extraction groups differ (missing={missing}, extra={extra})")
     if any(not isinstance(data[key], list) for key in EXTRACTION_KEYS):
         raise ValueError("every extraction group must be an array")
+    data, repairs = normalize_extraction_candidate(data)
+    if repairs:
+        logger.warning(
+            "Applied safe extraction contract normalization: %s.",
+            "; ".join(repairs),
+        )
     candidate = {
         "schema_version": "2.0", "chapter": 0.0, "source_sha256": "0" * 64,
         **{key: data[key] for key in EXTRACTION_KEYS},
@@ -101,12 +114,53 @@ def _coerce_extraction(data) -> dict:
     return normalized
 
 
+def _validation_feedback(error: Exception) -> str:
+    if isinstance(error, ValidationError):
+        grouped: dict[tuple[str, str], int] = {}
+        for item in error.errors(include_url=False, include_input=False):
+            location = ".".join(
+                "[]" if isinstance(part, int) else str(part)
+                for part in item.get("loc", ())
+            )
+            key = (location or "payload", str(item.get("msg") or "invalid value"))
+            grouped[key] = grouped.get(key, 0) + 1
+        details = [
+            f"- {location}: {message}"
+            + (f" ({count} occurrences)" if count > 1 else "")
+            for (location, message), count in list(grouped.items())[:12]
+        ]
+        return "\n".join(details)
+    text = " ".join(str(error).split())
+    return f"- {text[:2000]}"
+
+
+def _corrective_retry_message(error: Exception) -> str:
+    state_keys = "|".join(sorted(STATE_KEYS))
+    relationship_state_keys = "|".join(sorted(RELATIONSHIP_STATE_KEYS))
+    return f"""Trusted validation rejected the previous proposal. Return a complete replacement
+JSON object with every required top-level array; do not return a patch or commentary.
+
+Field-scoped correction rules:
+- `mentions[].entity_ref` declares a NEW entity and MUST use a unique `m1`, `m2`, ...
+  ref. Never put a supplied roster `eN` ref in `mentions`; omit that mention record and
+  reference the `eN` ref directly from facts, relationships, events, or transitions.
+- `state_changes[].state_key` MUST be exactly one of: {state_keys}.
+- `relationship_state_changes[].state_key` MUST be exactly one of:
+  {relationship_state_keys}.
+- If an observation does not fit those closed transition vocabularies, represent it as a
+  supported fact/relationship when appropriate or omit it. Never invent a new state key.
+- Preserve the supplied chunk provenance and use only supplied `eN` refs or declared `mN`
+  refs everywhere outside `mentions`.
+
+Validation failures:
+{_validation_feedback(error)}
+"""
+
+
 async def _call_and_parse(
     messages: list[dict], label: str, runtime, temperature: float = 0.0
 ) -> dict:
-    """Invoke Flash, parse + coerce the JSON, and re-ask ONCE (with a small temperature
-    nudge so a deterministic bad output isn't simply reproduced) if the payload is
-    unusable. Raises on a second failure rather than corrupting the knowledge base."""
+    """Invoke the selected model and make one validation-aware corrective retry."""
     raw = await runtime.ai.call_chat_completion(
         model=settings.MODEL_FLASH, messages=messages, temperature=temperature
     )
@@ -114,9 +168,19 @@ async def _call_and_parse(
         return _coerce_extraction(_parse_json_object(raw))
     except Exception as first_err:
         retry_temp = max(temperature, 0.3)
-        logger.warning(f"{label}: JSON parse/shape failed ({first_err}); re-asking once at temp {retry_temp}...")
+        logger.warning(
+            "%s: JSON parse/shape failed (%s); re-asking once with trusted "
+            "validation feedback at temp %s...",
+            label, first_err, retry_temp,
+        )
+        retry_messages = [
+            *messages,
+            {"role": "user", "content": _corrective_retry_message(first_err)},
+        ]
         raw_retry = await runtime.ai.call_chat_completion(
-            model=settings.MODEL_FLASH, messages=messages, temperature=retry_temp
+            model=settings.MODEL_FLASH,
+            messages=retry_messages,
+            temperature=retry_temp,
         )
         try:
             return _coerce_extraction(_parse_json_object(raw_retry))

@@ -30,7 +30,7 @@ from pathlib import Path
 
 from novelwiki.platform.config import settings
 from novelwiki.platform.observability.logging import log_context, log_event
-from novelwiki.modules.narration.domain import textprep
+from novelwiki.modules.narration.domain import textprep, timing
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +220,10 @@ def audio_abs(rel: str) -> Path:
     return _audio_root() / rel
 
 
+def timing_abs(rel: str) -> Path:
+    return audio_abs(rel).with_suffix(".timings.json")
+
+
 async def find_audio(novel_id: int, number, voice_id: str, version: int, user_id: int | None) -> dict | None:
     """Exact-match cache lookup for one (novel, chapter, voice, version, owner) audio row."""
     row = await (await _worker_state()).find_audio(
@@ -327,9 +331,10 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
             )
             return "quota"
 
-        paras = textprep.to_paragraphs(
+        paragraph_records = textprep.to_paragraph_records(
             info["text"], title=info["title"], number=number, intro=settings.TTS_TITLE_INTRO,
         )
+        paras = [record["text"] for record in paragraph_records]
         language = lang_override or info["language"]
         generation_started = time.monotonic()
         log_event(
@@ -355,7 +360,7 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
 
         heartbeat_task = asyncio.create_task(heartbeat())
         try:
-            opus, duration = await _configured_runtime().tts_client.narrate(
+            opus, duration, sidecar_timing = await _configured_runtime().tts_client.narrate(
                 paras, voice_id, language=language,
                 speed=settings.TTS_SPEED, num_step=settings.TTS_NUM_STEP,
                 silence_ms=settings.TTS_PARA_SILENCE_MS, opus_bitrate=settings.TTS_OPUS_BITRATE,
@@ -368,13 +373,42 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
                 raise
         rel = audio_rel(novel_id, number, voice_id, version, uid)
         dest = audio_abs(rel)
+        timing_dest = timing_abs(rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
+        timing_manifest = None
+        if sidecar_timing is not None:
+            manifest_silence_ms = sidecar_timing.get("silence_ms")
+            timing_manifest = timing.build_timing_manifest(
+                paragraph_records,
+                sidecar_timing["paragraph_durations_ms"],
+                int(
+                    settings.TTS_PARA_SILENCE_MS
+                    if manifest_silence_ms is None else manifest_silence_ms
+                ),
+                sidecar_timing["duration_ms"],
+                len(opus),
+            )
         # Atomic publish: write a temp file then os.replace, so a force-regenerate can't corrupt
         # the audio for someone currently streaming the old version (their open fd keeps the old
         # inode), and a crash mid-write never leaves a half-written file behind the DB row.
         tmp = dest.with_suffix(dest.suffix + ".tmp")
-        tmp.write_bytes(opus)
-        os.replace(tmp, dest)
+        timing_tmp = timing_dest.with_suffix(timing_dest.suffix + ".tmp")
+        try:
+            tmp.write_bytes(opus)
+            if timing_manifest is not None:
+                timing_tmp.write_text(
+                    json.dumps(timing_manifest, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+            # Never leave an old manifest beside replacement audio if the process stops between
+            # the two publishes. A missing manifest safely disables highlighting.
+            timing_dest.unlink(missing_ok=True)
+            os.replace(tmp, dest)
+            if timing_manifest is not None:
+                os.replace(timing_tmp, timing_dest)
+        finally:
+            tmp.unlink(missing_ok=True)
+            timing_tmp.unlink(missing_ok=True)
         await _upsert_audio(novel_id, number, uid, voice_id, language, version, rel, duration, len(opus))
         log_event(
             logger, logging.INFO, "tts_job.chapter_completed",
@@ -382,6 +416,7 @@ async def _generate_chapter(job: dict, user: dict, number) -> str:
             chapter=_numstr(number), duration_seconds=int(duration),
             audio_bytes=len(opus), voice_id=voice_id, language=language,
             content_version=version, target_user_id=uid,
+            timing_manifest=timing_manifest is not None,
             duration_ms=round((time.monotonic() - generation_started) * 1000, 2),
         )
         return "generated"

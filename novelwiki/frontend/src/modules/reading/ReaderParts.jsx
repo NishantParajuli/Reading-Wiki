@@ -10,6 +10,7 @@ import { useToast } from "../../components/toast.jsx";
 import { DiffView } from "../../lib/diff.jsx";
 import { VoicePicker, readTtsPrefs } from "../narration/index.js";
 import { clamp, fmtChapter } from "../../lib/utils.js";
+import { activeNarrationChunk } from "./narrationGuide.js";
 
 const READER_DEFAULTS = {
   font: "serif", size: 19, line: 1.7, width: "normal", tone: "default",
@@ -183,12 +184,16 @@ export function TranslationTools({ novelId, ch, onClose, onChanged }) {
 }
 
 /* ---------- Audio player ---------- */
-export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReader, onAudioChange, autoEngage }) {
+export function AudioPlayer({
+  novelId, number, ch, user, onUserUpdate, openReader, onAudioChange, autoEngage,
+  narrationChunks = [], onNarrationGuideChange,
+}) {
   const [voices, setVoices] = useState(null);
   const [voice, setVoice] = useState(() => readTtsPrefs(user).voice);
   const [defaultVoice, setDefaultVoice] = useState(null);
   const [speed, setSpeed] = useState(() => readTtsPrefs(user).speed);
   const [src, setSrc] = useState(null);
+  const [timingManifest, setTimingManifest] = useState(null);
   const [state, setState] = useState("idle");          // idle|checking|generating|ready|error|untranslated
   const [msg, setMsg] = useState(null);
   const [availableVoices, setAvailableVoices] = useState([]);
@@ -197,9 +202,30 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
   const [dur, setDur] = useState(0);
   const audioRef = useRef(null);
   const pollRef = useRef(null);
+  const guideEngagedRef = useRef(false);
+  const guideSnapshotRef = useRef("");
   const posKey = `nw-tts:${novelId}:${number}:${voice || "none"}`;
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  const syncNarrationGuide = useCallback((audio, { engaged = guideEngagedRef.current, playing } = {}) => {
+    if (!onNarrationGuideChange) return;
+    const timed = engaged && timingManifest != null;
+    const next = {
+      activeIndex: timed && audio
+        ? activeNarrationChunk(
+          narrationChunks, audio.currentTime, timingManifest,
+        )
+        : null,
+      engaged: timed,
+      playing: timed && (
+        playing == null ? !!(audio && !audio.paused && !audio.ended) : playing
+      ),
+    };
+    const snapshot = `${next.activeIndex ?? "none"}:${next.engaged}:${next.playing}`;
+    if (snapshot === guideSnapshotRef.current) return;
+    guideSnapshotRef.current = snapshot;
+    onNarrationGuideChange(next);
+  }, [narrationChunks, onNarrationGuideChange, timingManifest]);
 
   useEffect(() => {
     let cancel = false;
@@ -218,7 +244,9 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
   useEffect(() => {
     stopPoll();
     if (audioRef.current) audioRef.current.pause();
-    setSrc(null); setMsg(null); setAvailableVoices([]);
+    guideEngagedRef.current = false;
+    syncNarrationGuide(null, { engaged: false, playing: false });
+    setSrc(null); setTimingManifest(null); setMsg(null); setAvailableVoices([]);
     setCur(0); setDur(0); setPlaying(false);
     if (!voice) { setState("idle"); return; }
     let cancel = false;
@@ -227,6 +255,7 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
       if (cancel) return;
       setAvailableVoices(r.available_voices || []);
       if (r.cached) {
+        setTimingManifest(r.timing || null);
         setSrc(narrationApi.chapterAudioUrl(novelId, number, voice));
         setState("ready");
       } else if (r.job_id) {
@@ -240,6 +269,10 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
     }).catch(() => { if (!cancel) setState("idle"); });
     return () => { cancel = true; stopPoll(); };
   }, [novelId, number, voice]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (guideEngagedRef.current && audioRef.current) syncNarrationGuide(audioRef.current);
+  }, [narrationChunks, syncNarrationGuide]);
 
   useEffect(() => { if (audioRef.current) audioRef.current.playbackRate = speed; }, [speed, src]);
 
@@ -263,6 +296,7 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
     const r = await narrationApi.chapterAudioStatus(novelId, number, voice);
     setAvailableVoices(r.available_voices || []);
     if (r.cached) {
+      setTimingManifest(r.timing || null);
       setSrc(narrationApi.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
       setState("ready");
       onAudioChange && onAudioChange();
@@ -298,10 +332,14 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
 
   async function generate(force) {
     if (!voice) return;
+    if (audioRef.current) audioRef.current.pause();
+    guideEngagedRef.current = false;
+    syncNarrationGuide(null, { engaged: false, playing: false });
     setState("generating"); setMsg(null); stopPoll();
     try {
       const r = await narrationApi.generateChapterAudio(novelId, number, voice, force);
       if (r.status === "ready") {
+        setTimingManifest(r.timing || null);
         setSrc(narrationApi.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
         setState("ready");
         onAudioChange && onAudioChange();
@@ -322,11 +360,12 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
   function skip(delta) {
     const a = audioRef.current; if (!a) return;
     a.currentTime = clamp(a.currentTime + delta, 0, a.duration || 0);
-    setCur(a.currentTime);
+    setCur(a.currentTime); syncNarrationGuide(a);
   }
   function seek(e) {
     const a = audioRef.current; const t = Number(e.target.value);
-    setCur(t); if (a) a.currentTime = t;
+    setCur(t);
+    if (a) { a.currentTime = t; syncNarrationGuide(a); }
   }
   function cycleSpeed() {
     const i = TTS_SPEEDS.indexOf(speed);
@@ -356,8 +395,16 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
         <>
           <audio
             ref={audioRef} src={src} preload="metadata" style={{ display: "none" }}
-            onPlay={() => { __ttsContinue = true; setPlaying(true); }}
-            onPause={() => { __ttsContinue = false; setPlaying(false); }}
+            onPlay={() => {
+              __ttsContinue = true; guideEngagedRef.current = true; setPlaying(true);
+              syncNarrationGuide(audioRef.current, { engaged: true, playing: true });
+            }}
+            onPause={() => {
+              __ttsContinue = false; setPlaying(false);
+              const a = audioRef.current;
+              if (!a || a.ended) return;
+              syncNarrationGuide(a, { playing: false });
+            }}
             onDurationChange={() => setDur(audioRef.current ? audioRef.current.duration || 0 : 0)}
             onLoadedMetadata={() => {
               const a = audioRef.current; if (!a) return;
@@ -368,10 +415,12 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
             onTimeUpdate={() => {
               const a = audioRef.current; if (!a) return;
               setCur(a.currentTime);
+              syncNarrationGuide(a);
               if (Math.floor(a.currentTime) % 5 === 0) localStorage.setItem(posKey, String(a.currentTime));
             }}
             onEnded={() => {
-              localStorage.removeItem(posKey); setPlaying(false);
+              localStorage.removeItem(posKey); guideEngagedRef.current = false; setPlaying(false);
+              syncNarrationGuide(null, { engaged: false, playing: false });
               if (readTtsPrefs(user).autoplay && ch && ch.next != null) openReader(ch.next);
             }}
           />

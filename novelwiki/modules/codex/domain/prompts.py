@@ -41,12 +41,18 @@ chapter. Reuse supplied `eN` entity refs and `tN` thread refs. Declare a unique 
 a genuinely new entity. Never use database IDs or an entity/thread that was not supplied or
 declared. Absence from the bounded context does not prove nonexistence: if a named entity in the
 chapter is not supplied, declare it provisionally and let deterministic linking resolve it.
+FIELD-SCOPED REFERENCE RULE: every record inside `mentions` declares a new entity, so its
+`entity_ref` MUST be a unique `mN` ref. NEVER copy a supplied roster `eN` ref into `mentions`.
+Existing `eN` refs belong directly in facts, relationships, events, aliases, and transitions.
 
 State is temporal. Use `state_changes` when this chapter sets, adds, removes, clears, confirms, or
 contradicts a value such as location, life status, occupation, rank, affiliation, possession,
 ability, identity, title, goal, knowledge, condition, or custody. Do not repeat unchanged state.
 Use `narrative_scope` to distinguish current reality from history, dreams, prophecy, or alternates.
 Use certainty/perspective fields for beliefs and claims instead of presenting them as omniscient fact.
+The state-key lists in the JSON schema are closed vocabularies. Never invent a state key such as
+`age`, `parent`, `sibling`, `attitude`, or `affection`; use a supported fact/relationship when
+appropriate or omit the item.
 
 Use `thread_updates` only for important unresolved questions, objectives, mysteries, threats, or
 promises that matter beyond this scene. Reuse a supplied thread_ref; a new thread must use a unique

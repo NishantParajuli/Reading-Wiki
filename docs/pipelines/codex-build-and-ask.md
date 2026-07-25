@@ -58,7 +58,16 @@ For each chapter ascending (never backwards — Invariant 2 of the pipeline):
    verifier itself fails. The AGY extraction task must self-review before writing its
    artifacts; `AGY_SEPARATE_CODEX_VERIFY=true` adds a separate AGY verification child run
    but is off by default. Both paths still pass the v2 proposal through trusted validation
-   and the same atomic commit checks.
+   and the same atomic commit checks. Before the shared host schema validation, both
+   transports apply the same narrow provider-neutral normalization: redundant
+   supplied-roster `eN` records are removed from `mentions` (claims keep using those
+   refs), and optional temporal-transition items with state keys outside the closed v2
+   vocabularies are discarded. The AGY stop hook may require the model to repair an
+   invalid artifact before it reaches that host boundary. No references, provenance, or
+   required groups are invented. A direct provider proposal that remains invalid receives
+   one complete-regeneration retry containing compact trusted validation feedback and the
+   exact ref/state-key rules; the second invalid proposal still fails closed. This behavior
+   does not depend on a provider-specific JSON-schema feature.
 4. **Entity linking** (`link.py`) per declared mention: type-compatible exact name/alias
    match → trigram fuzzy (`FUZZY_MATCH_THRESHOLD`; one candidate auto-accepts only above
    `FUZZY_AUTO_ACCEPT`) → name-embedding similarity → validated gray-case decision → new

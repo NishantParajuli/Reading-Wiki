@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -101,6 +103,65 @@ MentionRef = Annotated[str, Field(pattern=r"^m[1-9][0-9]*$", max_length=80)]
 ThreadRef = Annotated[str, Field(pattern=r"^(?:t|p)[1-9][0-9]*$", max_length=80)]
 Keyword = Annotated[str, Field(min_length=1, max_length=100)]
 WarningText = Annotated[str, Field(max_length=500)]
+_ROSTER_REF_RE = re.compile(r"^e[1-9][0-9]*$")
+
+
+def normalize_extraction_candidate(value: Any) -> tuple[Any, tuple[str, ...]]:
+    """Apply narrow, loss-minimizing repairs before strict extraction validation.
+
+    Existing roster refs are valid in claims but redundant in ``mentions``, whose
+    records only declare new local ``mN`` refs. Temporal state keys are closed
+    vocabularies; an item outside those vocabularies cannot be committed safely, so
+    discard that optional item without weakening validation for the rest of the
+    payload. All other malformed shapes, references, and provenance remain strict
+    validation errors.
+    """
+    if not isinstance(value, dict):
+        return value, ()
+
+    candidate = deepcopy(value)
+    repairs: list[str] = []
+
+    mentions = candidate.get("mentions")
+    if isinstance(mentions, list):
+        kept_mentions = [
+            item for item in mentions
+            if not (
+                isinstance(item, dict)
+                and isinstance(item.get("entity_ref"), str)
+                and _ROSTER_REF_RE.fullmatch(item["entity_ref"])
+            )
+        ]
+        removed = len(mentions) - len(kept_mentions)
+        if removed:
+            candidate["mentions"] = kept_mentions
+            repairs.append(f"removed {removed} redundant roster mention(s)")
+
+    for group, allowed, label in (
+        ("state_changes", STATE_KEYS, "entity-state transition(s)"),
+        (
+            "relationship_state_changes",
+            RELATIONSHIP_STATE_KEYS,
+            "relationship-state transition(s)",
+        ),
+    ):
+        items = candidate.get(group)
+        if not isinstance(items, list):
+            continue
+        kept_items = [
+            item for item in items
+            if not (
+                isinstance(item, dict)
+                and isinstance(item.get("state_key"), str)
+                and item["state_key"] not in allowed
+            )
+        ]
+        removed = len(items) - len(kept_items)
+        if removed:
+            candidate[group] = kept_items
+            repairs.append(f"removed {removed} unsupported {label}")
+
+    return candidate, tuple(repairs)
 
 
 class ExtractionMention(StrictModel):

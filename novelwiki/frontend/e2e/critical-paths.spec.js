@@ -21,7 +21,22 @@ const chapter = {
   overlay: null, overlay_conflict: false, is_raw: false,
 };
 
-async function mockApi(page, { signedIn = true } = {}) {
+async function mockApi(page, { signedIn = true, chapterData = chapter } = {}) {
+  const narrationParagraphs = (chapterData.content || "").split(/\n\s*\n/);
+  const timingParagraphs = [
+    { source_index: null, start_ms: 0, speech_end_ms: 1000, end_ms: 1000 },
+    ...narrationParagraphs.map((_, sourceIndex) => ({
+      source_index: sourceIndex,
+      start_ms: (sourceIndex + 1) * 1000,
+      speech_end_ms: (sourceIndex + 2) * 1000,
+      end_ms: (sourceIndex + 2) * 1000,
+    })),
+  ];
+  const timing = {
+    version: 1,
+    duration_ms: timingParagraphs.length * 1000,
+    paragraphs: timingParagraphs,
+  };
   await page.route("http://127.0.0.1:4173/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -39,7 +54,7 @@ async function mockApi(page, { signedIn = true } = {}) {
     else if (path === "/api/discover") body = { items: [novel], total: 1, offset: 0, limit: 60 };
     else if (path === "/api/novels/7") body = novel;
     else if (path === "/api/novels/7/chapters") body = [{ number: 1, title: "Arrival" }, { number: 2, title: "Undertow" }];
-    else if (path === "/api/novels/7/chapter/1") body = chapter;
+    else if (path === "/api/novels/7/chapter/1") body = chapterData;
     else if (path === "/api/novels/7/progress") body = novel.progress;
     else if (path === "/api/novels/7/bookmarks") body = [];
     else if (path === "/api/adapters") body = [];
@@ -58,6 +73,9 @@ async function mockApi(page, { signedIn = true } = {}) {
     else if (path === "/api/import/jobs") body = [];
     else if (path === "/api/tts/voices") body = { voices: [{ id: "v1", name: "Test voice", ready: true }], default: "v1" };
     else if (path === "/api/novels/7/audio/coverage") body = [];
+    else if (path === "/api/novels/7/chapter/1/audio/status") body = {
+      cached: true, available_voices: ["v1"], timing,
+    };
     else if (path === "/api/admin/users") body = [user];
     else if (path === "/api/admin/ai/agy/health") body = { enabled: false, queue: {} };
     await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -131,6 +149,36 @@ test("cached narration controls render with mocked voice service", async ({ page
   await page.goto("/n/7/read/1?listen=1");
   await expect(page.getByRole("heading", { name: "Arrival" })).toBeVisible();
   await expect(page.getByText(/Test voice/i).first()).toBeVisible();
+});
+
+test("narration highlights and reveals its timed passage on mobile", async ({ page }) => {
+  const content = Array.from(
+    { length: 18 },
+    (_, index) => `Passage ${index + 1} begins here. Its second sentence carries the story forward.`,
+  ).join("\n\n");
+  await page.setViewportSize({ width: 390, height: 740 });
+  await mockApi(page, { chapterData: { ...chapter, content } });
+  await page.goto("/n/7/read/1");
+
+  const audio = page.locator("audio");
+  await expect(audio).toBeAttached();
+  await audio.evaluate((element) => {
+    Object.defineProperties(element, {
+      currentTime: { configurable: true, value: 17.2, writable: true },
+      duration: { configurable: true, value: 100 },
+      paused: { configurable: true, value: false },
+      ended: { configurable: true, value: false },
+    });
+    element.dispatchEvent(new Event("play"));
+    element.dispatchEvent(new Event("timeupdate"));
+  });
+
+  const highlighted = page.locator('[data-narration-active="true"]');
+  await expect(highlighted).toHaveCount(1);
+  await expect(highlighted).toContainText("Passage 17");
+  await expect(highlighted).toBeInViewport();
+  const background = await highlighted.evaluate(element => getComputedStyle(element).backgroundColor);
+  expect(background).not.toBe("rgba(0, 0, 0, 0)");
 });
 
 test("admin user quota and policy surface remains available", async ({ page }) => {

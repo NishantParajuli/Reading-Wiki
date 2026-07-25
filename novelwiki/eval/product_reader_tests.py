@@ -375,6 +375,7 @@ async def test_chapter_audio_status_reports_available_other_voices(db):
     assert cached_selected["cached"] is True
     assert cached_selected["any_cached"] is True
     assert cached_selected["available_voices"] == ["v2"]
+    assert cached_selected["timing"] is None
 
 
 # ── Health panel counts ───────────────────────────────────────────────────────
