@@ -193,6 +193,15 @@ def _contracts() -> dict[str, str]:
                 "status": 200,
                 "json": {"cached": True, "timing": None},
             },
+            "regenerating": {
+                "status": 200,
+                "json": {
+                    "cached": True,
+                    "timing": None,
+                    "job_id": "<job-id>",
+                    "job_status": "generating",
+                },
+            },
             "error": {"status": 404, "json": {"detail": "Novel not found"}},
         },
         "experience_admin": {

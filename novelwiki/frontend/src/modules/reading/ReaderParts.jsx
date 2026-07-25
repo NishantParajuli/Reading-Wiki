@@ -11,6 +11,7 @@ import { DiffView } from "../../lib/diff.jsx";
 import { VoicePicker, readTtsPrefs } from "../narration/index.js";
 import { clamp, fmtChapter } from "../../lib/utils.js";
 import { activeNarrationChunk } from "./narrationGuide.js";
+import { pollNarrationJob } from "./narrationPolling.js";
 
 const READER_DEFAULTS = {
   font: "serif", size: 19, line: 1.7, width: "normal", tone: "default",
@@ -200,13 +201,19 @@ export function AudioPlayer({
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
   const [dur, setDur] = useState(0);
+  const [regenerating, setRegenerating] = useState(false);
   const audioRef = useRef(null);
   const pollRef = useRef(null);
   const guideEngagedRef = useRef(false);
   const guideSnapshotRef = useRef("");
   const posKey = `nw-tts:${novelId}:${number}:${voice || "none"}`;
 
-  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  const stopPoll = () => {
+    if (pollRef.current) {
+      pollRef.current();
+      pollRef.current = null;
+    }
+  };
   const syncNarrationGuide = useCallback((audio, { engaged = guideEngagedRef.current, playing } = {}) => {
     if (!onNarrationGuideChange) return;
     const timed = engaged && timingManifest != null;
@@ -247,7 +254,7 @@ export function AudioPlayer({
     guideEngagedRef.current = false;
     syncNarrationGuide(null, { engaged: false, playing: false });
     setSrc(null); setTimingManifest(null); setMsg(null); setAvailableVoices([]);
-    setCur(0); setDur(0); setPlaying(false);
+    setCur(0); setDur(0); setPlaying(false); setRegenerating(false);
     if (!voice) { setState("idle"); return; }
     let cancel = false;
     setState("checking");
@@ -258,6 +265,7 @@ export function AudioPlayer({
         setTimingManifest(r.timing || null);
         setSrc(narrationApi.chapterAudioUrl(novelId, number, voice));
         setState("ready");
+        if (r.job_id) watchJob(r.job_id, true, true);
       } else if (r.job_id) {
         watchJob(r.job_id, false);
       } else if (r.reason === "untranslated") {
@@ -292,8 +300,7 @@ export function AudioPlayer({
   function pickVoice(v) { setVoice(v); persist({ voice: v }); }
   function pickSpeed(s) { setSpeed(s); if (audioRef.current) audioRef.current.playbackRate = s; persist({ speed: s }); }
 
-  async function loadReadyAudio(force) {
-    const r = await narrationApi.chapterAudioStatus(novelId, number, voice);
+  function loadReadyAudio(r, force) {
     setAvailableVoices(r.available_voices || []);
     if (r.cached) {
       setTimingManifest(r.timing || null);
@@ -311,45 +318,96 @@ export function AudioPlayer({
     return false;
   }
 
-  function watchJob(jobId, force) {
+  function watchJob(jobId, force, keepReady = false) {
     stopPoll();
-    setState("generating");
-    pollRef.current = setInterval(async () => {
-      try {
-        const j = await narrationApi.ttsJob(jobId);
+    setMsg(null);
+    setRegenerating(keepReady);
+    if (!keepReady) setState("generating");
+    pollRef.current = pollNarrationJob({
+      jobId,
+      loadJob: async (id) => {
+        const j = await narrationApi.ttsJob(id);
+        // Fetching the final cache record is part of the retryable poll. A brief
+        // disconnect after the durable job finishes must not strand the player.
         if (j.status === "done") {
-          stopPoll();
-          const ok = await loadReadyAudio(force);
+          j.readyAudio = await narrationApi.chapterAudioStatus(novelId, number, voice);
+        }
+        return j;
+      },
+      onProgress: () => setMsg(null),
+      onRetry: () => setMsg("Connection interrupted. Retrying…"),
+      onTerminal: async (j) => {
+        pollRef.current = null;
+        setRegenerating(false);
+        if (j.status === "done") {
+          const ok = loadReadyAudio(j.readyAudio, force);
           if (!ok) { setState("error"); setMsg("Narration finished, but no playable audio was produced."); }
         } else if (j.status === "failed") {
-          stopPoll(); setState("error"); setMsg(j.error || "Narration failed.");
+          if (!keepReady) setState("error");
+          setMsg(j.error || "Narration failed.");
         } else if (j.status === "canceled") {
-          stopPoll(); setState("idle");
+          if (!keepReady) setState("idle");
         }
-      } catch (e) { stopPoll(); setState("error"); setMsg(e.message || "Narration failed."); }
-    }, 1500);
+      },
+      onError: (e) => {
+        pollRef.current = null;
+        setRegenerating(false);
+        if (!keepReady) setState("error");
+        setMsg(e.message || "Narration status is unavailable.");
+      },
+    });
   }
 
   async function generate(force) {
     if (!voice) return;
+    const keepReady = !!(force && state === "ready" && src);
     if (audioRef.current) audioRef.current.pause();
     guideEngagedRef.current = false;
     syncNarrationGuide(null, { engaged: false, playing: false });
-    setState("generating"); setMsg(null); stopPoll();
+    setMsg(null); stopPoll();
+    setRegenerating(keepReady);
+    if (!keepReady) setState("generating");
     try {
       const r = await narrationApi.generateChapterAudio(novelId, number, voice, force);
       if (r.status === "ready") {
+        setRegenerating(false);
         setTimingManifest(r.timing || null);
         setSrc(narrationApi.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
         setState("ready");
         onAudioChange && onAudioChange();
         return;
       }
-      if (r.job_id) watchJob(r.job_id, force);
+      if (r.job_id) watchJob(r.job_id, force, keepReady);
     } catch (e) {
+      // The POST may have reached the server even when its response did not reach
+      // the browser. Reconcile through the reload-safe status endpoint before
+      // presenting a failure.
+      if (!e.status) {
+        try {
+          const status = await narrationApi.chapterAudioStatus(novelId, number, voice);
+          if (status.job_id) {
+            if (status.cached && !src) {
+              setTimingManifest(status.timing || null);
+              setSrc(narrationApi.chapterAudioUrl(novelId, number, voice));
+              setState("ready");
+            }
+            watchJob(status.job_id, force || status.cached, !!status.cached);
+            return;
+          }
+        } catch (statusError) {
+          // Preserve the original mutation error when reconciliation is also offline.
+        }
+      }
+      setRegenerating(false);
+      if (keepReady) setState("ready");
       if (e.status === 409) { setState("untranslated"); setMsg("Translate this chapter before narrating it."); }
-      else if (e.status === 429) { setState("error"); setMsg(e.message || "Monthly narration quota reached."); }
-      else { setState("error"); setMsg(e.message || "Couldn't start narration."); }
+      else if (e.status === 429) {
+        if (!keepReady) setState("error");
+        setMsg(e.message || "Monthly narration quota reached.");
+      } else {
+        if (!keepReady) setState("error");
+        setMsg(e.message || "Couldn't start narration.");
+      }
     }
   }
 
@@ -438,10 +496,15 @@ export function AudioPlayer({
           <span className="ab-time">{fmt(cur)} / {fmt(dur)}</span>
           <button className="ab-speed" onClick={cycleSpeed} aria-label="Playback speed">{speed}×</button>
           {picker}
-          <button className="icon-btn plain" style={{ width: 30, height: 30 }} title="Regenerate this narration"
-                  aria-label="Regenerate narration" onClick={() => generate(true)}>
-            <Icon name="refresh" size={14} />
-          </button>
+          {regenerating ? (
+            <span className="ab-status"><Icon name="refresh" size={14} className="spin" /> Updating…</span>
+          ) : (
+            <button className="icon-btn plain" style={{ width: 30, height: 30 }} title="Regenerate this narration"
+                    aria-label="Regenerate narration" onClick={() => generate(true)}>
+              <Icon name="refresh" size={14} />
+            </button>
+          )}
+          {msg && <span className="ab-msg">{msg}</span>}
         </>
       ) : state === "generating" || state === "checking" ? (
         <>

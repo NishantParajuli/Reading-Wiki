@@ -127,6 +127,15 @@
       },
       "status": 200
     },
+    "regenerating": {
+      "json": {
+        "cached": true,
+        "job_id": "<job-id>",
+        "job_status": "generating",
+        "timing": null
+      },
+      "status": 200
+    },
     "request": {
       "method": "GET",
       "path": "/api/novels/{novel_id}/chapter/{number}/audio/status"

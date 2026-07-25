@@ -156,7 +156,10 @@ free; else durable job) · `GET …/chapter/{n}/audio/status` ·
 For cached audio, `audio/status` includes `timing`. Newly generated audio returns a
 versioned manifest with actual `start_ms`, `speech_end_ms`, and `end_ms` boundaries per
 generated paragraph plus its visible `source_index`. Legacy audio returns `timing: null`;
-clients must keep playback available and disable synchronized highlighting.
+clients must keep playback available and disable synchronized highlighting. During forced
+regeneration, the previous cache remains playable and the same response also includes the
+active `job_id` and `job_status`; clients must follow that job rather than treating the
+cached row as the completed regeneration.
 
 ## Work (`/api`, auth)
 

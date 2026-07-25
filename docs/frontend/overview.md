@@ -106,6 +106,11 @@ paragraph, highlights it with the configured accent, and scrolls at group
 transitions when needed to keep it visible. Legacy cached audio without a timing
 manifest remains playable with highlighting disabled. Timed highlighting works for both
 plain and imported rich chapters.
+Forced regeneration remains associated with its durable job across reloads even though
+the previous audio cache is still playable. The transport marks that state as updating,
+polls with one in-flight request and bounded retry backoff, then replaces the stream with
+the cache-busted timed audio. A transient browser fetch failure therefore no longer turns
+a still-running narration job into a client-side failure.
 Resume writes are debounced `PUT /progress` calls and update `last_chapter`/`scroll_pct`
 only. The trusted spoiler ceiling advances separately when the authenticated
 `GET /chapter/{number}` response is served, so a fabricated progress PUT cannot unlock
@@ -129,6 +134,9 @@ precise slider dragging.
   route table and API bindings match the frozen contracts.
 - `src/modules/reading/narrationGuide.test.js` — sentence grouping, rich-markup
   preservation, timed-paragraph mapping, and the legacy-audio fallback.
+- `src/modules/reading/narrationPolling.test.js` +
+  `src/modules/reading/AudioPlayer.test.jsx` — single-flight retry/cancellation and
+  reload recovery while cached audio and forced regeneration coexist.
 - `e2e/critical-paths.spec.js` — Playwright against a mocked/real backend
   (`e2e/real-backend.spec.js`, `scripts/test_real_browser.py` fixture): register→read→
   codex critical journeys, including mobile narration highlighting and reveal behavior.

@@ -92,7 +92,10 @@ HTTP Range supported for scrubbing) · `POST /novels/{id}/audiobook` ·
 `GET /novels/{id}/audiobook/status` · `GET /novels/{id}/audio/chapters` ·
 `GET /novels/{id}/audio/coverage` · `GET /tts/jobs/{id}` · `POST /tts/jobs/{id}/cancel`.
 `GET …/audio/status` returns `timing: {version,duration_ms,paragraphs}` for newly timed
-audio and `timing: null` for legacy cached audio.
+audio and `timing: null` for legacy cached audio. A forced regeneration atomically retains
+that cache while work is active, so status also returns the active `job_id` and
+`job_status` alongside `cached: true`; this makes the durable job recoverable after a
+reader reload or an ambiguous mutation-response failure.
 
 ## Collaboration notes
 

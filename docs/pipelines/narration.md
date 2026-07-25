@@ -26,10 +26,13 @@ only).
   `TTS_MAX_BATCH_CHAPTERS` (100), one active book job per (novel, voice); the explicit
   chapter list is stored in `options.chapters`; cancellable mid-run keeping finished
   chapters.
-- The reader's transport UI polls `GET …/audio/status`, which includes generation-time
-  paragraph boundaries when available, then streams
+- The reader's transport UI checks `GET …/audio/status`, which includes generation-time
+  paragraph boundaries when available. While generation is active it polls
+  `GET /api/tts/jobs/{id}`, then streams
   `GET …/chapter/{n}/audio.opus` (access-controlled `FileResponse`; HTTP **Range**
-  supported, so scrubbing works).
+  supported, so scrubbing works). A forced regeneration keeps the previous cache playable;
+  status returns that cache together with the active `job_id`/`job_status`, allowing a
+  reloaded reader to resume following the durable job.
 
 ## The worker, per chapter
 
@@ -68,7 +71,11 @@ status returns `timing: null`, so the reader disables synchronized highlighting 
 of guessing across a whole chapter. For timed audio, the reader uses the real paragraph
 boundaries directly against the media clock and estimates only among sentence groups
 inside the current paragraph; drift therefore resets at every generated paragraph
-boundary.
+boundary. Job polling is single-flight: the next request is scheduled only after the
+previous response completes. Transient network and 5xx failures retry with bounded
+backoff instead of declaring the durable server-side job failed; a terminal job status
+or permanent 4xx lookup error ends polling. Once generation completes, the reader fetches
+the new timing record and uses a cache-busted audio URL.
 
 ## Coverage & surfaces
 

@@ -365,6 +365,18 @@ async def test_chapter_audio_status_reports_available_other_voices(db):
         await conn.execute(
             "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
             "VALUES ($1, 1, 'v2', 1, 'v2.opus', NULL);", nid)
+        job_id = await conn.fetchval(
+            """
+            INSERT INTO tts_jobs
+              (novel_id,user_id,scope,voice_id,status,stage,options)
+            VALUES
+              ($1,$2,'chapter','v2','generating','narrating',
+               '{"force":true,"target_kind":"chapter_audio","target_chapter":"1",
+                 "target_content_version":1,"target_user_id":null}'::jsonb)
+            RETURNING id;
+            """,
+            nid, reader["id"],
+        )
 
     missing_selected = await tts_routes.api_chapter_audio_status(nid, 1, voice_id="v1", user=reader)
     assert missing_selected["cached"] is False
@@ -376,6 +388,8 @@ async def test_chapter_audio_status_reports_available_other_voices(db):
     assert cached_selected["any_cached"] is True
     assert cached_selected["available_voices"] == ["v2"]
     assert cached_selected["timing"] is None
+    assert cached_selected["job_id"] == job_id
+    assert cached_selected["job_status"] == "generating"
 
 
 # ── Health panel counts ───────────────────────────────────────────────────────
