@@ -98,7 +98,9 @@ on the root, CSS token-driven), column width, auto-scroll, scroll-position recov
 volume-grouped TOC (`toc.jsx`), bookmarks, per-chapter translation editing (overlay
 editor + base-vs-mine diff via `lib/diff.jsx`), provenance badges, the audiobook
 transport (narration slice), and codex citation popovers (`lib/markdown.jsx` renders
-answer markdown with `CiteProvider` so `[c:…]` markers open evidence popovers). During
+answer markdown with `CiteProvider` so `[c:…]` markers open evidence popovers). Shared
+anchored popovers, including the narrator picker, preserve their preferred alignment when
+space permits and shift inside a 12px viewport gutter when it does not. During
 audiobook playback, the reader selects the active paragraph from its actual
 generation-time boundaries by comparing the player clock directly with manifest
 milliseconds. It estimates the active one-or-two-sentence group only within that
@@ -126,7 +128,10 @@ The Codex ceiling popover accepts an exact chapter number (including fractional 
 numbers) and validates it against the reader's available range. Its range slider remains
 available for coarse browsing, while “Follow my reading” restores the trusted latest-read
 ceiling. The number field uses the mobile decimal keyboard so long books do not require
-precise slider dragging.
+precise slider dragging. The Codex header separately shows the latest chapter with a
+completed extraction checkpoint and the number of chapters built, so build coverage is not
+confused with the reader's spoiler ceiling. Chunking or embedding alone does not count as a
+completed build.
 
 ## Testing
 

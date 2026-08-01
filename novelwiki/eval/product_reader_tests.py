@@ -409,6 +409,10 @@ async def test_health_counts(db):
             "INSERT INTO chunks (novel_id, chapter, chunk_index, text) "
             "VALUES ($1, 1, 0, 'a'), ($1, 2, 0, 'b');", nid)
         await conn.execute(
+            "INSERT INTO extraction_state (novel_id, chapter) VALUES ($1, 1), ($1, 2);",
+            nid,
+        )
+        await conn.execute(
             "INSERT INTO chapter_audio (novel_id, chapter, voice_id, content_version, audio_path, user_id) "
             "VALUES ($1, 1, 'v1', 1, 'a.opus', NULL);", nid)
 
@@ -420,6 +424,26 @@ async def test_health_counts(db):
     assert h["audio"]["prose_chapters"] == 4 and h["audio"]["have"] == 1 and h["audio"]["missing"] == 3
     assert h["audio"]["voices"][0]["voice_id"] == "v1"
     assert h["is_editor"] is True
+
+
+@pytest.mark.asyncio
+async def test_health_does_not_treat_chunking_as_completed_codex_coverage(db):
+    pool, reader = db["pool"], db["reader"]
+    nid = await _mk_novel(
+        pool, owner_id=reader["id"], visibility="private", title="Chunked only",
+        chapters=2, codex=True,
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO chunks (novel_id, chapter, chunk_index, text) "
+            "VALUES ($1, 1, 0, 'a'), ($1, 2, 0, 'b');",
+            nid,
+        )
+
+    health = await prod.api_novel_health(nid, user=reader)
+
+    assert health["codex"]["coverage_chapter"] is None
+    assert health["codex"]["missing"] is True
 
 
 @pytest.mark.asyncio

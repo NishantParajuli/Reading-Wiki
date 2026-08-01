@@ -172,7 +172,7 @@ def test_experience_projection_registry_is_explicit_and_read_only():
         }),
         "job_view": frozenset({"jobs", "ai_execution_runs"}),
         "novel_health": frozenset({
-            "novels", "chapters", "entities", "chunks", "sources", "jobs",
+            "novels", "chapters", "entities", "extraction_state", "sources", "jobs",
             "import_jobs", "tts_jobs",
         }),
         "cost_estimate": frozenset({"chapters", "chapter_audio", "quota_usage"}),

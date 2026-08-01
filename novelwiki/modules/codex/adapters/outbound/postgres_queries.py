@@ -38,10 +38,25 @@ class PostgresCodexQueries:
                 """,
                 ceiling.value, novel_id,
             )
+            coverage = await connection.fetchrow(
+                """
+                SELECT COUNT(*) AS chapter_count, MAX(chapter) AS through_chapter
+                FROM extraction_state
+                WHERE novel_id=$1;
+                """,
+                novel_id,
+            )
         return {
             "entities_revealed": int(entities or 0),
             "facts_known": int(facts or 0),
             "relationships_known": int(relationships or 0),
+            # Build coverage is operational metadata, not story content. It is
+            # intentionally independent of the reader's spoiler ceiling.
+            "built_chapter_count": int(coverage["chapter_count"] or 0),
+            "built_through_chapter": (
+                float(coverage["through_chapter"])
+                if coverage["through_chapter"] is not None else None
+            ),
         }
 
     async def list_entities(
@@ -132,4 +147,3 @@ class PostgresEntityMerger:
         from .ingest.link import merge_entities
         async with self._pool.acquire() as connection:
             await merge_entities(novel_id, keep_id, drop_id, connection)
-

@@ -286,6 +286,7 @@
 /* ===================== Codex ===================== */
 .codex-head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
 .codex-head .search-box { flex: 1 1 240px; }
+.codex-build-coverage { margin-top: 8px; font-variant-numeric: tabular-nums; }
 .ceiling-pill {
   display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border);
   background: var(--surface); color: var(--ink); border-radius: var(--radius-full);

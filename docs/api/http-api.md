@@ -135,7 +135,9 @@ quota-reserved) · `GET|PUT /api/novels/{id}/glossary` ·
 ## Codex (`/api`, auth; every read ceiling-bounded)
 
 `GET /api/novels/{id}/meta` (chapter span + display info for the ceiling control) ·
-`GET /api/novels/{id}/stats` · `GET /api/novels/{id}/entities`
+`GET /api/novels/{id}/stats` (ceiling-bounded knowledge counts plus operational
+`built_through_chapter` and `built_chapter_count`; build metadata
+may extend beyond the reader's ceiling but contains no story content) · `GET /api/novels/{id}/entities`
 (`ceiling`, `type`, `q`) · `GET /api/novels/{id}/entity/resolve?name=…` ·
 `GET /api/novels/{id}/entity/{eid}` (profile; wiki-cache fast path, LLM synthesis on
 miss) · `GET …/entity/{eid}/relationships` (`other_id` filter) · `GET …/entity/{eid}/timeline` ·

@@ -33,7 +33,10 @@ class Ceiling:
 class Queries:
     async def stats(self, novel_id, ceiling):
         assert isinstance(ceiling, ChapterCeiling)
-        return {"entities_revealed": 2, "facts_known": 3, "relationships_known": 1}
+        return {
+            "entities_revealed": 2, "facts_known": 3, "relationships_known": 1,
+            "built_chapter_count": 4, "built_through_chapter": 4.0,
+        }
 
     async def cached_profile(self, novel_id, entity_id, ceiling):
         assert isinstance(ceiling, ChapterCeiling)
@@ -84,6 +87,17 @@ def query_service(*, cached=None):
         ask_max_query_chars=20, ask_requires_verified=True,
         profile_requires_verified=True, profile_model="pro",
     ), ceiling, costs
+
+
+@pytest.mark.asyncio
+async def test_stats_exposes_build_coverage_separately_from_spoiler_ceiling():
+    service, _, _ = query_service()
+
+    result = await service.stats(1, 9, PRINCIPAL)
+
+    assert result["effective_ceiling"] == 4.0
+    assert result["built_chapter_count"] == 4
+    assert result["built_through_chapter"] == 4.0
 
 
 @pytest.mark.asyncio
@@ -217,4 +231,3 @@ async def test_build_range_validation_happens_before_backend_or_quota():
 
     assert backend.calls == 0
     assert quota.reserved == 0
-

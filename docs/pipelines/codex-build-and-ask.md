@@ -137,6 +137,12 @@ loaded on first query, blocking work offloaded to a thread.
 
 ## Read side: everything ceiling-bounded
 
+The Codex screen always reports completed build coverage as the highest chapter in
+`extraction_state` plus the number of completed chapter checkpoints. This operational
+metadata is distinct from the reader's spoiler ceiling: preprocessing stages such as
+chunking and embedding do not advance it, and it can safely report a later chapter number
+without exposing any story content.
+
 Resolution first, always: `CeilingPort.resolve(novel_id, principal, requested)` clamps
 the *requested* ceiling (the UI slider) to the server-trusted `max_chapter_read`
 (owners/admins may range over the full span). The resulting `CeilingContext` is threaded

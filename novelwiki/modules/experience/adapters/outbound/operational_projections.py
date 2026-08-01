@@ -7,7 +7,7 @@ OPERATIONAL_PROJECTION_TABLES = {
     "home": frozenset({"users", "novels", "library_entries", "reading_progress", "chapters", "sources", "chapter_audio"}),
     "activity": frozenset({"import_jobs", "tts_jobs", "jobs", "ai_execution_runs"}),
     "job_view": frozenset({"jobs", "ai_execution_runs"}),
-    "novel_health": frozenset({"novels", "chapters", "entities", "chunks", "sources", "jobs", "import_jobs", "tts_jobs"}),
+    "novel_health": frozenset({"novels", "chapters", "entities", "extraction_state", "sources", "jobs", "import_jobs", "tts_jobs"}),
     "cost_estimate": frozenset({"chapters", "chapter_audio", "quota_usage"}),
     "admin_users": frozenset({"users", "quota_usage", "novels", "user_ai_backend_policies", "jobs"}),
     "admin_agy_health": frozenset({"ai_worker_heartbeats", "jobs", "ai_execution_runs"}),
@@ -130,7 +130,7 @@ class PostgresOperationalProjectionRepository:
                 SELECT (SELECT COUNT(*) FROM chapters WHERE novel_id=$1) AS total_chapters,
                   (SELECT MAX(number) FROM chapters WHERE novel_id=$1) AS book_max,
                   (SELECT COUNT(*) FROM entities WHERE novel_id=$1) AS entities_count,
-                  (SELECT MAX(chapter) FROM chunks WHERE novel_id=$1) AS codex_max,
+                  (SELECT MAX(chapter) FROM extraction_state WHERE novel_id=$1) AS codex_max,
                   (SELECT COUNT(*) FROM chapters WHERE novel_id=$1 AND original_text IS NOT NULL
                     AND (content IS NULL OR translation_status<>'done')) AS untranslated,
                   (SELECT MAX(last_scraped_at) FROM sources WHERE novel_id=$1) AS source_last_scraped,

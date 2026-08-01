@@ -98,7 +98,7 @@ async def api_meta_stats(
     service: CodexMigrationService = Depends(codex_migration_service_dependency),
     principal_factory: Callable[[dict], Principal] = Depends(codex_principal_factory_dependency),
 ):
-    """Spoiler-safe aggregate stats for the codex home surface (all bounded by ceiling)."""
+    """Ceiling-bounded knowledge stats plus non-story completed-build coverage."""
     try:
         return await service.queries.stats(
             novel_id, ceiling, _principal(principal_factory, user)

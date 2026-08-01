@@ -66,7 +66,10 @@ async function mockApi(page, { signedIn = true, chapterData = chapter } = {}) {
     else if (path === "/api/novels/7/glossary") body = [];
     else if (path === "/api/novels/7/contributions") body = [];
     else if (path === "/api/novels/7/tag-suggestions") body = [];
-    else if (path === "/api/novels/7/stats") body = { entities: 1, facts: 1, effective_ceiling: 1, ceiling_clamped: false };
+    else if (path === "/api/novels/7/stats") body = {
+      entities: 1, facts: 1, effective_ceiling: 1, ceiling_clamped: false,
+      built_chapter_count: 1, built_through_chapter: 1,
+    };
     else if (path === "/api/novels/7/entities") body = [{ id: 1, canonical_name: "Mira", type: "character", first_seen_chapter: 1 }];
     else if (path === "/api/novels/7/ask") body = { answer: "Mira arrives.", citations: [], evidence_ids: [], requested_ceiling: 1, allowed_ceiling: 1, effective_ceiling: 1, ceiling_clamped: false };
     else if (path === "/api/novels/7/recap") body = { answer: "Previously, Mira arrived.", citations: [] };
@@ -142,6 +145,12 @@ test("codex ceiling and cached ask remain usable", async ({ page }) => {
   await page.getByRole("textbox").fill("Who arrives?");
   await page.getByRole("button", { name: /ask/i }).click();
   await expect(page.getByText("Mira arrives.")).toBeVisible();
+});
+
+test("codex browser shows completed build coverage", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/n/7/codex");
+  await expect(page.getByText("Built through Ch. 1 of 2 · 1 chapter")).toBeVisible();
 });
 
 test("cached narration controls render with mocked voice service", async ({ page }) => {

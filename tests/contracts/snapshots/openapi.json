@@ -5951,7 +5951,7 @@
     },
     "/api/novels/{novel_id}/stats": {
       "get": {
-        "description": "Spoiler-safe aggregate stats for the codex home surface (all bounded by ceiling).",
+        "description": "Ceiling-bounded knowledge stats plus non-story completed-build coverage.",
         "operationId": "api_meta_stats_api_novels__novel_id__stats_get",
         "parameters": [
           {
