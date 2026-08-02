@@ -297,7 +297,9 @@ class CodexCommandService:
                 },
                 idempotency_key=idem, decision=decision,
                 max_attempts=(
-                    self._agy_max_attempts if decision.resolved == "agy" else None
+                    self._agy_max_attempts
+                    if decision.resolved in {"agy", "openai_codex"}
+                    else None
                 ),
             )
 

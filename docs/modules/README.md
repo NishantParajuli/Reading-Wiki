@@ -16,7 +16,7 @@ rest of the system.
 | Codex | [codex.md](codex.md) | the spoiler-safe knowledge base: build pipeline, retrieval, Ask, recap |
 | Narration | [narration.md](narration.md) | audiobook TTS jobs and the chapter-audio cache |
 | Work | [work.md](work.md) | the generic durable-job system: schedule, dedupe, lease, retry, settle quota |
-| AI Execution | [ai-execution.md](ai-execution.md) | backend policy (API vs AGY), provider gateways, cost controls, AGY runner |
+| AI Execution | [ai-execution.md](ai-execution.md) | API/AGY/OpenAI Codex policy, provider gateways, cost controls, isolated runners |
 | Experience | [experience.md](experience.md) | read-only cross-module projections: home, activity, discover, profiles, admin |
 
 ## Dependency shape (executable graph)

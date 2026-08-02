@@ -41,7 +41,7 @@ def configure_finalization_uow(factory) -> None:
     global _finalization_uow_factory
     _finalization_uow_factory = factory
 
-KINDS = ("scrape", "codex_build", "translate", "agy_smoke")
+KINDS = ("scrape", "codex_build", "translate", "agy_smoke", "openai_codex_smoke")
 TRIGGER_STATUSES = ("queued",)
 ACTIVE_STATUSES = ("queued", "running", "waiting_provider")
 TERMINAL_STATUSES = ("done", "failed", "canceled")
@@ -116,9 +116,10 @@ def job_view(job: dict) -> dict:
         "backend_state": job.get("status"),
         "backend_wait_reason": job.get("error") if job.get("status") == "waiting_provider" else None,
         "current_run_id": str(job["current_run_id"]) if job.get("current_run_id") else None,
-        "plugin_version": job.get("current_plugin_version") or (
-            settings.AGY_PLUGIN_VERSION if (job.get("execution_backend") or "api") == "agy" else None
-        ),
+        "plugin_version": job.get("current_plugin_version") or {
+            "agy": settings.AGY_PLUGIN_VERSION,
+            "openai_codex": settings.OPENAI_CODEX_CONTRACT_VERSION,
+        }.get(job.get("execution_backend") or "api"),
         "cancel_requested": job.get("cancel_requested_at") is not None,
         "not_before": job["not_before"].isoformat() if job.get("not_before") else None,
         "created_at": job["created_at"].isoformat() if job.get("created_at") else None,
@@ -191,28 +192,38 @@ async def create_job(kind: str, *, novel_id: int | None, user_id: int | None,
                         backend_requested=backend_requested, backend_model=backend_model,
                     )
                     return int(existing), False
-            if execution_backend == "agy" and user_id is not None and kind != "agy_smoke":
+            if execution_backend in {"agy", "openai_codex"} and user_id is not None \
+                    and kind not in {"agy_smoke", "openai_codex_smoke"}:
                 # Close the route-level count/create race across web processes.
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2));",
-                    "agy_user_queue", str(user_id),
+                    f"{execution_backend}_user_queue", str(user_id),
                 )
                 if policy_lookup is None:
                     raise BackendPolicyChangedError(
                         "AI policy lookup was not supplied by the scheduling workflow"
                     )
                 policy = await policy_lookup(user_id)
-                if not policy or not policy["agy_enabled"]:
-                    raise BackendPolicyChangedError("AGY grant changed before the job was created")
+                enabled_key = "agy_enabled" if execution_backend == "agy" else "openai_codex_enabled"
+                concurrency_key = (
+                    "max_concurrent_agy_jobs" if execution_backend == "agy"
+                    else "max_concurrent_openai_codex_jobs"
+                )
+                if not policy or not policy[enabled_key]:
+                    raise BackendPolicyChangedError(
+                        f"{execution_backend} grant changed before the job was created"
+                    )
                 active = int(await conn.fetchval(
                     """
-                    SELECT count(*) FROM jobs WHERE user_id=$1 AND execution_backend='agy'
-                      AND status=ANY($2::text[]);
+                    SELECT count(*) FROM jobs WHERE user_id=$1 AND execution_backend=$2
+                      AND status=ANY($3::text[]);
                     """,
-                    user_id, list(ACTIVE_STATUSES),
+                    user_id, execution_backend, list(ACTIVE_STATUSES),
                 ) or 0)
-                if active >= int(policy["max_concurrent_agy_jobs"]):
-                    raise ActiveJobLimitError("per-user AGY job limit is already in use")
+                if active >= int(policy[concurrency_key]):
+                    raise ActiveJobLimitError(
+                        f"per-user {execution_backend} job limit is already in use"
+                    )
             job_id = int(await conn.fetchval(
                 """
                 INSERT INTO jobs (kind, novel_id, user_id, status, stage, options,
@@ -327,14 +338,14 @@ async def cancel_job(job_id: int) -> bool:
         row = await conn.fetchrow(
             """
             UPDATE jobs SET
-              status = CASE WHEN status='running' AND execution_backend='agy'
+              status = CASE WHEN status='running' AND execution_backend IN ('agy','openai_codex')
                             THEN 'running' ELSE 'canceled' END,
-              stage = CASE WHEN status='running' AND execution_backend='agy'
+              stage = CASE WHEN status='running' AND execution_backend IN ('agy','openai_codex')
                            THEN 'cancel requested' ELSE 'canceled' END,
               cancel_requested_at = now(),
-              claim_token = CASE WHEN status='running' AND execution_backend='agy'
+              claim_token = CASE WHEN status='running' AND execution_backend IN ('agy','openai_codex')
                                  THEN claim_token ELSE NULL END,
-              claimed_at = CASE WHEN status='running' AND execution_backend='agy'
+              claimed_at = CASE WHEN status='running' AND execution_backend IN ('agy','openai_codex')
                                 THEN claimed_at ELSE NULL END,
               updated_at=now()
             WHERE id=$1 AND status IN ('queued','running','waiting_provider')
@@ -484,13 +495,16 @@ async def wait_for_provider(job_id: int, failure_code: str, error: str, minutes:
     return row is not None
 
 
-async def retry_waiting(*, job_id: int | None = None) -> int:
+async def retry_waiting(
+    *, job_id: int | None = None, execution_backend: str | None = None
+) -> int:
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         if job_id is None:
             result = await conn.execute(
                 "UPDATE jobs SET status='queued', stage='queued', not_before=NULL, error=NULL, updated_at=now() "
-                "WHERE status='waiting_provider';"
+                "WHERE status='waiting_provider' AND ($1::text IS NULL OR execution_backend=$1);",
+                execution_backend,
             )
         else:
             result = await conn.execute(

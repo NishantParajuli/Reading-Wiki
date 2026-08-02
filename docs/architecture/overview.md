@@ -14,7 +14,7 @@ process is divided into ten independently-owned **business modules**, organized 
                           │                ONE DEPLOYABLE PROCESS                │
    Browser (React SPA) ──▶│  FastAPI (Platform Web)                              │
    python -m novelwiki.cli│  Typer CLI (Platform CLI runtime)                    │──▶ one PostgreSQL
-   systemd AGY worker  ──▶│  3 in-process workers (import / TTS / generic jobs)  │    (pgvector + pg_trgm)
+ subscription workers ──▶│  3 in-process workers (import / TTS / generic jobs)  │    (pgvector + pg_trgm)
                           │                                                      │
                           │  identity  catalog  reading  acquisition  translation│──▶ filesystem (./data)
                           │  codex  narration  work  ai_execution  experience    │──▶ AI provider APIs
@@ -52,7 +52,7 @@ Everything under `novelwiki/` falls into exactly one of five categories:
 | **Workflows** | `novelwiki/workflows/` | Named cross-module write coordinators. Seven coordinate transaction-bound public capabilities inside one DB transaction; `schedule_ai_job` is the ADR-003 guarded-compensation exception. Workflows own no SQL. |
 | **Bootstrap (composition root)** | `novelwiki/bootstrap/` | The only place that knows how everything is wired together: builds the FastAPI app, registers routers, injects every dependency, starts/stops workers, owns the worker-handler registry and the CLI composition. |
 
-Everything else at the `novelwiki/` top level (`api/`, `auth/`, `db/`, `jobs/`, `agy/`,
+Everything else at the `novelwiki/` top level (`api/`, `auth/`, `db/`, `jobs/`, `agy/`, `openai_codex/`,
 `ai_backend/`, `importer/`, `scraper/`, `ingest/`, `retrieval/`, `agent/`, `translate/`,
 `tts/`, `quota.py`, `audit.py`, `ai_limits.py`, `config/`, `eval/`) is a **stable
 compatibility surface**: passive import aliases and thin dependency-injecting wrappers kept
@@ -72,7 +72,7 @@ Outside the package:
 | `tests/`, `novelwiki/eval/` | Unit/architecture/contract tests and DB-backed integration suites. See [../testing.md](../testing.md). |
 | `tools/` | `check_architecture.py` (boundary gate), `benchmark_queries.py`, `rehearsal_database.py`. |
 | `scripts/` | `contracts.py` (snapshot regeneration), `test_backend.py` (integration launcher), backup-restore rehearsal, real-browser fixture. |
-| `deploy/` | `novelwiki-agy-worker.service` systemd unit for the dedicated AGY host worker. |
+| `deploy/` | systemd units for the dedicated AGY and OpenAI Codex host workers. |
 | `implementation-plan/` | Dated future and historical plans. They preserve implementation intent but are not living authority; current ownership authority is `platform/architecture/checks.py::TABLE_OWNERS`. |
 | `data/` | Runtime data (BM25 indexes, assets, audio, import scratch). See [../data/filesystem-layout.md](../data/filesystem-layout.md). |
 
@@ -94,7 +94,7 @@ reference: [../modules/README.md](../modules/README.md)):
 | **Codex** | the spoiler-safe knowledge base: chunks, entities, facts, relationships, events, retrieval, Ask, recap | `chunks`, `entities`, `entity_descriptions`, `entity_aliases`, `identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state`, `wiki_cache`, `query_cache` |
 | **Narration** | audiobook TTS jobs and the chapter-audio cache | `tts_jobs`, `chapter_audio` |
 | **Work** | the generic durable-job system (scrape/codex/translate batches): scheduling, dedupe, leases, retries, quota settlement | `jobs` |
-| **AI Execution** | *how* AI runs: backend policy (API vs AGY), provider gateways, cost controls, the AGY runner/workspaces, run records | `user_ai_backend_policies`, `ai_request_locks`, `provider_budget`, `ai_execution_runs`, `ai_worker_heartbeats` |
+| **AI Execution** | *how* AI runs: backend policy (API, AGY, or OpenAI Codex), provider gateways, cost controls, isolated runners/workspaces, run records | `user_ai_backend_policies`, `ai_request_locks`, `provider_budget`, `ai_execution_runs`, `ai_worker_heartbeats` |
 | **Experience** | cross-module *read-only* projections: home, activity feed, discover, library cards, profiles, health, cost estimates, admin dashboards | none (registered read-only projections only) |
 
 Platform Database/Observability owns the two remaining tables: `app_migrations`,
@@ -200,12 +200,12 @@ receives out-of-bounds text. Full treatment:
 | Fact | Value |
 |---|---|
 | Backend Python files / lines | ~401 files, ~37.7k lines |
-| HTTP routes | 119 (snapshot: `tests/contracts/snapshots/routes.json`) |
-| CLI commands | 13 (`tests/contracts/snapshots/cli.json`) |
+| HTTP routes | 122 (snapshot: `tests/contracts/snapshots/routes.json`) |
+| CLI commands | 14 (`tests/contracts/snapshots/cli.json`) |
 | Database tables | 39, one writer each (`docs/architecture/module-ownership.md`) |
 | Business modules | 10 + Platform |
 | Named cross-module workflows | 8: 7 transaction-bound + 1 guarded-compensation (`novelwiki/workflows/`) |
-| In-process durable workers | 3 (import, TTS, generic jobs) + 1 dedicated AGY host worker |
+| In-process durable workers | 3 (import, TTS, generic jobs) + 2 optional dedicated subscription host workers |
 | Test suites | unit (`tests/unit`), architecture (`tests/architecture`), contracts (`tests/contracts`), DB-backed eval (`novelwiki/eval`), frontend unit + e2e |
 
 ## Where to go next

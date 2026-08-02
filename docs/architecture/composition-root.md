@@ -24,7 +24,9 @@ never used as a locator."*
 | Web/ASGI | `novelwiki.api.app:app` | re-exports `bootstrap/web.py::app` |
 | CLI | `python -m novelwiki.cli` | re-exports `bootstrap/cli.py::app` |
 | Standalone import worker | `python -m novelwiki.cli import-worker` | `bootstrap/acquisition_cli.py::run_standalone_import_worker` |
-| Dedicated AGY host worker | `python -m novelwiki.agy.worker` (systemd) | wraps `modules/ai_execution/adapters/inbound/worker.py` with `bootstrap/ai_execution_worker.py` runtime |
+| Dedicated AGY host worker | `python -m novelwiki.agy.worker` (systemd) | wraps `modules/ai_execution/adapters/inbound/worker.py` with the AGY runtime from `bootstrap/ai_execution_worker.py` |
+| Dedicated OpenAI Codex host worker | `python -m novelwiki.openai_codex.worker` (systemd) | wraps the same inbound worker with the isolated App Server runtime from `bootstrap/ai_execution_worker.py` |
+| Dedicated OpenAI Codex host worker | `python -m novelwiki.openai_codex.worker` (systemd) | reuses the subscription worker orchestration with the isolated App Server runtime and provider-specific registry |
 
 ## 2. The web app (`bootstrap/web.py`, 475 lines)
 

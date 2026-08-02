@@ -8,12 +8,12 @@ class AiAdminPort(Protocol):
     async def get_policy(self, user_id: int) -> dict | None: ...
     async def upsert_policy(self, user_id: int, policy: dict, admin_id: int) -> dict: ...
     async def delete_policy(self, user_id: int, admin_id: int) -> bool: ...
-    async def worker_available(self) -> bool: ...
+    async def worker_available(self, backend: Any = None) -> bool: ...
 
 
 class WorkAdminPort(Protocol):
-    async def retry_waiting(self) -> int: ...
-    async def create_smoke(self, admin_id: int) -> tuple[int, bool]: ...
+    async def retry_waiting(self, backend: str | None = None) -> int: ...
+    async def create_smoke(self, admin_id: int, backend: str) -> tuple[int, bool]: ...
 
 
 class AdminAuditPort(Protocol):
@@ -35,13 +35,13 @@ class ExperienceAdminCommands:
     async def delete_policy(self, user_id: int, admin_id: int) -> bool:
         return await self._ai.delete_policy(user_id, admin_id)
 
-    async def worker_available(self) -> bool:
-        return await self._ai.worker_available()
+    async def worker_available(self, backend=None) -> bool:
+        return await self._ai.worker_available(backend) if backend else await self._ai.worker_available()
 
-    async def retry_waiting(self, admin_id: int) -> int:
-        count = await self._work.retry_waiting()
-        await self._audit.record("agy.run.retry_waiting", admin_id, {"jobs": count})
+    async def retry_waiting(self, admin_id: int, backend: str = "agy") -> int:
+        count = await self._work.retry_waiting(backend)
+        await self._audit.record(f"{backend}.run.retry_waiting", admin_id, {"jobs": count})
         return count
 
-    async def queue_smoke(self, admin_id: int) -> tuple[int, bool]:
-        return await self._work.create_smoke(admin_id)
+    async def queue_smoke(self, admin_id: int, backend: str = "agy") -> tuple[int, bool]:
+        return await self._work.create_smoke(admin_id, backend)

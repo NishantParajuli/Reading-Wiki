@@ -194,3 +194,59 @@ def build_agy_worker_registry() -> WorkerRegistry:
     registry.register("codex_build", codex)
     registry.register("agy_smoke", smoke)
     return registry
+
+
+def build_openai_codex_worker_registry() -> WorkerRegistry:
+    """Build handlers that reuse the sealed artifact pipeline with App Server."""
+    from novelwiki.bootstrap.codex_worker import build_codex_runtime
+    from novelwiki.bootstrap.translation import build_translation_execution_runtime
+    from novelwiki.ingest.chunk import chunk_all_chapters as _chunk
+    from novelwiki.ingest.embed import embed_missing_chunks as _embed
+    from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.smoke import (
+        run_smoke_test,
+    )
+    from novelwiki.modules.codex.adapters.inbound.jobs import execute_agy_codex_job
+    from novelwiki.modules.codex.adapters.outbound.agy import (
+        execute_codex_job as execute_codex_extraction,
+    )
+    from novelwiki.modules.codex.adapters.outbound.retrieval.bm25 import get_bm25_manager
+    from novelwiki.modules.translation.adapters.outbound.agy import execute_translation_job
+    from novelwiki.modules.work.adapters.outbound import postgres
+
+    codex_runtime = build_codex_runtime("openai_codex")
+    translation_runtime = build_translation_execution_runtime("openai_codex")
+
+    async def translation(job, preflight, _context):
+        return await execute_translation_job(job, preflight, runtime=translation_runtime)
+
+    async def smoke(job, preflight, _context):
+        return await run_smoke_test(job, preflight, postgres)
+
+    async def codex(job, preflight, context):
+        async def run_extraction(claimed, checked):
+            return await execute_codex_extraction(
+                claimed, checked, runtime=codex_runtime
+            )
+
+        class CodexContext:
+            bail_if_canceled = staticmethod(context.bail_if_canceled)
+            chunk_all_chapters = staticmethod(
+                lambda *args, **kwargs: _chunk(*args, runtime=codex_runtime, **kwargs)
+            )
+            embed_missing_chunks = staticmethod(
+                lambda *args, **kwargs: _embed(*args, runtime=codex_runtime, **kwargs)
+            )
+            set_progress = staticmethod(context.set_progress)
+            execute_codex_job = staticmethod(run_extraction)
+
+            @staticmethod
+            async def rebuild_bm25(novel_id):
+                await get_bm25_manager(novel_id).rebuild()
+
+        return await execute_agy_codex_job(job, preflight, CodexContext())
+
+    registry = WorkerRegistry()
+    registry.register("translate", translation)
+    registry.register("codex_build", codex)
+    registry.register("openai_codex_smoke", smoke)
+    return registry

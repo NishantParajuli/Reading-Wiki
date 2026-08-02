@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-def build_translation_execution_runtime():
+def build_translation_execution_runtime(provider: str = "agy"):
     """Build an immutable dependency bundle for Translation use-case instances."""
 
     class RunBridge:
@@ -13,7 +13,7 @@ def build_translation_execution_runtime():
             )
             from novelwiki.platform.database import init_db_pool
             return await PostgresAgyWorkerStateRepository(
-                await init_db_pool()
+                await init_db_pool(), provider
             ).resumable_runs(job_id, workloads)
 
     class QuotaBridge:
@@ -36,22 +36,52 @@ def build_translation_execution_runtime():
                 user_id, "translated_chapters", units
             )
 
+    from functools import partial
+    from pathlib import Path
     from types import SimpleNamespace
     from novelwiki.modules.ai_execution.adapters.outbound import providers
-    from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
-    from novelwiki.modules.ai_execution.adapters.outbound.agy.prompts import build_task_prompt
     from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import (
-        create_run, update_run, workspace_relpath,
+        create_run, update_run, workspace_relpath as agy_workspace_relpath,
     )
     from novelwiki.modules.ai_execution.adapters.outbound.agy.validators import (
         load_json, read_text_artifact, validate_output_manifest,
     )
-    from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import (
-        add_input, create_run_workspace, seal_inputs, sha256_file, write_json,
-    )
-    from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import (
-        is_database_error, safe_error_summary,
-    )
+    from novelwiki.platform.config import settings
+    if provider == "openai_codex":
+        from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.runner import (
+            build_task_prompt, is_database_error, run_openai_codex, safe_error_summary,
+        )
+        from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.workspace import (
+            add_input, create_run_workspace, seal_inputs, sha256_file,
+            workspace_relpath, write_json,
+        )
+        run_subscription = run_openai_codex
+        model_translate = settings.OPENAI_CODEX_MODEL_TRANSLATE
+        contract_version = settings.OPENAI_CODEX_CONTRACT_VERSION
+        work_root = Path(settings.OPENAI_CODEX_WORK_DIR).expanduser().resolve(strict=False)
+        workspace_max_bytes = settings.OPENAI_CODEX_WORKSPACE_MAX_BYTES
+        batch_chapters = settings.OPENAI_CODEX_TRANSLATE_BATCH_CHAPTERS
+        batch_chars = settings.OPENAI_CODEX_TRANSLATE_BATCH_MAX_CHARS
+        provider_label = "OpenAI Codex"
+    else:
+        from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import (
+            is_database_error, safe_error_summary,
+        )
+        from novelwiki.modules.ai_execution.adapters.outbound.agy.prompts import build_task_prompt
+        from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
+        from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import (
+            add_input, create_run_workspace, seal_inputs, sha256_file,
+            write_json,
+        )
+        workspace_relpath = agy_workspace_relpath
+        run_subscription = run_agy
+        model_translate = settings.AGY_MODEL_TRANSLATE
+        contract_version = settings.AGY_PLUGIN_VERSION
+        work_root = Path(settings.AGY_WORK_DIR).expanduser().resolve(strict=False)
+        workspace_max_bytes = settings.AGY_WORKSPACE_MAX_BYTES
+        batch_chapters = settings.AGY_TRANSLATE_BATCH_CHAPTERS
+        batch_chars = settings.AGY_TRANSLATE_BATCH_MAX_CHARS
+        provider_label = "AGY"
     from novelwiki.modules.work.adapters.outbound import postgres as work
     from novelwiki.modules.translation.application.ports import TranslationRuntime
 
@@ -73,14 +103,20 @@ def build_translation_execution_runtime():
 
     ai = SimpleNamespace(
         call_chat_completion=providers.call_chat_completion,
-        run_agy=run_agy, build_task_prompt=build_task_prompt,
-        create_run=create_run, update_run=update_run,
+        run_agy=run_subscription, build_task_prompt=build_task_prompt,
+        create_run=partial(create_run, backend=provider), update_run=update_run,
         workspace_relpath=workspace_relpath, load_json=load_json,
         read_text_artifact=read_text_artifact,
         validate_output_manifest=validate_output_manifest,
         add_input=add_input, create_run_workspace=create_run_workspace,
         seal_inputs=seal_inputs, sha256_file=sha256_file, write_json=write_json,
         is_database_error=is_database_error, safe_error_summary=safe_error_summary,
+        model_translate=model_translate, model_label=f"{provider}:{model_translate}",
+        contract_version=contract_version, work_root=work_root,
+        workspace_max_bytes=workspace_max_bytes,
+        translate_batch_chapters=batch_chapters,
+        translate_batch_max_chars=batch_chars,
+        provider_label=provider_label,
     )
     return TranslationRuntime(
         reading=ReadingBridge(), uow_factory=LazyUnitOfWork,

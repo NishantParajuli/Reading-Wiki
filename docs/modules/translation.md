@@ -49,7 +49,7 @@ the chapter — powers self-translate overlays), `prefetch_translations` (next
 spellings from codex entities so a source switch keeps names stable), and the AGY
 staging trio `stage_translation_batch` / `reset_staged_translations` /
 `commit_translation` with `run_id` identity (`SourceChangedError` when the chapter moved
-under a staged batch).
+  under a staged batch). OpenAI Codex reuses this sealed staging and commit contract.
 
 ## Scheduling a batch (`application/scheduling.py`)
 
@@ -57,13 +57,13 @@ under a staged batch).
 `POST /api/novels/{id}/translate` path:
 
 1. Catalog editable check (port), then fast dedupe against the idempotency key.
-2. Resolve execution backend (API vs AGY) via `BackendResolutionPort` (AI Execution).
+2. Resolve execution backend (API, AGY, or OpenAI Codex) via `BackendResolutionPort` (AI Execution).
 3. Count pending chapters in range (Reading port). A zero count is allowed: the job
    starts and completes as a no-op after recomputing the range at execution time.
-4. **AGY:** reserve the pending count up front. **API:** check that the current count
+4. **Subscription backend:** reserve the pending count up front. **API:** check that the current count
    would fit, but reserve one unit at a time under the per-chapter lock during execution.
 5. Create-or-dedupe the durable Work job (`TranslationWorkPort`, idempotency-keyed).
-6. Refund any speculative AGY reservation on failure or a create-time dedupe race — the
+6. Refund any speculative subscription reservation on failure or a create-time dedupe race — the
    `schedule_ai_job` compensation shape (ADR 003).
 
 The worker side then meters per chapter *as it actually translates*, so a canceled batch

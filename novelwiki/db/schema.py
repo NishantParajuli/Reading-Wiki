@@ -58,18 +58,23 @@ DDL_QUERIES = [
     """,
     "CREATE INDEX IF NOT EXISTS users_username_idx ON users (username);",
 
-    # Admin-owned AGY entitlement.  Reader prefs are intentionally not part of
+    # Admin-owned subscription-backend entitlement. Reader prefs are intentionally not part of
     # this trust boundary: no row means API-only, and only admin routes mutate it.
     """
     CREATE TABLE IF NOT EXISTS user_ai_backend_policies (
       user_id                 BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       agy_enabled             BOOLEAN NOT NULL DEFAULT FALSE,
+      openai_codex_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
       default_backend         TEXT NOT NULL DEFAULT 'api'
-                              CHECK (default_backend IN ('api', 'agy')),
+                              CHECK (default_backend IN ('api', 'agy', 'openai_codex')),
       agy_workloads           TEXT[] NOT NULL DEFAULT '{}',
+      openai_codex_workloads  TEXT[] NOT NULL DEFAULT '{}',
       fallback_to_api         BOOLEAN NOT NULL DEFAULT FALSE,
       max_concurrent_agy_jobs SMALLINT NOT NULL DEFAULT 1
                               CHECK (max_concurrent_agy_jobs BETWEEN 1 AND 4),
+      max_concurrent_openai_codex_jobs SMALLINT NOT NULL DEFAULT 1
+                              CONSTRAINT user_ai_backend_policies_openai_concurrency_check
+                              CHECK (max_concurrent_openai_codex_jobs BETWEEN 1 AND 4),
       policy_version          BIGINT NOT NULL DEFAULT 1,
       notes                   TEXT,
       granted_by              BIGINT REFERENCES users(id) ON DELETE SET NULL,
@@ -79,11 +84,53 @@ DDL_QUERIES = [
         'translate_batch', 'codex_extract', 'segment_import', 'ocr_pages',
         'ask', 'profile_synthesis'
       ]::TEXT[]),
-      CHECK (agy_enabled OR default_backend = 'api')
+      CONSTRAINT user_ai_backend_policies_openai_workloads_allowed_check
+      CHECK (openai_codex_workloads <@ ARRAY[
+        'translate_batch', 'codex_extract', 'segment_import', 'ocr_pages',
+        'ask', 'profile_synthesis'
+      ]::TEXT[]),
+      CONSTRAINT user_ai_backend_policies_enabled_default_check CHECK (
+        default_backend = 'api'
+        OR (default_backend = 'agy' AND agy_enabled)
+        OR (default_backend = 'openai_codex' AND openai_codex_enabled)
+      )
     );
     """,
+    "ALTER TABLE user_ai_backend_policies ADD COLUMN IF NOT EXISTS "
+    "openai_codex_enabled BOOLEAN NOT NULL DEFAULT FALSE;",
+    "ALTER TABLE user_ai_backend_policies ADD COLUMN IF NOT EXISTS "
+    "openai_codex_workloads TEXT[] NOT NULL DEFAULT '{}';",
+    "ALTER TABLE user_ai_backend_policies ADD COLUMN IF NOT EXISTS "
+    "max_concurrent_openai_codex_jobs SMALLINT NOT NULL DEFAULT 1;",
+    "ALTER TABLE user_ai_backend_policies DROP CONSTRAINT IF EXISTS "
+    "user_ai_backend_policies_default_backend_check;",
+    "ALTER TABLE user_ai_backend_policies ADD CONSTRAINT "
+    "user_ai_backend_policies_default_backend_check "
+    "CHECK (default_backend IN ('api','agy','openai_codex'));",
+    "ALTER TABLE user_ai_backend_policies DROP CONSTRAINT IF EXISTS "
+    "user_ai_backend_policies_check;",
+    "ALTER TABLE user_ai_backend_policies DROP CONSTRAINT IF EXISTS "
+    "user_ai_backend_policies_enabled_default_check;",
+    "ALTER TABLE user_ai_backend_policies ADD CONSTRAINT "
+    "user_ai_backend_policies_enabled_default_check CHECK ("
+    "default_backend='api' OR (default_backend='agy' AND agy_enabled) OR "
+    "(default_backend='openai_codex' AND openai_codex_enabled));",
+    "ALTER TABLE user_ai_backend_policies DROP CONSTRAINT IF EXISTS "
+    "user_ai_backend_policies_openai_workloads_allowed_check;",
+    "ALTER TABLE user_ai_backend_policies ADD CONSTRAINT "
+    "user_ai_backend_policies_openai_workloads_allowed_check CHECK ("
+    "openai_codex_workloads <@ ARRAY['translate_batch','codex_extract','segment_import',"
+    "'ocr_pages','ask','profile_synthesis']::TEXT[]);",
+    "ALTER TABLE user_ai_backend_policies DROP CONSTRAINT IF EXISTS "
+    "user_ai_backend_policies_openai_concurrency_check;",
+    "ALTER TABLE user_ai_backend_policies ADD CONSTRAINT "
+    "user_ai_backend_policies_openai_concurrency_check CHECK ("
+    "max_concurrent_openai_codex_jobs BETWEEN 1 AND 4);",
     "CREATE INDEX IF NOT EXISTS user_ai_backend_policies_enabled_idx "
     "ON user_ai_backend_policies (agy_enabled) WHERE agy_enabled = TRUE;",
+    "CREATE INDEX IF NOT EXISTS user_ai_backend_policies_openai_enabled_idx "
+    "ON user_ai_backend_policies (openai_codex_enabled) "
+    "WHERE openai_codex_enabled = TRUE;",
 
     # External identity links (Google/Discord). A user may link several providers.
     """
@@ -878,7 +925,7 @@ DDL_QUERIES = [
     """
     CREATE TABLE IF NOT EXISTS jobs (
       id               BIGSERIAL PRIMARY KEY,
-      kind             TEXT NOT NULL,                                    -- scrape|codex_build|translate|agy_smoke
+      kind             TEXT NOT NULL,                -- scrape|codex_build|translate|agy_smoke|openai_codex_smoke
       novel_id         BIGINT REFERENCES novels(id) ON DELETE CASCADE,
       user_id          BIGINT REFERENCES users(id) ON DELETE SET NULL,  -- requester (quota owner)
       status           TEXT NOT NULL DEFAULT 'queued',                  -- queued|running|done|failed|canceled
@@ -896,9 +943,9 @@ DDL_QUERIES = [
       claim_token      TEXT,                                            -- opaque lease owner (see jobs/worker.py)
       claimed_at       TIMESTAMPTZ,
       backend_requested TEXT NOT NULL DEFAULT 'auto'
-                       CHECK (backend_requested IN ('auto','api','agy')),
+                       CHECK (backend_requested IN ('auto','api','agy','openai_codex')),
       execution_backend TEXT NOT NULL DEFAULT 'api'
-                       CHECK (execution_backend IN ('api','agy')),
+                       CHECK (execution_backend IN ('api','agy','openai_codex')),
       backend_policy_version BIGINT,
       backend_fallback_allowed BOOLEAN NOT NULL DEFAULT FALSE,
       backend_fallback_from TEXT,
@@ -919,16 +966,12 @@ DDL_QUERIES = [
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS not_before TIMESTAMPTZ;",
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ;",
     """
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='jobs_backend_requested_check') THEN
-        ALTER TABLE jobs ADD CONSTRAINT jobs_backend_requested_check
-        CHECK (backend_requested IN ('auto','api','agy'));
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='jobs_execution_backend_check') THEN
-        ALTER TABLE jobs ADD CONSTRAINT jobs_execution_backend_check
-        CHECK (execution_backend IN ('api','agy'));
-      END IF;
-    END $$;
+    ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_backend_requested_check;
+    ALTER TABLE jobs ADD CONSTRAINT jobs_backend_requested_check
+      CHECK (backend_requested IN ('auto','api','agy','openai_codex'));
+    ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_execution_backend_check;
+    ALTER TABLE jobs ADD CONSTRAINT jobs_execution_backend_check
+      CHECK (execution_backend IN ('api','agy','openai_codex'));
     """,
     "CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status);",
     "CREATE INDEX IF NOT EXISTS jobs_kind_idx ON jobs (kind);",
@@ -954,7 +997,7 @@ DDL_QUERIES = [
       user_id            BIGINT REFERENCES users(id) ON DELETE SET NULL,
       novel_id           BIGINT REFERENCES novels(id) ON DELETE SET NULL,
       workload           TEXT NOT NULL,
-      backend            TEXT NOT NULL CHECK (backend IN ('api','agy')),
+      backend            TEXT NOT NULL CHECK (backend IN ('api','agy','openai_codex')),
       model              TEXT,
       runner_version     TEXT,
       plugin_version     TEXT,
@@ -976,6 +1019,9 @@ DDL_QUERIES = [
       CHECK ((job_id IS NOT NULL)::INT + (import_job_id IS NOT NULL)::INT = 1)
     );
     """,
+    "ALTER TABLE ai_execution_runs DROP CONSTRAINT IF EXISTS ai_execution_runs_backend_check;",
+    "ALTER TABLE ai_execution_runs ADD CONSTRAINT ai_execution_runs_backend_check "
+    "CHECK (backend IN ('api','agy','openai_codex'));",
     "CREATE INDEX IF NOT EXISTS ai_runs_job_idx ON ai_execution_runs (job_id, created_at);",
     "CREATE INDEX IF NOT EXISTS ai_runs_status_idx ON ai_execution_runs (backend, status, created_at);",
 

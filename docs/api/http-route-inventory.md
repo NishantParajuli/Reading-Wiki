@@ -6,7 +6,7 @@
 > [http-api.md](http-api.md). After changing routes, run
 > `uv run python scripts/contracts.py --update` and update this table in the same change.
 
-Current snapshot: **119 routes**. FastAPI-generated documentation routes and the
+Current snapshot: **122 routes**. FastAPI-generated documentation routes and the
 Platform health endpoint are included; the SPA catch-all is not an HTTP contract row.
 
 | Method | Exact path | FastAPI endpoint name |
@@ -16,6 +16,9 @@ Platform health endpoint are included; the SPA catch-all is not an HTTP contract
 | `GET` | `/api/admin/ai/agy/health` | `admin_agy_health` |
 | `POST` | `/api/admin/ai/agy/retry-waiting` | `admin_retry_waiting_agy` |
 | `POST` | `/api/admin/ai/agy/smoke-test` | `admin_agy_smoke_test` |
+| `GET` | `/api/admin/ai/openai-codex/health` | `admin_openai_codex_health` |
+| `POST` | `/api/admin/ai/openai-codex/retry-waiting` | `admin_retry_waiting_openai_codex` |
+| `POST` | `/api/admin/ai/openai-codex/smoke-test` | `admin_openai_codex_smoke_test` |
 | `GET` | `/api/admin/global-novels` | `admin_global_novels` |
 | `GET` | `/api/admin/novels` | `admin_list_novels` |
 | `GET` | `/api/admin/usage` | `admin_usage` |

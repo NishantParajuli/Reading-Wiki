@@ -1,36 +1,37 @@
-# Pipeline: AI execution backends (API vs AGY)
+# Pipeline: AI execution backends (API, AGY, OpenAI Codex)
 
-> Tideglass can execute AI workloads two ways: the metered **API backend** (DeepSeek/
-> OpenRouter/Gemini, pay-per-token) or the **AGY backend** (the Antigravity CLI, driving a
-> subscription account on the host). This page follows one job through backend
+> Tideglass can execute AI workloads through the metered **API backend** or two isolated
+> host subscription workers: **AGY** (Antigravity) and **OpenAI Codex App Server** (ChatGPT).
+> This page follows one job through backend
 > selection, execution, and every failure path. Module reference:
 > [../modules/ai-execution.md](../modules/ai-execution.md); operator procedures:
-> [../agy-operator-runbook.md](../agy-operator-runbook.md); consistency decision:
+> [../agy-operator-runbook.md](../agy-operator-runbook.md) and
+> [../openai-codex-operator-runbook.md](../openai-codex-operator-runbook.md); consistency decision:
 > [ADR 003](../architecture/adr-003-ai-scheduling-consistency.md).
 
-## The two backends
+## The three backends
 
-| | API | AGY |
-|---|---|---|
-| Transport | HTTPS to DeepSeek / OpenRouter / Gemini | local subprocess: the `agy` CLI in print mode |
-| Auth | `DEEPSEEK_API_KEY` (optional native V4), `OPENROUTER_API_KEY` (embedding/rerank + other generation), `GEMINI_API_KEY` (optional vision) in app env | the CLI's own official browser/keyring login on the host — **never** an app credential |
-| Cost model | per-token, metered by user quotas | subscription capacity (rate/quota windows) |
-| Executor | in-process (routes, generic worker) | dedicated host worker only (`python -m novelwiki.agy.worker`, systemd) |
-| Default | default selection; requires the configured provider credentials | dormant unless `AGY_ENABLED` **and** an admin grant; Codex also requires `AGY_CODEX_ENABLED` |
-| Workloads | all six policy workloads | implemented adapters: `translate_batch`, `codex_extract`; `codex_extract` remains globally disabled by default while plugin `1.3.2` has only the early real-LOTM chapter-1 v2 provider evidence recorded for `1.3.1`, and the other four reserved vocabulary values remain API-only |
+| | API | AGY | OpenAI Codex |
+|---|---|---|---|
+| Transport | HTTPS to DeepSeek / OpenRouter / Gemini | local `agy` print subprocess | local `codex app-server` JSONL over stdio |
+| Auth | provider keys in app env | official Antigravity host login | official `codex login` ChatGPT session; no API key |
+| Cost model | per-token, metered by user quotas | subscription capacity | ChatGPT Codex subscription capacity |
+| Executor | in-process routes/generic worker | `python -m novelwiki.agy.worker` | `python -m novelwiki.openai_codex.worker` |
+| Default | available when keys are configured | dormant unless global switch + grant | dormant unless global switch + grant |
+| Workloads | all six policy workloads | `translate_batch`, `codex_extract` | `translate_batch`, `codex_extract` |
 
 ### Codex equivalence and call topology
 
 For `codex_extract`, backend choice changes transport and provider-call shape, not the
 stored meaning or integrity boundary:
 
-| Property | API | AGY |
-|---|---|---|
-| Context and proposal | shared deterministic bounded context and v2 schema | same |
-| Review | optional best-effort second call, default on via `EXTRACTION_VERIFY` | mandatory self-review in the primary artifact run; optional separate child via `AGY_SEPARATE_CODEX_VERIFY` |
-| Chapter summary | separate API call | emitted with the reviewed extraction artifacts |
-| Ambiguous linking | direct per-mention gray-case calls when needed | gray cases batched into one disambiguation child run |
-| Validation and storage | trusted proposal/provenance/ref validation, then source/context-checked atomic commit | same semantic validators and the same `commit_codex_extraction` workflow |
+| Property | API | AGY | OpenAI Codex |
+|---|---|---|---|
+| Context and proposal | shared deterministic bounded context and v2 schema | same | same |
+| Review | optional best-effort second call, default on via `EXTRACTION_VERIFY` | mandatory self-review in the primary artifact run; optional separate child via `AGY_SEPARATE_CODEX_VERIFY` | strict structured primary result; optional separate child via `OPENAI_CODEX_SEPARATE_CODEX_VERIFY` |
+| Chapter summary | separate API call | emitted with the reviewed extraction artifacts | emitted with the structured extraction result |
+| Ambiguous linking | direct per-mention gray-case calls when needed | gray cases batched into one disambiguation child run | same batched disambiguation contract |
+| Validation and storage | trusted proposal/provenance/ref validation, then source/context-checked atomic commit | same semantic validators and the same `commit_codex_extraction` workflow | same semantic validators and workflow |
 
 Model output is still nondeterministic, so two backends need not produce byte-identical
 claims. They are required to obey the same ceiling, memory, provenance, temporal, and
@@ -42,21 +43,36 @@ commit contract.
 onto the job (`execution_backend`, `backend_model`, `backend_policy_version`,
 `backend_fallback_allowed`):
 
-1. `requested` is `auto` | `api` | `agy` (UI/API may ask; `auto` follows the user's
+1. `requested` is `auto` | `api` | `agy` | `openai_codex` (UI/API may ask; `auto` follows the user's
    `default_backend`).
-2. AGY is chosen only if: `AGY_ENABLED` globally, `AGY_CODEX_ENABLED` for
-   `codex_extract`, the user's
-   `user_ai_backend_policies` row has `agy_enabled`, the workload is one of
-   `IMPLEMENTED_AGY_WORKLOADS`, **and** it appears in `agy_workloads`, and the
-   per-user active-AGY-job cap (`max_concurrent_agy_jobs`,
-   1–4) isn't exceeded. Otherwise: API (or a typed error if `agy` was demanded
-   explicitly).
+2. A subscription backend is chosen only if its global switch is enabled, its independent
+   Codex-extraction switch is enabled for `codex_extract`, its per-user provider grant includes
+   the workload, the adapter implements it, and that provider's 1–4 active-job cap is not
+   exceeded. Otherwise `auto` resolves to API; an explicit unavailable provider returns a typed
+   error.
 3. The whole schedule runs inside the `schedule_ai_job` compensation shape:
    reserve quota → create/dedupe job → refund on failure or dedupe.
 
 The decision is *immutable* but execution is *re-authorized*: `reauthorize_job` re-checks
-the grant, user status, and `policy_version` **immediately before the AGY subprocess
-starts** — revoking a grant or bumping the policy between queue and run wins.
+the grant, user status, and `policy_version` **immediately before the subscription subprocess
+starts** — revoking a grant or bumping the policy between queue and run wins for either worker.
+
+## OpenAI Codex App Server execution
+
+The dedicated OpenAI Codex worker claims only `execution_backend='openai_codex'` rows and holds
+its own advisory subscription lock. Preflight pins the official executable/version, verifies a
+ChatGPT account through `account/read`, and confirms Terra/Luna in `model/list` without starting a
+turn. Each run gets a sealed workspace plus isolated `CODEX_HOME`; only the official `auth.json`
+is linked. History and web search are disabled.
+
+The worker starts an ephemeral App Server thread with `approvalPolicy=never`, read-only sandbox,
+network disabled for the sandbox, no interactive client actions, and a workload-specific JSON
+Schema. Story content is passed inside an explicit untrusted-data boundary. The model cannot write
+files: the host validates the final structured message, writes the exact artifact files and
+SHA-256 manifest, then enters the same validators, resumable-commit logic, quota settlement, and
+atomic database workflows as AGY. Cancellation sends `turn/interrupt` and then identity-checked
+process-group termination. Token usage notifications are stored as run metrics; story/transcript
+content is not written to logs.
 
 ## AGY execution (the hardened path)
 
@@ -104,20 +120,20 @@ The dedicated host worker (never the web process) claims `jobs` rows with
 
 | Failure | Handling |
 |---|---|
-| Provider capacity/quota (codes in `PROVIDER_WAIT_CODES`) | park `waiting_provider`, `not_before = now + AGY_PROVIDER_RETRY_MINUTES` (30); no lease, no tight retries, still dedupes; auto-release when due or admin **Retry waiting** |
-| Transient crash | retry up to `AGY_MAX_ATTEMPTS` (2) |
-| Permanent failure, `fallback_to_api` allowed | `_fallback_to_api`: job re-pointed to the API backend (`backend_fallback_from='agy'`), AGY translation's unused reservation refunded first so API metering can't double-charge |
+| Provider capacity/quota | park `waiting_provider` for the selected provider's retry interval; no lease or tight retry; auto-release when due or admin **Retry waiting** |
+| Transient crash | retry up to the selected subscription backend's max attempts (2 by default) |
+| Permanent failure, `fallback_to_api` allowed | `_fallback_to_api`: job re-pointed to the API backend with the selected provider in `backend_fallback_from`; its unused translation reservation is refunded first so API metering cannot double-charge |
 | Permanent failure, no fallback | `failed` + quota settlement (refund of unconsumed reservation) |
 | Revoked grant / bumped policy at claim time | job not executed (reauthorization loses gracefully) |
 | Codex kill switch off | `codex_extract` is rejected at scheduling and again before subprocess launch; translation remains independently available |
-| Missing/failed hooks | terminate immediately with a permanent plugin/hook failure |
+| Missing/failed AGY hooks | terminate AGY immediately with a permanent plugin/hook failure |
 | Planner responses without output progress | reset the streak whenever the output tree changes; terminate only after the configured no-progress threshold with `agy_planner_loop` |
 | Model-request ceiling | terminate with `agy_request_limit` before an unbounded agent loop can consume more capacity |
-| Worker down | jobs queue; startup logs a warning if `AGY_ENABLED` with no healthy heartbeat; kill switch = `AGY_ENABLED=false` (queued AGY jobs stay explicit, spend nothing) |
+| Worker down | provider-specific jobs queue; disabling that provider's global switch prevents claims and spend |
 
 ## Read-side AI (no jobs involved)
 
-Ask and profile synthesis execute inline on the API backend (their AGY policy names are
+Ask and profile synthesis execute inline on the API backend (their subscription policy names are
 reserved but not implemented), guarded not by monthly
 quota but by the denial-of-wallet gates (verified email; 30 uncached/h; 2 concurrent;
 tool-arg clamps) — see
@@ -126,8 +142,9 @@ tool-arg clamps) — see
 
 ## Admin surface
 
-`GET/PUT/DELETE /api/admin/users/{id}/ai-backend-policy` (grants are explicit and
-per-workload — admin role itself grants nothing), `GET /api/admin/ai/agy/health`,
-`POST /api/admin/ai/agy/retry-waiting`, `POST /api/admin/ai/agy/smoke-test`
-(a consuming end-to-end test with zero novel/user content). Eval suites:
-`eval/agy_{contract,policy,runner,workload}_tests.py` with the `fake_agy.py` binary.
+`GET/PUT/DELETE /api/admin/users/{id}/ai-backend-policy` (provider grants are explicit and
+per-workload — admin role itself grants nothing). Each provider has health, retry-waiting, and
+consuming smoke-test routes below `/api/admin/ai/agy/` or `/api/admin/ai/openai-codex/`.
+The smoke tests contain no novel/user content. Eval suites:
+`eval/agy_{contract,policy,runner,workload}_tests.py` with the `fake_agy.py` binary, plus
+provider-free App Server protocol/materialization unit tests.

@@ -1,10 +1,10 @@
 # HTTP API reference
 
 > **Source of truth:** the contract snapshot `tests/contracts/snapshots/routes.json`
-> (119 routes) and `openapi.json` (schemas). A live instance serves interactive docs at
+> (122 routes) and `openapi.json` (schemas). A live instance serves interactive docs at
 > `/docs` (Swagger) and `/redoc`, and the raw spec at `/openapi.json`. This page is the
 > annotated map: every route family, grouped by owning module, plus the cross-cutting
-> rules. For the literal 119-row method/path/endpoint-name list, use
+> rules. For the literal 122-row method/path/endpoint-name list, use
 > [http-route-inventory.md](http-route-inventory.md).
 
 ## Cross-cutting rules
@@ -175,7 +175,9 @@ self, admins may add `user_id`) · `GET /api/jobs/{id}` · `POST /api/jobs/{id}/
 `DELETE /users/{id}` · `GET /usage` (platform spend) · `GET /novels` ·
 `GET /global-novels` · AI backend policy: `GET|PUT|DELETE
 /users/{id}/ai-backend-policy` · AGY ops: `GET /ai/agy/health` ·
-`POST /ai/agy/retry-waiting` · `POST /ai/agy/smoke-test`.
+`POST /ai/agy/retry-waiting` · `POST /ai/agy/smoke-test`. OpenAI Codex has the same
+three operations at `/ai/openai-codex/{health|retry-waiting|smoke-test}`. Translation and
+Codex-build request bodies accept `ai_backend=auto|api|agy|openai_codex`.
 
 ## Platform
 

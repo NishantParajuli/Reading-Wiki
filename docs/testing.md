@@ -46,6 +46,20 @@ uv run python scripts/diagnose_agy_codex.py --novel-id 33 \
 Keep the default-off Codex kill switch until representative chapters pass on the exact pinned
 binary/plugin pair and the operator intentionally enables rollout.
 
+OpenAI Codex App Server tests use a fake JSONL subprocess and host-side artifact
+materialization, so the normal suite consumes no ChatGPT capacity. The authenticated
+preflight is also non-consuming: it verifies the pinned CLI, initializes App Server,
+checks `account/read`, and lists configured models without starting a turn:
+
+```bash
+uv run python -m novelwiki.modules.ai_execution.adapters.outbound.openai_codex.preflight
+```
+
+The admin OpenAI Codex smoke action is intentionally separate because it starts a real,
+rate-limited model turn. Run it once during rollout, then qualify representative translation
+and extraction chapters before enabling either global switch for general use; see the
+[OpenAI Codex operator runbook](openai-codex-operator-runbook.md).
+
 `agy_workload_tests.py::test_chapter_1200_context_stays_bounded_and_ignores_historical_fact_bloat`
 is the provider-free long-book qualification. It creates a synthetic LOTM-shaped chapter/volume
 layout, 500 entities, temporal state, threads, and more than 20,000 historical facts in the

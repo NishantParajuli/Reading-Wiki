@@ -57,7 +57,7 @@ wiki/
 ├── scripts/                   # contracts.py (regen snapshots) · test_backend.py
 │                              # (disposable-DB integration launcher) ·
 │                              # rehearse-backup-restore.sh · real-browser fixtures
-├── deploy/                    # novelwiki-agy-worker.service (systemd --user unit)
+├── deploy/                    # AGY + OpenAI Codex systemd --user workers
 ├── implementation-plan/       # dated future/historical plans (not living authority)
 ├── data/                      # runtime data (gitignored)                → docs/data/filesystem-layout.md
 └── docs/                      # ← you are here                          → docs/README.md

@@ -3,24 +3,49 @@
 from __future__ import annotations
 
 
-def build_codex_runtime():
+def build_codex_runtime(provider: str = "agy"):
     from types import SimpleNamespace
 
     from novelwiki.modules.ai_execution.adapters.outbound import providers
-    from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import (
-        is_database_error, safe_error_summary,
-    )
-    from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
-    from novelwiki.modules.ai_execution.adapters.outbound.agy.prompts import build_task_prompt
     from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import (
-        create_run, update_run, workspace_relpath,
+        create_run, update_run, workspace_relpath as agy_workspace_relpath,
     )
     from novelwiki.modules.ai_execution.adapters.outbound.agy.validators import (
         load_json, read_text_artifact, validate_output_manifest,
     )
-    from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import (
-        add_input, create_run_workspace, seal_inputs, sha256_file, write_json,
-    )
+    from novelwiki.platform.config import settings
+    from pathlib import Path
+    if provider == "openai_codex":
+        from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.runner import (
+            build_task_prompt, is_database_error, run_openai_codex, safe_error_summary,
+        )
+        from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.workspace import (
+            add_input, create_run_workspace, seal_inputs, sha256_file,
+            workspace_relpath, write_json,
+        )
+        run_subscription = run_openai_codex
+        model_codex = settings.OPENAI_CODEX_MODEL_CODEX
+        contract_version = settings.OPENAI_CODEX_CONTRACT_VERSION
+        work_root = Path(settings.OPENAI_CODEX_WORK_DIR).expanduser().resolve(strict=False)
+        separate_verify = settings.OPENAI_CODEX_SEPARATE_CODEX_VERIFY
+        provider_label = "OpenAI Codex"
+    else:
+        from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import (
+            is_database_error, safe_error_summary,
+        )
+        from novelwiki.modules.ai_execution.adapters.outbound.agy.prompts import build_task_prompt
+        from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import run_agy
+        from novelwiki.modules.ai_execution.adapters.outbound.agy.workspace import (
+            add_input, create_run_workspace, seal_inputs, sha256_file,
+            write_json,
+        )
+        workspace_relpath = agy_workspace_relpath
+        run_subscription = run_agy
+        model_codex = settings.AGY_MODEL_CODEX
+        contract_version = settings.AGY_PLUGIN_VERSION
+        work_root = Path(settings.AGY_WORK_DIR).expanduser().resolve(strict=False)
+        separate_verify = settings.AGY_SEPARATE_CODEX_VERIFY
+        provider_label = "AGY"
     from novelwiki.modules.codex.application.ports import CodexRuntime
     from novelwiki.modules.work.adapters.outbound import postgres as work
 
@@ -53,7 +78,7 @@ def build_codex_runtime():
             )
             from novelwiki.platform.database import init_db_pool
             return await PostgresAgyWorkerStateRepository(
-                await init_db_pool()
+                await init_db_pool(), provider
             ).resumable_runs(job_id, workloads)
 
         async def job_run_ids(self, job_id, workloads):
@@ -62,17 +87,19 @@ def build_codex_runtime():
             )
             from novelwiki.platform.database import init_db_pool
             return await PostgresAgyWorkerStateRepository(
-                await init_db_pool()
+                await init_db_pool(), provider
             ).job_run_ids(job_id, workloads)
+
+    from functools import partial
 
     ai = SimpleNamespace(
         call_chat_completion=providers.call_chat_completion,
         get_embedding=providers.get_embedding,
         get_embeddings_batch=providers.get_embeddings_batch,
         rerank_passages=providers.rerank_passages,
-        run_agy=run_agy,
+        run_agy=run_subscription,
         build_task_prompt=build_task_prompt,
-        create_run=create_run,
+        create_run=partial(create_run, backend=provider),
         update_run=update_run,
         workspace_relpath=workspace_relpath,
         load_json=load_json,
@@ -85,6 +112,9 @@ def build_codex_runtime():
         write_json=write_json,
         is_database_error=is_database_error,
         safe_error_summary=safe_error_summary,
+        model_codex=model_codex, model_label=f"{provider}:{model_codex}",
+        contract_version=contract_version, work_root=work_root,
+        separate_codex_verify=separate_verify, provider_label=provider_label,
     )
 
     runtime = None

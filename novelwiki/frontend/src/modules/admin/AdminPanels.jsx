@@ -16,6 +16,7 @@ export const ADMIN_TABS = [
   { id: "moderation", label: "Moderation", icon: "shield" },
   { id: "jobs", label: "Global jobs", icon: "spider" },
   { id: "agy", label: "Antigravity", icon: "sparkles" },
+  { id: "openai-codex", label: "OpenAI Codex", icon: "cpu" },
 ];
 
 function blankToNull(v) {
@@ -40,10 +41,13 @@ function UserRow({ u, me, onChanged }) {
   const initialPolicy = u.ai_backend_policy || {};
   const [ai, setAi] = useState({
     agy_enabled: !!initialPolicy.agy_enabled,
+    openai_codex_enabled: !!initialPolicy.openai_codex_enabled,
     default_backend: initialPolicy.default_backend || "api",
     agy_workloads: initialPolicy.agy_workloads || [],
+    openai_codex_workloads: initialPolicy.openai_codex_workloads || [],
     fallback_to_api: !!initialPolicy.fallback_to_api,
     max_concurrent_agy_jobs: initialPolicy.max_concurrent_agy_jobs || 1,
+    max_concurrent_openai_codex_jobs: initialPolicy.max_concurrent_openai_codex_jobs || 1,
     notes: initialPolicy.notes || "",
   });
   const isSelf = me && u.id === me.id;
@@ -74,10 +78,10 @@ function UserRow({ u, me, onChanged }) {
     try { await adminApi.revokeAiPolicy(u.id); onChanged(); }
     catch (e) { toast(e.message || "AI backend revoke failed.", { tone: "danger" }); setBusy(false); }
   };
-  const toggleWorkload = key => setAi(s => ({
+  const toggleWorkload = (key, field = "agy_workloads") => setAi(s => ({
     ...s,
-    agy_workloads: s.agy_workloads.includes(key)
-      ? s.agy_workloads.filter(x => x !== key) : [...s.agy_workloads, key],
+    [field]: s[field].includes(key)
+      ? s[field].filter(x => x !== key) : [...s[field], key],
   }));
 
   const statusTone = u.status === "active" ? "ok" : u.status === "suspended" ? "warn" : "danger";
@@ -92,6 +96,7 @@ function UserRow({ u, me, onChanged }) {
               {u.display_name || u.username}
               {u.role === "admin" && <Chip style={{ marginLeft: 6 }}>admin</Chip>}
               {initialPolicy.agy_enabled && <Chip tone="accent" style={{ marginLeft: 6 }}>AGY</Chip>}
+              {initialPolicy.openai_codex_enabled && <Chip tone="accent" style={{ marginLeft: 6 }}>Codex</Chip>}
             </div>
             <div className="muted admin-user-email">@{u.username} · {u.email}{u.email_verified ? "" : " · unverified"}</div>
           </div>
@@ -132,20 +137,32 @@ function UserRow({ u, me, onChanged }) {
             <div className="row wrap" style={{ gap: 12 }}>
               <label className="check">
                 <input type="checkbox" checked={ai.agy_enabled}
-                       onChange={e => setAi(s => ({ ...s, agy_enabled: e.target.checked, default_backend: e.target.checked ? s.default_backend : "api" }))} />
+                       onChange={e => setAi(s => ({ ...s, agy_enabled: e.target.checked, default_backend: (!e.target.checked && s.default_backend === "agy") ? "api" : s.default_backend }))} />
                 AGY access
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={ai.openai_codex_enabled}
+                       onChange={e => setAi(s => ({ ...s, openai_codex_enabled: e.target.checked, default_backend: (!e.target.checked && s.default_backend === "openai_codex") ? "api" : s.default_backend }))} />
+                OpenAI Codex access
               </label>
               <label className="field">
                 <span>Default backend</span>
-                <select value={ai.default_backend} disabled={!ai.agy_enabled}
+                <select value={ai.default_backend} disabled={!ai.agy_enabled && !ai.openai_codex_enabled}
                         onChange={e => setAi(s => ({ ...s, default_backend: e.target.value }))}>
-                  <option value="api">API</option><option value="agy">Antigravity</option>
+                  <option value="api">API</option>
+                  {ai.agy_enabled && <option value="agy">Antigravity</option>}
+                  {ai.openai_codex_enabled && <option value="openai_codex">OpenAI Codex</option>}
                 </select>
               </label>
               <label className="field">
-                <span>Concurrent jobs</span>
+                <span>AGY concurrent</span>
                 <input type="number" min="1" max="4" value={ai.max_concurrent_agy_jobs}
                        onChange={e => setAi(s => ({ ...s, max_concurrent_agy_jobs: Number(e.target.value) }))} />
+              </label>
+              <label className="field">
+                <span>Codex concurrent</span>
+                <input type="number" min="1" max="4" value={ai.max_concurrent_openai_codex_jobs}
+                       onChange={e => setAi(s => ({ ...s, max_concurrent_openai_codex_jobs: Number(e.target.value) }))} />
               </label>
               <label className="check">
                 <input type="checkbox" checked={ai.fallback_to_api}
@@ -162,15 +179,25 @@ function UserRow({ u, me, onChanged }) {
                 </label>
               ))}
             </div>
+            <div className="row wrap" style={{ gap: 12, marginTop: 8 }}>
+              {[['translate_batch', 'Codex batch translation'], ['codex_extract', 'Codex extraction']].map(([key, label]) => (
+                <label key={`openai-${key}`} className="check">
+                  <input type="checkbox" disabled={!ai.openai_codex_enabled}
+                         checked={ai.openai_codex_workloads.includes(key)}
+                         onChange={() => toggleWorkload(key, "openai_codex_workloads")} />
+                  {label}
+                </label>
+              ))}
+            </div>
             <label className="field" style={{ marginTop: 8 }}>
               <span>Admin notes</span>
               <input value={ai.notes} onChange={e => setAi(s => ({ ...s, notes: e.target.value }))} placeholder="owner pilot" />
             </label>
             <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
               <Button variant="primary" size="sm" disabled={busy} onClick={saveAi}>Save AI access</Button>
-              {initialPolicy.policy_version && <Button variant="ghost" size="sm" disabled={busy} onClick={revokeAi}>Revoke AGY</Button>}
+              {initialPolicy.policy_version && <Button variant="ghost" size="sm" disabled={busy} onClick={revokeAi}>Revoke AI access</Button>}
               <span className="muted" style={{ fontSize: "var(--text-xs)" }}>
-                {initialPolicy.active_jobs || 0} active · policy v{initialPolicy.policy_version || "—"}
+                {initialPolicy.active_jobs || 0} AGY active · {initialPolicy.openai_codex_active_jobs || 0} Codex active · policy v{initialPolicy.policy_version || "—"}
               </span>
             </div>
           </div>
@@ -430,3 +457,45 @@ export function AgyHealthTab() {
   );
 }
 
+export function OpenAiCodexHealthTab() {
+  const { toast } = useToast();
+  const [health, setHealth] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => adminApi.openaiCodexHealth().then(setHealth).catch(() => setHealth(false)), []);
+  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, [load]);
+  if (health == null) return <Loading label="Checking OpenAI Codex worker…" />;
+  if (health === false) return <EmptyState icon="cpu" title="Couldn't load OpenAI Codex health" />;
+  const q = health.queue || {};
+  const act = async fn => {
+    setBusy(true);
+    try { await fn(); await load(); }
+    catch (e) { toast(e.message || "OpenAI Codex action failed.", { tone: "danger" }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div>
+      <div className="admin-metric-grid">
+        <StatTile value={health.available ? "Ready" : "Offline"} label="worker availability" tone={health.available ? "ok" : "danger"} />
+        <StatTile value={q.queued || 0} label="queued" />
+        <StatTile value={q.running || 0} label="running" />
+        <StatTile value={q.waiting_provider || 0} label="waiting provider" tone={q.waiting_provider > 0 ? "warn" : undefined} />
+      </div>
+      <div className="card pad-lg" style={{ marginTop: 14 }}>
+        <div><b>Global switch:</b> {health.enabled ? "enabled" : "disabled"}</div>
+        <div><b>Worker:</b> {health.worker ? `${health.worker.status} · ${health.worker.version || "unknown version"} · contract ${health.worker.contract_version || "—"}` : "no heartbeat"}</div>
+        <div className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 4 }}>
+          Last success: {health.last_success_at || "none"} · oldest queued: {q.oldest_at || "none"}
+        </div>
+        <div className="row wrap" style={{ gap: 8, marginTop: 14 }}>
+          <Button variant="ghost" disabled={busy || !health.enabled} onClick={() => act(adminApi.openaiCodexSmoke)}>Run consuming smoke test</Button>
+          <Button variant="ghost" disabled={busy || !(q.waiting_provider > 0)} onClick={() => act(adminApi.retryWaitingOpenaiCodex)}>Retry waiting jobs</Button>
+        </div>
+        {health.recent_failures && health.recent_failures.length > 0 && (
+          <div className="muted" style={{ marginTop: 12, fontSize: "var(--text-xs)" }}>
+            Recent failures: {health.recent_failures.map(x => `${x.code} (${x.count})`).join(", ")}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

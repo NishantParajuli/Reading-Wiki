@@ -27,7 +27,8 @@ _implementation.configure_finalization_uow(_LazyFinalizationUow)
 
 
 async def create_job(*args, **kwargs):
-    if kwargs.get("execution_backend") == "agy" and "policy_lookup" not in kwargs:
+    if kwargs.get("execution_backend") in {"agy", "openai_codex"} \
+            and "policy_lookup" not in kwargs:
         from novelwiki.modules.ai_execution.adapters.outbound.policy import get_policy
 
         kwargs["policy_lookup"] = get_policy

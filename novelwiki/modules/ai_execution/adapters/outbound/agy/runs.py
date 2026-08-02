@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 async def create_run(
     *, job: dict, workload: str, model: str, runner_version: str | None,
     plugin_version: str, plugin_sha256: str, parent_run_id: uuid.UUID | None = None,
+    backend: str = "agy",
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
     pool = await get_db_pool()
@@ -24,10 +25,10 @@ async def create_run(
             INSERT INTO ai_execution_runs
               (id, job_id, parent_run_id, user_id, novel_id, workload, backend, model,
                runner_version, plugin_version, plugin_sha256, status, attempt, created_at)
-            VALUES ($1,$2,$3,$4,$5,$6,'agy',$7,$8,$9,$10,'preparing',$11,now());
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'preparing',$12,now());
             """,
             run_id, int(job["id"]), parent_run_id, job.get("user_id"), job.get("novel_id"),
-            workload, model, runner_version, plugin_version, plugin_sha256,
+            workload, backend, model, runner_version, plugin_version, plugin_sha256,
             int(job.get("attempts") or 1),
         )
     log_event(
@@ -36,7 +37,7 @@ async def create_run(
         ai_run_id=run_id, parent_run_id=parent_run_id,
         job_id=int(job["id"]), job_kind=job.get("kind"), agy_workload=workload,
         user_id=job.get("user_id"), novel_id=job.get("novel_id"),
-        execution_backend="agy", model=model, runner_version=runner_version,
+        execution_backend=backend, model=model, runner_version=runner_version,
         plugin_version=plugin_version, plugin_sha256=plugin_sha256,
         attempt=int(job.get("attempts") or 1), status="preparing",
     )

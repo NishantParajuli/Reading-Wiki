@@ -56,7 +56,7 @@ class TranslationSchedulingService:
         pending = await self._reading.count_pending(
             novel_id, command.from_chapter, command.to_chapter, command.force
         )
-        reserved = pending if decision.resolved == "agy" else 0
+        reserved = pending if decision.resolved in {"agy", "openai_codex"} else 0
         from novelwiki.workflows.schedule_ai_job import schedule_ai_job
 
         async def reserve():

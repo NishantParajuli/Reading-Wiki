@@ -1,8 +1,8 @@
 # Structured logging and Grafana/Loki operations
 
-Tideglass emits application, HTTP, worker, job, and AGY lifecycle logs as one JSON object
+Tideglass emits application, HTTP, worker, job, and subscription-provider lifecycle logs as one JSON object
 per line on the process logging stream (standard error). Docker and journald capture that
-stream, while CLI result output remains clean. The web container and dedicated host AGY worker use the
+stream, while CLI result output remains clean. The web container and dedicated host subscription workers use the
 same schema, so Docker or journald can forward them to Loki without regex parsing.
 
 The logging stream complements, rather than replaces, durable state:
@@ -24,14 +24,14 @@ The logging stream complements, rather than replaces, durable state:
 | `LOG_JOB_PROGRESS` | `true` | emit stage/progress transitions for durable jobs |
 
 Keep `INFO` in normal production operation. `DEBUG` additionally exposes successful lease
-heartbeats, AGY worker heartbeats, and maintenance sweeps; heartbeat failures are always
+heartbeats, subscription-worker heartbeats, and maintenance sweeps; heartbeat failures are always
 `WARNING` because they can lead to lease recovery.
 
 Uvicorn error/application loggers are routed through the same formatter. Its built-in access
 logger is disabled because it renders the raw request target, including query strings; the
 sanitized `http.request.completed`/`failed` events below replace it. The web process (which hosts
 the generic, import, and narration workers), CLI processes, and dedicated
-`python -m novelwiki.agy.worker` process all install the application logging configuration.
+`python -m novelwiki.agy.worker` and `python -m novelwiki.openai_codex.worker` processes all install the application logging configuration.
 
 ## Common fields
 
@@ -46,9 +46,9 @@ also include:
 | `job_id`, `job_kind` | durable row ID and real task name, such as `codex_build`, `import_pdf`, or `narrate_book` |
 | `worker_type`, `worker_id` | worker role and per-process instance/lease identity |
 | `user_id`, `novel_id` | numeric ownership/correlation IDs; names and email addresses are not added |
-| `attempt`, `max_attempts` | current generic/AGY attempt and retry ceiling |
-| `execution_backend`, `backend_model` | `api`/`agy` routing and selected model |
-| `agy_workload`, `ai_run_id` | precise AGY task (`translate_batch`, `codex_extract`, and nested run workloads) and UUID |
+| `attempt`, `max_attempts` | current generic/subscription attempt and retry ceiling |
+| `execution_backend`, `backend_model` | `api`/`agy`/`openai_codex` routing and selected model |
+| `ai_workload`, `ai_run_id` | precise subscription task (`translate_batch`, `codex_extract`, and nested run workloads) and UUID |
 | `agy_model_requests`, `agy_tool_confirmations`, `agy_sandbox_blocks` | metadata-only counters parsed from the private AGY log; request count is the capacity proxy because print mode exposes no token total |
 | `agy_hooks_loaded`, `agy_hook_files_loaded`, `agy_hook_failures` | runtime customization activation/failure proof; absence or failure terminates the run |
 | `agy_empty_planner_responses`, `agy_token_usage_available` | total AGY planner-without-modified-response warnings (successful tool steps can increment it); the runner aborts only a no-output-progress streak. Token telemetry is explicitly unavailable (`false` for the pinned CLI) |
@@ -77,9 +77,10 @@ The high-value lifecycle events are:
 - Narration: `tts_job.scheduled`, `tts_job.started`, `tts_job.state_changed`,
   per-chapter start/heartbeat/cache/skip/completion events, `tts_job.failed`, and
   `tts_job.attempt_finished`.
-- AGY: worker lock/preflight/heartbeat events; `agy.job_claimed`,
+- Subscription workers: provider-prefixed lock/preflight/heartbeat events; `agy.job_claimed` or `openai_codex.job_claimed`,
   `agy.run.started`, `agy.run.completed`/`failed`/`canceled`, run-state changes,
-  subprocess start/spawn/exit, provider waits, orphan recovery, and the final job attempt.
+  equivalent `openai_codex.*` events, subprocess start/spawn/exit, provider waits, orphan
+  recovery, and the final job attempt.
 - Other background work: the translation prefetch task emits
   `background_task.started`, `background_task.completed`, or `background_task.failed`.
 - Provider calls: `ai.provider_call_started`/`completed`/`failed` records provider,
@@ -108,12 +109,16 @@ collector. Parse JSON at query time and keep high-cardinality values such as `jo
 {container_name="novelwiki-web"} | json | event="job.snapshot_changed"
 
 # Failed or crashing background work
-{container_name=~"novelwiki-web|novelwiki-agy-worker"}
+{container_name=~"novelwiki-web|novelwiki-agy-worker|novelwiki-openai-codex-worker"}
   | json | level=~"error|critical" | job_system!=""
 
 # AGY translation runs and their subprocess exits
 {unit="novelwiki-agy-worker.service"}
-  | json | agy_workload="translate_batch"
+  | json | ai_workload="translate_batch"
+
+# OpenAI Codex App Server runs
+{unit="novelwiki-openai-codex-worker.service"}
+  | json | event=~"openai_codex\\..*"
 
 # Lease/heartbeat trouble that can explain unexpected requeues
 {container_name="novelwiki-web"}
@@ -124,9 +129,9 @@ collector. Parse JSON at query time and keep high-cardinality values such as `jo
 ```
 
 A useful first dashboard has queue counts from PostgreSQL beside log panels for failed
-attempts, retries/lease recoveries, p95 `duration_ms` by `job_kind`, AGY preflight/provider
+attempts, retries/lease recoveries, p95 `duration_ms` by `job_kind`, subscription preflight/provider
 waits, import OCR pauses, and TTS chapter generation time. Alert on worker loop/process
-failures, AGY preflight failures, repeated lease-heartbeat failures, and terminal job
+failures, provider preflight failures, repeated lease-heartbeat failures, and terminal job
 failures; do not alert on ordinary idle polling (it intentionally emits nothing).
 
 ## Sensitive-data boundary
@@ -137,10 +142,10 @@ cookies, or provider keys. Common bearer tokens, secret assignments, and URL pas
 redacted as defense in depth. Avoid adding raw `options`, request bodies, query strings, or
 provider payloads to future events.
 
-AGY stdout/stderr byte counts, truncation flags, and metadata counters are logged, but content remains only in
-the private mode-0700 workspace. Per-run `logs/runner.jsonl` and `logs/agy.log` remain
-available under `AGY_WORK_DIR` for a privileged incident investigation and follow the
-configured success/failure retention windows.
+Subscription stdout/stderr byte counts and metadata counters may be logged, but content is
+never placed in structured logs. AGY's retained private runner logs remain under
+`AGY_WORK_DIR`; OpenAI Codex retains only validated artifacts/metrics under
+`OPENAI_CODEX_WORK_DIR`. Both follow their configured success/failure windows.
 
 ## Direct operator access
 
@@ -150,6 +155,9 @@ docker compose logs -f web
 
 # Dedicated user-level AGY worker JSON logs
 journalctl --user -u novelwiki-agy-worker.service -f -o cat
+
+# Dedicated user-level OpenAI Codex worker JSON logs
+journalctl --user -u novelwiki-openai-codex-worker.service -f -o cat
 
 # Validate that a line is JSON
 docker compose logs --no-log-prefix web | tail -n 1 | python -m json.tool

@@ -29,14 +29,14 @@ what a scrape is. Handlers are registered by Bootstrap
 
 ## The job row (see [database-schema.md](../data/database-schema.md) for every column)
 
-Key fields: `kind` (`scrape` | `codex_build` | `translate` | `agy_smoke`), `status`
+Key fields: `kind` (`scrape` | `codex_build` | `translate` | `agy_smoke` | `openai_codex_smoke`), `status`
 (`queued` | `running` | `waiting_provider` | `done` | `failed` | `canceled`), `stage` +
 `progress` (live UI), `options` (kind-specific args), `idempotency_key` (partial-unique
 over **active** statuses — a repeated click dedupes onto the running job instead of
 double-charging), the quota triple `quota_kind`/`quota_reserved`/`quota_consumed` +
 `quota_finalized` (double-refund guard), `attempts`/`max_attempts`
 (`JOB_MAX_ATTEMPTS`=3), the lease pair `claim_token`/`claimed_at`, and the AI-backend
-block (`backend_requested` auto|api|agy, `execution_backend` api|agy,
+block (`backend_requested` auto|api|agy|openai_codex, `execution_backend` api|agy|openai_codex,
 `backend_policy_version`, `backend_fallback_allowed`/`_from`, `backend_model`,
 `not_before`, `cancel_requested_at`).
 
@@ -65,14 +65,14 @@ decision lives in application services:
 - **Retry** — `fail_or_retry`: crashed attempt → back to `queued` while
   `attempts < max_attempts`, else `failed` (with `error`).
 - **Provider wait** — `wait_for_provider(job_id, failure_code, error, minutes)`: parks an
-  AGY job as `waiting_provider` with `not_before = now + minutes` (no lease held, no
+  subscription job as `waiting_provider` with `not_before = now + minutes` (no lease held, no
   tight retry loop when the subscription/quota is exhausted);
   `release_due_provider_waits` makes due rows claimable; admins can force it via
-  `retry_waiting` (`POST /api/admin/ai/agy/retry-waiting`).
+  provider-specific `retry_waiting` admin route.
 - **Finalization** — on any terminal state, exactly once (guarded by
   `quota_finalized`), through the `finalize_job_quota` workflow: success keeps the full
   reservation; failure/cancel refunds `reserved − consumed` (clamped ≥ 0). Translation
-  additionally has `release_translation_reservation_for_fallback` (refund AGY's unused
+  additionally has `release_translation_reservation_for_fallback` (refund the subscription backend's unused
   reservation before the API backend re-meters remaining chapters).
 - **Audit** — every transition logs an `audit_events` row (`job.created`, `job.done`,
   `job.failed`, `quota.refund`, …) tagged with the request id that scheduled it.
@@ -81,8 +81,8 @@ decision lives in application services:
 
 `create_job(...)` inserts or returns the existing **active** job with the same
 `idempotency_key` (the partial unique index includes `waiting_provider`, so
-capacity-parked AGY work still dedupes). `ActiveJobLimitError` and
-`BackendPolicyChangedError` surface the per-user AGY concurrency cap and
+capacity-parked subscription work still dedupes). `ActiveJobLimitError` and
+`BackendPolicyChangedError` surface the per-user provider concurrency cap and
 policy-version drift as typed errors the schedulers translate.
 
 ## HTTP surface (`adapters/inbound/http.py`, auth required)
@@ -106,6 +106,6 @@ Experience projection, not Work.)
 - Feature modules never insert into `jobs` directly — they schedule through injected
   Work bridges, inside the `schedule_ai_job` compensation shape (reserve → schedule →
   refund on failure/dedupe; ADR 003).
-- The AGY host worker claims from the *same table* with
-  `execution_backend='agy'` — one queue, two executors
+- The AGY and OpenAI Codex host workers claim from the *same table* with their respective
+  `execution_backend` values — one queue, provider-specific executors
   ([ai-execution.md](ai-execution.md)).

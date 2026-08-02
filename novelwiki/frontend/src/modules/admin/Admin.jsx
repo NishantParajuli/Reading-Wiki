@@ -5,7 +5,8 @@ import { useAuth } from "../../App.jsx";
 import { EmptyState, PageHeader, Tabs } from "../../components/ui.jsx";
 import { useTitle } from "../../lib/hooks.js";
 import {
-  ADMIN_TABS, AgyHealthTab, GlobalJobsTab, ModerationTab, UsageTab, UsersTab,
+  ADMIN_TABS, AgyHealthTab, GlobalJobsTab, ModerationTab, OpenAiCodexHealthTab,
+  UsageTab, UsersTab,
 } from "../../modules/admin/AdminPanels.jsx";
 
 export function Admin() {
@@ -35,6 +36,7 @@ export function Admin() {
         {tab === "moderation" && <ModerationTab openNovel={openNovel} />}
         {tab === "jobs" && <GlobalJobsTab openNovel={openNovel} />}
         {tab === "agy" && <AgyHealthTab />}
+        {tab === "openai-codex" && <OpenAiCodexHealthTab />}
       </div>
     </div>
   );

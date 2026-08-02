@@ -8,11 +8,13 @@ class RequestedBackend(StrEnum):
     AUTO = "auto"
     API = "api"
     AGY = "agy"
+    OPENAI_CODEX = "openai_codex"
 
 
 class ExecutionBackend(StrEnum):
     API = "api"
     AGY = "agy"
+    OPENAI_CODEX = "openai_codex"
 
 
 class Workload(StrEnum):
@@ -25,6 +27,9 @@ class Workload(StrEnum):
 
 
 IMPLEMENTED_AGY_WORKLOADS = frozenset({Workload.TRANSLATE_BATCH, Workload.CODEX_EXTRACT})
+IMPLEMENTED_OPENAI_CODEX_WORKLOADS = frozenset(
+    {Workload.TRANSLATE_BATCH, Workload.CODEX_EXTRACT}
+)
 
 
 @dataclass(frozen=True)

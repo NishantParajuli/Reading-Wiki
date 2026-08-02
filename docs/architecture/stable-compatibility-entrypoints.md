@@ -9,6 +9,7 @@ wrappers only; they hold no business workflow.
 | `novelwiki.api.app:app` | ASGI deployment contract |
 | `novelwiki.cli` | `python -m novelwiki.cli` and installed CLI contract |
 | `novelwiki.agy.worker` | Dedicated host-worker systemd/process contract |
+| `novelwiki.openai_codex.worker` | Dedicated official Codex App Server host-worker contract |
 | `novelwiki.api.routes` | Original evaluation fixtures and downstream direct-call fixtures; delegates through normal composed services and performs no private mutation |
 | `novelwiki.api.routes_product`, `routes_tts`, `admin_routes` | Original evaluation fixture imports |
 | `novelwiki.auth.*`, `novelwiki.quota` | Authentication/quota fixture and downstream Python imports |

@@ -165,10 +165,10 @@ documented in [docs/operations/configuration.md](docs/operations/configuration.m
 ```bash
 python -m novelwiki.cli --help
 # add-novel · scrape · chunk · embed · extract · translate · import · import-batch
-# · import-series · import-worker · rebuild-bm25 · merge · reset-db
+# · import-series · import-worker · rebuild-bm25 · merge · reset-codex · reset-db
 ```
 
-Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (119 routes):
+Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (122 routes):
 [docs/api/http-api.md](docs/api/http-api.md), or `/docs` on a running instance.
 
 ---
@@ -204,8 +204,9 @@ Source is **baked into the image** (deploy = rebuild); only `/app/data` persists
 Sidecars sit on a private bridge with **unpublished ports** and require a shared service
 token (`SIDECAR_AUTH_TOKEN`) — they fail closed without it; both are optional and the
 app degrades gracefully. Host PostgreSQL is reached via `host.docker.internal`. The
-optional AGY worker runs on the host under systemd
-([docs/agy-operator-runbook.md](docs/agy-operator-runbook.md)).
+optional AGY and OpenAI Codex subscription workers run on the host under systemd
+([AGY runbook](docs/agy-operator-runbook.md) ·
+[OpenAI Codex runbook](docs/openai-codex-operator-runbook.md)).
 Full topology + first boot + release/rollback:
 [docs/operations/deployment.md](docs/operations/deployment.md) ·
 [docs/release-runbook.md](docs/release-runbook.md).
@@ -225,5 +226,5 @@ Full topology + first boot + release/rollback:
 | Modules | [map](docs/modules/README.md) + one doc per module |
 | Pipelines | [jobs & quota](docs/pipelines/background-jobs-and-quota.md) · [scraping](docs/pipelines/scraping.md) · [import](docs/pipelines/file-import.md) · [translation](docs/pipelines/translation.md) · [codex](docs/pipelines/codex-build-and-ask.md) · [narration](docs/pipelines/narration.md) · [AI backends](docs/pipelines/ai-backends.md) |
 | Reference | [DB schema](docs/data/database-schema.md) · [filesystem](docs/data/filesystem-layout.md) · [HTTP behavior](docs/api/http-api.md) · [exact route inventory](docs/api/http-route-inventory.md) · [CLI](docs/api/cli.md) · [configuration](docs/operations/configuration.md) |
-| Operating | [deployment](docs/operations/deployment.md) · [configuration](docs/operations/configuration.md) · [structured logging](docs/operations/logging.md) · [security](docs/operations/security.md) · [testing](docs/testing.md) · [release runbook](docs/release-runbook.md) · [AGY runbook](docs/agy-operator-runbook.md) |
+| Operating | [deployment](docs/operations/deployment.md) · [configuration](docs/operations/configuration.md) · [structured logging](docs/operations/logging.md) · [security](docs/operations/security.md) · [testing](docs/testing.md) · [release runbook](docs/release-runbook.md) · [AGY runbook](docs/agy-operator-runbook.md) · [OpenAI Codex runbook](docs/openai-codex-operator-runbook.md) |
 | Frontend | [overview](docs/frontend/overview.md) |

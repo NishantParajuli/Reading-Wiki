@@ -11,7 +11,7 @@ a *method* (GET = read, POST = create/do, PUT/PATCH = update, DELETE), a *path*
 (`/api/novels/42/progress`), headers, and often a JSON body. Status codes carry the
 outcome: 2xx ok, 401 "who are you?", 403 "you may not", 404 "no such thing",
 409 "conflicts with current state", 422 "your input is malformed", 429 "slow down",
-5xx "we broke". Here: all 119 endpoints are listed in
+5xx "we broke". Here: all 122 endpoints are listed in
 [../api/http-api.md](../api/http-api.md); handlers live in each module's
 `adapters/inbound/http.py`.
 
@@ -178,8 +178,8 @@ loopback-only, behind a Cloudflare tunnel
 **GPU sidecar.** Heavy ML models live in their own service so the main image stays
 small and CPU-only; the app talks to them over private HTTP with a shared token.
 
-**systemd (user) service.** The host's process manager; used for the dedicated AGY
-worker (`deploy/novelwiki-agy-worker.service`) so it restarts on failure and starts at
+**systemd (user) service.** The host's process manager; used for the dedicated AGY and
+OpenAI Codex workers (`deploy/novelwiki-{agy,openai-codex}-worker.service`) so they restart on failure and start at
 boot.
 
 **Audit log & request IDs.** Append-only "what happened" records (`audit_events`), each

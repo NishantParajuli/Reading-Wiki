@@ -1,14 +1,12 @@
 [Unit]
-Description=NovelWiki AGY worker
+Description=NovelWiki OpenAI Codex App Server worker
 After=network-online.target
 
 [Service]
 WorkingDirectory=%h/wiki
-ExecStart=%h/wiki/.venv/bin/python -m novelwiki.agy.worker
+ExecStart=%h/wiki/.venv/bin/python -m novelwiki.openai_codex.worker
 Restart=on-failure
 RestartSec=10
-Environment=AGY_CLI_DISABLE_AUTO_UPDATE=true
-Environment=AGY_CLI_HIDE_ACCOUNT_INFO=true
 Environment=HOST_WORKER_DATABASE_HOST=127.0.0.1
 
 MemoryMax=4G

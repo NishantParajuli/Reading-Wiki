@@ -62,6 +62,7 @@ durable job; the CLI exposes the stages individually (all idempotent, all range-
 | `python -m novelwiki.db.schema` | apply schema DDL explicitly |
 | `python -m novelwiki.db.migrate_multiuser` | run the guarded multi-user migration supervised (take a `pg_dump` first) |
 | `python -m novelwiki.agy.worker` | the dedicated AGY host worker (normally via systemd — see [../agy-operator-runbook.md](../agy-operator-runbook.md)) |
+| `python -m novelwiki.openai_codex.worker` | the dedicated ChatGPT Codex App Server worker (normally via systemd — see [../openai-codex-operator-runbook.md](../openai-codex-operator-runbook.md)) |
 
 ## Typical sequences
 

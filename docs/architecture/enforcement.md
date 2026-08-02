@@ -44,7 +44,7 @@ compares the live application against deterministic JSON snapshots in
 
 | Snapshot | Freezes |
 |---|---|
-| `routes.json` | the full HTTP route inventory (method + path + endpoint name; currently 119 routes) |
+| `routes.json` | the full HTTP route inventory (method + path + endpoint name; currently 122 routes) |
 | `openapi.json` | the normalized OpenAPI document (request/response schemas) |
 | `cli.json`, `cli_help.json` | the 14 CLI commands and every help surface, captured semantically via Typer's `CliRunner` (ANSI styling/wrapping discarded; every word, option, default, and command order kept) |
 | `schema.json` | normalized DDL (which creates all 47 tables) plus the 46-entry `ALL_TABLES` reset list; `auth_rate_limits` omission is frozen by ADR 002 |

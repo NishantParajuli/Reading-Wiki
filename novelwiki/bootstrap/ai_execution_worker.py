@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def build_agy_worker_runtime():
     from novelwiki.bootstrap.ai_execution import wire_ai_policy
@@ -34,8 +36,20 @@ def build_agy_worker_runtime():
     )
     from novelwiki.modules.work.adapters.outbound import postgres
     from novelwiki.modules.work.adapters.outbound.claims import claim_next
+    from novelwiki.platform.config import settings
 
     return SimpleNamespace(
+        backend="agy",
+        worker_type="agy",
+        enabled=settings.AGY_ENABLED,
+        model_translate=settings.AGY_MODEL_TRANSLATE,
+        model_codex=settings.AGY_MODEL_CODEX,
+        contract_version=settings.AGY_PLUGIN_VERSION,
+        provider_retry_minutes=settings.AGY_PROVIDER_RETRY_MINUTES,
+        concurrency_policy_key="max_concurrent_agy_jobs",
+        smoke_kind="agy_smoke",
+        advisory_lock_key="novelwiki-agy-subscription-v1",
+        work_root=Path(settings.AGY_WORK_DIR).expanduser().resolve(strict=False),
         agy_error=AgyError,
         canceled_error=AgyCanceled,
         claim_next=claim_next,
@@ -59,7 +73,7 @@ def build_agy_worker_runtime():
     )
 
 
-async def build_agy_worker_state_service():
+async def build_agy_worker_state_service(backend: str = "agy"):
     from novelwiki.modules.ai_execution.adapters.outbound.worker_state import (
         PostgresAgyWorkerStateRepository,
     )
@@ -77,10 +91,87 @@ async def build_agy_worker_state_service():
 
     pool = await init_db_pool()
     return AgyWorkerStateService(
-        PostgresAgyWorkerStateRepository(pool),
+        PostgresAgyWorkerStateRepository(pool, backend),
         PostgresIdentityWorkerLookup(pool),
         PostgresReadingTranslationQuery(pool),
-        PostgresWorkerStateRepository(pool),
+        PostgresWorkerStateRepository(pool, backend),
+    )
+
+
+def build_openai_codex_worker_runtime():
+    from novelwiki.bootstrap.ai_execution import wire_ai_policy
+    wire_ai_policy()
+    from types import SimpleNamespace
+
+    from novelwiki.bootstrap.workers import build_openai_codex_worker_registry
+    from novelwiki.modules.ai_execution.adapters.outbound.agy.errors import (
+        AgyCanceled,
+        AgyError,
+    )
+    from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.client import (
+        process_identity_matches,
+        terminate_process_group,
+    )
+    from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.preflight import (
+        run_preflight,
+    )
+    from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.runner import (
+        safe_error_summary,
+    )
+    from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.workspace import (
+        cleanup_expired_workspaces,
+        validate_work_root,
+    )
+    from novelwiki.modules.ai_execution.adapters.outbound.policy import (
+        get_policy,
+        model_for,
+        reauthorize_job,
+    )
+    from novelwiki.modules.work.adapters.inbound.worker import (
+        _heartbeat,
+        _recover_stale_leases,
+        _release_due_provider_waits,
+    )
+    from novelwiki.modules.work.adapters.outbound import postgres
+    from novelwiki.modules.work.adapters.outbound.claims import claim_next
+    from novelwiki.platform.config import settings
+
+    provider_wait_codes = {
+        "openai_codex_quota_likely_exhausted",
+        "openai_codex_provider_unavailable",
+    }
+    return SimpleNamespace(
+        backend="openai_codex",
+        worker_type="openai_codex",
+        enabled=settings.OPENAI_CODEX_ENABLED,
+        model_translate=settings.OPENAI_CODEX_MODEL_TRANSLATE,
+        model_codex=settings.OPENAI_CODEX_MODEL_CODEX,
+        contract_version=settings.OPENAI_CODEX_CONTRACT_VERSION,
+        provider_retry_minutes=settings.OPENAI_CODEX_PROVIDER_RETRY_MINUTES,
+        concurrency_policy_key="max_concurrent_openai_codex_jobs",
+        smoke_kind="openai_codex_smoke",
+        advisory_lock_key="novelwiki-openai-codex-subscription-v1",
+        work_root=Path(settings.OPENAI_CODEX_WORK_DIR).expanduser().resolve(strict=False),
+        agy_error=AgyError,
+        canceled_error=AgyCanceled,
+        claim_next=claim_next,
+        cleanup_expired_workspaces=cleanup_expired_workspaces,
+        get_policy=get_policy,
+        heartbeat=_heartbeat,
+        is_canceled_error=lambda exc: isinstance(exc, AgyCanceled),
+        is_provider_wait_code=lambda code: code in provider_wait_codes,
+        model_for=model_for,
+        process_identity_matches=process_identity_matches,
+        reauthorize_job=reauthorize_job,
+        recover_stale_leases=_recover_stale_leases,
+        registry_factory=build_openai_codex_worker_registry,
+        release_due_provider_waits=_release_due_provider_waits,
+        run_preflight=run_preflight,
+        safe_error_summary=safe_error_summary,
+        terminate_process_group=terminate_process_group,
+        validate_work_root=validate_work_root,
+        worker_state_factory=lambda: build_agy_worker_state_service("openai_codex"),
+        work_service=postgres,
     )
 
 

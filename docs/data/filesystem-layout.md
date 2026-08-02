@@ -30,6 +30,7 @@ Outside the repo/volume:
 
 ```
 ~/.local/share/novelwiki/agy-jobs/     AI Execution — AGY run workspaces (AGY_WORK_DIR)
+~/.local/share/novelwiki/openai-codex-jobs/  AI Execution — Codex App Server workspaces
 └── <job_id>/
     ├── <run_id>/                      input/ plus `.agents`/`.git` customizations
     │                                  (sealed read-only), writable output/ and logs/;
@@ -61,6 +62,7 @@ sidecar-tts/voices/              narrator reference clips (voice cloning prompts
 | `IMPORT_DIR` | `./data/imports` | import job artifacts |
 | `IMPORT_INCOMING_DIR` | `./data/imports/incoming` | watched drop folder |
 | `AGY_WORK_DIR` | `~/.local/share/novelwiki/agy-jobs` | AGY workspaces |
+| `OPENAI_CODEX_WORK_DIR` | `~/.local/share/novelwiki/openai-codex-jobs` | OpenAI Codex workspaces and isolated sibling `CODEX_HOME` directories |
 
 ## Serving rules (why two asset paths exist)
 
