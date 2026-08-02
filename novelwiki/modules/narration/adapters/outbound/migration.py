@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 from novelwiki.modules.identity.public import Principal
 
@@ -185,3 +187,55 @@ class NarrationSidecar:
 class LocalAudioFiles:
     def exists(self, path: str) -> bool:
         return os.path.exists(path)
+
+    def read_timing_manifest(self, audio_path: str) -> dict | None:
+        """Read an optional generation-time manifest, rejecting stale or malformed files."""
+        audio = Path(audio_path)
+        path = audio.with_suffix(".timings.json")
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            if manifest.get("version") != 1:
+                return None
+            if type(manifest.get("audio_bytes")) is not int:
+                return None
+            if manifest["audio_bytes"] != audio.stat().st_size:
+                return None
+            duration_ms = manifest.get("duration_ms")
+            paragraphs = manifest.get("paragraphs")
+            if type(duration_ms) is not int or duration_ms <= 0:
+                return None
+            if not isinstance(paragraphs, list) or not paragraphs or len(paragraphs) > 2000:
+                return None
+            previous_end = 0
+            cleaned = []
+            for paragraph in paragraphs:
+                source_index = paragraph.get("source_index")
+                start = paragraph.get("start_ms")
+                speech_end = paragraph.get("speech_end_ms")
+                end = paragraph.get("end_ms")
+                if (
+                    (source_index is not None and (
+                        type(source_index) is not int or source_index < 0
+                    ))
+                    or not all(type(value) is int for value in (start, speech_end, end))
+                    or start != previous_end
+                    or not start <= speech_end <= end
+                    or end > duration_ms + 1000
+                ):
+                    return None
+                cleaned.append({
+                    "source_index": source_index,
+                    "start_ms": start,
+                    "speech_end_ms": speech_end,
+                    "end_ms": end,
+                })
+                previous_end = end
+            if abs(duration_ms - previous_end) > 1000:
+                return None
+            return {
+                "version": 1,
+                "duration_ms": duration_ms,
+                "paragraphs": cleaned,
+            }
+        except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            return None

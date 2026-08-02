@@ -91,6 +91,7 @@ async def _resolve_target(apis, job: dict, meta: dict):
         if not await apis.catalog.novel_exists(novel_id):
             raise ValueError(f"Append target novel {novel_id} does not exist.")
         if as_volume:
+            await apis.acquisition.lock_volume_append(novel_id)
             existing = await apis.reading.other_source_numbers(novel_id, -1)
             offset = float(math.floor(max(existing))) if existing else 0.0
         else:
@@ -402,6 +403,7 @@ async def commit_series(
             novel_id = int(target_novel_id)
             if not await apis.catalog.novel_exists(novel_id):
                 raise ValueError(f"Append target novel {novel_id} does not exist.")
+            await apis.acquisition.lock_volume_append(novel_id)
             existing = await apis.reading.other_source_numbers(novel_id, -1)
             running = float(math.floor(max(existing))) if existing else 0.0
         else:

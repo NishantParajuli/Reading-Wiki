@@ -16,6 +16,7 @@ rebuilds.
 │                                access-controlled /api/assets/... routes)
 ├── audio/                       Narration — cached Opus narration files
 │   └── <novel-scoped paths from chapter_audio.audio_path>
+│                                Opus plus optional sibling *.timings.json manifests;
 │                                deliberately OUTSIDE assets/ so private-novel audio is
 │                                only reachable via the permission-checked audio route
 └── imports/                     Acquisition — import pipeline artifacts

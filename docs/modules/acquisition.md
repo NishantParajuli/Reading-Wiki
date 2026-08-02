@@ -101,7 +101,8 @@ cross-page paragraph rejoining).
   (sidecar HTTP with the shared service token + provider budget).
 - **`postgres.py`** — the owned-tables repository (import jobs, sources, assets).
 - **`catalog_workflows.py`** — `PostgresAcquisitionTransactionService` (the
-  `AcquisitionTransactionApi` implementation).
+  `AcquisitionTransactionApi` implementation), including the per-target-novel
+  transaction lock that serializes automatic single- and batch-volume range allocation.
 - **`scheduling.py` / `worker_jobs.py`** — Work-facing bridges (schedule scrape jobs,
   find-active dedupe) and import-worker persistence.
 - **`adapter_catalog.py`** — `list_adapters()` for the UI.

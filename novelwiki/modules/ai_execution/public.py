@@ -8,7 +8,8 @@ from uuid import UUID
 from .application.contracts import (
     ArtifactRef, DisambiguationPayload, ExtractionPayload, InputManifest,
     MemoryUpdateProposal, OutputManifest, PlotThreadUpdateProposal, PreflightResult,
-    RelationshipStateTransitionProposal, StateTransitionProposal, TranslationMeta,
+    RELATIONSHIP_STATE_KEYS, RelationshipStateTransitionProposal, STATE_KEYS,
+    StateTransitionProposal, TranslationMeta, normalize_extraction_candidate,
 )
 from .application.errors import (
     AgyCanceled, AgyError, AgyPreflightError, AgyValidationError, BudgetExhausted,
@@ -44,6 +45,7 @@ __all__ = [
     "ExecutionBackend", "ExtractionPayload", "InputManifest", "MemoryUpdateProposal",
     "OutputManifest", "PlotThreadUpdateProposal", "PreflightResult",
     "PROVIDER_WAIT_CODES", "RequestedBackend", "RerankGateway", "ResumableRunQuery",
-    "RelationshipStateTransitionProposal", "StateTransitionProposal", "TranslationMeta",
-    "VisionGateway", "Workload",
+    "RELATIONSHIP_STATE_KEYS", "RelationshipStateTransitionProposal", "STATE_KEYS",
+    "StateTransitionProposal", "TranslationMeta", "VisionGateway", "Workload",
+    "normalize_extraction_candidate",
 ]

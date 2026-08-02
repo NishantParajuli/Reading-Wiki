@@ -193,10 +193,10 @@ class Settings(BaseSettings):
     AGY_CREDENTIAL_DIR: str = str(Path.home() / ".gemini" / "antigravity-cli")
 
     # Exact display names from `agy models`; preflight hard-fails on catalog drift.
-    AGY_MODEL_TRANSLATE: str = "Gemini 3.5 Flash (Medium)"
-    AGY_MODEL_CODEX: str = "Gemini 3.5 Flash (High)"
-    AGY_MODEL_SEGMENT: str = "Gemini 3.5 Flash (Medium)"
-    AGY_MODEL_OCR: str = "Gemini 3.5 Flash (High)"
+    AGY_MODEL_TRANSLATE: str = "Gemini 3.6 Flash (Medium)"
+    AGY_MODEL_CODEX: str = "Gemini 3.6 Flash (High)"
+    AGY_MODEL_SEGMENT: str = "Gemini 3.6 Flash (Medium)"
+    AGY_MODEL_OCR: str = "Gemini 3.6 Flash (High)"
     # Print mode is non-interactive, so request/review workflows cannot be its
     # control plane. Hooks and the sandbox remain the safety boundary.
     AGY_MODE: str = "accept-edits"

@@ -1,19 +1,22 @@
 """HTTP client for the OmniVoice TTS sidecar (separate GPU deploy on :8078).
 
 Mirrors importer/ocr_client.py: a tiny async httpx wrapper that the durable narration worker
-calls one chapter (in fact, one paragraph) at a time. The sidecar holds the model + cached
-voice-clone prompts; this module just speaks its contract and degrades gracefully when the
-sidecar is down (the worker fails the job with an actionable message).
+calls once per chapter. The sidecar holds the model + cached voice-clone prompts and
+synthesizes each paragraph separately; this module just speaks its contract and degrades
+gracefully when the sidecar is down (the worker fails the job with an actionable message).
 
 Contract::
 
     GET  /health     → {"status":"ok","model_loaded":bool,"voices":[...]}
     GET  /voices     → [{"id","name","language","gender","accent","ready"}]
     POST /synthesize → 24 kHz mono WAV bytes (single passage; for testing/RTF)
-    POST /narrate    → Ogg/Opus bytes for a whole chapter (paragraphs concatenated)
+    POST /narrate    → Ogg/Opus bytes, optionally multipart timing JSON + Opus
 """
 from __future__ import annotations
 
+from email.parser import BytesParser
+from email.policy import default
+import json
 import logging
 
 import httpx
@@ -39,6 +42,38 @@ def _raise_if_unauthorized(status_code: int) -> None:
             f"TTS sidecar rejected the service token (HTTP {status_code}); ensure "
             "TTS_SIDECAR_TOKEN/SIDECAR_AUTH_TOKEN matches the sidecar's configured token."
         )
+
+
+def _parse_timed_narration(
+    content: bytes, content_type: str, paragraph_count: int,
+) -> tuple[bytes, dict]:
+    message = BytesParser(policy=default).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("ascii")
+        + content
+    )
+    audio = None
+    manifest = None
+    for part in message.iter_parts():
+        payload_bytes = part.get_payload(decode=True)
+        if part.get_content_type() == "audio/ogg":
+            audio = payload_bytes
+        elif part.get_content_type() == "application/json":
+            manifest = json.loads(payload_bytes.decode("utf-8"))
+    durations = manifest.get("paragraph_durations_ms") if isinstance(manifest, dict) else None
+    valid_manifest = (
+        isinstance(manifest, dict)
+        and manifest.get("version") == 1
+        and type(manifest.get("duration_ms")) is int
+        and manifest["duration_ms"] > 0
+        and type(manifest.get("silence_ms")) is int
+        and manifest["silence_ms"] >= 0
+        and isinstance(durations, list)
+        and len(durations) == paragraph_count
+        and all(type(value) is int and value >= 0 for value in durations)
+    )
+    if audio is None or not valid_manifest:
+        raise RuntimeError("TTS sidecar returned an invalid timed narration response.")
+    return audio, manifest
 
 
 async def sidecar_available() -> bool:
@@ -90,11 +125,17 @@ async def narrate(
     paragraphs: list[str], voice_id: str, language: str | None = None,
     speed: float | None = None, num_step: int | None = None,
     silence_ms: int | None = None, opus_bitrate: str | None = None,
-) -> tuple[bytes, float]:
+) -> tuple[bytes, float, dict | None]:
     """Narrate a whole chapter: the sidecar synthesizes each paragraph with the same cached
-    clone prompt, concatenates them with silence, and returns Ogg/Opus bytes + duration.
-    Long chapters can take minutes on a small GPU, hence the long timeout."""
-    payload: dict = {"paragraphs": paragraphs, "voice_id": voice_id}
+    clone prompt, concatenates them with silence, and returns Ogg/Opus bytes, duration, and
+    actual paragraph durations. An older sidecar's audio-only response remains accepted and
+    returns ``None`` timing data during rolling deploys. Long chapters can take minutes on a
+    small GPU, hence the long timeout."""
+    payload: dict = {
+        "paragraphs": paragraphs,
+        "voice_id": voice_id,
+        "include_timing_manifest": True,
+    }
     if language:
         payload["language"] = language
     if speed:
@@ -110,4 +151,10 @@ async def narrate(
         _raise_if_unauthorized(r.status_code)
         r.raise_for_status()
         duration = float(r.headers.get("X-Duration-Seconds", "0") or 0.0)
-        return r.content, duration
+        content_type = r.headers.get("content-type", "")
+        if not content_type.lower().startswith("multipart/"):
+            return r.content, duration, None
+        audio, manifest = _parse_timed_narration(
+            r.content, content_type, len(paragraphs)
+        )
+        return audio, duration, manifest

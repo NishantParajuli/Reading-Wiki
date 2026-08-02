@@ -233,7 +233,7 @@ authenticated real-CLI canary passes against the pinned binary. Validated at boo
 | `AGY_BINARY` / `AGY_MIN_VERSION` / `AGY_BINARY_SHA256` | local path / `1.1.2` / pinned hash | integrity pin; updating AGY is an explicit operator action (empty hash = deliberate unpinned dev) |
 | `AGY_WORK_DIR` | `~/.local/share/novelwiki/agy-jobs` | story-bearing workspaces outside checkout + public roots |
 | `AGY_CREDENTIAL_DIR` | `~/.gemini/antigravity-cli` | official CLI-owned login source; NovelWiki verifies ownership/mode and links files into isolated per-run state without reading token contents |
-| `AGY_MODEL_TRANSLATE` / `AGY_MODEL_CODEX` / `AGY_MODEL_SEGMENT` / `AGY_MODEL_OCR` | Gemini 3.5 Flash (Medium/High/Medium/High) | **exact display names** from `agy models`; preflight hard-fails on catalog drift |
+| `AGY_MODEL_TRANSLATE` / `AGY_MODEL_CODEX` / `AGY_MODEL_SEGMENT` / `AGY_MODEL_OCR` | Gemini 3.6 Flash (Medium/High/Medium/High) | **exact display names** from `agy models`; preflight hard-fails on catalog drift |
 | `AGY_MODE` | `accept-edits` | `""` \| `accept-edits` \| `plan`; print mode cannot service interactive edit review |
 | `AGY_TOOL_PERMISSION` / `AGY_ARTIFACT_REVIEW_POLICY` | `strict` / `always-proceed` | copied into each isolated run state; hooks plus `--sandbox` remain the enforcement boundary |
 | `AGY_MAX_CONCURRENT` | 1 | 1–4 |

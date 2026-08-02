@@ -16,7 +16,7 @@ def main() -> int:
     if args == ["--version"]:
         print("1.1.2"); return 0
     if args == ["models"]:
-        print("Gemini 3.5 Flash (Medium)\nGemini 3.5 Flash (High)"); return 0
+        print("Gemini 3.6 Flash (Medium)\nGemini 3.6 Flash (High)"); return 0
     if args[:2] == ["plugin", "validate"]:
         return 0
     try:

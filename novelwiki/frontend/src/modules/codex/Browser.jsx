@@ -75,7 +75,7 @@ function SkeletonGrid({ count = 8 }) {
 }
 
 export function CodexBrowser() {
-  const { novel, novelId, ceiling, codexMeta } = useNovel();
+  const { novel, novelId, ceiling, stats, codexMeta } = useNovel();
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
@@ -113,6 +113,17 @@ export function CodexBrowser() {
 
   const bookMax = codexMeta && (codexMeta.bookMax == null ? codexMeta.max : codexMeta.bookMax);
   const showTeaser = !q.trim() && filter === "all" && (codexMeta && (bookMax == null || ceiling < bookMax));
+  const builtThrough = stats && stats.built_through_chapter;
+  const builtCount = stats && Number(stats.built_chapter_count || 0);
+  const bookExtent = bookMax != null ? ` of ${fmtChapter(bookMax)}` : "";
+  const builtCountLabel = builtCount
+    ? ` · ${builtCount} chapter${builtCount === 1 ? "" : "s"}`
+    : "";
+  const coverageLabel = stats == null
+    ? "Checking build coverage…"
+    : builtThrough == null
+      ? "Codex not built yet"
+      : `Built through Ch. ${fmtChapter(builtThrough)}${bookExtent}${builtCountLabel}`;
 
   return (
     <div className="page page-enter">
@@ -120,6 +131,10 @@ export function CodexBrowser() {
         <div>
           <p className="section-eyebrow" style={{ margin: 0 }}>The Codex</p>
           <h1 className="page-title">{novel.title}</h1>
+          <Chip className="codex-build-coverage" tone={stats && builtThrough == null ? "warn" : "info"}
+                icon={builtThrough == null ? "clock" : "database"} role="status">
+            {coverageLabel}
+          </Chip>
         </div>
         <div style={{ marginLeft: "auto" }}><CeilingControl /></div>
       </div>

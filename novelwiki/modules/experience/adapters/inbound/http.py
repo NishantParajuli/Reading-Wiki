@@ -399,7 +399,7 @@ async def api_novel_health(novel_id: int, voice_id: str | None = None,
     codex_enabled = bool(metrics["codex_enabled"])
 
     # Codex is "missing" if enabled but nothing extracted; "stale" if extraction lags the book.
-    codex_missing = codex_enabled and entities_count == 0
+    codex_missing = codex_enabled and codex_max_f is None
     codex_stale = bool(codex_enabled and codex_max_f is not None and book_max_f is not None
                        and codex_max_f < book_max_f)
     audio = await narration.coverage(novel_id)

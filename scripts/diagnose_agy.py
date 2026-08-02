@@ -24,7 +24,7 @@ from pathlib import Path
 
 DEFAULT_BINARY = Path.home() / ".local" / "bin" / "agy"
 DEFAULT_CREDENTIAL_DIR = Path.home() / ".gemini" / "antigravity-cli"
-DEFAULT_MODEL = "Gemini 3.5 Flash (Medium)"
+DEFAULT_MODEL = "Gemini 3.6 Flash (Medium)"
 
 
 @dataclass(frozen=True)

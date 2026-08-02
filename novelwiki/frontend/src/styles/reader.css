@@ -69,6 +69,20 @@
 .reader-text.indent p:first-of-type { text-indent: 0; }
 .reader-raw-note { display: flex; gap: 12px; align-items: flex-start; padding: 18px; }
 .reader-prov { justify-content: center; margin: 6px 0 2px; }
+.reader [data-narration-chunk] {
+  border-radius: 0.18em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  transition: background-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
+}
+.reader [data-narration-active="true"] {
+  background: color-mix(in oklch, var(--accent) 38%, transparent);
+  box-shadow: 0 0 0 0.08em color-mix(in oklch, var(--accent) 38%, transparent);
+}
+.reader.tone-night [data-narration-active="true"] {
+  background: color-mix(in oklch, var(--accent) 30%, transparent);
+  box-shadow: 0 0 0 0.08em color-mix(in oklch, var(--accent) 30%, transparent);
+}
 
 /* imported rich content */
 .reader-rich { color: var(--ink); }

@@ -2,7 +2,7 @@
    Overlays — Dialog, ConfirmDialog, CostConfirmDialog, Popover, Menu, Drawer.
    All trap focus, close on Escape/backdrop, and restore focus on close.
    ============================================================ */
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "./Icon.jsx";
 import { Button } from "./ui.jsx";
 import { useDismissable, useFocusTrap } from "../lib/hooks.js";
@@ -126,14 +126,55 @@ export function CostConfirmDialog({ novelId, action, params, title, actionLabel 
 }
 
 /* Anchored popover: relative-positioned wrapper + absolutely-positioned card.
-   Dismisses on outside click / Escape. `align` = left|right. */
+   Dismisses on outside click / Escape. `align` = left|right. The preferred
+   alignment is clamped to the viewport so wide menus cannot render off-screen. */
 export function Popover({ open, onClose, trigger, align = "right", className = "", children, style }) {
   const ref = useDismissable(open, onClose);
+  const panelRef = useRef(null);
+  const positionPanel = useCallback(() => {
+    const anchor = ref.current;
+    const panel = panelRef.current;
+    if (!anchor || !panel) return;
+
+    const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+    const panelWidth = panel.offsetWidth;
+    if (!viewportWidth || !panelWidth) return;
+
+    const gutter = 12;
+    const anchorRect = anchor.getBoundingClientRect();
+    const preferredLeft = align === "left" ? anchorRect.left : anchorRect.right - panelWidth;
+    const furthestLeft = Math.max(gutter, viewportWidth - gutter - panelWidth);
+    const viewportLeft = Math.min(Math.max(preferredLeft, gutter), furthestLeft);
+
+    panel.style.left = `${viewportLeft - anchorRect.left}px`;
+    panel.style.right = "auto";
+  }, [align, ref]);
+
+  useLayoutEffect(() => {
+    if (open) positionPanel();
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(positionPanel);
+    if (observer) {
+      observer.observe(ref.current);
+      observer.observe(panelRef.current);
+    }
+    window.addEventListener("resize", positionPanel);
+    window.addEventListener("scroll", positionPanel, true);
+    return () => {
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", positionPanel);
+      window.removeEventListener("scroll", positionPanel, true);
+    };
+  }, [open, positionPanel, ref]);
+
   return (
     <div className="usermenu" ref={ref} style={{ position: "relative", display: "inline-block" }}>
       {trigger}
       {open && (
-        <div className={["popover", className].filter(Boolean).join(" ")}
+        <div ref={panelRef} className={["popover", className].filter(Boolean).join(" ")}
              style={{ top: "calc(100% + 8px)", [align]: 0, ...style }}>
           {children}
         </div>

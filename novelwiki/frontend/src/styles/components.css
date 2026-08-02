@@ -256,6 +256,7 @@ img.avatar-user { border: 1px solid var(--border-2); }
 /* ---------- Popover / menu ---------- */
 .popover {
   position: absolute; z-index: 70; min-width: 180px;
+  max-width: calc(100vw - 24px);
   background: var(--surface); border: 1px solid var(--border-2); border-radius: 14px;
   box-shadow: var(--shadow-pop); padding: 8px;
 }

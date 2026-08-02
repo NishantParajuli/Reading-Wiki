@@ -4,6 +4,7 @@ grouping, replace-source, and re-import-by-hash detection.
 The pure-logic tests (quality, chunked-upload storage IO) need no DB; the commit-path tests
 (series / replace / hash) hit Postgres and skip when none is reachable.
 """
+import asyncio
 import io
 import os
 import zipfile
@@ -241,6 +242,128 @@ async def test_single_volume_auto_appends_and_groups(tmp_path, db_ready):
         if novel_id is not None:
             storage.cleanup_novel_assets(novel_id)
         storage.cleanup_job(jid1); storage.cleanup_job(jid2)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_automatic_volume_appends_allocate_distinct_ranges(
+    tmp_path, db_ready, monkeypatch,
+):
+    from novelwiki.importer import commit, jobs as import_jobs
+    from novelwiki.db.connection import get_db_pool
+    from novelwiki.modules.acquisition.adapters.outbound.catalog_workflows import (
+        PostgresAcquisitionTransactionService,
+    )
+
+    paths = [str(tmp_path / f"v{index}.epub") for index in range(1, 4)]
+    for index, path in enumerate(paths, start=1):
+        make_series_epub(
+            path,
+            title=f"Saga Vol {index}",
+            series="The Saga",
+            index=index,
+            chapters=2,
+        )
+    job_ids = [await _parse_job(path) for path in paths]
+    novel_id = None
+    append_tasks = []
+    try:
+        await import_jobs.update_job(
+            job_ids[0], options={"target": "new", "as_volume": True},
+        )
+        initial = await commit.commit_job(
+            await import_jobs.get_job(job_ids[0])
+        )
+        novel_id = initial["novel_id"]
+        for job_id in job_ids[1:]:
+            await import_jobs.update_job(
+                job_id,
+                options={
+                    "target": {"novel_id": novel_id, "offset": 0},
+                    "as_volume": True,
+                },
+            )
+
+        original_lock = PostgresAcquisitionTransactionService.lock_volume_append
+        first_locked = asyncio.Event()
+        second_attempted = asyncio.Event()
+        lock_calls = 0
+
+        async def synchronized_lock(self, target_novel_id):
+            nonlocal lock_calls
+            lock_calls += 1
+            if lock_calls == 1:
+                await original_lock(self, target_novel_id)
+                first_locked.set()
+                await asyncio.wait_for(second_attempted.wait(), timeout=5)
+                return
+            second_attempted.set()
+            await original_lock(self, target_novel_id)
+
+        monkeypatch.setattr(
+            PostgresAcquisitionTransactionService,
+            "lock_volume_append",
+            synchronized_lock,
+        )
+        append_tasks.append(asyncio.create_task(
+            commit.commit_job(await import_jobs.get_job(job_ids[1]))
+        ))
+        await asyncio.wait_for(first_locked.wait(), timeout=5)
+        append_tasks.append(asyncio.create_task(
+            commit.commit_job(await import_jobs.get_job(job_ids[2]))
+        ))
+        results = await asyncio.wait_for(
+            asyncio.gather(*append_tasks), timeout=15,
+        )
+
+        assert lock_calls == 2
+        assert {
+            (result["stats"]["from_chapter"], result["stats"]["to_chapter"])
+            for result in results
+        } == {(3.0, 4.0), (5.0, 6.0)}
+
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT number,part_label,source_id FROM chapters "
+                "WHERE novel_id=$1 ORDER BY number;",
+                novel_id,
+            )
+            sources = await conn.fetch(
+                "SELECT chapter_offset,label FROM sources "
+                "WHERE novel_id=$1 ORDER BY chapter_offset;",
+                novel_id,
+            )
+            statuses = await conn.fetch(
+                "SELECT id,status FROM import_jobs WHERE id=ANY($1::bigint[]);",
+                job_ids,
+            )
+        assert [float(row["number"]) for row in rows] == [
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
+        ]
+        assert len({int(row["source_id"]) for row in rows}) == 3
+        assert [float(row["chapter_offset"]) for row in sources] == [
+            0.0, 2.0, 4.0,
+        ]
+        assert [row["label"] for row in sources] == [
+            "Saga Vol 1", "Saga Vol 2", "Saga Vol 3",
+        ]
+        assert {row["status"] for row in statuses} == {"committed"}
+    finally:
+        for task in append_tasks:
+            if not task.done():
+                task.cancel()
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            if novel_id is not None:
+                await conn.execute("DELETE FROM novels WHERE id=$1;", novel_id)
+            await conn.execute(
+                "DELETE FROM import_jobs WHERE id=ANY($1::bigint[]);",
+                job_ids,
+            )
+        if novel_id is not None:
+            storage.cleanup_novel_assets(novel_id)
+        for job_id in job_ids:
+            storage.cleanup_job(job_id)
 
 
 @pytest.mark.asyncio

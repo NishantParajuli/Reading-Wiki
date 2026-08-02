@@ -173,6 +173,37 @@ def _contracts() -> dict[str, str]:
             "success": {"status": 200, "json": {"voices": ["<normalized-voice>"]}},
             "error": {"status": 503, "json": {"detail": "TTS service unavailable"}},
         },
+        "narration_timing": {
+            "request": {
+                "method": "GET",
+                "path": "/api/novels/{novel_id}/chapter/{number}/audio/status",
+            },
+            "success": {
+                "status": 200,
+                "json": {
+                    "cached": True,
+                    "timing": {
+                        "version": 1,
+                        "duration_ms": "<milliseconds>",
+                        "paragraphs": ["<timed-paragraph>"],
+                    },
+                },
+            },
+            "legacy": {
+                "status": 200,
+                "json": {"cached": True, "timing": None},
+            },
+            "regenerating": {
+                "status": 200,
+                "json": {
+                    "cached": True,
+                    "timing": None,
+                    "job_id": "<job-id>",
+                    "job_status": "generating",
+                },
+            },
+            "error": {"status": 404, "json": {"detail": "Novel not found"}},
+        },
         "experience_admin": {
             "request": {"method": "GET", "path": "/api/admin/users"},
             "success": {"status": 200, "json": {"users": ["<normalized-user>"]}},

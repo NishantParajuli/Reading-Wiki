@@ -58,7 +58,9 @@ configured with an injected runtime of quota/chapter-text/sidecar/state capabili
   text; that audio row is stamped `user_id`, base audio has `user_id IS NULL`) →
   textprep → sidecar `narrate` (per-paragraph synthesis with the cached voice-clone
   prompt, `TTS_PARA_SILENCE_MS` gaps, `TTS_NUM_STEP` diffusion steps, `TTS_SPEED`) →
-  ffmpeg Opus (`TTS_OPUS_BITRATE` 48k) → write under `AUDIO_DIR` → upsert
+  ffmpeg Opus (`TTS_OPUS_BITRATE` 48k) plus generation-time paragraph durations →
+  publish the audio and sibling `*.timings.json` under `AUDIO_DIR` with atomic file
+  replacements → upsert
   `chapter_audio` (partial-unique indexes: one base row and one per-user row per
   `(novel, chapter, voice, version)`) → **meter 1 `tts_chapters` unit only on actual
   generation** (cache hits and skips are never charged).
@@ -75,6 +77,8 @@ HTTP client for the OmniVoice GPU service (`TTS_SIDECAR_URL`, default `:8078`):
 `sidecar_available()`, `list_voices()` (id/name/language/gender/accent/ready — empty
 when offline, so the UI degrades gracefully), `synthesize(text, voice…)` → 24 kHz mono
 WAV, `narrate(paragraphs, …)` → whole-chapter audio with consistent cloned voice.
+The web worker opts into a multipart `narrate` response containing actual duration per
+generated paragraph; an older sidecar's audio-only response remains playable but untimed.
 Every call carries the shared service token (`tts_sidecar_token` →
 `X-Tideglass-Sidecar-Token`); the sidecar fails closed without it. Voices are cloned from
 fixed reference clips in `sidecar-tts/voices/` (see its README; consented/public-domain
@@ -87,6 +91,11 @@ schedules) · `GET …/audio/status` · `GET …/audio.opus` (access-controlled 
 HTTP Range supported for scrubbing) · `POST /novels/{id}/audiobook` ·
 `GET /novels/{id}/audiobook/status` · `GET /novels/{id}/audio/chapters` ·
 `GET /novels/{id}/audio/coverage` · `GET /tts/jobs/{id}` · `POST /tts/jobs/{id}/cancel`.
+`GET …/audio/status` returns `timing: {version,duration_ms,paragraphs}` for newly timed
+audio and `timing: null` for legacy cached audio. A forced regeneration atomically retains
+that cache while work is active, so status also returns the active `job_id` and
+`job_status` alongside `cached: true`; this makes the durable job recoverable after a
+reader reload or an ambiguous mutation-response failure.
 
 ## Collaboration notes
 

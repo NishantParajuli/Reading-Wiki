@@ -33,6 +33,10 @@ class NarrationService:
     def _voice(self, requested: str | None) -> str:
         return (requested or self._default_voice or "").strip()
 
+    def _timing(self, row: dict) -> dict | None:
+        path = self._jobs.absolute_audio_path(row["audio_path"])
+        return self._files.read_timing_manifest(path)
+
     @staticmethod
     def _job_view(job: dict) -> dict:
         return {
@@ -72,6 +76,7 @@ class NarrationService:
                 return {
                     "status": "ready", "cached": True,
                     "duration": cached.get("duration_seconds"), "voice_id": voice,
+                    "timing": self._timing(cached),
                 }
         active = await self._jobs.find_active_chapter_job(
             novel_id, number, voice, info["content_version"], user_id
@@ -218,15 +223,22 @@ class NarrationService:
         available = await self._queries.available_voices(
             novel_id, number, info["content_version"], user_id
         )
+        active = await self._jobs.find_active_chapter_job(
+            novel_id, number, voice, info["content_version"], user_id
+        )
         if row:
             return {
                 "cached": True, "voice_id": voice,
                 "duration": row.get("duration_seconds"), "any_cached": True,
                 "available_voices": available,
+                "timing": self._timing(row),
+                # Forced regeneration deliberately leaves the previous audio readable
+                # until its atomic replacement is ready. Surface that in-flight job as
+                # well, so a reload can keep following it instead of mistaking the
+                # legacy cache entry for the final result.
+                "job_id": int(active["id"]) if active else None,
+                "job_status": active["status"] if active else None,
             }
-        active = await self._jobs.find_active_chapter_job(
-            novel_id, number, voice, info["content_version"], user_id
-        )
         return {
             "cached": False, "voice_id": voice,
             "any_cached": bool(available), "available_voices": available,
@@ -249,4 +261,3 @@ class NarrationService:
         if not self._files.exists(path):
             raise AudioFileGone("Audio file missing (regenerate it).")
         return AudioFile(path)
-

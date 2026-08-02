@@ -26,9 +26,13 @@ only).
   `TTS_MAX_BATCH_CHAPTERS` (100), one active book job per (novel, voice); the explicit
   chapter list is stored in `options.chapters`; cancellable mid-run keeping finished
   chapters.
-- The reader's transport UI polls `GET …/audio/status`, then streams
+- The reader's transport UI checks `GET …/audio/status`, which includes generation-time
+  paragraph boundaries when available. While generation is active it polls
+  `GET /api/tts/jobs/{id}`, then streams
   `GET …/chapter/{n}/audio.opus` (access-controlled `FileResponse`; HTTP **Range**
-  supported, so scrubbing works).
+  supported, so scrubbing works). A forced regeneration keeps the previous cache playable;
+  status returns that cache together with the active `job_id`/`job_status`, allowing a
+  reloaded reader to resume following the durable job.
 
 ## The worker, per chapter
 
@@ -41,10 +45,12 @@ only).
    (`TTS_TITLE_INTRO`).
 4. **Sidecar `narrate`** — per-paragraph synthesis with the same cached voice prompt,
    `TTS_PARA_SILENCE_MS` (350 ms) gaps, `TTS_NUM_STEP` (32) diffusion steps,
-   `TTS_SPEED`.
+   `TTS_SPEED`. The timed multipart response records the actual PCM duration produced
+   for every paragraph by that selected voice.
 5. **Encode + store** — ffmpeg → Opus (`TTS_OPUS_BITRATE` 48k) under `AUDIO_DIR`
    (outside the public asset mount), upsert `chapter_audio` (partial-unique per
-   base/per-user target), duration + bytes recorded.
+   base/per-user target), duration + bytes recorded. A sibling
+   `*.timings.json` manifest is published with an atomic file replacement for timed audio.
 6. **Meter** — 1 × `tts_chapters` **only on actual generation** (default 200/month).
 
 Job mechanics: `queued → generating → done|failed|canceled`; startup requeues
@@ -59,6 +65,17 @@ or spend runs out.
 change (owner edit, accepted contribution, re-translation) bumps the version — old audio
 rows simply stop matching and the next request regenerates. Overlay saves invalidate
 only that user's row.
+
+Audio generated before timing manifests were introduced remains fully playable. Its
+status returns `timing: null`, so the reader disables synchronized highlighting instead
+of guessing across a whole chapter. For timed audio, the reader uses the real paragraph
+boundaries directly against the media clock and estimates only among sentence groups
+inside the current paragraph; drift therefore resets at every generated paragraph
+boundary. Job polling is single-flight: the next request is scheduled only after the
+previous response completes. Transient network and 5xx failures retry with bounded
+backoff instead of declaring the durable server-side job failed; a terminal job status
+or permanent 4xx lookup error ends polling. Once generation completes, the reader fetches
+the new timing record and uses a cache-busted audio URL.
 
 ## Coverage & surfaces
 

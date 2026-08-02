@@ -10,6 +10,8 @@ import { useToast } from "../../components/toast.jsx";
 import { DiffView } from "../../lib/diff.jsx";
 import { VoicePicker, readTtsPrefs } from "../narration/index.js";
 import { clamp, fmtChapter } from "../../lib/utils.js";
+import { activeNarrationChunk } from "./narrationGuide.js";
+import { pollNarrationJob } from "./narrationPolling.js";
 
 const READER_DEFAULTS = {
   font: "serif", size: 19, line: 1.7, width: "normal", tone: "default",
@@ -183,23 +185,54 @@ export function TranslationTools({ novelId, ch, onClose, onChanged }) {
 }
 
 /* ---------- Audio player ---------- */
-export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReader, onAudioChange, autoEngage }) {
+export function AudioPlayer({
+  novelId, number, ch, user, onUserUpdate, openReader, onAudioChange, autoEngage,
+  narrationChunks = [], onNarrationGuideChange,
+}) {
   const [voices, setVoices] = useState(null);
   const [voice, setVoice] = useState(() => readTtsPrefs(user).voice);
   const [defaultVoice, setDefaultVoice] = useState(null);
   const [speed, setSpeed] = useState(() => readTtsPrefs(user).speed);
   const [src, setSrc] = useState(null);
+  const [timingManifest, setTimingManifest] = useState(null);
   const [state, setState] = useState("idle");          // idle|checking|generating|ready|error|untranslated
   const [msg, setMsg] = useState(null);
   const [availableVoices, setAvailableVoices] = useState([]);
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
   const [dur, setDur] = useState(0);
+  const [regenerating, setRegenerating] = useState(false);
   const audioRef = useRef(null);
   const pollRef = useRef(null);
+  const guideEngagedRef = useRef(false);
+  const guideSnapshotRef = useRef("");
   const posKey = `nw-tts:${novelId}:${number}:${voice || "none"}`;
 
-  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  const stopPoll = () => {
+    if (pollRef.current) {
+      pollRef.current();
+      pollRef.current = null;
+    }
+  };
+  const syncNarrationGuide = useCallback((audio, { engaged = guideEngagedRef.current, playing } = {}) => {
+    if (!onNarrationGuideChange) return;
+    const timed = engaged && timingManifest != null;
+    const next = {
+      activeIndex: timed && audio
+        ? activeNarrationChunk(
+          narrationChunks, audio.currentTime, timingManifest,
+        )
+        : null,
+      engaged: timed,
+      playing: timed && (
+        playing == null ? !!(audio && !audio.paused && !audio.ended) : playing
+      ),
+    };
+    const snapshot = `${next.activeIndex ?? "none"}:${next.engaged}:${next.playing}`;
+    if (snapshot === guideSnapshotRef.current) return;
+    guideSnapshotRef.current = snapshot;
+    onNarrationGuideChange(next);
+  }, [narrationChunks, onNarrationGuideChange, timingManifest]);
 
   useEffect(() => {
     let cancel = false;
@@ -218,8 +251,10 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
   useEffect(() => {
     stopPoll();
     if (audioRef.current) audioRef.current.pause();
-    setSrc(null); setMsg(null); setAvailableVoices([]);
-    setCur(0); setDur(0); setPlaying(false);
+    guideEngagedRef.current = false;
+    syncNarrationGuide(null, { engaged: false, playing: false });
+    setSrc(null); setTimingManifest(null); setMsg(null); setAvailableVoices([]);
+    setCur(0); setDur(0); setPlaying(false); setRegenerating(false);
     if (!voice) { setState("idle"); return; }
     let cancel = false;
     setState("checking");
@@ -227,8 +262,10 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
       if (cancel) return;
       setAvailableVoices(r.available_voices || []);
       if (r.cached) {
+        setTimingManifest(r.timing || null);
         setSrc(narrationApi.chapterAudioUrl(novelId, number, voice));
         setState("ready");
+        if (r.job_id) watchJob(r.job_id, true, true);
       } else if (r.job_id) {
         watchJob(r.job_id, false);
       } else if (r.reason === "untranslated") {
@@ -240,6 +277,10 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
     }).catch(() => { if (!cancel) setState("idle"); });
     return () => { cancel = true; stopPoll(); };
   }, [novelId, number, voice]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (guideEngagedRef.current && audioRef.current) syncNarrationGuide(audioRef.current);
+  }, [narrationChunks, syncNarrationGuide]);
 
   useEffect(() => { if (audioRef.current) audioRef.current.playbackRate = speed; }, [speed, src]);
 
@@ -259,10 +300,10 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
   function pickVoice(v) { setVoice(v); persist({ voice: v }); }
   function pickSpeed(s) { setSpeed(s); if (audioRef.current) audioRef.current.playbackRate = s; persist({ speed: s }); }
 
-  async function loadReadyAudio(force) {
-    const r = await narrationApi.chapterAudioStatus(novelId, number, voice);
+  function loadReadyAudio(r, force) {
     setAvailableVoices(r.available_voices || []);
     if (r.cached) {
+      setTimingManifest(r.timing || null);
       setSrc(narrationApi.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
       setState("ready");
       onAudioChange && onAudioChange();
@@ -277,41 +318,96 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
     return false;
   }
 
-  function watchJob(jobId, force) {
+  function watchJob(jobId, force, keepReady = false) {
     stopPoll();
-    setState("generating");
-    pollRef.current = setInterval(async () => {
-      try {
-        const j = await narrationApi.ttsJob(jobId);
+    setMsg(null);
+    setRegenerating(keepReady);
+    if (!keepReady) setState("generating");
+    pollRef.current = pollNarrationJob({
+      jobId,
+      loadJob: async (id) => {
+        const j = await narrationApi.ttsJob(id);
+        // Fetching the final cache record is part of the retryable poll. A brief
+        // disconnect after the durable job finishes must not strand the player.
         if (j.status === "done") {
-          stopPoll();
-          const ok = await loadReadyAudio(force);
+          j.readyAudio = await narrationApi.chapterAudioStatus(novelId, number, voice);
+        }
+        return j;
+      },
+      onProgress: () => setMsg(null),
+      onRetry: () => setMsg("Connection interrupted. Retrying…"),
+      onTerminal: async (j) => {
+        pollRef.current = null;
+        setRegenerating(false);
+        if (j.status === "done") {
+          const ok = loadReadyAudio(j.readyAudio, force);
           if (!ok) { setState("error"); setMsg("Narration finished, but no playable audio was produced."); }
         } else if (j.status === "failed") {
-          stopPoll(); setState("error"); setMsg(j.error || "Narration failed.");
+          if (!keepReady) setState("error");
+          setMsg(j.error || "Narration failed.");
         } else if (j.status === "canceled") {
-          stopPoll(); setState("idle");
+          if (!keepReady) setState("idle");
         }
-      } catch (e) { stopPoll(); setState("error"); setMsg(e.message || "Narration failed."); }
-    }, 1500);
+      },
+      onError: (e) => {
+        pollRef.current = null;
+        setRegenerating(false);
+        if (!keepReady) setState("error");
+        setMsg(e.message || "Narration status is unavailable.");
+      },
+    });
   }
 
   async function generate(force) {
     if (!voice) return;
-    setState("generating"); setMsg(null); stopPoll();
+    const keepReady = !!(force && state === "ready" && src);
+    if (audioRef.current) audioRef.current.pause();
+    guideEngagedRef.current = false;
+    syncNarrationGuide(null, { engaged: false, playing: false });
+    setMsg(null); stopPoll();
+    setRegenerating(keepReady);
+    if (!keepReady) setState("generating");
     try {
       const r = await narrationApi.generateChapterAudio(novelId, number, voice, force);
       if (r.status === "ready") {
+        setRegenerating(false);
+        setTimingManifest(r.timing || null);
         setSrc(narrationApi.chapterAudioUrl(novelId, number, voice) + (force ? `&t=${Date.now()}` : ""));
         setState("ready");
         onAudioChange && onAudioChange();
         return;
       }
-      if (r.job_id) watchJob(r.job_id, force);
+      if (r.job_id) watchJob(r.job_id, force, keepReady);
     } catch (e) {
+      // The POST may have reached the server even when its response did not reach
+      // the browser. Reconcile through the reload-safe status endpoint before
+      // presenting a failure.
+      if (!e.status) {
+        try {
+          const status = await narrationApi.chapterAudioStatus(novelId, number, voice);
+          if (status.job_id) {
+            if (status.cached && !src) {
+              setTimingManifest(status.timing || null);
+              setSrc(narrationApi.chapterAudioUrl(novelId, number, voice));
+              setState("ready");
+            }
+            watchJob(status.job_id, force || status.cached, !!status.cached);
+            return;
+          }
+        } catch (statusError) {
+          // Preserve the original mutation error when reconciliation is also offline.
+        }
+      }
+      setRegenerating(false);
+      if (keepReady) setState("ready");
       if (e.status === 409) { setState("untranslated"); setMsg("Translate this chapter before narrating it."); }
-      else if (e.status === 429) { setState("error"); setMsg(e.message || "Monthly narration quota reached."); }
-      else { setState("error"); setMsg(e.message || "Couldn't start narration."); }
+      else if (e.status === 429) {
+        if (!keepReady) setState("error");
+        setMsg(e.message || "Monthly narration quota reached.");
+      } else {
+        if (!keepReady) setState("error");
+        setMsg(e.message || "Couldn't start narration.");
+      }
     }
   }
 
@@ -322,11 +418,12 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
   function skip(delta) {
     const a = audioRef.current; if (!a) return;
     a.currentTime = clamp(a.currentTime + delta, 0, a.duration || 0);
-    setCur(a.currentTime);
+    setCur(a.currentTime); syncNarrationGuide(a);
   }
   function seek(e) {
     const a = audioRef.current; const t = Number(e.target.value);
-    setCur(t); if (a) a.currentTime = t;
+    setCur(t);
+    if (a) { a.currentTime = t; syncNarrationGuide(a); }
   }
   function cycleSpeed() {
     const i = TTS_SPEEDS.indexOf(speed);
@@ -356,8 +453,16 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
         <>
           <audio
             ref={audioRef} src={src} preload="metadata" style={{ display: "none" }}
-            onPlay={() => { __ttsContinue = true; setPlaying(true); }}
-            onPause={() => { __ttsContinue = false; setPlaying(false); }}
+            onPlay={() => {
+              __ttsContinue = true; guideEngagedRef.current = true; setPlaying(true);
+              syncNarrationGuide(audioRef.current, { engaged: true, playing: true });
+            }}
+            onPause={() => {
+              __ttsContinue = false; setPlaying(false);
+              const a = audioRef.current;
+              if (!a || a.ended) return;
+              syncNarrationGuide(a, { playing: false });
+            }}
             onDurationChange={() => setDur(audioRef.current ? audioRef.current.duration || 0 : 0)}
             onLoadedMetadata={() => {
               const a = audioRef.current; if (!a) return;
@@ -368,10 +473,12 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
             onTimeUpdate={() => {
               const a = audioRef.current; if (!a) return;
               setCur(a.currentTime);
+              syncNarrationGuide(a);
               if (Math.floor(a.currentTime) % 5 === 0) localStorage.setItem(posKey, String(a.currentTime));
             }}
             onEnded={() => {
-              localStorage.removeItem(posKey); setPlaying(false);
+              localStorage.removeItem(posKey); guideEngagedRef.current = false; setPlaying(false);
+              syncNarrationGuide(null, { engaged: false, playing: false });
               if (readTtsPrefs(user).autoplay && ch && ch.next != null) openReader(ch.next);
             }}
           />
@@ -389,10 +496,15 @@ export function AudioPlayer({ novelId, number, ch, user, onUserUpdate, openReade
           <span className="ab-time">{fmt(cur)} / {fmt(dur)}</span>
           <button className="ab-speed" onClick={cycleSpeed} aria-label="Playback speed">{speed}×</button>
           {picker}
-          <button className="icon-btn plain" style={{ width: 30, height: 30 }} title="Regenerate this narration"
-                  aria-label="Regenerate narration" onClick={() => generate(true)}>
-            <Icon name="refresh" size={14} />
-          </button>
+          {regenerating ? (
+            <span className="ab-status"><Icon name="refresh" size={14} className="spin" /> Updating…</span>
+          ) : (
+            <button className="icon-btn plain" style={{ width: 30, height: 30 }} title="Regenerate this narration"
+                    aria-label="Regenerate narration" onClick={() => generate(true)}>
+              <Icon name="refresh" size={14} />
+            </button>
+          )}
+          {msg && <span className="ab-msg">{msg}</span>}
         </>
       ) : state === "generating" || state === "checking" ? (
         <>

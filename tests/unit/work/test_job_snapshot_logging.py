@@ -26,13 +26,13 @@ def _job(**overrides):
         "max_attempts": 5,
         "execution_backend": "agy",
         "backend_requested": "agy",
-        "backend_model": "Gemini 3.5 Flash (High)",
+        "backend_model": "Gemini 3.6 Flash (High)",
         "backend_fallback_allowed": False,
         "current_run_id": UUID("3da33b7a-1a86-498c-a329-02ebbf82ed74"),
         "current_run_workload": "codex_extract",
         "current_run_status": "running",
         "current_run_attempt": 1,
-        "current_run_model": "Gemini 3.5 Flash (High)",
+        "current_run_model": "Gemini 3.6 Flash (High)",
         "current_run_runner_version": "1.1.1",
         "current_plugin_version": "1.0.2",
         "current_run_process_group_id": 1616466,
@@ -63,7 +63,7 @@ def test_observer_emits_rich_snapshot_once_and_then_only_on_change(caplog):
     assert fields["progress"] == {"chapter": 5, "chunks": 8}
     assert fields["attempt"] == 1
     assert fields["max_attempts"] == 5
-    assert fields["backend_model"] == "Gemini 3.5 Flash (High)"
+    assert fields["backend_model"] == "Gemini 3.6 Flash (High)"
     assert fields["process_group_id"] == 1616466
     assert fields["metrics"] == {"items": 51}
     assert fields["novel_id"] == 33

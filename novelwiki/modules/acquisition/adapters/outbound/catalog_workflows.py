@@ -28,6 +28,13 @@ class PostgresAcquisitionTransactionService:
         )
         return [int(row["id"]) for row in rows]
 
+    async def lock_volume_append(self, novel_id: int) -> None:
+        """Serialize automatic range allocation for one target novel."""
+        await self._connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0));",
+            f"acquisition:volume_append:{novel_id}",
+        )
+
     async def store_novel_asset(
         self, novel_id: int, data: bytes, mime: str | None, kind: str
     ) -> dict:

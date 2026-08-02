@@ -4143,7 +4143,7 @@
     },
     "/api/novels/{novel_id}/chapter/{number}/audio/status": {
       "get": {
-        "description": "Whether this reader has playable audio for the chapter in the given voice (drives the\nplayer's generate-vs-play state and the TOC speaker icons).",
+        "description": "Whether this reader has playable audio for the chapter in the given voice (drives the\nplayer's generate-vs-play state and the TOC speaker icons). Cached audio includes an\noptional paragraph timing manifest; legacy audio reports ``timing: null``.",
         "operationId": "api_chapter_audio_status_api_novels__novel_id__chapter__number__audio_status_get",
         "parameters": [
           {
@@ -5951,7 +5951,7 @@
     },
     "/api/novels/{novel_id}/stats": {
       "get": {
-        "description": "Spoiler-safe aggregate stats for the codex home surface (all bounded by ceiling).",
+        "description": "Ceiling-bounded knowledge stats plus non-story completed-build coverage.",
         "operationId": "api_meta_stats_api_novels__novel_id__stats_get",
         "parameters": [
           {

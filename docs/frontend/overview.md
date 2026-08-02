@@ -98,7 +98,21 @@ on the root, CSS token-driven), column width, auto-scroll, scroll-position recov
 volume-grouped TOC (`toc.jsx`), bookmarks, per-chapter translation editing (overlay
 editor + base-vs-mine diff via `lib/diff.jsx`), provenance badges, the audiobook
 transport (narration slice), and codex citation popovers (`lib/markdown.jsx` renders
-answer markdown with `CiteProvider` so `[c:…]` markers open evidence popovers).
+answer markdown with `CiteProvider` so `[c:…]` markers open evidence popovers). Shared
+anchored popovers, including the narrator picker, preserve their preferred alignment when
+space permits and shift inside a 12px viewport gutter when it does not. During
+audiobook playback, the reader selects the active paragraph from its actual
+generation-time boundaries by comparing the player clock directly with manifest
+milliseconds. It estimates the active one-or-two-sentence group only within that
+paragraph, highlights it with the configured accent, and scrolls at group
+transitions when needed to keep it visible. Legacy cached audio without a timing
+manifest remains playable with highlighting disabled. Timed highlighting works for both
+plain and imported rich chapters.
+Forced regeneration remains associated with its durable job across reloads even though
+the previous audio cache is still playable. The transport marks that state as updating,
+polls with one in-flight request and bounded retry backoff, then replaces the stream with
+the cache-busted timed audio. A transient browser fetch failure therefore no longer turns
+a still-running narration job into a client-side failure.
 Resume writes are debounced `PUT /progress` calls and update `last_chapter`/`scroll_pct`
 only. The trusted spoiler ceiling advances separately when the authenticated
 `GET /chapter/{number}` response is served, so a fabricated progress PUT cannot unlock
@@ -114,13 +128,21 @@ The Codex ceiling popover accepts an exact chapter number (including fractional 
 numbers) and validates it against the reader's available range. Its range slider remains
 available for coarse browsing, while “Follow my reading” restores the trusted latest-read
 ceiling. The number field uses the mobile decimal keyboard so long books do not require
-precise slider dragging.
+precise slider dragging. The Codex header separately shows the latest chapter with a
+completed extraction checkpoint and the number of chapters built, so build coverage is not
+confused with the reader's spoiler ceiling. Chunking or embedding alone does not count as a
+completed build.
 
 ## Testing
 
 - `src/app-contract.test.js` + `src/lib/api.test.js` — Vitest suites asserting the app's
   route table and API bindings match the frozen contracts.
+- `src/modules/reading/narrationGuide.test.js` — sentence grouping, rich-markup
+  preservation, timed-paragraph mapping, and the legacy-audio fallback.
+- `src/modules/reading/narrationPolling.test.js` +
+  `src/modules/reading/AudioPlayer.test.jsx` — single-flight retry/cancellation and
+  reload recovery while cached audio and forced regeneration coexist.
 - `e2e/critical-paths.spec.js` — Playwright against a mocked/real backend
   (`e2e/real-backend.spec.js`, `scripts/test_real_browser.py` fixture): register→read→
-  codex critical journeys.
+  codex critical journeys, including mobile narration highlighting and reveal behavior.
 - The production build itself is a release gate (`npm run build`).

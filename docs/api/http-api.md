@@ -120,8 +120,9 @@ Jobs: `GET /api/import/jobs` · `GET|DELETE /api/import/jobs/{id}` ·
 overrides parser/filename values at commit) · `POST …/confirm-ocr` (paid-OCR consent
 gate) · `POST …/commit` (`mode=new|append|replace`; for `new`/`append`,
 `as_volume=true` groups under the saved or detected volume label and computes numbering
-automatically; `replace` preserves the source's labels/offset numbering and rejects
-`as_volume=true` with 422) · `POST …/cancel`.
+automatically, serializing concurrent automatic appends per target novel; `replace`
+preserves the source's labels/offset numbering and rejects `as_volume=true` with 422) ·
+`POST …/cancel`.
 Assets (access-controlled streaming): `GET /api/assets/novels/{novel_id}/{filename}` ·
 `GET /api/assets/import-jobs/{job_id}/{filename}`.
 
@@ -134,7 +135,9 @@ quota-reserved) · `GET|PUT /api/novels/{id}/glossary` ·
 ## Codex (`/api`, auth; every read ceiling-bounded)
 
 `GET /api/novels/{id}/meta` (chapter span + display info for the ceiling control) ·
-`GET /api/novels/{id}/stats` · `GET /api/novels/{id}/entities`
+`GET /api/novels/{id}/stats` (ceiling-bounded knowledge counts plus operational
+`built_through_chapter` and `built_chapter_count`; build metadata
+may extend beyond the reader's ceiling but contains no story content) · `GET /api/novels/{id}/entities`
 (`ceiling`, `type`, `q`) · `GET /api/novels/{id}/entity/resolve?name=…` ·
 `GET /api/novels/{id}/entity/{eid}` (profile; wiki-cache fast path, LLM synthesis on
 miss) · `GET …/entity/{eid}/relationships` (`other_id` filter) · `GET …/entity/{eid}/timeline` ·
@@ -151,6 +154,14 @@ free; else durable job) · `GET …/chapter/{n}/audio/status` ·
 `POST /api/novels/{id}/audiobook` (bounded book batch) · `GET …/audiobook/status` ·
 `GET /api/novels/{id}/audio/chapters` (`voice_id`) · `GET …/audio/coverage` ·
 `GET /api/tts/jobs/{id}` · `POST /api/tts/jobs/{id}/cancel`.
+
+For cached audio, `audio/status` includes `timing`. Newly generated audio returns a
+versioned manifest with actual `start_ms`, `speech_end_ms`, and `end_ms` boundaries per
+generated paragraph plus its visible `source_index`. Legacy audio returns `timing: null`;
+clients must keep playback available and disable synchronized highlighting. During forced
+regeneration, the previous cache remains playable and the same response also includes the
+active `job_id` and `job_status`; clients must follow that job rather than treating the
+cached row as the completed regeneration.
 
 ## Work (`/api`, auth)
 
