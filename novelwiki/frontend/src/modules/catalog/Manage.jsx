@@ -57,8 +57,11 @@ export function Manage() {
   const [busyVis, setBusyVis] = useState(false);
 
   const agyCapability = user && user.ai_backends && user.ai_backends.agy;
+  const openaiCodexCapability = user && user.ai_backends && user.ai_backends.openai_codex;
   const canAgyTranslate = !!(agyCapability && agyCapability.enabled && (agyCapability.workloads || []).includes("translate_batch"));
   const canAgyCodex = !!(agyCapability && agyCapability.enabled && (agyCapability.workloads || []).includes("codex_extract"));
+  const canOpenAiTranslate = !!(openaiCodexCapability && openaiCodexCapability.enabled && (openaiCodexCapability.workloads || []).includes("translate_batch"));
+  const canOpenAiCodex = !!(openaiCodexCapability && openaiCodexCapability.enabled && (openaiCodexCapability.workloads || []).includes("codex_extract"));
   const [translateBackend, setTranslateBackend] = useState("auto");
   const [codexBackend, setCodexBackend] = useState("auto");
   const [codexFromChapter, setCodexFromChapter] = useState("");
@@ -66,10 +69,15 @@ export function Manage() {
   const [tagBusy, setTagBusy] = useState(false);
 
   useEffect(() => {
-    const preferred = agyCapability && agyCapability.default_backend === "agy" ? "agy" : "api";
-    setTranslateBackend(canAgyTranslate ? preferred : "auto");
-    setCodexBackend(canAgyCodex ? preferred : "auto");
-  }, [user && user.id, agyCapability && agyCapability.default_backend, canAgyTranslate, canAgyCodex]); // eslint-disable-line react-hooks/exhaustive-deps
+    const preferred = (openaiCodexCapability && openaiCodexCapability.default_backend)
+      || (agyCapability && agyCapability.default_backend) || "api";
+    const translateAllowed = (preferred === "agy" && canAgyTranslate)
+      || (preferred === "openai_codex" && canOpenAiTranslate);
+    const codexAllowed = (preferred === "agy" && canAgyCodex)
+      || (preferred === "openai_codex" && canOpenAiCodex);
+    setTranslateBackend(translateAllowed ? preferred : "auto");
+    setCodexBackend(codexAllowed ? preferred : "auto");
+  }, [user && user.id, agyCapability && agyCapability.default_backend, openaiCodexCapability && openaiCodexCapability.default_backend, canAgyTranslate, canAgyCodex, canOpenAiTranslate, canOpenAiCodex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { acquisitionApi.adapters().then(setAdapters).catch(() => setAdapters([])); }, []);
 
@@ -239,11 +247,13 @@ export function Manage() {
 
           {hasRaw && (
             <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-              {canAgyTranslate && (
+              {(canAgyTranslate || canOpenAiTranslate) && (
                 <label className="field" style={{ maxWidth: 300, marginBottom: 10 }}>
                   <span>AI backend</span>
                   <select value={translateBackend} onChange={e => setTranslateBackend(e.target.value)}>
-                    <option value="agy">Antigravity — local subscription queue</option>
+                    <option value="auto">Auto — follow admin policy</option>
+                    {canAgyTranslate && <option value="agy">Antigravity — local subscription queue</option>}
+                    {canOpenAiTranslate && <option value="openai_codex">OpenAI Codex — ChatGPT subscription queue</option>}
                     <option value="api">API — provider usage</option>
                   </select>
                 </label>
@@ -260,11 +270,13 @@ export function Manage() {
 
           <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
             <div className="row wrap" style={{ gap: 10, alignItems: "flex-end", marginBottom: 10 }}>
-              {canAgyCodex && (
+              {(canAgyCodex || canOpenAiCodex) && (
                 <label className="field" style={{ flex: "1 1 220px", maxWidth: 300 }}>
                   <span>AI backend</span>
                   <select value={codexBackend} onChange={e => setCodexBackend(e.target.value)}>
-                    <option value="agy">Antigravity — local subscription queue</option>
+                    <option value="auto">Auto — follow admin policy</option>
+                    {canAgyCodex && <option value="agy">Antigravity — local subscription queue</option>}
+                    {canOpenAiCodex && <option value="openai_codex">OpenAI Codex — ChatGPT subscription queue</option>}
                     <option value="api">API — provider usage</option>
                   </select>
                 </label>

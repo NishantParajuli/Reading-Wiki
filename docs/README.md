@@ -89,7 +89,7 @@ against `HEAD` and the living references above before implementation.
 | [translation](pipelines/translation.md) | engine, glossary, atomic commits, overlays, AGY staging |
 | [codex-build-and-ask](pipelines/codex-build-and-ask.md) | chunk/embed/extract/link/index; retrieval; the agent; recap |
 | [narration](pipelines/narration.md) | TTS worker, sidecar, caching, invalidation |
-| [ai-backends](pipelines/ai-backends.md) | API vs AGY: selection, hardened execution, failure paths |
+| [ai-backends](pipelines/ai-backends.md) | API, AGY, and OpenAI Codex: selection, hardened execution, failure paths |
 
 ## Data & API
 
@@ -98,7 +98,7 @@ against `HEAD` and the living references above before implementation.
 | [data/database-schema](data/database-schema.md) | all 47 created tables, table-by-table column semantics, including the intentional 46-table reset-list quirk |
 | [data/filesystem-layout](data/filesystem-layout.md) | on-disk roots, serving rules, cleanup, backup |
 | [api/http-api](api/http-api.md) | annotated route families + auth/CSRF/error conventions |
-| [api/http-route-inventory](api/http-route-inventory.md) | exact method/path/endpoint-name inventory for all 119 routes |
+| [api/http-route-inventory](api/http-route-inventory.md) | exact method/path/endpoint-name inventory for all 122 routes |
 | [api/cli](api/cli.md) | all 14 commands + module entrypoints + recipes |
 
 ## Frontend
@@ -118,6 +118,7 @@ against `HEAD` and the living references above before implementation.
 | [testing](testing.md) | how to run every suite |
 | [release-runbook](release-runbook.md) | release & rollback procedure |
 | [agy-operator-runbook](agy-operator-runbook.md) | enabling/operating the AGY host worker |
+| [openai-codex-operator-runbook](openai-codex-operator-runbook.md) | enabling/operating the ChatGPT Codex App Server worker |
 
 ## Keeping these docs honest
 

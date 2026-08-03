@@ -4,11 +4,13 @@
 the provider gateways (native DeepSeek/OpenRouter chat, OpenRouter embeddings/rerank,
 Gemini vision), the read-side
 **cost controls** (denial-of-wallet guards on Ask/profile synthesis), the admin-granted
-**backend policy** deciding whether a user's job runs on the metered **API** or the
-subscription-based **AGY CLI**, the hardened AGY runner/workspace/validators, the
-dedicated AGY host worker, per-invocation **run records**, and worker **heartbeats**.
+**backend policy** deciding whether a user's job runs on the metered **API**, the
+subscription-based **AGY CLI**, or **OpenAI Codex App Server**; the hardened isolated
+runners/workspaces/validators; dedicated host workers; per-invocation **run records**;
+and worker **heartbeats**.
 Backend selection end-to-end: [../pipelines/ai-backends.md](../pipelines/ai-backends.md).
-Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md).
+Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md) and
+[../openai-codex-operator-runbook.md](../openai-codex-operator-runbook.md).
 
 **Owned tables:** `user_ai_backend_policies`, `ai_request_locks`, `provider_budget`,
 `ai_execution_runs`, `ai_worker_heartbeats`.
@@ -21,12 +23,11 @@ Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md).
   `EmbeddingGateway.embed`, `RerankGateway.rerank`, `VisionGateway.inspect`.
 - **Domain types** (`domain/backend.py`): `Workload` (the six policy-vocabulary workloads:
   `translate_batch`, `codex_extract`, `segment_import`, `ocr_pages`, `ask`,
-  `profile_synthesis`), `RequestedBackend` (`auto`/`api`/`agy`), `ExecutionBackend`
-  (`api`/`agy`). `IMPLEMENTED_AGY_WORKLOADS` currently contains only
-  `translate_batch` and `codex_extract`, but Codex selection also requires the default-off
-  `AGY_CODEX_ENABLED` kill switch; for the other four, automatic/default
-  selection remains on API and an explicit AGY request is rejected, even if the name is
-  stored in an admin policy.
+  `profile_synthesis`), `RequestedBackend` (`auto`/`api`/`agy`/`openai_codex`),
+  `ExecutionBackend` (`api`/`agy`/`openai_codex`). The two subscription adapters currently
+  implement `translate_batch` and `codex_extract`; extraction additionally requires that
+  provider's default-off Codex kill switch. For the other four workloads, selection remains
+  on API and an explicit subscription request is rejected even if the policy stores the name.
 - **Contracts** (`application/contracts.py`): the AGY manifest dataclasses —
   `InputManifest`/`OutputManifest`/`ArtifactRef`, `ExtractionPayload`,
   `DisambiguationPayload`, `TranslationMeta`, `PreflightResult`.
@@ -62,13 +63,13 @@ so a crashed request frees its slot). **Cache hits skip every gate.**
 ### `policy.py` — grants and backend resolution
 
 - `user_ai_backend_policies` is **admin-owned** (no row ⇒ API-only; only admin routes
-  mutate it): `agy_enabled`, `default_backend`, the granted `agy_workloads` array,
-  `fallback_to_api`, `max_concurrent_agy_jobs` (1–4), `policy_version` (bumped on every
+  mutate it): provider enable switches/workload arrays/concurrency caps for AGY and OpenAI
+  Codex, `default_backend`, shared `fallback_to_api`, `policy_version` (bumped on every
   change), `granted_by`, `notes`.
 - `resolve_backend(user, workload, requested, *, enforce_concurrency)` → an immutable
   per-job decision (backend, model, policy version, fallback allowance) applied at
   scheduling time; `reauthorize_job(job, user)` re-checks the grant/status **again just
-  before the AGY subprocess starts** (a revoked grant between queueing and execution
+  before a subscription subprocess starts** (a revoked grant between queueing and execution
   loses); `worker_available()` treats a recent heartbeat as a *capability signal, never
   an entitlement*; `capability_for_user` feeds the `/auth/me` UI capabilities.
 
@@ -120,37 +121,57 @@ so a crashed request frees its slot). **Cache hits skip every gate.**
 
 ### `worker_state.py`
 
-AGY-worker persistence: heartbeat writes (`ai_worker_heartbeats` — status, versions,
-plugin hash, details; health TTL `AGY_WORKER_HEALTH_TTL_SECONDS`=90 drives the admin
-panel and `/auth/me` capability), orphan-run detection, resumable-run queries.
+Subscription-worker persistence: provider-keyed heartbeat writes (`ai_worker_heartbeats`
+— status, versions, contract/plugin hash, details; provider-specific health TTL drives the
+admin panel and `/auth/me` capability), orphan-run detection, resumable-run queries.
+
+### `openai_codex/` — official App Server adapter
+
+- **`preflight.py`** pins the official binary/version/hash, verifies an official ChatGPT
+  account with `account/read`, and confirms configured Terra/Luna models via `model/list`
+  without starting a consuming turn.
+- **`client.py`** implements bounded JSONL stdio for `initialize`, `thread/start`, and
+  `turn/start`; it enforces an ephemeral thread, never-approve policy, read-only/no-network
+  sandbox, cancellation/interrupt, process identity, stream limits, and token-usage metrics.
+- **`contracts.py` / `runner.py`** supply strict workload JSON Schemas. The host parses the
+  final structured message and materializes the same hashed translation/extraction/
+  disambiguation artifacts expected by the existing validators; the model never writes files.
+- **`workspace.py`** creates the private run root and isolated sibling `CODEX_HOME`, linking
+  only the official `auth.json` while disabling persisted history and web search.
+- **`smoke.py`** implements the explicitly consuming, rate-limited admin readiness turn and
+  always terminalizes its run record as completed, failed, or canceled with `finished_at`.
 
 ## The dedicated host worker (`adapters/inbound/worker.py`)
 
-AGY runs **only** in a separate host process (`python -m novelwiki.agy.worker`, systemd
-unit `deploy/novelwiki-agy-worker.service`) under the OS user that completed the
-official AGY browser/keyring login — the web/API worker never touches the CLI. Loop:
+Subscription execution runs **only** in separate host processes: AGY via
+`python -m novelwiki.agy.worker`, and OpenAI Codex via
+`python -m novelwiki.openai_codex.worker`. Each has its own systemd unit, advisory lock,
+heartbeat, queue backend, credential state, and global kill switch. The AGY unit is
+`deploy/novelwiki-agy-worker.service`; both units run under the OS user that completed
+the corresponding official login, and the web/API worker never touches either CLI. Loop:
 preflight → heartbeat task → **reap verified orphan process groups** → claim
-(`claim_next` with `execution_backend='agy'`, gated by the global `AGY_ENABLED` and
-per-user concurrency) → `_reauthorize` → dispatch to the AGY codex/translation handlers →
+(`claim_next` with the process's provider backend, gated by its global switch and
+per-user concurrency) → `_reauthorize` → dispatch to provider codex/translation handlers →
 on provider-capacity failures park as `waiting_provider`
-(`AGY_PROVIDER_RETRY_MINUTES`=30); on permanent failure with `fallback_to_api` allowed,
-`_fallback_to_api` re-points the job at the API backend (refunding AGY's unused
-translation reservation first). Attempts capped by `AGY_MAX_ATTEMPTS` (2).
+(provider-specific retry interval); on permanent failure with `fallback_to_api` allowed,
+`_fallback_to_api` re-points the job at the API backend (refunding the subscription
+backend's unused translation reservation first). Attempts use the provider-specific cap.
 
 ## Admin surface
 
 Mounted in Experience's admin router, executed here through injected ports:
 `GET/PUT/DELETE /api/admin/users/{id}/ai-backend-policy`, `GET /api/admin/ai/agy/health`,
-`POST /api/admin/ai/agy/retry-waiting`, `POST /api/admin/ai/agy/smoke-test`.
+`POST /api/admin/ai/agy/retry-waiting`, `POST /api/admin/ai/agy/smoke-test`; equivalent
+OpenAI Codex operations are under `/api/admin/ai/openai-codex/`.
 
 ## Design invariants
 
-1. **Dormant by default** — AGY requires `AGY_ENABLED=true` *and* an explicit per-user
-   workload grant for one of the two implemented AGY workloads; Codex additionally requires
-   `AGY_CODEX_ENABLED=true`. Neither a role nor one switch alone suffices.
+1. **Dormant by default** — each subscription provider requires its global switch *and* an
+   explicit per-user workload grant for one of its two implemented workloads; extraction
+   additionally requires that provider's Codex switch. Neither a role nor one switch alone suffices.
    Admin role grants nothing implicitly.
-2. **No AGY credentials in this app** — authentication belongs to the CLI's own
-   keyring/browser login on the host.
+2. **No subscription credentials in settings or PostgreSQL** — authentication belongs to
+   each official CLI login owned by its host service account.
 3. **Immutable decisions, revocable execution** — backend decisions are stamped on the
    job; execution re-authorizes; policy bumps (`policy_version`) invalidate stale queued
    decisions.

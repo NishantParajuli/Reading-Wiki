@@ -19,7 +19,8 @@
             "default": "api",
             "enum": [
               "api",
-              "agy"
+              "agy",
+              "openai_codex"
             ],
             "title": "Default Backend",
             "type": "string"
@@ -36,6 +37,13 @@
             "title": "Max Concurrent Agy Jobs",
             "type": "integer"
           },
+          "max_concurrent_openai_codex_jobs": {
+            "default": 1,
+            "maximum": 4.0,
+            "minimum": 1.0,
+            "title": "Max Concurrent Openai Codex Jobs",
+            "type": "integer"
+          },
           "notes": {
             "anyOf": [
               {
@@ -47,6 +55,18 @@
               }
             ],
             "title": "Notes"
+          },
+          "openai_codex_enabled": {
+            "default": false,
+            "title": "Openai Codex Enabled",
+            "type": "boolean"
+          },
+          "openai_codex_workloads": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Openai Codex Workloads",
+            "type": "array"
           }
         },
         "title": "AdminAiBackendPolicy",
@@ -406,7 +426,8 @@
             "enum": [
               "auto",
               "api",
-              "agy"
+              "agy",
+              "openai_codex"
             ],
             "title": "Ai Backend",
             "type": "string"
@@ -1330,7 +1351,8 @@
             "enum": [
               "auto",
               "api",
-              "agy"
+              "agy",
+              "openai_codex"
             ],
             "title": "Ai Backend",
             "type": "string"
@@ -1558,6 +1580,54 @@
           }
         },
         "summary": "Admin Agy Smoke Test"
+      }
+    },
+    "/api/admin/ai/openai-codex/health": {
+      "get": {
+        "operationId": "admin_openai_codex_health_api_admin_ai_openai_codex_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Openai Codex Health"
+      }
+    },
+    "/api/admin/ai/openai-codex/retry-waiting": {
+      "post": {
+        "operationId": "admin_retry_waiting_openai_codex_api_admin_ai_openai_codex_retry_waiting_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Retry Waiting Openai Codex"
+      }
+    },
+    "/api/admin/ai/openai-codex/smoke-test": {
+      "post": {
+        "operationId": "admin_openai_codex_smoke_test_api_admin_ai_openai_codex_smoke_test_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Openai Codex Smoke Test"
       }
     },
     "/api/admin/global-novels": {

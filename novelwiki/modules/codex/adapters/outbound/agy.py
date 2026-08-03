@@ -415,8 +415,8 @@ async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source
                                      preflight: PreflightResult, runtime
                                      ) -> tuple[dict, str, uuid.UUID, Path, object]:
     run_id = await runtime.ai.create_run(
-        job=job, workload="codex_verify", model=settings.AGY_MODEL_CODEX,
-        runner_version=preflight.version, plugin_version=settings.AGY_PLUGIN_VERSION,
+        job=job, workload="codex_verify", model=runtime.ai.model_codex,
+        runner_version=preflight.version, plugin_version=runtime.ai.contract_version,
         plugin_sha256=preflight.plugin_sha256 or "", parent_run_id=parent_run_id,
     )
     root = runtime.ai.create_run_workspace(int(job["id"]), str(run_id))
@@ -434,7 +434,7 @@ async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source
     ]
     manifest = InputManifest(
         run_id=str(run_id), job_id=int(job["id"]), workload="codex_verify",
-        plugin_version=settings.AGY_PLUGIN_VERSION, model=settings.AGY_MODEL_CODEX,
+        plugin_version=runtime.ai.contract_version, model=runtime.ai.model_codex,
         novel_ref="novel", chapter_ceiling=chapter_number, inputs=inputs,
         limits={"allowed_chunk_ids": sorted(source["chunk_ids"]),
                 "context_tokens": source["context_token_count"],
@@ -447,7 +447,7 @@ async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source
     try:
         result = await runtime.ai.run_agy(
             root, prompt=runtime.ai.build_task_prompt("codex_verify"),
-            model=settings.AGY_MODEL_CODEX,
+            model=runtime.ai.model_codex,
             cancel_check=lambda: runtime.work.is_canceled(int(job["id"])),
             on_spawn=lambda pgid, started: runtime.ai.update_run(run_id, process_group_id=pgid, process_started_at=started),
         )
@@ -470,8 +470,8 @@ async def _run_disambiguation(
     runtime,
 ) -> dict[str, int | None]:
     run_id = await runtime.ai.create_run(
-        job=job, workload="entity_disambiguation", model=settings.AGY_MODEL_CODEX,
-        runner_version=preflight.version, plugin_version=settings.AGY_PLUGIN_VERSION,
+        job=job, workload="entity_disambiguation", model=runtime.ai.model_codex,
+        runner_version=preflight.version, plugin_version=runtime.ai.contract_version,
         plugin_sha256=preflight.plugin_sha256 or "", parent_run_id=parent_run_id,
     )
     root = runtime.ai.create_run_workspace(int(job["id"]), str(run_id))
@@ -486,7 +486,7 @@ async def _run_disambiguation(
                         role="disambiguation_cases", media_type="application/json")]
     manifest = InputManifest(
         run_id=str(run_id), job_id=int(job["id"]), workload="entity_disambiguation",
-        plugin_version=settings.AGY_PLUGIN_VERSION, model=settings.AGY_MODEL_CODEX,
+        plugin_version=runtime.ai.contract_version, model=runtime.ai.model_codex,
         novel_ref="novel", inputs=inputs,
         limits={"cases": len(cases)}, created_at=datetime.now(UTC),
     )
@@ -498,7 +498,7 @@ async def _run_disambiguation(
         result = await runtime.ai.run_agy(
             root,
             prompt=runtime.ai.build_task_prompt("entity_disambiguation"),
-            model=settings.AGY_MODEL_CODEX,
+            model=runtime.ai.model_codex,
             cancel_check=lambda: runtime.work.is_canceled(int(job["id"])),
             on_spawn=lambda pgid, started: runtime.ai.update_run(run_id, process_group_id=pgid, process_started_at=started),
         )
@@ -591,8 +591,8 @@ async def _extract_chapter(
 ) -> None:
     source = await _chapter_input(int(job["novel_id"]), chapter_number, runtime)
     run_id = await runtime.ai.create_run(
-        job=job, workload="codex_extract", model=settings.AGY_MODEL_CODEX,
-        runner_version=preflight.version, plugin_version=settings.AGY_PLUGIN_VERSION,
+        job=job, workload="codex_extract", model=runtime.ai.model_codex,
+        runner_version=preflight.version, plugin_version=runtime.ai.contract_version,
         plugin_sha256=preflight.plugin_sha256 or "",
     )
     root = runtime.ai.create_run_workspace(int(job["id"]), str(run_id))
@@ -607,7 +607,7 @@ async def _extract_chapter(
     ]
     manifest = InputManifest(
         run_id=str(run_id), job_id=int(job["id"]), workload="codex_extract",
-        plugin_version=settings.AGY_PLUGIN_VERSION, model=settings.AGY_MODEL_CODEX,
+        plugin_version=runtime.ai.contract_version, model=runtime.ai.model_codex,
         novel_ref="novel", chapter_ceiling=chapter_number, inputs=inputs,
         limits={"allowed_chunk_ids": sorted(source["chunk_ids"]), "max_items": 5000,
                 "context_tokens": source["context_token_count"],
@@ -623,7 +623,7 @@ async def _extract_chapter(
         result = await runtime.ai.run_agy(
             root,
             prompt=runtime.ai.build_task_prompt("codex_extract"),
-            model=settings.AGY_MODEL_CODEX,
+            model=runtime.ai.model_codex,
             cancel_check=lambda: runtime.work.is_canceled(int(job["id"])),
             on_spawn=lambda pgid, started: runtime.ai.update_run(run_id, process_group_id=pgid, process_started_at=started),
         )
@@ -633,7 +633,7 @@ async def _extract_chapter(
         )
         artifacts_valid = True
         final_run_id, verify_root, verify_result = run_id, None, None
-        if settings.AGY_SEPARATE_CODEX_VERIFY:
+        if runtime.ai.separate_codex_verify:
             data, summary, final_run_id, verify_root, verify_result = await _run_separate_verification(
                 job, run_id, source, chapter_number, data, summary, preflight, runtime,
             )
@@ -648,7 +648,7 @@ async def _extract_chapter(
             context_manifest=source["context_manifest"],
             context_sha256=source["context_sha256"],
             context_token_count=source["context_token_count"],
-            model_label=f"agy:{settings.AGY_MODEL_CODEX}",
+            model_label=runtime.ai.model_label,
             force=bool((job.get("options") or {}).get("force")),
             uow_factory=runtime.extraction_uow_factory,
         )
@@ -691,7 +691,7 @@ async def _resume_ready_commits(
     completed: set[float] = set()
     for row in rows:
         run_id = row["id"]
-        root = Path(settings.AGY_WORK_DIR) / (row["workspace_relpath"] or "")
+        root = runtime.ai.work_root / (row["workspace_relpath"] or "")
         try:
             if runtime.ai.sha256_file(root / "input" / "manifest.json") != row["input_sha256"]:
                 raise AgyValidationError("saved input manifest hash changed")
@@ -719,7 +719,7 @@ async def _resume_ready_commits(
                 context_manifest=source["context_manifest"],
                 context_sha256=source["context_sha256"],
                 context_token_count=source["context_token_count"],
-                model_label=f"agy:{settings.AGY_MODEL_CODEX}",
+                model_label=runtime.ai.model_label,
                 force=bool((job.get("options") or {}).get("force")),
                 uow_factory=runtime.extraction_uow_factory,
             )
@@ -773,11 +773,14 @@ async def execute_codex_job(job: dict, preflight: PreflightResult, *, runtime) -
     await runtime.work.set_progress(int(job["id"]), {"step": 3, "steps": 4, "done": len(completed),
                                                 "total": overall, "resumed_commits": len(resumed),
                                                 "checkpointed_chapters": len(checkpointed)},
-                               stage="waiting for AGY extraction")
+                               stage=f"waiting for {runtime.ai.provider_label} extraction")
     for index, chapter in enumerate(chapters, 1):
         if await runtime.work.is_canceled(int(job["id"])):
             raise AgyCanceled()
-        await runtime.work.update_job(int(job["id"]), stage=f"extracting AGY chapter {index}/{total}")
+        await runtime.work.update_job(
+            int(job["id"]),
+            stage=f"extracting {runtime.ai.provider_label} chapter {index}/{total}",
+        )
         await _extract_chapter(job, chapter, preflight, runtime)
         await runtime.work.set_progress(int(job["id"]), {
             "step": 3, "steps": 4, "done": len(completed) + index, "total": overall,

@@ -26,6 +26,21 @@
   },
   {
     "method": "GET",
+    "name": "admin_openai_codex_health",
+    "path": "/api/admin/ai/openai-codex/health"
+  },
+  {
+    "method": "POST",
+    "name": "admin_retry_waiting_openai_codex",
+    "path": "/api/admin/ai/openai-codex/retry-waiting"
+  },
+  {
+    "method": "POST",
+    "name": "admin_openai_codex_smoke_test",
+    "path": "/api/admin/ai/openai-codex/smoke-test"
+  },
+  {
+    "method": "GET",
     "name": "admin_global_novels",
     "path": "/api/admin/global-novels"
   },

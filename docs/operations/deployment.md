@@ -1,7 +1,7 @@
 # Deployment
 
 > How Tideglass runs in production: one web container, an optional GPU sidecar pair, a
-> host PostgreSQL, and (optionally) a dedicated AGY host worker. Release/rollback
+> host PostgreSQL, and optional dedicated AGY/OpenAI Codex host workers. Release/rollback
 > procedure: [../release-runbook.md](../release-runbook.md). Configuration:
 > [configuration.md](configuration.md).
 
@@ -14,7 +14,7 @@
                                                              │    host.docker.internal:5432
                                                              ├──▶ ocr:8077   (private bridge)
                                                              └──▶ tts:8078   (private bridge)
- host systemd (--user) ──▶ novelwiki-agy-worker (python -m novelwiki.agy.worker) ─▶ same DB
+ host systemd (--user) ──▶ AGY and/or OpenAI Codex subscription workers ─────────▶ same DB
 ```
 
 Key properties:
@@ -63,6 +63,9 @@ docker compose up -d tts            # + narration (GPU)
 
 `DATABASE_URL`/`DB_SUPERUSER_URL` in `.env` must point at
 `host.docker.internal:5432` (the compose file maps it to the host gateway).
+The dedicated host-worker units set `HOST_WORKER_DATABASE_HOST=127.0.0.1`, which replaces
+only the DSN hostname in those processes; credentials and the Docker-facing `.env` remain
+unchanged.
 
 ## First boot
 
@@ -72,7 +75,7 @@ ensure (creates the database via `DB_SUPERUSER_URL` if missing, applies idempote
 pool → identity cleanup → the guarded multi-user migration (bootstraps the first admin
 from `ADMIN_EMAIL`/`ADMIN_PASSWORD`; **rewrites legacy single-user data — pg_dump first**
 and confirm via `MULTIUSER_MIGRATION_BACKUP_CONFIRMED` or run
-`python -m novelwiki.db.migrate_multiuser` supervised) → the three workers → AGY health
+`python -m novelwiki.db.migrate_multiuser` supervised) → the three in-process workers → subscription-worker health
 check. Then: `curl localhost:8001/health`, log in, done.
 
 ## The AGY host worker (optional)
@@ -85,6 +88,15 @@ model catalog check, plugin validation, authenticated smoke/representative workl
 runtime hook proof, and explicit per-user grants). Global kill switch:
 `AGY_ENABLED=false`; Codex-only containment: `AGY_CODEX_ENABLED=false`. Restart settings
 consumers after changing either switch.
+
+## The OpenAI Codex host worker (optional)
+
+This also runs on the host, separately from AGY and the web container. It needs the official
+Codex CLI and a ChatGPT `codex login` session owned by the service user. Install
+`deploy/novelwiki-openai-codex-worker.service` as a `systemd --user` unit and follow the
+[OpenAI Codex operator runbook](../openai-codex-operator-runbook.md). Global kill switch:
+`OPENAI_CODEX_ENABLED=false`; extraction-only containment:
+`OPENAI_CODEX_CODEX_ENABLED=false`.
 
 ## Automated deployment after CI
 

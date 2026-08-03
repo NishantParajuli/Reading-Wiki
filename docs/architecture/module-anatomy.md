@@ -187,7 +187,7 @@ results/errors back into the transport's language. They are deliberately thin an
   a `configure_*` hook receives command factories from Bootstrap; the Typer function only
   parses arguments and renders output.
 - **`worker.py`** — the long-running poll loops for durable jobs (Acquisition's import
-  worker, Narration's TTS worker, Work's generic worker, AI Execution's dedicated AGY host
+  worker, Narration's TTS worker, Work's generic worker, AI Execution's dedicated subscription host
   worker). Each exposes `configure_worker_runtime(runtime)` + `start_worker()`/
   `stop_worker()`; the loop keeps *transport* concerns (polling, leases, heartbeats,
   signal-free shutdown) and delegates every state-machine decision to an application

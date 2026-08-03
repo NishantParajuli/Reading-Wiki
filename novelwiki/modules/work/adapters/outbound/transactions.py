@@ -34,7 +34,9 @@ class PostgresWorkQuotaFinalizationTransactionService:
             UPDATE jobs SET
               quota_finalized = TRUE,
               quota_consumed = CASE
-                WHEN $2 AND NOT (execution_backend='agy' AND kind='translate')
+                WHEN $2 AND NOT (
+                  execution_backend IN ('agy','openai_codex') AND kind='translate'
+                )
                 THEN quota_reserved ELSE quota_consumed END,
               updated_at = now()
             WHERE id = $1 AND quota_finalized = FALSE

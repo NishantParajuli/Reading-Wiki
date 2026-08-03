@@ -135,3 +135,49 @@ async def test_active_agy_concurrency_limit(policy_db):
     with pytest.raises(HTTPException) as exc:
         await resolve_backend(user, Workload.TRANSLATE_BATCH, "agy")
     assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_openai_codex_grant_routes_and_revokes_its_own_queue(
+    policy_db, monkeypatch
+):
+    user, admin, novel_id = policy_db["user"], policy_db["admin"], policy_db["novel_id"]
+    monkeypatch.setattr(settings, "OPENAI_CODEX_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_CODEX_CODEX_ENABLED", True)
+    row = await upsert_policy(
+        user["id"],
+        {
+            "agy_enabled": False,
+            "openai_codex_enabled": True,
+            "default_backend": "openai_codex",
+            "agy_workloads": [],
+            "openai_codex_workloads": ["translate_batch", "codex_extract"],
+            "fallback_to_api": False,
+            "max_concurrent_agy_jobs": 1,
+            "max_concurrent_openai_codex_jobs": 1,
+        },
+        admin["id"],
+    )
+    assert row["openai_codex_enabled"] is True
+    decision = await resolve_backend(user, Workload.TRANSLATE_BATCH, "auto")
+    assert decision.resolved.value == "openai_codex"
+    assert decision.model == settings.OPENAI_CODEX_MODEL_TRANSLATE
+    job_id, _ = await service.create_job(
+        "translate",
+        novel_id=novel_id,
+        user_id=user["id"],
+        options={},
+        execution_backend="openai_codex",
+        backend_requested="openai_codex",
+        backend_policy_version=int(row["policy_version"]),
+    )
+    claimed = await claim_next(
+        execution_backend="openai_codex",
+        worker_id="test-openai-codex",
+        kinds=("translate",),
+    )
+    assert claimed["id"] == job_id
+    assert await delete_policy(user["id"], admin["id"]) is True
+    canceled = await service.get_job(job_id)
+    assert canceled["status"] == "running"
+    assert canceled["cancel_requested_at"] is not None

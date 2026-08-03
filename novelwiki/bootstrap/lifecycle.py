@@ -216,13 +216,19 @@ def build_application_lifecycle() -> ApplicationLifecycle:
         await stop_worker()
 
     async def check_agy_worker():
-        if not settings.AGY_ENABLED:
-            return
+        from novelwiki.modules.ai_execution.domain.backend import ExecutionBackend
         from novelwiki.modules.ai_execution.adapters.outbound.policy import worker_available
-        if not await worker_available():
+        if settings.AGY_ENABLED and not await worker_available(ExecutionBackend.AGY):
             logger.warning(
                 "AGY_ENABLED is true, but no recent healthy dedicated AGY worker heartbeat "
                 "exists. AGY jobs may remain queued until the host worker recovers."
+            )
+        if settings.OPENAI_CODEX_ENABLED and not await worker_available(
+            ExecutionBackend.OPENAI_CODEX
+        ):
+            logger.warning(
+                "OPENAI_CODEX_ENABLED is true, but no recent healthy dedicated OpenAI "
+                "Codex worker heartbeat exists. Jobs may remain queued until it recovers."
             )
 
     async def close_pool():

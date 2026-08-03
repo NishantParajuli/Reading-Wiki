@@ -5,43 +5,45 @@ from typing import Any
 
 
 class PostgresWorkerStateRepository:
-    def __init__(self, pool: Any):
+    def __init__(self, pool: Any, backend: str = "agy"):
         self._pool = pool
+        self._backend = backend
 
     async def active_job_count(self, user_id: int) -> int:
         async with self._pool.acquire() as connection:
             return int(await connection.fetchval(
                 """
                 SELECT count(*) FROM jobs WHERE user_id=$1
-                  AND execution_backend='agy'
+                  AND execution_backend=$2
                   AND status IN ('queued','running','waiting_provider');
                 """,
-                user_id,
+                user_id, self._backend,
             ) or 0)
 
     async def fallback_to_api(
         self, job_id: int, model: str, max_attempts: int, error: str
     ) -> bool:
+        provider_label = "OpenAI Codex" if self._backend == "openai_codex" else "AGY"
         async with self._pool.acquire() as connection:
             changed = await connection.fetchrow(
                 """
-                UPDATE jobs SET execution_backend='api',backend_fallback_from='agy',
+                UPDATE jobs SET execution_backend='api',backend_fallback_from=$5,
                   backend_model=$2,backend_fallback_allowed=FALSE,status='queued',
-                  stage='AGY failed; switching to API',attempts=0,max_attempts=$3,
+                  stage=$6 || ' failed; switching to API',attempts=0,max_attempts=$3,
                   error=$4,claim_token=NULL,claimed_at=NULL,not_before=NULL,
                   cancel_requested_at=NULL,updated_at=now()
                 WHERE id=$1 AND status='running' RETURNING id;
                 """,
-                job_id, model, max_attempts, error,
+                job_id, model, max_attempts, error, self._backend, provider_label,
             )
         return changed is not None
 
     async def revoked_job_ids(self, user_id: int, kinds: list[str]) -> list[int]:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(
-                "SELECT id FROM jobs WHERE user_id=$1 AND execution_backend='agy' "
+                "SELECT id FROM jobs WHERE user_id=$1 AND execution_backend=$4 "
                 "AND kind=ANY($2::text[]) AND status=ANY($3::text[]);",
-                user_id, kinds, ["queued", "running", "waiting_provider"],
+                user_id, kinds, ["queued", "running", "waiting_provider"], self._backend,
             )
         return [int(row["id"]) for row in rows]
 

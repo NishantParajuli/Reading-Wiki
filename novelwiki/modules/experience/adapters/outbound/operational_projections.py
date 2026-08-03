@@ -175,11 +175,12 @@ class PostgresOperationalProjectionRepository:
         async with self._pool.acquire() as connection:
             return bool(await connection.fetchval("SELECT 1 FROM users WHERE id=$1;", user_id))
 
-    async def recent_smoke(self) -> bool:
+    async def recent_smoke(self, backend: str = "agy") -> bool:
         async with self._pool.acquire() as connection:
             return bool(await connection.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM audit_events WHERE event='agy.smoke.completed' "
-                "AND created_at>now()-interval '10 minutes');"
+                "SELECT EXISTS(SELECT 1 FROM audit_events WHERE event=$1 "
+                "AND created_at>now()-interval '10 minutes');",
+                f"{backend}.smoke.completed",
             ))
 
     async def admin_users(self, period, query):
@@ -193,11 +194,15 @@ class PostgresOperationalProjectionRepository:
                   COALESCE(q.ocr_pages,0) AS used_ocr,COALESCE(q.codex_builds,0) AS used_codex,
                   COALESCE(q.tts_chapters,0) AS used_tts,
                   (SELECT COUNT(*) FROM novels n WHERE n.owner_id=u.id) AS novels_owned,
-                  p.agy_enabled,p.default_backend,p.agy_workloads,p.fallback_to_api,
-                  p.max_concurrent_agy_jobs,p.policy_version,p.notes AS agy_notes,
+                  p.agy_enabled,p.openai_codex_enabled,p.default_backend,p.agy_workloads,
+                  p.openai_codex_workloads,p.fallback_to_api,p.max_concurrent_agy_jobs,
+                  p.max_concurrent_openai_codex_jobs,p.policy_version,p.notes AS agy_notes,
                   p.updated_at AS agy_updated_at,p.granted_by,
                   (SELECT COUNT(*) FROM jobs j WHERE j.user_id=u.id AND j.execution_backend='agy'
                     AND j.status IN ('queued','running','waiting_provider')) AS agy_active_jobs
+                  ,(SELECT COUNT(*) FROM jobs j WHERE j.user_id=u.id
+                    AND j.execution_backend='openai_codex'
+                    AND j.status IN ('queued','running','waiting_provider')) AS openai_codex_active_jobs
                 FROM users u LEFT JOIN quota_usage q ON q.user_id=u.id AND q.period=$1
                 LEFT JOIN user_ai_backend_policies p ON p.user_id=u.id
                 WHERE ($2::text IS NULL OR u.email ILIKE '%'||$2||'%'
@@ -207,10 +212,13 @@ class PostgresOperationalProjectionRepository:
             )
 
     async def agy_health(self):
+        return await self.subscription_health("agy")
+
+    async def subscription_health(self, backend: str):
         async with self._pool.acquire() as connection:
             heartbeat = await connection.fetchrow(
-                "SELECT * FROM ai_worker_heartbeats WHERE backend='agy' "
-                "ORDER BY heartbeat_at DESC LIMIT 1;"
+                "SELECT * FROM ai_worker_heartbeats WHERE backend=$1 "
+                "ORDER BY heartbeat_at DESC LIMIT 1;", backend
             )
             counts = await connection.fetchrow(
                 """
@@ -218,18 +226,18 @@ class PostgresOperationalProjectionRepository:
                   count(*) FILTER(WHERE status='running') AS running,
                   count(*) FILTER(WHERE status='waiting_provider') AS waiting,
                   min(created_at) FILTER(WHERE status IN ('queued','waiting_provider')) AS oldest
-                FROM jobs WHERE execution_backend='agy';
-                """
+                FROM jobs WHERE execution_backend=$1;
+                """, backend
             )
             recent = await connection.fetch(
                 "SELECT failure_code,count(*) AS count FROM ai_execution_runs "
-                "WHERE backend='agy' AND failure_code IS NOT NULL "
+                "WHERE backend=$1 AND failure_code IS NOT NULL "
                 "AND created_at>now()-interval '7 days' GROUP BY failure_code "
-                "ORDER BY count(*) DESC;"
+                "ORDER BY count(*) DESC;", backend
             )
             last_success = await connection.fetchval(
                 "SELECT max(finished_at) FROM ai_execution_runs "
-                "WHERE backend='agy' AND status='completed';"
+                "WHERE backend=$1 AND status='completed';", backend
             )
         return heartbeat, counts, recent, last_success
 

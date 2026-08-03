@@ -14,6 +14,7 @@ class AgyError(RuntimeError):
         code: str | None = None,
         retryable: bool | None = None,
         metrics: dict | None = None,
+        safe_detail: str | None = None,
     ):
         super().__init__(message or code or self.code)
         if code is not None:
@@ -21,6 +22,7 @@ class AgyError(RuntimeError):
         if retryable is not None:
             self.retryable = retryable
         self.metrics = dict(metrics or {})
+        self.safe_detail = safe_detail
 
 
 class AgyPreflightError(AgyError):

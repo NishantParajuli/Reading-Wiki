@@ -81,10 +81,11 @@ Refunds decrement with a floor of zero.
 
 ### `user_ai_backend_policies`
 
-Admin-owned AGY entitlement (no row = API-only). `user_id PK`, `agy_enabled`,
-`default_backend` (`api`|`agy`, CHECK: must be `api` unless enabled), `agy_workloads
-TEXT[]` (CHECK ⊆ {`translate_batch`, `codex_extract`, `segment_import`, `ocr_pages`,
-`ask`, `profile_synthesis`}), `fallback_to_api`, `max_concurrent_agy_jobs` (1–4),
+Admin-owned subscription entitlement (no row = API-only). `user_id PK`, provider switches
+`agy_enabled` / `openai_codex_enabled`, `default_backend`
+(`api`|`agy`|`openai_codex`, CHECK: selected provider must be enabled), provider-specific
+workload arrays (CHECK ⊆ {`translate_batch`, `codex_extract`, `segment_import`, `ocr_pages`,
+`ask`, `profile_synthesis`}), shared `fallback_to_api`, provider-specific concurrent-job caps (1–4),
 `policy_version` (bumped on every change; stale queued decisions are detected),
 `notes`, `granted_by`.
 
@@ -104,17 +105,19 @@ Daily provider call counter that survives restarts (Gemini free-tier guard). PK
 One row per provider invocation (a job may have many: attempts, chapters, child runs).
 `id UUID PK`, exactly one of `job_id` / `import_job_id` (CHECK), `parent_run_id`
 (disambiguation/verification children), `user_id`, `novel_id`, `workload`, `backend`
-(`api`|`agy`), `model`, `runner_version`, `plugin_version`, `plugin_sha256`, `status`,
+(`api`|`agy`|`openai_codex`), `model`, `runner_version`, `plugin_version`, `plugin_sha256`, `status`,
 `attempt`, `input_sha256`/`output_sha256` (artifact integrity), `workspace_relpath`,
 `process_group_id` + `process_started_at` (identity-verified orphan reaping),
 `exit_code`, `failure_code`, `error_summary`, `metrics JSONB`, timing columns.
+Run status progresses from `preparing` to `running`, then to a terminal `completed`, `failed`,
+or `canceled`; orphan recovery may instead mark it `worker_lost`.
 
 ### `ai_worker_heartbeats`
 
-Small non-secret health record from the dedicated AGY host worker: `worker_id PK`,
+Small non-secret health record from the dedicated AGY/OpenAI Codex host workers: `worker_id PK`,
 `backend`, `status`, versions + plugin hash, `details JSONB`, `heartbeat_at`,
 `started_at`. Drives the admin health panel (stale after
-`AGY_WORKER_HEALTH_TTL_SECONDS`).
+the provider-specific worker health TTL).
 
 ## Catalog-owned
 
@@ -360,7 +363,9 @@ per (novel, chapter, voice, version)) because `user_id` is nullable.
 
 ### `jobs`
 
-The generic durable-job queue (scrape / codex_build / translate / agy_smoke). Fields in
+The generic durable-job queue (scrape / codex_build / translate / subscription smoke tests).
+`backend_requested` accepts `auto`, `api`, `agy`, or `openai_codex`; `execution_backend` stores
+the immutable resolved provider. Fields in
 four groups:
 - *Lifecycle*: `kind`, `novel_id`, `user_id` (requester/quota owner; SET NULL on user
   delete), `status` (`queued`|`running`|`waiting_provider`|`done`|`failed`|`canceled`),
@@ -370,8 +375,8 @@ four groups:
   `waiting_provider` — capacity-parked work still dedupes).
 - *Quota*: `quota_kind`, `quota_reserved`, `quota_consumed`, **`quota_finalized`**
   (exactly-once settlement guard).
-- *Execution backend*: `backend_requested` (`auto`|`api`|`agy`), `execution_backend`
-  (`api`|`agy` — which worker family may claim it), `backend_policy_version`,
+- *Execution backend*: `backend_requested` (`auto`|`api`|`agy`|`openai_codex`), `execution_backend`
+  (`api`|`agy`|`openai_codex` — which worker family may claim it), `backend_policy_version`,
   `backend_fallback_allowed`/`backend_fallback_from`, `backend_model`, `not_before`
   (provider-wait release time), `cancel_requested_at`, and the lease pair
   `claim_token`/`claimed_at`.

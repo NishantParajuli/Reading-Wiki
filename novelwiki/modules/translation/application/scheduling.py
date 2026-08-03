@@ -25,6 +25,7 @@ class TranslationSchedulingService:
         self, catalog: CatalogAccessPort, reading: ReadingTranslationPort,
         backend: BackendResolutionPort, work: TranslationWorkPort,
         quota: TranslationQuotaPort, agy_max_attempts: int,
+        openai_codex_max_attempts: int,
     ):
         self._catalog = catalog
         self._reading = reading
@@ -32,6 +33,7 @@ class TranslationSchedulingService:
         self._work = work
         self._quota = quota
         self._agy_max_attempts = agy_max_attempts
+        self._openai_codex_max_attempts = openai_codex_max_attempts
 
     async def schedule(
         self, novel_id: int, principal: Principal, command: ScheduleTranslation
@@ -56,7 +58,7 @@ class TranslationSchedulingService:
         pending = await self._reading.count_pending(
             novel_id, command.from_chapter, command.to_chapter, command.force
         )
-        reserved = pending if decision.resolved == "agy" else 0
+        reserved = pending if decision.resolved in {"agy", "openai_codex"} else 0
         from novelwiki.workflows.schedule_ai_job import schedule_ai_job
 
         async def reserve():
@@ -78,7 +80,15 @@ class TranslationSchedulingService:
                 idempotency_key=idem,
                 decision=decision,
                 quota_reserved=reserved,
-                max_attempts=self._agy_max_attempts if reserved else None,
+                max_attempts=(
+                    self._agy_max_attempts
+                    if decision.resolved == "agy"
+                    else (
+                        self._openai_codex_max_attempts
+                        if decision.resolved == "openai_codex"
+                        else None
+                    )
+                ),
             )
 
         async def refund():

@@ -4,14 +4,12 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
 from pydantic import ValidationError
 
 from novelwiki.modules.ai_execution.public import InputManifest, TranslationMeta
 from novelwiki.modules.ai_execution.public import AgyCanceled, AgyValidationError
 from novelwiki.modules.ai_execution.public import PreflightResult
-from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
 from novelwiki.modules.translation.adapters.outbound.runtime import (
     commit_translation,
@@ -107,16 +105,16 @@ async def _glossary(novel_id: int) -> dict:
             "established_english_spellings": established[:120]}
 
 
-def _batch(numbers: list[float], lengths: dict[float, int]) -> list[list[float]]:
+def _batch(numbers: list[float], lengths: dict[float, int], runtime) -> list[list[float]]:
     batches, current, chars = [], [], 0
     for number in numbers:
         length = lengths[number]
-        if current and (len(current) >= settings.AGY_TRANSLATE_BATCH_CHAPTERS
-                        or chars + length > settings.AGY_TRANSLATE_BATCH_MAX_CHARS):
+        if current and (len(current) >= runtime.ai.translate_batch_chapters
+                        or chars + length > runtime.ai.translate_batch_max_chars):
             batches.append(current); current, chars = [], 0
         current.append(number); chars += length
         # An oversized chapter is an intentional single-chapter batch; never truncate.
-        if length > settings.AGY_TRANSLATE_BATCH_MAX_CHARS:
+        if length > runtime.ai.translate_batch_max_chars:
             batches.append(current); current, chars = [], 0
     if current:
         batches.append(current)
@@ -212,8 +210,8 @@ async def _run_batch(
     glossary: dict, runtime,
 ) -> int:
     run_id = await runtime.ai.create_run(
-        job=job, workload="translate_batch", model=settings.AGY_MODEL_TRANSLATE,
-        runner_version=preflight.version, plugin_version=settings.AGY_PLUGIN_VERSION,
+        job=job, workload="translate_batch", model=runtime.ai.model_translate,
+        runner_version=preflight.version, plugin_version=runtime.ai.contract_version,
         plugin_sha256=preflight.plugin_sha256 or "",
     )
     staged = await stage_translation_batch(
@@ -248,10 +246,10 @@ async def _run_batch(
                                     role="chapter_metadata", media_type="application/json"))
         manifest = InputManifest(
             run_id=str(run_id), job_id=int(job["id"]), workload="translate_batch",
-            plugin_version=settings.AGY_PLUGIN_VERSION, model=settings.AGY_MODEL_TRANSLATE,
+            plugin_version=runtime.ai.contract_version, model=runtime.ai.model_translate,
             novel_ref="novel",
             chapter_ceiling=max(ch["number"] for ch in staged), inputs=inputs,
-            limits={"chapters": len(staged), "max_workspace_bytes": settings.AGY_WORKSPACE_MAX_BYTES},
+            limits={"chapters": len(staged), "max_workspace_bytes": runtime.ai.workspace_max_bytes},
             created_at=datetime.now(UTC),
         )
         runtime.ai.write_json(run_root / "input" / "manifest.json", manifest.model_dump(mode="json"))
@@ -269,7 +267,7 @@ async def _run_batch(
         result = await runtime.ai.run_agy(
             run_root,
             prompt=runtime.ai.build_task_prompt("translate_batch"),
-            model=settings.AGY_MODEL_TRANSLATE, cancel_check=canceled, on_spawn=spawned,
+            model=runtime.ai.model_translate, cancel_check=canceled, on_spawn=spawned,
         )
         await runtime.ai.update_run(run_id, status="validating", exit_code=result.exit_code,
                          metrics=result.metrics())
@@ -284,7 +282,7 @@ async def _run_batch(
                 expected_source_hash=ch["source_sha256"],
                 expected_content_version=ch["source_content_version"],
                 translated_title=proposal["title"], translation=proposal["translation"],
-                new_terms=proposal["terms"], model_label=f"agy:{settings.AGY_MODEL_TRANSLATE}",
+                new_terms=proposal["terms"], model_label=runtime.ai.model_label,
                 run_id=run_id, job_id=int(job["id"]),
                 runtime=runtime,
             )
@@ -317,7 +315,7 @@ async def _resume_ready_commits(job: dict, runtime) -> int:
     committed = 0
     for row in rows:
         run_id = row["id"]
-        root = Path(settings.AGY_WORK_DIR) / (row["workspace_relpath"] or "")
+        root = runtime.ai.work_root / (row["workspace_relpath"] or "")
         try:
             if runtime.ai.sha256_file(root / "input" / "manifest.json") != row["input_sha256"]:
                 raise AgyValidationError("saved input manifest hash changed")
@@ -349,7 +347,7 @@ async def _resume_ready_commits(job: dict, runtime) -> int:
                     int(job["novel_id"]), ch["number"], expected_source_hash=ch["source_sha256"],
                     expected_content_version=ch["source_content_version"],
                     translated_title=proposal["title"], translation=proposal["translation"],
-                    new_terms=proposal["terms"], model_label=f"agy:{settings.AGY_MODEL_TRANSLATE}",
+                    new_terms=proposal["terms"], model_label=runtime.ai.model_label,
                     run_id=run_id, job_id=int(job["id"]),
                     runtime=runtime,
                 )
@@ -376,17 +374,20 @@ async def execute_translation_job(
     resumed = await _resume_ready_commits(job, runtime)
     numbers = await _pending(job, runtime)
     lengths = await _lengths(novel_id, numbers, runtime)
-    batches = _batch(numbers, lengths)
+    batches = _batch(numbers, lengths, runtime)
     glossary = await _glossary(novel_id)
     done = resumed
     total = resumed + len(numbers)
     await runtime.work.set_progress(job_id, {"done": resumed, "total": total, "batches": len(batches),
                                         "resumed_commits": resumed},
-                               stage="waiting for AGY")
+                               stage=f"waiting for {runtime.ai.provider_label}")
     for index, batch in enumerate(batches, 1):
         if await runtime.work.is_canceled(job_id):
             raise AgyCanceled()
-        await runtime.work.update_job(job_id, stage=f"translating AGY batch {index}/{len(batches)}")
+        await runtime.work.update_job(
+            job_id,
+            stage=f"translating {runtime.ai.provider_label} batch {index}/{len(batches)}",
+        )
         committed = await _run_batch(job, batch, preflight, glossary, runtime)
         done += committed
         # Newly committed first-write-wins terms feed the next batch.

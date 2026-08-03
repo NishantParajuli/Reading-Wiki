@@ -49,7 +49,7 @@ spend.
 ## Batch scheduling (HTTP)
 
 `TranslationSchedulingService`: editable check → fast active-job dedupe → resolve backend
-(API vs AGY per the user's grant) → count pending → quota guard → create/dedupe the
+(API, AGY, or OpenAI Codex per the user's grant) → count pending → quota guard → create/dedupe the
 durable job (idempotency key over novel+range). AGY reserves the pending count up front
 and finalization refunds the unconsumed remainder. API merely checks availability at
 scheduling, then reserves/refunds one unit inside each per-chapter execution; therefore

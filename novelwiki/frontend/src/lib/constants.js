@@ -39,7 +39,8 @@ export const PROVENANCE_ORDER = ["scraped", "imported", "ocr", "translated", "us
 // Activity / job vocabulary (shared by Home strip, Jobs page, novel Manage tab).
 export const ACT_KIND_LABEL = {
   scrape: "Scrape", codex_build: "Codex build", translate: "Translation",
-  agy_smoke: "AGY smoke", import: "Import", tts: "Narration",
+  agy_smoke: "AGY smoke", openai_codex_smoke: "OpenAI Codex smoke",
+  import: "Import", tts: "Narration",
 };
 export const ACT_KIND_ICON = {
   scrape: "spider", codex_build: "brain", translate: "globe",

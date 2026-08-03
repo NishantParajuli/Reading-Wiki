@@ -52,15 +52,22 @@ async def build_experience_admin_commands():
         worker_available = staticmethod(policy.worker_available)
 
     class WorkBridge:
-        retry_waiting = staticmethod(service.retry_waiting)
+        @staticmethod
+        async def retry_waiting(backend):
+            return await service.retry_waiting(execution_backend=backend)
 
         @staticmethod
-        async def create_smoke(admin_id):
+        async def create_smoke(admin_id, backend):
+            openai = backend == "openai_codex"
             return await service.create_job(
-                "agy_smoke", novel_id=None, user_id=admin_id, options={},
-                idempotency_key="agy-admin-smoke", max_attempts=1,
-                backend_requested="agy", execution_backend="agy",
-                backend_model=settings.AGY_MODEL_TRANSLATE,
+                "openai_codex_smoke" if openai else "agy_smoke",
+                novel_id=None, user_id=admin_id, options={},
+                idempotency_key=f"{backend}-admin-smoke", max_attempts=1,
+                backend_requested=backend, execution_backend=backend,
+                backend_model=(
+                    settings.OPENAI_CODEX_MODEL_CODEX if openai
+                    else settings.AGY_MODEL_TRANSLATE
+                ),
             )
 
     class AuditBridge:

@@ -9,7 +9,8 @@
       "scrape",
       "codex_build",
       "translate",
-      "agy_smoke"
+      "agy_smoke",
+      "openai_codex_smoke"
     ],
     "terminal": [
       "done",

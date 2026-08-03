@@ -1,4 +1,4 @@
-"""Shared atomic claim primitive for API and AGY durable workers."""
+"""Shared atomic claim primitive for API and subscription durable workers."""
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -13,8 +13,8 @@ async def claim_next(
     worker_id: str,
     kinds: Iterable[str] | None = None,
 ) -> dict | None:
-    if execution_backend not in ("api", "agy"):
-        raise ValueError("execution_backend must be api or agy")
+    if execution_backend not in ("api", "agy", "openai_codex"):
+        raise ValueError("execution_backend must be api, agy, or openai_codex")
     allowed_kinds = list(kinds or service.KINDS)
     pool = await get_db_pool()
     async with pool.acquire() as conn:

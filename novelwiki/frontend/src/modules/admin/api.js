@@ -19,4 +19,7 @@ export const adminApi = {
   agyHealth: () => getJSON(`${API_BASE}/admin/ai/agy/health`),
   agySmoke: () => postJSON(`${API_BASE}/admin/ai/agy/smoke-test`, {}),
   retryWaitingAgy: () => postJSON(`${API_BASE}/admin/ai/agy/retry-waiting`, {}),
+  openaiCodexHealth: () => getJSON(`${API_BASE}/admin/ai/openai-codex/health`),
+  openaiCodexSmoke: () => postJSON(`${API_BASE}/admin/ai/openai-codex/smoke-test`, {}),
+  retryWaitingOpenaiCodex: () => postJSON(`${API_BASE}/admin/ai/openai-codex/retry-waiting`, {}),
 };

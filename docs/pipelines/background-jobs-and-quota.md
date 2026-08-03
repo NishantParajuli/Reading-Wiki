@@ -16,10 +16,11 @@ and explicit settlement fix all three.
 
 | System | Table | Worker | Kinds / scope |
 |---|---|---|---|
-| Generic (Work module) | `jobs` | `modules/work/adapters/inbound/worker.py` (in-process; N instances safe) | `scrape`, `codex_build`, `translate`, `agy_smoke` |
+| Generic (Work module) | `jobs` | in-process API worker or provider-specific dedicated worker | `scrape`, `codex_build`, `translate`, `agy_smoke`, `openai_codex_smoke` |
 | Import (Acquisition) | `import_jobs` | import worker (in-process; standalone via `import-worker` CLI; N safe) | EPUB/PDF pipeline stages |
 | Narration | `tts_jobs` | TTS worker (in-process, single-instance design) | `chapter` / `book` narration |
 | AGY executor | same `jobs` table, `execution_backend='agy'` | dedicated host worker (`python -m novelwiki.agy.worker`, systemd) | AGY-granted codex/translate (+ smoke) |
+| OpenAI Codex executor | same `jobs` table, `execution_backend='openai_codex'` | dedicated host worker (`python -m novelwiki.openai_codex.worker`, systemd) | explicitly granted codex/translate (+ smoke) |
 
 All are surfaced together in `GET /api/activity` (Experience) and individually via their
 own endpoints. States are contract-frozen in

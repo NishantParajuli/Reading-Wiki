@@ -5,8 +5,9 @@ from uuid import UUID
 
 
 class PostgresAgyWorkerStateRepository:
-    def __init__(self, pool):
+    def __init__(self, pool, backend: str = "agy"):
         self._pool = pool
+        self._backend = backend
         self._lock_connection = None
 
     async def write_heartbeat(self, **fields) -> None:
@@ -16,13 +17,13 @@ class PostgresAgyWorkerStateRepository:
                 INSERT INTO ai_worker_heartbeats
                   (worker_id,backend,status,version,plugin_version,plugin_sha256,
                    details,heartbeat_at,started_at)
-                VALUES ($1,'agy',$2,$3,$4,$5,$6,now(),now())
+                VALUES ($1,$2,$3,$4,$5,$6,$7,now(),now())
                 ON CONFLICT (worker_id) DO UPDATE SET status=EXCLUDED.status,
                   version=EXCLUDED.version,plugin_version=EXCLUDED.plugin_version,
                   plugin_sha256=EXCLUDED.plugin_sha256,details=EXCLUDED.details,
                   heartbeat_at=now();
                 """,
-                fields["worker_id"], fields["status"], fields.get("version"),
+                fields["worker_id"], self._backend, fields["status"], fields.get("version"),
                 fields["plugin_version"], fields.get("plugin_sha256"),
                 json.dumps(fields.get("details") or {}),
             )
@@ -34,8 +35,9 @@ class PostgresAgyWorkerStateRepository:
                 SELECT id,job_id,workload,status,workspace_relpath,
                        process_group_id,process_started_at
                 FROM ai_execution_runs
-                WHERE backend='agy' AND status IN ('preparing','running','validating');
+                WHERE backend=$1 AND status IN ('preparing','running','validating');
                 """
+                , self._backend
             )
         return [dict(row) for row in rows]
 
@@ -44,8 +46,8 @@ class PostgresAgyWorkerStateRepository:
             rows = await connection.fetch(
                 "SELECT id,parent_run_id,workload,workspace_relpath,input_sha256 "
                 "FROM ai_execution_runs WHERE job_id=$1 AND workload=ANY($2::text[]) "
-                "AND status='validating' ORDER BY created_at;",
-                job_id, list(workloads),
+                "AND backend=$3 AND status='validating' ORDER BY created_at;",
+                job_id, list(workloads), self._backend,
             )
         return [dict(row) for row in rows]
 
@@ -53,8 +55,8 @@ class PostgresAgyWorkerStateRepository:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(
                 "SELECT id FROM ai_execution_runs "
-                "WHERE job_id=$1 AND workload=ANY($2::text[]);",
-                job_id, list(workloads),
+                "WHERE job_id=$1 AND workload=ANY($2::text[]) AND backend=$3;",
+                job_id, list(workloads), self._backend,
             )
         return tuple(row["id"] for row in rows)
 

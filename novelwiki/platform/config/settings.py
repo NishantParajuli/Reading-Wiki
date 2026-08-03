@@ -1,7 +1,22 @@
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _replace_database_host(value: str, host: str) -> str:
+    """Replace only a DSN hostname while preserving credentials and other URL parts."""
+    host = host.strip()
+    if not host or any(char in host for char in "/@?#") or any(char.isspace() for char in host):
+        raise ValueError("HOST_WORKER_DATABASE_HOST must be a hostname or IP address")
+    parsed = urlsplit(value)
+    if not parsed.hostname:
+        raise ValueError("database URL must contain a hostname")
+    credentials = parsed.netloc.rsplit("@", 1)[0] + "@" if "@" in parsed.netloc else ""
+    rendered_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return urlunsplit(parsed._replace(netloc=f"{credentials}{rendered_host}{port}"))
 
 class Settings(BaseSettings):
     # Single-line JSON is the production/default contract for Docker/journald → Loki/Grafana.
@@ -19,6 +34,10 @@ class Settings(BaseSettings):
     # bootstrap connect via asyncpg directly.
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/novelwiki"
     DB_SUPERUSER_URL: str = "postgresql://postgres:postgres@localhost:5432/postgres"
+    # Host-only workers share Docker's .env, where host.docker.internal is correct for
+    # containers but may not resolve on Linux itself. The systemd units set this to
+    # 127.0.0.1; ordinary web/CLI processes leave it empty.
+    HOST_WORKER_DATABASE_HOST: str = ""
 
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
@@ -234,6 +253,38 @@ class Settings(BaseSettings):
     # Worker health is considered stale after this interval for /auth/me and admin UI.
     AGY_WORKER_HEALTH_TTL_SECONDS: int = 90
 
+    # ── OpenAI Codex App Server subscription backend ─────────────────
+    # This is a separate, opt-in backend that uses the official Codex login owned
+    # by the dedicated worker OS account. NovelWiki never reads the OAuth token.
+    OPENAI_CODEX_ENABLED: bool = False
+    OPENAI_CODEX_CODEX_ENABLED: bool = False
+    OPENAI_CODEX_BINARY: str = str(Path.home() / ".local" / "bin" / "codex")
+    OPENAI_CODEX_MIN_VERSION: str = "0.146.0"
+    OPENAI_CODEX_BINARY_SHA256: str = ""
+    OPENAI_CODEX_WORK_DIR: str = str(
+        Path.home() / ".local" / "share" / "novelwiki" / "openai-codex-jobs"
+    )
+    OPENAI_CODEX_CREDENTIAL_DIR: str = str(Path.home() / ".codex")
+    # Current model roles: Luna for high-volume extraction, Terra for translation.
+    OPENAI_CODEX_MODEL_TRANSLATE: str = "gpt-5.6-terra"
+    OPENAI_CODEX_MODEL_CODEX: str = "gpt-5.6-luna"
+    OPENAI_CODEX_REASONING_TRANSLATE: str = "medium"
+    OPENAI_CODEX_REASONING_CODEX: str = "medium"
+    OPENAI_CODEX_TURN_TIMEOUT_SECONDS: int = 1200
+    OPENAI_CODEX_KILL_GRACE_SECONDS: int = 10
+    OPENAI_CODEX_STDOUT_MAX_BYTES: int = 16_777_216
+    OPENAI_CODEX_STDERR_MAX_BYTES: int = 1_048_576
+    OPENAI_CODEX_WORKSPACE_MAX_BYTES: int = 134_217_728
+    OPENAI_CODEX_TRANSLATE_BATCH_CHAPTERS: int = 3
+    OPENAI_CODEX_TRANSLATE_BATCH_MAX_CHARS: int = 120_000
+    OPENAI_CODEX_SEPARATE_CODEX_VERIFY: bool = False
+    OPENAI_CODEX_MAX_ATTEMPTS: int = 2
+    OPENAI_CODEX_PROVIDER_RETRY_MINUTES: int = 30
+    OPENAI_CODEX_SUCCESS_RETENTION_HOURS: int = 24
+    OPENAI_CODEX_FAILURE_RETENTION_HOURS: int = 168
+    OPENAI_CODEX_CONTRACT_VERSION: str = "1.0.2"
+    OPENAI_CODEX_WORKER_HEALTH_TTL_SECONDS: int = 90
+
     # Text segmentation/cleanup LLM (native DeepSeek when configured, otherwise OpenRouter).
     SEGMENT_MODEL: str = "deepseek/deepseek-v4-pro"
 
@@ -350,6 +401,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_runtime_settings(self):
+        if self.HOST_WORKER_DATABASE_HOST:
+            self.DATABASE_URL = _replace_database_host(
+                self.DATABASE_URL, self.HOST_WORKER_DATABASE_HOST
+            )
+            self.DB_SUPERUSER_URL = _replace_database_host(
+                self.DB_SUPERUSER_URL, self.HOST_WORKER_DATABASE_HOST
+            )
         if self.LOG_LEVEL.strip().upper() not in {
             "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
         }:
@@ -389,6 +447,27 @@ class Settings(BaseSettings):
         if not 1 <= self.AGY_REQUIRED_LOADED_HOOKS <= 20:
             raise ValueError("AGY_REQUIRED_LOADED_HOOKS must be between 1 and 20")
         for field in ("AGY_MODEL_TRANSLATE", "AGY_MODEL_CODEX", "AGY_MODEL_SEGMENT", "AGY_MODEL_OCR"):
+            if not getattr(self, field).strip():
+                raise ValueError(f"{field} must not be empty")
+        if not 60 <= self.OPENAI_CODEX_TURN_TIMEOUT_SECONDS <= 7200:
+            raise ValueError("OPENAI_CODEX_TURN_TIMEOUT_SECONDS must be between 60 and 7200")
+        if not 1 <= self.OPENAI_CODEX_KILL_GRACE_SECONDS <= 60:
+            raise ValueError("OPENAI_CODEX_KILL_GRACE_SECONDS must be between 1 and 60")
+        if not 1 <= self.OPENAI_CODEX_TRANSLATE_BATCH_CHAPTERS <= 10:
+            raise ValueError("OPENAI_CODEX_TRANSLATE_BATCH_CHAPTERS must be between 1 and 10")
+        if not 1_000 <= self.OPENAI_CODEX_TRANSLATE_BATCH_MAX_CHARS <= 500_000:
+            raise ValueError("OPENAI_CODEX_TRANSLATE_BATCH_MAX_CHARS is outside the safe range")
+        if not 1 <= self.OPENAI_CODEX_MAX_ATTEMPTS <= 5:
+            raise ValueError("OPENAI_CODEX_MAX_ATTEMPTS must be between 1 and 5")
+        if min(self.OPENAI_CODEX_STDOUT_MAX_BYTES, self.OPENAI_CODEX_STDERR_MAX_BYTES) < 4096:
+            raise ValueError("OpenAI Codex stream retention limits must be at least 4096 bytes")
+        if self.OPENAI_CODEX_WORKSPACE_MAX_BYTES < 1_048_576:
+            raise ValueError("OPENAI_CODEX_WORKSPACE_MAX_BYTES must be at least 1 MiB")
+        valid_efforts = {"low", "medium", "high", "xhigh", "max"}
+        for field in ("OPENAI_CODEX_REASONING_TRANSLATE", "OPENAI_CODEX_REASONING_CODEX"):
+            if getattr(self, field) not in valid_efforts:
+                raise ValueError(f"{field} has an unsupported value")
+        for field in ("OPENAI_CODEX_MODEL_TRANSLATE", "OPENAI_CODEX_MODEL_CODEX"):
             if not getattr(self, field).strip():
                 raise ValueError(f"{field} must not be empty")
         return self

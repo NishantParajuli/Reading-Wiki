@@ -73,10 +73,13 @@ class AdminUserUpdate(BaseModel):
 
 class AdminAiBackendPolicy(BaseModel):
     agy_enabled: bool = False
-    default_backend: Literal["api", "agy"] = "api"
+    openai_codex_enabled: bool = False
+    default_backend: Literal["api", "agy", "openai_codex"] = "api"
     agy_workloads: list[str] = Field(default_factory=list)
+    openai_codex_workloads: list[str] = Field(default_factory=list)
     fallback_to_api: bool = settings.AGY_FALLBACK_TO_API_DEFAULT
     max_concurrent_agy_jobs: int = Field(default=1, ge=1, le=4)
+    max_concurrent_openai_codex_jobs: int = Field(default=1, ge=1, le=4)
     notes: str | None = Field(default=None, max_length=1000)
 
 
@@ -114,15 +117,21 @@ async def admin_list_users(
             },
             "ai_backend_policy": {
                 "agy_enabled": bool(r["agy_enabled"]),
+                "openai_codex_enabled": bool(r["openai_codex_enabled"]),
                 "default_backend": r["default_backend"] or "api",
                 "agy_workloads": list(r["agy_workloads"] or []),
+                "openai_codex_workloads": list(r["openai_codex_workloads"] or []),
                 "fallback_to_api": bool(r["fallback_to_api"]),
                 "max_concurrent_agy_jobs": int(r["max_concurrent_agy_jobs"] or 1),
+                "max_concurrent_openai_codex_jobs": int(
+                    r["max_concurrent_openai_codex_jobs"] or 1
+                ),
                 "policy_version": int(r["policy_version"]) if r["policy_version"] is not None else None,
                 "notes": r["agy_notes"],
                 "updated_at": r["agy_updated_at"].isoformat() if r["agy_updated_at"] else None,
                 "granted_by": int(r["granted_by"]) if r["granted_by"] is not None else None,
                 "active_jobs": int(r["agy_active_jobs"] or 0),
+                "openai_codex_active_jobs": int(r["openai_codex_active_jobs"] or 0),
             },
         }
         for r in rows
@@ -151,15 +160,24 @@ async def admin_update_user(
 
 def _policy_view(row: dict | None, user_id: int) -> dict:
     if not row:
-        return {"user_id": user_id, "agy_enabled": False, "default_backend": "api",
-                "agy_workloads": [], "fallback_to_api": False,
-                "max_concurrent_agy_jobs": 1, "policy_version": None, "notes": None,
+        return {"user_id": user_id, "agy_enabled": False,
+                "openai_codex_enabled": False, "default_backend": "api",
+                "agy_workloads": [], "openai_codex_workloads": [],
+                "fallback_to_api": False, "max_concurrent_agy_jobs": 1,
+                "max_concurrent_openai_codex_jobs": 1,
+                "policy_version": None, "notes": None,
                 "granted_by": None, "created_at": None, "updated_at": None}
     return {
         "user_id": user_id, "agy_enabled": bool(row["agy_enabled"]),
-        "default_backend": row["default_backend"], "agy_workloads": list(row["agy_workloads"] or []),
+        "openai_codex_enabled": bool(row["openai_codex_enabled"]),
+        "default_backend": row["default_backend"],
+        "agy_workloads": list(row["agy_workloads"] or []),
+        "openai_codex_workloads": list(row["openai_codex_workloads"] or []),
         "fallback_to_api": bool(row["fallback_to_api"]),
         "max_concurrent_agy_jobs": int(row["max_concurrent_agy_jobs"]),
+        "max_concurrent_openai_codex_jobs": int(
+            row["max_concurrent_openai_codex_jobs"]
+        ),
         "policy_version": int(row["policy_version"]), "notes": row.get("notes"),
         "granted_by": int(row["granted_by"]) if row.get("granted_by") is not None else None,
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
@@ -236,6 +254,7 @@ async def admin_retry_waiting_agy(
 async def admin_agy_smoke_test(
     admin: dict = Depends(require_admin),
     commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+    projections=Depends(operational_projection_dependency),
 ):
     if not settings.AGY_ENABLED:
         raise HTTPException(status_code=409, detail="Enable AGY before running a consuming smoke test.")
@@ -245,6 +264,85 @@ async def admin_agy_smoke_test(
     job_id, created = await commands.queue_smoke(int(admin["id"]))
     return {"status": "queued", "job_id": job_id, "deduped": not created,
             "warning": "This explicit smoke test consumes AGY subscription capacity."}
+
+
+@router.get("/ai/openai-codex/health")
+async def admin_openai_codex_health(
+    admin: dict = Depends(require_admin),
+    commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+    projections=Depends(operational_projection_dependency),
+):
+    heartbeat, counts, recent, last_success = await projections.subscription_health(
+        "openai_codex"
+    )
+    details = heartbeat["details"] if heartbeat else {}
+    if isinstance(details, str):
+        try:
+            details = __import__("json").loads(details)
+        except Exception:
+            details = {}
+    return {
+        "enabled": settings.OPENAI_CODEX_ENABLED,
+        "available": await commands.worker_available("openai_codex"),
+        "worker": (
+            {
+                "id": heartbeat["worker_id"],
+                "status": heartbeat["status"],
+                "version": heartbeat["version"],
+                "contract_version": heartbeat["plugin_version"],
+                "contract_sha256": heartbeat["plugin_sha256"],
+                "details": details,
+                "heartbeat_at": heartbeat["heartbeat_at"].isoformat(),
+            }
+            if heartbeat
+            else None
+        ),
+        "queue": {
+            "queued": int(counts["queued"] or 0),
+            "running": int(counts["running"] or 0),
+            "waiting_provider": int(counts["waiting"] or 0),
+            "oldest_at": counts["oldest"].isoformat() if counts["oldest"] else None,
+        },
+        "last_success_at": last_success.isoformat() if last_success else None,
+        "recent_failures": [
+            {"code": row["failure_code"], "count": int(row["count"])}
+            for row in recent
+        ],
+    }
+
+
+@router.post("/ai/openai-codex/retry-waiting")
+async def admin_retry_waiting_openai_codex(
+    admin: dict = Depends(require_admin),
+    commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+):
+    count = await commands.retry_waiting(int(admin["id"]), "openai_codex")
+    return {"status": "success", "jobs_requeued": count}
+
+
+@router.post("/ai/openai-codex/smoke-test")
+async def admin_openai_codex_smoke_test(
+    admin: dict = Depends(require_admin),
+    commands: ExperienceAdminCommands = Depends(experience_admin_commands_dependency),
+    projections=Depends(operational_projection_dependency),
+):
+    if not settings.OPENAI_CODEX_ENABLED:
+        raise HTTPException(
+            status_code=409,
+            detail="Enable OpenAI Codex before running a consuming smoke test.",
+        )
+    if await projections.recent_smoke("openai_codex"):
+        raise HTTPException(
+            status_code=429,
+            detail="An OpenAI Codex smoke test ran in the last 10 minutes.",
+        )
+    job_id, created = await commands.queue_smoke(int(admin["id"]), "openai_codex")
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "deduped": not created,
+        "warning": "This explicit smoke test consumes ChatGPT Codex subscription capacity.",
+    }
 
 
 @router.delete("/users/{user_id}")

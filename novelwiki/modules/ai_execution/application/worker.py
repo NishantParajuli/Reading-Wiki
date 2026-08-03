@@ -26,8 +26,12 @@ class AgyWorkerOperations(Protocol):
 
 
 class AgyWorkerService:
-    def __init__(self, operations: AgyWorkerOperations):
+    def __init__(self, operations: AgyWorkerOperations, provider: str = "agy"):
         self._ops = operations
+        self._provider = provider
+
+    def _event(self, suffix: str) -> str:
+        return f"{self._provider}.{suffix}"
 
     async def process(self, job: dict, preflight: Any, state: dict) -> None:
         job_id = int(job["id"])
@@ -37,10 +41,10 @@ class AgyWorkerService:
             if not allowed:
                 await self._ops.cancel(job_id)
                 await self._ops.mark_canceled(job_id)
-                await self._ops.record("agy.run.canceled", job, job_id=job_id, reason=reason)
+                await self._ops.record(self._event("run.canceled"), job, job_id=job_id, reason=reason)
                 return
             await self._ops.record(
-                "agy.run.started", job, job_id=job_id, kind=job["kind"],
+                self._event("run.started"), job, job_id=job_id, kind=job["kind"],
                 model=job.get("backend_model"),
             )
             try:
@@ -50,15 +54,15 @@ class AgyWorkerService:
             if handler is None:
                 raise self._ops.unsupported_error()
             progress = await handler(job, preflight, self._ops.execution_context())
-            if job["kind"] == "agy_smoke":
+            if job["kind"] in {"agy_smoke", "openai_codex_smoke"}:
                 await self._ops.record(
-                    "agy.smoke.completed", job, job_id=job_id,
+                    self._event("smoke.completed"), job, job_id=job_id,
                     version=progress.get("version"), model=progress.get("model"),
                 )
             if await self._ops.mark_done(job_id, progress):
                 await self._ops.finalize(job_id, True)
                 await self._ops.record(
-                    "agy.run.completed", job, job_id=job_id, kind=job["kind"]
+                    self._event("run.completed"), job, job_id=job_id, kind=job["kind"]
                 )
             else:
                 await self._ops.mark_canceled(job_id)
@@ -69,7 +73,7 @@ class AgyWorkerService:
             )
             if self._ops.is_canceled_error(exc):
                 await self._ops.mark_canceled(job_id)
-                await self._ops.record("agy.run.canceled", job, job_id=job_id)
+                await self._ops.record(self._event("run.canceled"), job, job_id=job_id)
                 return
             code = self._ops.error_code(exc)
             summary = self._ops.error_summary(exc)
@@ -80,13 +84,16 @@ class AgyWorkerService:
             elif code in {
                 "agy_not_authenticated", "agy_permission_blocked", "agy_plugin_invalid",
                 "agy_version_unsupported", "agy_model_missing",
+                "openai_codex_not_authenticated", "openai_codex_permission_blocked",
+                "openai_codex_version_unsupported", "openai_codex_model_missing",
+                "openai_codex_protocol_error",
             }:
                 state.update(status="unhealthy", error=summary)
                 await self._ops.wait_for_provider(job_id, code, summary)
             elif not await self._ops.fallback_to_api(job, exc):
                 await self._ops.fail_or_retry(job, summary)
             await self._ops.record(
-                "agy.run.failed", job, job_id=job_id, failure_code=code,
+                self._event("run.failed"), job, job_id=job_id, failure_code=code,
                 attempt=job.get("attempts"),
             )
         finally:

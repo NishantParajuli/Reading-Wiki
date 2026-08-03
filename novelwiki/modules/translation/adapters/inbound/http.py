@@ -30,7 +30,7 @@ class TranslateTrigger(BaseModel):
     to_chapter: float | None = None
     force: bool = False
     seed_from_codex: bool = False
-    ai_backend: Literal["auto", "api", "agy"] = "auto"
+    ai_backend: Literal["auto", "api", "agy", "openai_codex"] = "auto"
 
 
 async def glossary_service_dependency() -> GlossaryService:

@@ -10,16 +10,16 @@ def wire_ai_policy() -> None:
 
     class Dependencies:
         @staticmethod
-        async def _work_repository():
+        async def _work_repository(backend: str = "agy"):
             from novelwiki.modules.work.adapters.outbound.worker_state import (
                 PostgresWorkerStateRepository,
             )
             from novelwiki.platform.database import init_db_pool
 
-            return PostgresWorkerStateRepository(await init_db_pool())
+            return PostgresWorkerStateRepository(await init_db_pool(), backend)
 
-        async def active_job_count(self, user_id: int) -> int:
-            return await (await self._work_repository()).active_job_count(user_id)
+        async def active_job_count(self, user_id: int, backend: str = "agy") -> int:
+            return await (await self._work_repository(backend)).active_job_count(user_id)
 
         async def user_exists(self, user_id: int) -> bool:
             from novelwiki.modules.identity.adapters.outbound.worker_lookup import (
@@ -32,8 +32,10 @@ def wire_ai_policy() -> None:
             ).load_user(user_id)
             return user is not None
 
-        async def revoked_job_ids(self, user_id: int, kinds: list[str]) -> list[int]:
-            return await (await self._work_repository()).revoked_job_ids(user_id, kinds)
+        async def revoked_job_ids(
+            self, user_id: int, kinds: list[str], backend: str = "agy"
+        ) -> list[int]:
+            return await (await self._work_repository(backend)).revoked_job_ids(user_id, kinds)
 
         async def cancel_job(self, job_id: int) -> bool:
             from novelwiki.modules.work.adapters.outbound import postgres

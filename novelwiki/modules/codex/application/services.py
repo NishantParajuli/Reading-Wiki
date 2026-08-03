@@ -250,7 +250,8 @@ class CodexCommandService:
     def __init__(
         self, catalog: CatalogEditPort, backend: BackendResolutionPort,
         work: CodexWorkPort, quota: CodexQuotaPort, merger: EntityMergePort,
-        agy_max_attempts: int, pipeline_version: str = "2.0",
+        agy_max_attempts: int, openai_codex_max_attempts: int,
+        pipeline_version: str = "2.0",
     ):
         self._catalog = catalog
         self._backend = backend
@@ -258,6 +259,7 @@ class CodexCommandService:
         self._quota = quota
         self._merger = merger
         self._agy_max_attempts = agy_max_attempts
+        self._openai_codex_max_attempts = openai_codex_max_attempts
         self._pipeline_version = pipeline_version
 
     async def schedule_build(
@@ -297,7 +299,13 @@ class CodexCommandService:
                 },
                 idempotency_key=idem, decision=decision,
                 max_attempts=(
-                    self._agy_max_attempts if decision.resolved == "agy" else None
+                    self._agy_max_attempts
+                    if decision.resolved == "agy"
+                    else (
+                        self._openai_codex_max_attempts
+                        if decision.resolved == "openai_codex"
+                        else None
+                    )
                 ),
             )
 

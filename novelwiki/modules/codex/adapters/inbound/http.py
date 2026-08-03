@@ -29,7 +29,7 @@ class CodexBuild(BaseModel):
     force: bool = False
     from_chapter: float | None = None
     to_chapter: float | None = None
-    ai_backend: Literal["auto", "api", "agy"] = "auto"
+    ai_backend: Literal["auto", "api", "agy", "openai_codex"] = "auto"
 
 
 class MergePayload(BaseModel):

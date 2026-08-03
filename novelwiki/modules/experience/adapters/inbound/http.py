@@ -77,10 +77,10 @@ def _generic_job_row(j: dict) -> dict:
         **j, "progress": progress, "options": options,
         "execution_backend": j.get("execution_backend") or "api",
         "backend_model": j.get("backend_model"),
-        "plugin_version": j.get("current_plugin_version") or (
-            settings.AGY_PLUGIN_VERSION
-            if (j.get("execution_backend") or "api") == "agy" else None
-        ),
+        "plugin_version": j.get("current_plugin_version") or {
+            "agy": settings.AGY_PLUGIN_VERSION,
+            "openai_codex": settings.OPENAI_CODEX_CONTRACT_VERSION,
+        }.get(j.get("execution_backend") or "api"),
     }
     active = v["status"] in {"queued", "running", "waiting_provider"}
     return {
