@@ -261,18 +261,18 @@ owned by the dedicated worker user, not an application API key. See the
 | Setting | Default | Notes |
 |---|---|---|
 | `OPENAI_CODEX_ENABLED` / `OPENAI_CODEX_CODEX_ENABLED` | `false` / `false` | provider-wide and extraction-only kill switches |
-| `OPENAI_CODEX_BINARY` / `OPENAI_CODEX_MIN_VERSION` / `OPENAI_CODEX_BINARY_SHA256` | `~/.local/bin/codex` / `0.146.0` / empty in code | official executable, minimum protocol version, optional integrity pin; `.env.example` pins the tested launcher |
-| `OPENAI_CODEX_WORK_DIR` | `~/.local/share/novelwiki/openai-codex-jobs` | private story-bearing run workspaces outside checkout/public roots |
-| `OPENAI_CODEX_CREDENTIAL_DIR` | `~/.codex` | official auth source; only `auth.json` is linked into per-run state, never parsed by NovelWiki |
+| `OPENAI_CODEX_BINARY` / `OPENAI_CODEX_MIN_VERSION` / `OPENAI_CODEX_BINARY_SHA256` | `~/.local/bin/codex` / `0.146.0` / empty in code | official executable, minimum protocol version, optional integrity pin; `.env.example` pins the tested launcher, and `~` expands to the worker service user's home |
+| `OPENAI_CODEX_WORK_DIR` | `~/.local/share/novelwiki/openai-codex-jobs` | private story-bearing run workspaces outside checkout/public roots; `~` expands to the worker service user's home |
+| `OPENAI_CODEX_CREDENTIAL_DIR` | `~/.codex` | official auth source under the worker service user's home; only `auth.json` is linked into per-run state, never parsed by NovelWiki |
 | `OPENAI_CODEX_MODEL_TRANSLATE` / `OPENAI_CODEX_MODEL_CODEX` | `gpt-5.6-terra` / `gpt-5.6-luna` | translation and high-volume extraction roles; preflight requires both in App Server `model/list` |
 | `OPENAI_CODEX_REASONING_TRANSLATE` / `OPENAI_CODEX_REASONING_CODEX` | `medium` / `medium` | allowed: low, medium, high, xhigh, max |
 | `OPENAI_CODEX_TURN_TIMEOUT_SECONDS` / `OPENAI_CODEX_KILL_GRACE_SECONDS` | 1200 / 10 | turn deadline and process-group termination grace |
 | `OPENAI_CODEX_STDOUT_MAX_BYTES` / `OPENAI_CODEX_STDERR_MAX_BYTES` / `OPENAI_CODEX_WORKSPACE_MAX_BYTES` | 16 MiB / 1 MiB / 128 MiB | JSONL, diagnostic-tail, and workspace caps |
 | `OPENAI_CODEX_TRANSLATE_BATCH_CHAPTERS` / `OPENAI_CODEX_TRANSLATE_BATCH_MAX_CHARS` | 3 / 120000 | per-turn translation bound |
 | `OPENAI_CODEX_SEPARATE_CODEX_VERIFY` | `false` | when true, run a separate structured verification child turn |
-| `OPENAI_CODEX_MAX_ATTEMPTS` / `OPENAI_CODEX_PROVIDER_RETRY_MINUTES` | 2 / 30 | retries and provider-capacity parking |
+| `OPENAI_CODEX_MAX_ATTEMPTS` / `OPENAI_CODEX_PROVIDER_RETRY_MINUTES` | 2 / 30 | OpenAI Codex job retries (independent of `AGY_MAX_ATTEMPTS`) and provider-capacity parking |
 | `OPENAI_CODEX_SUCCESS_RETENTION_HOURS` / `OPENAI_CODEX_FAILURE_RETENTION_HOURS` | 24 / 168 | private workspace retention |
-| `OPENAI_CODEX_CONTRACT_VERSION` | `1.0.0` | host prompt/schema contract recorded on every run and heartbeat |
+| `OPENAI_CODEX_CONTRACT_VERSION` | `1.0.2` | host prompt/schema contract recorded on every run and heartbeat; 1.0.2 adds strict schema normalization and validator-owned enums |
 | `OPENAI_CODEX_WORKER_HEALTH_TTL_SECONDS` | 90 | heartbeat staleness for capabilities/admin health |
 
 ## Minimal production checklist

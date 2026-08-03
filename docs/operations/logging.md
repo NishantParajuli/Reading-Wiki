@@ -54,7 +54,7 @@ also include:
 | `agy_empty_planner_responses`, `agy_token_usage_available` | total AGY planner-without-modified-response warnings (successful tool steps can increment it); the runner aborts only a no-output-progress streak. Token telemetry is explicitly unavailable (`false` for the pinned CLI) |
 | `status`, `stage`, `progress` | resulting durable state and structured progress object |
 | `duration_ms` | elapsed wall-clock time for requests, attempts, subprocesses, or generated chapters |
-| `error_type`, `error_message`, `stack_trace` | exception class, summary, and traceback when a live exception is logged |
+| `error_type`, `error_message`, `stack_trace` | exception class, summary, and traceback when a live exception is logged; OpenAI Codex summaries may include only an allowlisted error tag/HTTP status or a fixed request authentication/permission category, never the raw provider message |
 
 `request_id` follows the synchronous HTTP action. A durable worker may execute minutes
 later in another process, so `job_id` is the bridge between the scheduling request and all

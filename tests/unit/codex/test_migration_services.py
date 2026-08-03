@@ -147,12 +147,15 @@ class Catalog:
 
 
 class Backend:
-    def __init__(self):
+    def __init__(self, resolved="api"):
         self.calls = 0
+        self.resolved = resolved
 
     async def resolve(self, principal, requested):
         self.calls += 1
-        return BackendDecision("auto", "api", "global_disabled", "flash", None, False)
+        return BackendDecision(
+            "auto", self.resolved, "test", "flash", None, False
+        )
 
 
 class Work:
@@ -160,11 +163,13 @@ class Work:
         self.active = active
         self.result = result
         self.error = error
+        self.scheduled = None
 
     async def find_active(self, key):
         return self.active
 
     async def schedule(self, **kwargs):
+        self.scheduled = kwargs
         if self.error:
             raise self.error
         return self.result
@@ -187,10 +192,11 @@ class Merger:
         pass
 
 
-def command_service(work):
-    catalog, backend, quota = Catalog(), Backend(), Quota()
+def command_service(work, *, resolved="api"):
+    catalog, backend, quota = Catalog(), Backend(resolved), Quota()
     service = CodexCommandService(
-        catalog, backend, work, quota, Merger(), agy_max_attempts=3
+        catalog, backend, work, quota, Merger(),
+        agy_max_attempts=3, openai_codex_max_attempts=2,
     )
     return service, catalog, backend, quota
 
@@ -231,3 +237,14 @@ async def test_build_range_validation_happens_before_backend_or_quota():
 
     assert backend.calls == 0
     assert quota.reserved == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("resolved", "expected"), [("agy", 3), ("openai_codex", 2)])
+async def test_build_uses_provider_specific_attempt_limit(resolved, expected):
+    work = Work()
+    service, _, _, _ = command_service(work, resolved=resolved)
+
+    await service.schedule_build(1, PRINCIPAL, BuildCodex())
+
+    assert work.scheduled["max_attempts"] == expected

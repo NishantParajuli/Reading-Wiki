@@ -25,6 +25,7 @@ class TranslationSchedulingService:
         self, catalog: CatalogAccessPort, reading: ReadingTranslationPort,
         backend: BackendResolutionPort, work: TranslationWorkPort,
         quota: TranslationQuotaPort, agy_max_attempts: int,
+        openai_codex_max_attempts: int,
     ):
         self._catalog = catalog
         self._reading = reading
@@ -32,6 +33,7 @@ class TranslationSchedulingService:
         self._work = work
         self._quota = quota
         self._agy_max_attempts = agy_max_attempts
+        self._openai_codex_max_attempts = openai_codex_max_attempts
 
     async def schedule(
         self, novel_id: int, principal: Principal, command: ScheduleTranslation
@@ -78,7 +80,15 @@ class TranslationSchedulingService:
                 idempotency_key=idem,
                 decision=decision,
                 quota_reserved=reserved,
-                max_attempts=self._agy_max_attempts if reserved else None,
+                max_attempts=(
+                    self._agy_max_attempts
+                    if decision.resolved == "agy"
+                    else (
+                        self._openai_codex_max_attempts
+                        if decision.resolved == "openai_codex"
+                        else None
+                    )
+                ),
             )
 
         async def refund():

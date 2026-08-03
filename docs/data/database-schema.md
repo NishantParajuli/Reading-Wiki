@@ -109,6 +109,8 @@ One row per provider invocation (a job may have many: attempts, chapters, child 
 `attempt`, `input_sha256`/`output_sha256` (artifact integrity), `workspace_relpath`,
 `process_group_id` + `process_started_at` (identity-verified orphan reaping),
 `exit_code`, `failure_code`, `error_summary`, `metrics JSONB`, timing columns.
+Run status progresses from `preparing` to `running`, then to a terminal `completed`, `failed`,
+or `canceled`; orphan recovery may instead mark it `worker_lost`.
 
 ### `ai_worker_heartbeats`
 

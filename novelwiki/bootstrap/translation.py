@@ -206,6 +206,7 @@ async def build_translation_scheduling_service():
             work_service.BackendPolicyChangedError,
         ),
         TranslationQuotaBridge(quota), settings.AGY_MAX_ATTEMPTS,
+        settings.OPENAI_CODEX_MAX_ATTEMPTS,
     )
 
 

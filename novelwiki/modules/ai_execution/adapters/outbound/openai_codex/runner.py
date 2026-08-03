@@ -8,7 +8,11 @@ from typing import Any, Awaitable, Callable
 
 from pydantic import ValidationError
 
-from novelwiki.modules.ai_execution.application.contracts import ArtifactRef, OutputManifest
+from novelwiki.modules.ai_execution.application.contracts import (
+    ArtifactRef,
+    OutputManifest,
+    normalize_extraction_candidate,
+)
 from novelwiki.modules.ai_execution.application.errors import AgyValidationError
 from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.client import (
     AppServerResult,
@@ -124,6 +128,9 @@ def _write_text(path: Path, text: str) -> None:
 
 
 def materialize_result(run_root: Path, workload: str, value: Any) -> None:
+    if workload in {"codex_extract", "codex_verify"} and isinstance(value, dict):
+        extraction, _repairs = normalize_extraction_candidate(value.get("extraction"))
+        value = {**value, "extraction": extraction}
     try:
         result = validate_result(workload, value)
     except ValidationError as exc:
@@ -276,7 +283,13 @@ def process_start_time(pid: int) -> str | None:
 
 
 def safe_error_summary(exc: BaseException) -> str:
-    return f"{getattr(exc, 'code', 'unknown')}: {type(exc).__name__}"
+    summary = f"{getattr(exc, 'code', 'unknown')}: {type(exc).__name__}"
+    detail = getattr(exc, "safe_detail", None)
+    if isinstance(detail, str) and detail and len(detail) <= 80 and all(
+        character.isalnum() or character in " _-()" for character in detail
+    ):
+        return f"{summary} ({detail})"
+    return summary
 
 
 def is_database_error(exc: BaseException) -> bool:

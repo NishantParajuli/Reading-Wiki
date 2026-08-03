@@ -62,7 +62,12 @@ TERM_TYPES = {"name", "place", "skill", "item", "term", "faction", "organization
 class TranslationTerm(StrictModel):
     source_term: str = Field(min_length=1, max_length=200)
     translation: str = Field(min_length=1, max_length=200)
-    term_type: str = Field(default="term", min_length=1, max_length=40)
+    term_type: str = Field(
+        default="term",
+        min_length=1,
+        max_length=40,
+        json_schema_extra={"enum": sorted(TERM_TYPES)},
+    )
 
     @field_validator("term_type")
     @classmethod
@@ -167,7 +172,11 @@ def normalize_extraction_candidate(value: Any) -> tuple[Any, tuple[str, ...]]:
 class ExtractionMention(StrictModel):
     entity_ref: MentionRef
     surface_form: str = Field(min_length=1, max_length=300)
-    type: str = Field(min_length=1, max_length=40)
+    type: str = Field(
+        min_length=1,
+        max_length=40,
+        json_schema_extra={"enum": sorted(ENTITY_TYPES)},
+    )
     description: str = Field(default="", max_length=1000)
     provisional: bool = False
 
@@ -219,7 +228,7 @@ class ExtractionAlias(StrictModel):
 
 class StateTransitionProposal(StrictModel):
     entity_ref: EntityRef
-    state_key: str
+    state_key: str = Field(json_schema_extra={"enum": sorted(STATE_KEYS)})
     operation: Literal["set", "clear", "add", "remove", "confirm", "contradict"]
     value: Any = None
     value_entity_ref: EntityRef | None = None
@@ -239,7 +248,9 @@ class StateTransitionProposal(StrictModel):
 class RelationshipStateTransitionProposal(StrictModel):
     source_ref: EntityRef
     target_ref: EntityRef
-    state_key: str
+    state_key: str = Field(
+        json_schema_extra={"enum": sorted(RELATIONSHIP_STATE_KEYS)}
+    )
     operation: Literal["set", "clear", "add", "remove", "confirm", "contradict"]
     value: Any = None
     certainty: Literal["uncertain", "alleged", "presumed", "confirmed", "contradicted"] = "confirmed"

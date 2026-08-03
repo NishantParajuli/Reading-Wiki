@@ -67,12 +67,18 @@ is linked. History and web search are disabled.
 
 The worker starts an ephemeral App Server thread with `approvalPolicy=never`, read-only sandbox,
 network disabled for the sandbox, no interactive client actions, and a workload-specific JSON
-Schema. Story content is passed inside an explicit untrusted-data boundary. The model cannot write
-files: the host validates the final structured message, writes the exact artifact files and
-SHA-256 manifest, then enters the same validators, resumable-commit logic, quota settlement, and
-atomic database workflows as AGY. Cancellation sends `turn/interrupt` and then identity-checked
-process-group termination. Token usage notifications are stored as run metrics; story/transcript
-content is not written to logs.
+Schema normalized to OpenAI's strict Structured Outputs subset (all properties required,
+`additionalProperties=false` for every object, nullable types preserved, defaults removed, and
+otherwise unconstrained transition values bounded to JSON scalars or scalar arrays). Closed host
+vocabularies are emitted as enums, and the same loss-minimizing extraction normalization used by
+AGY runs before final Pydantic validation. Story content is passed inside an explicit
+untrusted-data boundary. The model cannot write files: the host validates the final structured
+message, writes the exact artifact files and SHA-256 manifest, then enters the same validators,
+resumable-commit logic, quota settlement, and atomic database workflows as AGY. Cancellation sends
+`turn/interrupt` and then identity-checked process-group termination. Token usage notifications are
+stored as run metrics; failed turns retain only an allowlisted App Server error tag/HTTP status,
+and request-level authentication/permission rejections are reduced to safe worker-health
+categories. Raw App Server messages and story/transcript content are not written to logs.
 
 ## AGY execution (the hardened path)
 
@@ -122,6 +128,7 @@ The dedicated host worker (never the web process) claims `jobs` rows with
 |---|---|
 | Provider capacity/quota | park `waiting_provider` for the selected provider's retry interval; no lease or tight retry; auto-release when due or admin **Retry waiting** |
 | Transient crash | retry up to the selected subscription backend's max attempts (2 by default) |
+| Authentication/permission rejection | mark that subscription worker unhealthy, park the current job, and stop new claims until operator recovery |
 | Permanent failure, `fallback_to_api` allowed | `_fallback_to_api`: job re-pointed to the API backend with the selected provider in `backend_fallback_from`; its unused translation reservation is refunded first so API metering cannot double-charge |
 | Permanent failure, no fallback | `failed` + quota settlement (refund of unconsumed reservation) |
 | Revoked grant / bumped policy at claim time | job not executed (reauthorization loses gracefully) |

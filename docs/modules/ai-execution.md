@@ -138,7 +138,8 @@ admin panel and `/auth/me` capability), orphan-run detection, resumable-run quer
   disambiguation artifacts expected by the existing validators; the model never writes files.
 - **`workspace.py`** creates the private run root and isolated sibling `CODEX_HOME`, linking
   only the official `auth.json` while disabling persisted history and web search.
-- **`smoke.py`** implements the explicitly consuming, rate-limited admin readiness turn.
+- **`smoke.py`** implements the explicitly consuming, rate-limited admin readiness turn and
+  always terminalizes its run record as completed, failed, or canceled with `finished_at`.
 
 ## The dedicated host worker (`adapters/inbound/worker.py`)
 

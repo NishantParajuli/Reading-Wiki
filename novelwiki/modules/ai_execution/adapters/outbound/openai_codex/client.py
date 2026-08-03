@@ -17,6 +17,159 @@ from novelwiki.platform.config import settings
 
 CancelCheck = Callable[[], Awaitable[bool]]
 
+_CODEX_ERROR_TAGS = {
+    "activeTurnNotSteerable",
+    "badRequest",
+    "contextWindowExceeded",
+    "cyberPolicy",
+    "httpConnectionFailed",
+    "internalServerError",
+    "other",
+    "responseStreamConnectionFailed",
+    "responseStreamDisconnected",
+    "responseTooManyFailedAttempts",
+    "sandboxError",
+    "serverOverloaded",
+    "sessionBudgetExceeded",
+    "threadRollbackFailed",
+    "unauthorized",
+    "usageLimitExceeded",
+}
+_CODEX_QUOTA_ERRORS = {"sessionBudgetExceeded", "usageLimitExceeded"}
+_CODEX_PROVIDER_ERRORS = {
+    "httpConnectionFailed",
+    "internalServerError",
+    "responseStreamConnectionFailed",
+    "responseStreamDisconnected",
+    "responseTooManyFailedAttempts",
+    "serverOverloaded",
+}
+_CODEX_NON_RETRYABLE_ERRORS = {
+    "activeTurnNotSteerable",
+    "badRequest",
+    "contextWindowExceeded",
+    "cyberPolicy",
+    "sandboxError",
+    "threadRollbackFailed",
+    "unauthorized",
+}
+
+
+def _codex_error_tag_and_detail(value: Any) -> tuple[str | None, str | None]:
+    """Extract only protocol-defined error metadata, never provider message text."""
+    tag: str | None = value if isinstance(value, str) else None
+    details: Any = None
+    if isinstance(value, dict):
+        for candidate in _CODEX_ERROR_TAGS:
+            if candidate in value:
+                tag = candidate
+                details = value[candidate]
+                break
+    if tag not in _CODEX_ERROR_TAGS:
+        return None, None
+
+    http_status = details.get("httpStatusCode") if isinstance(details, dict) else None
+    if isinstance(http_status, int) and 100 <= http_status <= 599:
+        return tag, f"{tag} (HTTP {http_status})"
+    return tag, tag
+
+
+def _classify_codex_error_info(
+    value: Any, *, fallback_code: str
+) -> tuple[str, bool, str | None]:
+    tag, safe_detail = _codex_error_tag_and_detail(value)
+    if tag in _CODEX_QUOTA_ERRORS:
+        return "openai_codex_quota_likely_exhausted", True, safe_detail
+    if tag in _CODEX_PROVIDER_ERRORS:
+        return "openai_codex_provider_unavailable", True, safe_detail
+    if tag == "unauthorized":
+        return "openai_codex_not_authenticated", False, safe_detail
+    if tag in {"cyberPolicy", "sandboxError"}:
+        return "openai_codex_permission_blocked", False, safe_detail
+    return fallback_code, tag not in _CODEX_NON_RETRYABLE_ERRORS, safe_detail
+
+
+def _classify_codex_turn_error(error: dict[str, Any]) -> tuple[str, bool, str | None]:
+    return _classify_codex_error_info(
+        error.get("codexErrorInfo"), fallback_code="openai_codex_turn_failed"
+    )
+
+
+def _request_codex_error_info(error: dict[str, Any]) -> Any:
+    """Read protocol metadata from the few documented JSON-RPC data shapes."""
+    candidates = [error.get("codexErrorInfo")]
+    data = error.get("data")
+    candidates.append(data)
+    if isinstance(data, dict):
+        candidates.append(data.get("codexErrorInfo"))
+        nested = data.get("error")
+        if isinstance(nested, dict):
+            candidates.append(nested.get("codexErrorInfo"))
+    for candidate in candidates:
+        tag, _ = _codex_error_tag_and_detail(candidate)
+        if tag is not None:
+            return candidate
+    return None
+
+
+def _request_http_status(error: dict[str, Any]) -> int | None:
+    candidates: list[Any] = [error.get("code")]
+    data = error.get("data")
+    if isinstance(data, dict):
+        candidates.extend(
+            data.get(key) for key in ("httpStatusCode", "statusCode", "status")
+        )
+        nested = data.get("error")
+        if isinstance(nested, dict):
+            candidates.extend(
+                nested.get(key) for key in ("httpStatusCode", "statusCode", "status")
+            )
+    return next((value for value in candidates if value in {401, 403}), None)
+
+
+def _classify_codex_request_error(error: Any) -> tuple[str, bool, str | None]:
+    """Classify a JSON-RPC rejection without retaining its untrusted message."""
+    if not isinstance(error, dict):
+        return "openai_codex_request_failed", True, None
+
+    codex_error_info = _request_codex_error_info(error)
+    if codex_error_info is not None:
+        return _classify_codex_error_info(
+            codex_error_info, fallback_code="openai_codex_request_failed"
+        )
+
+    status = _request_http_status(error)
+    message = error.get("message")
+    normalized = message.casefold() if isinstance(message, str) else ""
+    authentication_markers = (
+        "authentication required",
+        "login required",
+        "not authenticated",
+        "not logged in",
+        "not signed in",
+        "sign in required",
+        "session expired",
+        "token expired",
+        "token has expired",
+        "unauthorized",
+    )
+    permission_markers = (
+        "access denied",
+        "approval required",
+        "forbidden",
+        "insufficient permission",
+        "not allowed by policy",
+        "not permitted",
+        "permission denied",
+    )
+    if status == 401 or any(marker in normalized for marker in authentication_markers):
+        return "openai_codex_not_authenticated", False, "authentication required"
+    if status == 403 or any(marker in normalized for marker in permission_markers):
+        return "openai_codex_permission_blocked", False, "permission blocked"
+    if error.get("code") == -32001:
+        return "openai_codex_provider_unavailable", True, "serverOverloaded"
+    return "openai_codex_request_failed", True, None
+
 
 def child_environment(run_root: Path, source: dict[str, str] | None = None) -> dict[str, str]:
     """Build a positive-allowlist environment with isolated Codex state."""
@@ -118,7 +271,7 @@ class AppServerSession:
 
     async def start(self) -> None:
         self.process = await asyncio.create_subprocess_exec(
-            settings.OPENAI_CODEX_BINARY,
+            str(Path(settings.OPENAI_CODEX_BINARY).expanduser()),
             "app-server",
             "--stdio",
             "--strict-config",
@@ -231,9 +384,14 @@ class AppServerSession:
                 )
             if message.get("id") == request_id:
                 if message.get("error") is not None:
+                    code, retryable, safe_detail = _classify_codex_request_error(
+                        message["error"]
+                    )
                     raise AgyError(
                         "Codex App Server rejected the request",
-                        code="openai_codex_request_failed",
+                        code=code,
+                        retryable=retryable,
+                        safe_detail=safe_detail,
                     )
                 result = message.get("result")
                 if not isinstance(result, dict):
@@ -336,16 +494,13 @@ class AppServerSession:
             status = turn.get("status")
             if status != "completed":
                 error = turn.get("error") or {}
-                info = str(error.get("codexErrorInfo") or error.get("message") or status)
-                lowered = info.lower()
-                code = (
-                    "openai_codex_quota_likely_exhausted"
-                    if "usage" in lowered or "limit" in lowered
-                    else "openai_codex_provider_unavailable"
-                    if "overloaded" in lowered or "connection" in lowered
-                    else "openai_codex_turn_failed"
+                code, retryable, safe_detail = _classify_codex_turn_error(error)
+                raise AgyError(
+                    "OpenAI Codex turn failed",
+                    code=code,
+                    retryable=retryable,
+                    safe_detail=safe_detail,
                 )
-                raise AgyError("OpenAI Codex turn failed", code=code)
             if not self._agent_message:
                 raise AgyError(
                     "OpenAI Codex completed without a final message",
@@ -393,4 +548,3 @@ class AppServerSession:
         if self.stderr_task:
             self.stderr_tail, self.stderr_bytes = await self.stderr_task
         return self.process.returncode or 0, self.stderr_tail.decode(errors="replace"), self.stderr_bytes
-

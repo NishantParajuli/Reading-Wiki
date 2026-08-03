@@ -32,7 +32,7 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 
 
 def validate_binary() -> tuple[Path, str]:
-    path = Path(settings.OPENAI_CODEX_BINARY)
+    path = Path(settings.OPENAI_CODEX_BINARY).expanduser()
     if not path.is_absolute() or not path.exists():
         raise AgyPreflightError(
             "Codex is not installed at OPENAI_CODEX_BINARY",
@@ -196,4 +196,3 @@ if __name__ == "__main__":
     result = asyncio.run(run_preflight(raise_on_error=False))
     print(json.dumps(result.public(), indent=2))
     raise SystemExit(0 if result.healthy else 1)
-

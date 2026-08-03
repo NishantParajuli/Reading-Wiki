@@ -52,10 +52,42 @@ RESULT_MODELS: dict[str, type[StrictModel]] = {
     "smoke_test": CodexSmokeResult,
 }
 
+def _scalar_json_schema() -> list[dict[str, str]]:
+    return [
+        {"type": "string"},
+        {"type": "number"},
+        {"type": "boolean"},
+        {"type": "null"},
+    ]
+
+
+def _strict_json_schema(value: Any) -> Any:
+    """Convert Pydantic JSON Schema into the strict Structured Outputs subset."""
+    if isinstance(value, list):
+        return [_strict_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    normalized = {
+        key: _strict_json_schema(item)
+        for key, item in value.items()
+        if key != "default"
+    }
+    properties = normalized.get("properties")
+    if isinstance(properties, dict):
+        normalized["required"] = list(properties)
+        normalized["additionalProperties"] = False
+    elif set(normalized) <= {"title", "description"}:
+        normalized["anyOf"] = [
+            *_scalar_json_schema(),
+            {"type": "array", "items": {"anyOf": _scalar_json_schema()}},
+        ]
+    return normalized
+
 
 def output_schema(workload: str) -> dict[str, Any]:
     try:
-        return RESULT_MODELS[workload].model_json_schema()
+        return _strict_json_schema(RESULT_MODELS[workload].model_json_schema())
     except KeyError as exc:
         raise ValueError(f"unsupported OpenAI Codex workload: {workload}") from exc
 
@@ -66,4 +98,3 @@ def validate_result(workload: str, value: Any) -> StrictModel:
     except KeyError as exc:
         raise ValueError(f"unsupported OpenAI Codex workload: {workload}") from exc
     return model.model_validate(value)
-

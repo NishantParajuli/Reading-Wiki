@@ -258,7 +258,7 @@ class Settings(BaseSettings):
     # by the dedicated worker OS account. NovelWiki never reads the OAuth token.
     OPENAI_CODEX_ENABLED: bool = False
     OPENAI_CODEX_CODEX_ENABLED: bool = False
-    OPENAI_CODEX_BINARY: str = "/home/nishantp/.local/bin/codex"
+    OPENAI_CODEX_BINARY: str = str(Path.home() / ".local" / "bin" / "codex")
     OPENAI_CODEX_MIN_VERSION: str = "0.146.0"
     OPENAI_CODEX_BINARY_SHA256: str = ""
     OPENAI_CODEX_WORK_DIR: str = str(
@@ -282,7 +282,7 @@ class Settings(BaseSettings):
     OPENAI_CODEX_PROVIDER_RETRY_MINUTES: int = 30
     OPENAI_CODEX_SUCCESS_RETENTION_HOURS: int = 24
     OPENAI_CODEX_FAILURE_RETENTION_HOURS: int = 168
-    OPENAI_CODEX_CONTRACT_VERSION: str = "1.0.0"
+    OPENAI_CODEX_CONTRACT_VERSION: str = "1.0.2"
     OPENAI_CODEX_WORKER_HEALTH_TTL_SECONDS: int = 90
 
     # Text segmentation/cleanup LLM (native DeepSeek when configured, otherwise OpenRouter).
