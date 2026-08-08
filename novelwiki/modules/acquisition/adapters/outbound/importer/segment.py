@@ -185,10 +185,15 @@ def _classify(title: str, number: float | None) -> tuple[str, bool]:
         return "interlude", True
     if _PROLOGUE_RE.search(low):
         return "chapter", True
-    # Readable extras (galleries, guides, side stories, epilogues, afterword): kept, but never
-    # numbered as a story chapter. Tagged backmatter so the reader labels them and the commit
-    # slots them in the gap after the prior chapter instead of stealing its number.
-    if _EPILOGUE_RE.search(low) or any(k in low for k in _EXTRA_KW):
+    # Epilogues are narrative even when the source omits a chapter number.  Treating them as
+    # back matter makes the reader keep them while silently excluding them from translation,
+    # Codex, narration, and every downstream question-answering benchmark.
+    if _EPILOGUE_RE.search(low):
+        return "interlude", True
+    # Readable reference extras (galleries, guides, afterwords): kept, but never numbered as a
+    # story chapter. Tagged backmatter so the reader labels them and the commit slots them in
+    # the gap after the prior chapter instead of stealing its number.
+    if any(k in low for k in _EXTRA_KW):
         return "backmatter", True
     if any(k in low for k in _BACK_KW):
         return "backmatter", False
@@ -279,8 +284,10 @@ _REFINE_SYSTEM = (
     "first line. Correct obvious mistakes only. Return STRICT JSON: "
     '{"segments":[{"id","kind","title","number","part_label","include"}]}. '
     "kind is one of chapter|frontmatter|interlude|backmatter. Set include=false for "
-    "non-story matter (copyright, table of contents, about the author, ads). Keep every id; "
-    "do not merge, split, reorder, or invent segments. number is null for non-chapters."
+    "non-story matter (copyright, table of contents, about the author, ads). Epilogues, "
+    "prologues, interludes, and side stories are narrative and must stay included; classify "
+    "an unnumbered epilogue/interlude/side story as interlude. Keep every id; do not merge, "
+    "split, reorder, or invent segments. number is null for non-narrative sections."
 )
 
 
@@ -345,6 +352,8 @@ async def _refine_batch(
         s = by_id.get(upd.get("id"))
         if not s:
             continue
+        original_title = s.get("title") or ""
+        original_number = s.get("number")
         if upd.get("kind") in ("chapter", "frontmatter", "interlude", "backmatter"):
             s["kind"] = upd["kind"]
         if isinstance(upd.get("title"), str) and upd["title"].strip():
@@ -355,3 +364,14 @@ async def _refine_batch(
             s["part_label"] = upd["part_label"]
         if isinstance(upd.get("include"), bool):
             s["include"] = upd["include"]
+        # Narrative title signals are host-owned.  A best-effort refinement may improve an
+        # ambiguous title, but it may never demote explicit story material to back matter.
+        narrative_title = f"{original_title} {s.get('title') or ''}".lower()
+        if _EPILOGUE_RE.search(narrative_title) or _INTERLUDE_RE.search(narrative_title):
+            s["kind"] = "interlude"
+            s["include"] = True
+            s["number"] = original_number
+        elif _PROLOGUE_RE.search(narrative_title):
+            s["kind"] = "chapter"
+            s["include"] = True
+            s["number"] = original_number

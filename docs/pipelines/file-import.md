@@ -90,6 +90,12 @@ the job row — lists segments with `kind` (`chapter`/`frontmatter`/`interlude`/
 heuristic **quality score** (`domain/quality.py`) so the UI can warn "this segmentation
 looks off". Status: `awaiting_review`.
 
+Explicit prologues, epilogues, interludes, and side stories are narrative. An unnumbered
+epilogue/interlude is assigned a fractional reading index after the preceding chapter and
+kept as `interlude`, so translation, Codex extraction, narration, and retrieval cannot
+silently skip it. The optional refinement pass is not allowed to demote those explicit
+narrative titles to front/back matter.
+
 ## 4. Review
 
 The user edits the plan and book details in the Import UI
