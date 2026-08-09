@@ -1,4 +1,4 @@
-import { API_BASE, getJSON, postJSON } from "../../shared/api/http.js";
+import { API_BASE, getJSON, getJSONStream, postJSON, postJSONStream } from "../../shared/api/http.js";
 const novel = (id) => `${API_BASE}/novels/${id}`;
 const portrait = { character: "PORTRAIT", location: "PLACE", faction: "EMBLEM", item: "OBJECT", concept: "CONCEPT", organization: "EMBLEM" };
 const mapEntity = (entity) => ({
@@ -20,7 +20,7 @@ export const codexApi = {
     if (opts.q) params.set("q", opts.q);
     return (await getJSON(`${novel(id)}/entities?${params}`)).map(mapEntity);
   },
-  entityProfile: (id, entityId, ceiling) => getJSON(`${novel(id)}/entity/${entityId}?ceiling=${ceiling}`),
+  entityProfile: (id, entityId, ceiling) => getJSONStream(`${novel(id)}/entity/${entityId}?ceiling=${ceiling}`),
   relationships(id, entityId, ceiling, otherId) {
     const params = new URLSearchParams({ ceiling });
     if (otherId != null) params.set("other_id", otherId);
@@ -29,7 +29,7 @@ export const codexApi = {
   timeline: (id, entityId, ceiling) => getJSON(`${novel(id)}/entity/${entityId}/timeline?ceiling=${ceiling}`),
   identities: (id, entityId, ceiling) => getJSON(`${novel(id)}/entity/${entityId}/identities?ceiling=${ceiling}`),
   resolve: (id, name, ceiling) => getJSON(`${novel(id)}/entity/resolve?name=${encodeURIComponent(name)}&ceiling=${ceiling}`),
-  ask: (id, question, ceiling) => postJSON(`${novel(id)}/ask`, { question, ceiling }),
+  ask: (id, question, ceiling) => postJSONStream(`${novel(id)}/ask`, { question, ceiling }),
   codexBuild: (id, body) => postJSON(`${novel(id)}/codex/build`, body || {}),
   mergeEntities: (id, body) => postJSON(`${novel(id)}/merge-entities`, body),
 };

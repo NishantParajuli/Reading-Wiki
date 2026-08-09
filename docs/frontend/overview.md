@@ -75,8 +75,9 @@ Signed-in, inside `Shell` (top nav + toasts):
   `credentials`, the CSRF header from the `tg_csrf` cookie (and
   `x-tideglass-request: 1` on pre-auth mutations), JSON envelope/error normalization
   (`{detail}` → thrown error with status), and a registered **unauthorized handler**
-  (401 → auth re-gate). Its recap transport requests NDJSON and ignores start/heartbeat
-  frames until the final result, keeping a long cache-miss request active through the proxy.
+  (401 → auth re-gate). Its streaming JSON transport supports both GET and POST, requests
+  NDJSON, and ignores start/heartbeat frames until the final result. Recap, Ask, and first-view
+  entity synthesis use it so long cache misses remain active through the proxy.
 - **TanStack Query** — `staleTime` 30 s, `retry` 1, no refetch-on-focus. Slices keep
   their query definitions in `queries.js`; invalidation goes through
   `shared/query/useInvalidate.js` so mutations refresh exactly the affected keys

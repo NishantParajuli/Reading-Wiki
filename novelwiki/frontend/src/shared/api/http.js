@@ -49,11 +49,11 @@ async function parseJSONStream(res) {
     try {
       event = JSON.parse(line);
     } catch (error) {
-      throw new Error("The recap service returned an invalid streamed response.");
+      throw new Error("The server returned an invalid streamed response.");
     }
     if (event.event === "result") result = event.data;
     if (event.event === "error") {
-      const streamError = new Error(event.detail || "Recap generation failed.");
+      const streamError = new Error(event.detail || "The streamed request failed.");
       streamError.status = event.status;
       throw streamError;
     }
@@ -73,7 +73,7 @@ async function parseJSONStream(res) {
     reader.releaseLock();
   }
   if (result !== undefined) return result;
-  throw new Error("The recap connection ended before a result was returned. Please try again.");
+  throw new Error("The connection ended before a result was returned. Please try again.");
 }
 
 export async function req(method, url, body) {
@@ -99,16 +99,15 @@ export const postJSON = (url, body) => req("POST", url, body || {});
 export const putJSON = (url, body) => req("PUT", url, body);
 export const delJSON = (url) => req("DELETE", url);
 
-export async function postJSONStream(url, body) {
-  const headers = mutationHeaders({
-    Accept: "application/x-ndjson",
-    "Content-Type": "application/json",
-  });
+async function reqJSONStream(method, url, body) {
+  const headers = { Accept: "application/x-ndjson" };
+  if (!SAFE_METHODS.has(method.toUpperCase())) mutationHeaders(headers);
+  if (body !== undefined) headers["Content-Type"] = "application/json";
   const res = await fetch(url, {
-    method: "POST",
+    method,
     credentials: "include",
     headers,
-    body: JSON.stringify(body || {}),
+    ...(body !== undefined ? { body: JSON.stringify(body || {}) } : {}),
   });
   if (!res.ok) {
     if (res.status === 401 && !url.includes("/auth/") && onUnauthorized) {
@@ -122,6 +121,9 @@ export async function postJSONStream(url, body) {
   }
   return parseJSONStream(res);
 }
+
+export const getJSONStream = (url) => reqJSONStream("GET", url);
+export const postJSONStream = (url, body) => reqJSONStream("POST", url, body || {});
 
 export async function postMultipart(url, formData) {
   const res = await fetch(url, {
