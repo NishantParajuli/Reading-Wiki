@@ -205,7 +205,7 @@ def test_plugin_stop_hook_enforces_codex_source_snapshot_identity(tmp_path):
                 "entity_ref": "m1", "surface_form": surface, "type": "character",
             }]
         content = json.dumps({
-            "schema_version": "2.0", "chapter": chapter,
+            "schema_version": "2.2", "chapter": chapter,
             "source_sha256": source_hash, "warnings": [],
             **group_values,
         }).encode()
@@ -244,6 +244,22 @@ def test_plugin_stop_hook_enforces_codex_source_snapshot_identity(tmp_path):
     assert "occur literally" in hook(str(tmp_path))
     write_output(2.0, expected_source_hash, "Klein")
     assert hook(str(tmp_path)) is None
+
+
+def test_plugin_and_host_contract_treat_evidence_as_exact_word_sequences():
+    normalize = runpy.run_path(
+        str(PLUGIN_SOURCE / "hooks" / "validate_stop.py")
+    )["_normalized_evidence_text"]
+    source = normalize(
+        '“Do you know how much I earn?”\n\n“Two silver pieces,” I said.'
+    )
+
+    assert normalize(
+        "Do you know how much I earn? Two silver pieces, I said."
+    ) in source
+    assert normalize(
+        "Do you know how much I earn? Three silver pieces, I said."
+    ) not in source
 
 
 def test_plugin_stop_hook_enforces_exact_disambiguation_decisions(tmp_path):

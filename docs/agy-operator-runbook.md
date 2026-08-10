@@ -62,15 +62,23 @@ the output manifest so the model does not waste turns listing, verifying, or has
 Use `loginctl enable-linger <user>` if the user service must survive logout. The service must
 retain access to the authenticated user's DBus/keyring session.
 
-## Codex v2 rollout
+## Codex v2.1 quality rollout
 
-The bundled NovelWiki plugin contract is version `1.3.2` and emits Codex schema `2.0`.
+The bundled NovelWiki plugin contract is version `1.4.4` and emits Codex artifact schema `2.2`
+while committed database rows remain pipeline `2.1`.
 Its stop hook rejects inferred mention labels before exit: every `surface_form` must be a
 literal word-bounded span in the sealed current-chapter section. For batched entity
 disambiguation, it also requires exactly one decision per input case, the complete
 `case_ref`/`decision`/`confidence`/`evidence` shape, and only `NEW` or a supplied candidate.
-The host validator repeats those checks before linking, and the atomic commit remains the
-final enforcement boundary.
+Version `1.4.4` requires every material claim to include a short verbatim `evidence_text` span
+from one cited chunk. The stop hook checks exact source-word locality independent of punctuation
+and dialogue typography; changed words or word order still fail. The independent verifier checks
+semantic entailment and may repair or drop a paraphrase without relying on shared words. It retains
+the `1.4.2` behavior that directs new names for supplied entities into aliases instead of duplicate
+mentions and requires explicit identity-reveal pairs for cross-reference identity state. The host
+validator repeats those checks before linking, and the atomic commit remains the final enforcement
+boundary. A broad residual grounding failure is reported as
+`evidence_anchor_broad_failure`, not an unclassified `ValueError`.
 After deploying, follow the backend-neutral
 [release rollout](release-runbook.md#first-codex-v2-production-rollout), apply the additive
 startup DDL before enabling workers, and update both
@@ -78,15 +86,15 @@ startup DDL before enabling workers, and update both
 workers before changing the pin; v1 extraction artifacts cannot resume under v2.
 
 A Build treats v1 checkpoints as incomplete and migrates chronologically while retaining
-narrative chunks/embeddings. The initial v1→v2 range must start at the first narrative
-chapter; later incremental ranges are allowed only after their preceding v2 summaries and
+narrative chunks/embeddings. The initial/quality-contract v2.1 range must start at the first narrative
+chapter; later incremental ranges are allowed only after their preceding v2.1 summaries and
 checkpoints exist. If legacy extraction touched front/back matter, chunk cleanup deliberately
 requires the clean reset path. For a clean whole-book regeneration, cancel/drain active jobs,
 run `reset-codex NOVEL_ID --force`, then Build from the first narrative chapter. Multiple
 ranges for one novel are intentionally serialized by both the active-job key and a database
 commit lock.
 
-Before enabling `AGY_CODEX_ENABLED`, canary schema 2.0 output on early, late,
+Before enabling `AGY_CODEX_ENABLED`, canary artifact-schema 2.2 output on early, late,
 checkpoint-end, and (when present) final-volume chapters. Confirm context-token/entity
 counts, exact reducer targets, source/context hashes, and provenance validation.
 

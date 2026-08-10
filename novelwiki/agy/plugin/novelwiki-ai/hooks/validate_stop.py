@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime, timezone
 
 
@@ -74,6 +75,25 @@ def _codex_chapter_text(root, input_manifest):
     # rsplit fails closed if hostile chapter text repeats the heading: it can
     # shrink the accepted suffix, but cannot admit text from schema/memory/drafts.
     return task.rsplit(marker, 1)[1], None
+
+
+def _marked_chunk_texts(marked_text):
+    markers = list(re.finditer(r"(?m)^\[chunk ([1-9][0-9]*)\]\n", marked_text or ""))
+    return {
+        int(match.group(1)): marked_text[
+            match.end():markers[index + 1].start() if index + 1 < len(markers) else None
+        ].strip()
+        for index, match in enumerate(markers)
+    }
+
+
+def _normalized_evidence_text(value):
+    value = unicodedata.normalize("NFKC", value or "").casefold()
+    value = value.translate(str.maketrans({
+        "‘": "'", "’": "'", "‛": "'", "ʼ": "'", "`": "'",
+    }))
+    tokens = re.findall(r"[^\W_]+(?:'[^\W_]+)*", value, re.UNICODE)
+    return f" {' '.join(tokens)} " if tokens else ""
 
 
 def finalize_manifest(root):
@@ -372,8 +392,8 @@ def validate(root):
         required_fields = {
             "schema_version", "chapter", "source_sha256", "warnings", *required_groups,
         }
-        if set(extraction) != required_fields or extraction.get("schema_version") != "2.0":
-            return "codex extraction must match the complete v2 top-level shape"
+        if set(extraction) != required_fields or extraction.get("schema_version") != "2.2":
+            return "codex extraction must match the complete v2.2 top-level shape"
         if any(not isinstance(extraction.get(group), list) for group in required_groups):
             return "every codex extraction group must be an array"
         allowed_chunks = set(schema.get("allowed_chunk_ids", []))
@@ -382,6 +402,10 @@ def validate(root):
         chapter_text, chapter_error = _codex_chapter_text(root, input_manifest)
         if chapter_error:
             return chapter_error
+        chunk_texts = {
+            chunk_id: _normalized_evidence_text(text)
+            for chunk_id, text in _marked_chunk_texts(chapter_text).items()
+        }
         mention_refs = set()
         for mention in extraction.get("mentions", []):
             if not isinstance(mention, dict):
@@ -420,6 +444,20 @@ def validate(root):
                 if (not isinstance(chunks, list) or not chunks
                         or not all(isinstance(value, int) and value in allowed_chunks for value in chunks)):
                     return f"codex {group} entry must cite only supplied chunks"
+                evidence = item.get("evidence_text")
+                normalized_evidence = _normalized_evidence_text(
+                    evidence if isinstance(evidence, str) else ""
+                )
+                if not normalized_evidence:
+                    return f"codex {group} entry must include verbatim evidence_text"
+                if not any(
+                    normalized_evidence in chunk_texts.get(chunk_id, "")
+                    for chunk_id in chunks
+                ):
+                    return (
+                        f"codex {group} evidence_text must occur in one cited chunk; "
+                        "repair or drop that item"
+                    )
                 refs = [item.get(key) for key in ref_keys if item.get(key) is not None]
                 refs.extend(item.get("participant_refs") or [])
                 if not all(isinstance(ref, str) and ref in permitted_entities for ref in refs):
@@ -454,6 +492,27 @@ def validate(root):
             if (not isinstance(chunks, list) or not chunks
                     or not all(isinstance(value, int) and value in allowed_chunks for value in chunks)):
                 return "codex memory updates must cite only supplied chunks"
+            target = next(
+                (item for item in targets if item.get("kind") == update.get("kind")),
+                None,
+            )
+            expected_coverage = target.get("covered_chapters", []) if target else []
+            coverage = update.get("covered_chapters")
+            beats = update.get("key_beats")
+            if coverage != expected_coverage or not isinstance(beats, list) or not beats:
+                return "codex memory updates must copy trusted distributed coverage"
+            flattened = []
+            for beat in beats:
+                if not isinstance(beat, dict) or set(beat) != {"chapter_refs", "summary"}:
+                    return "codex memory beats have an invalid shape"
+                refs = beat.get("chapter_refs")
+                summary = beat.get("summary")
+                if (not isinstance(refs, list) or not 1 <= len(refs) <= 6
+                        or not isinstance(summary, str) or len(summary.strip()) < 40):
+                    return "codex memory beats must be substantive groups of at most six chapters"
+                flattened.extend(refs)
+            if sorted(flattened) != sorted(expected_coverage) or len(flattened) != len(set(flattened)):
+                return "codex memory beats must partition every trusted child chapter once"
     if input_manifest.get("workload") == "translate_batch":
         error = _validate_translation_artifacts(root, input_manifest, artifacts_by_role)
         if error:

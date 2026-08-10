@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -54,12 +56,28 @@ _WORKLOAD_INSTRUCTIONS = {
     ),
     "codex_extract": (
         "Extract only current-chapter knowledge using the exact schema, allowed entity/thread "
-        "references, and supplied chunk IDs. Every claim must cite supplied provenance. Produce "
-        "a concise reader-safe running summary and a non-reasoning audit summary."
+        "references, and supplied chunk IDs. Every material claim must cite supplied provenance "
+        "and include a short verbatim evidence_text span from one cited chunk; the span must "
+        "semantically entail the claim even when the claim is a useful paraphrase. Create "
+        "only proper named persistent entities; explicitly name referenced subjects in claim "
+        "text; store a newly spoken name for a supplied entity as its alias rather than a new "
+        "mention; pair every cross-ref identity state with an explicit identity reveal; allow "
+        "identity reveals only between supplied preexisting refs, using aliases for identities "
+        "introduced and revealed in the current chapter; update existing threads only when "
+        "their stable topic appears in this chapter; reconcile "
+        "superseded transient state. For each memory target, copy covered_chapters and "
+        "partition every chapter exactly once across distributed key_beats of at most six child "
+        "chapters; set memory summary to null because the host renders it. Produce a substantive "
+        "80-220 token reader-safe running summary without chunk/candidate notation and a "
+        "non-reasoning audit."
     ),
     "codex_verify": (
         "Verify and repair the supplied draft against the current chapter and constraints. Return "
-        "the complete corrected extraction, running summary, and a non-reasoning audit summary."
+        "the complete corrected extraction without duplicating supplied entities under new "
+        "names or creating a same-chapter revealed persona. Repair or drop every claim whose "
+        "evidence_text is absent from its cited chunks or does not semantically entail it. Return "
+        "an 80-220 token running summary, "
+        "and a non-reasoning audit summary."
     ),
     "entity_disambiguation": (
         "Choose exactly one supplied candidate_ref or NEW for every case. Use only the supplied "
@@ -127,9 +145,59 @@ def _write_text(path: Path, text: str) -> None:
     _atomic_write(path, text.encode("utf-8"))
 
 
+def _trusted_extraction_identity(run_root: Path) -> tuple[float, str, set[int]]:
+    try:
+        manifest = json.loads(
+            (run_root / "input" / "manifest.json").read_text(encoding="utf-8")
+        )
+        schema = json.loads(
+            (run_root / "input" / "schema.json").read_text(encoding="utf-8")
+        )
+        chapter = manifest.get("chapter_ceiling")
+        source_sha256 = schema.get("source_sha256")
+        raw_chunk_ids = schema.get("allowed_chunk_ids")
+    except (AttributeError, OSError, json.JSONDecodeError) as exc:
+        raise AgyValidationError(
+            "OpenAI Codex trusted extraction identity is invalid",
+            code="openai_codex_artifact_invalid",
+        ) from exc
+    if (
+        isinstance(chapter, bool)
+        or not isinstance(chapter, (int, float))
+        or not math.isfinite(float(chapter))
+        or not isinstance(source_sha256, str)
+        or re.fullmatch(r"[a-f0-9]{64}", source_sha256) is None
+        or not isinstance(raw_chunk_ids, list)
+        or not raw_chunk_ids
+        or any(
+            isinstance(chunk_id, bool)
+            or not isinstance(chunk_id, int)
+            or chunk_id < 1
+            for chunk_id in raw_chunk_ids
+        )
+    ):
+        raise AgyValidationError(
+            "OpenAI Codex trusted extraction identity is invalid",
+            code="openai_codex_artifact_invalid",
+        )
+    return float(chapter), source_sha256, set(raw_chunk_ids)
+
+
 def materialize_result(run_root: Path, workload: str, value: Any) -> None:
     if workload in {"codex_extract", "codex_verify"} and isinstance(value, dict):
-        extraction, _repairs = normalize_extraction_candidate(value.get("extraction"))
+        chapter, source_sha256, allowed_chunk_ids = _trusted_extraction_identity(
+            run_root
+        )
+        extraction, _repairs = normalize_extraction_candidate(
+            value.get("extraction"), allowed_chunk_ids=allowed_chunk_ids
+        )
+        if isinstance(extraction, dict):
+            extraction = {
+                **extraction,
+                "schema_version": "2.2",
+                "chapter": chapter,
+                "source_sha256": source_sha256,
+            }
         value = {**value, "extraction": extraction}
     try:
         result = validate_result(workload, value)

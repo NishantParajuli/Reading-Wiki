@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     CHUNK_TARGET_TOKENS: int = 500
     CHUNK_OVERLAP: int = 80
     RRF_K: int = 60
+    # Reserve this share of the pre-rerank candidate set for the top results
+    # from each source so RRF consensus cannot suppress dense-only evidence.
+    RRF_SOURCE_QUOTA_RATIO: float = 0.4
     RETRIEVE_K: int = 50
     RERANK_TOP_N: int = 8
     MAX_ITERATIONS: int = 5
@@ -90,6 +93,7 @@ class Settings(BaseSettings):
     # Run BM25's synchronous tokenize/index/search off the event loop (asyncio.to_thread)
     # so a heavy lexical search can't stall unrelated requests. Leave True in prod.
     BM25_THREAD_OFFLOAD: bool = True
+    BM25_PREFIX_CACHE_SIZE: int = 4
 
     # ── Read-side AI cost controls (denial-of-wallet guards for /ask + profile synth) ──
     # Uncached AI reads (agentic Q&A, entity-profile synthesis) fan out to embeddings,
@@ -102,11 +106,13 @@ class Settings(BaseSettings):
     ASK_CONCURRENCY_TTL_SECONDS: int = 180        # concurrency-slot lease TTL (auto-reclaimed if a request dies)
     ASK_REQUIRE_VERIFIED: bool = True             # uncached /ask needs a verified email
     ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED: bool = True  # uncached profile synthesis needs a verified email
+    # Bump either namespace whenever its prompts/grounding contract changes. The model
+    # ids are also included in Q&A keys and checked on profile-cache reads.
+    CODEX_QA_CACHE_VERSION: str = "3"
+    CODEX_PROFILE_CACHE_VERSION: str = "2"
     # Hard caps on what a model-planned tool call may request, so the LLM can't be steered
     # into a huge fan-out. Applied in the agent's execute_tool dispatcher.
     ASK_TOOL_MAX_K: int = 100                     # clamp hybrid_search k
-    ASK_TOOL_MAX_TOP_N: int = 20                  # clamp rerank top_n
-    ASK_TOOL_MAX_RERANK_HITS: int = 100           # clamp rerank candidate documents sent to provider
     ASK_TOOL_MAX_QUERY_CHARS: int = 2000          # reject longer model-supplied tool queries
     ASK_MAX_TOOL_CALLS_PER_ITER: int = 4          # tool calls processed per planner iteration
 
@@ -125,24 +131,35 @@ class Settings(BaseSettings):
     # extra call per chapter; accuracy-first default is on.
     EXTRACTION_VERIFY: bool = True
 
-    # ── Bounded Codex memory (pipeline v2) ────────────────────────────────
+    # ── Bounded Codex memory (pipeline v2.1) ──────────────────────────────
     # The provider context window is emergency headroom, not an application
     # budget.  Every extraction is packed under these deterministic limits so
     # chapter 1,400 costs and attends like chapter 40.
-    CODEX_PIPELINE_VERSION: str = "2.0"
+    CODEX_PIPELINE_VERSION: str = "2.1"
     CODEX_CONTEXT_MAX_TOKENS: int = 48_000
-    CODEX_CONTEXT_MAX_ENTITIES: int = 80
+    CODEX_VERIFY_CONTEXT_MAX_TOKENS: int = 64_000
+    CODEX_CONTEXT_MAX_ENTITIES: int = 120
+    CODEX_CONTEXT_MAX_BACKGROUND_ENTITIES: int = 20
     CODEX_CONTEXT_VECTOR_MIN_SIMILARITY: float = 0.45
-    CODEX_CONTEXT_ENTITY_TOKENS: int = 6_000
+    CODEX_CONTEXT_ENTITY_TOKENS: int = 8_000
     CODEX_CONTEXT_STATE_TOKENS: int = 2_000
     CODEX_CONTEXT_THREAD_TOKENS: int = 1_000
     CODEX_RECENT_SUMMARY_CHAPTERS: int = 3
     CODEX_CHECKPOINT_CHAPTERS: int = 25
+    CODEX_CHAPTER_SUMMARY_MIN_TOKENS: int = 64
     CODEX_CHAPTER_SUMMARY_MAX_TOKENS: int = 300
+    CODEX_CHECKPOINT_SUMMARY_MIN_TOKENS: int = 200
     CODEX_CHECKPOINT_SUMMARY_MAX_TOKENS: int = 1_500
+    CODEX_VOLUME_SUMMARY_MIN_TOKENS: int = 300
     CODEX_VOLUME_SUMMARY_MAX_TOKENS: int = 2_000
     CODEX_RECENT_ACTIVITY_CHAPTERS: int = 15
     CODEX_CONTEXT_MAX_THREADS: int = 10
+    CODEX_THREAD_DORMANT_CHAPTERS: int = 50
+    CODEX_STATE_CONDITION_MAX_AGE_CHAPTERS: int = 30
+    CODEX_STATE_CUSTODY_MAX_AGE_CHAPTERS: int = 50
+    CODEX_STATE_GOAL_MAX_AGE_CHAPTERS: int = 75
+    CODEX_STATE_OCCUPATION_MAX_AGE_CHAPTERS: int = 100
+    CODEX_STATE_LOCATION_MAX_AGE_CHAPTERS: int = 100
 
     # UI history is paginated independently, while model-facing tools receive
     # much smaller bounded slices.  These caps prevent a long-running
@@ -248,8 +265,8 @@ class Settings(BaseSettings):
     AGY_SUCCESS_RETENTION_HOURS: int = 24
     AGY_FAILURE_RETENTION_HOURS: int = 168
     AGY_FALLBACK_TO_API_DEFAULT: bool = False
-    AGY_PLUGIN_VERSION: str = "1.3.2"
-    AGY_PLUGIN_SHA256: str = "ca80edc8199e48733de3d4387466752686136dc807d1b6a42b7ba4d2fb352edd"
+    AGY_PLUGIN_VERSION: str = "1.4.4"
+    AGY_PLUGIN_SHA256: str = "f2967baa759a04047346a93815124fb65a16ec586e90cced603293e4c194d47a"
     # Worker health is considered stale after this interval for /auth/me and admin UI.
     AGY_WORKER_HEALTH_TTL_SECONDS: int = 90
 
@@ -265,11 +282,13 @@ class Settings(BaseSettings):
         Path.home() / ".local" / "share" / "novelwiki" / "openai-codex-jobs"
     )
     OPENAI_CODEX_CREDENTIAL_DIR: str = str(Path.home() / ".codex")
-    # Current model roles: Luna for high-volume extraction, Terra for translation.
+    # Current model roles: Luna/xhigh for high-volume Codex work, Terra/xhigh
+    # for translation.  The validator below keeps the deployment from silently
+    # weakening either role through an environment override.
     OPENAI_CODEX_MODEL_TRANSLATE: str = "gpt-5.6-terra"
     OPENAI_CODEX_MODEL_CODEX: str = "gpt-5.6-luna"
-    OPENAI_CODEX_REASONING_TRANSLATE: str = "medium"
-    OPENAI_CODEX_REASONING_CODEX: str = "medium"
+    OPENAI_CODEX_REASONING_TRANSLATE: str = "xhigh"
+    OPENAI_CODEX_REASONING_CODEX: str = "xhigh"
     OPENAI_CODEX_TURN_TIMEOUT_SECONDS: int = 1200
     OPENAI_CODEX_KILL_GRACE_SECONDS: int = 10
     OPENAI_CODEX_STDOUT_MAX_BYTES: int = 16_777_216
@@ -277,12 +296,12 @@ class Settings(BaseSettings):
     OPENAI_CODEX_WORKSPACE_MAX_BYTES: int = 134_217_728
     OPENAI_CODEX_TRANSLATE_BATCH_CHAPTERS: int = 3
     OPENAI_CODEX_TRANSLATE_BATCH_MAX_CHARS: int = 120_000
-    OPENAI_CODEX_SEPARATE_CODEX_VERIFY: bool = False
+    OPENAI_CODEX_SEPARATE_CODEX_VERIFY: bool = True
     OPENAI_CODEX_MAX_ATTEMPTS: int = 2
     OPENAI_CODEX_PROVIDER_RETRY_MINUTES: int = 30
     OPENAI_CODEX_SUCCESS_RETENTION_HOURS: int = 24
     OPENAI_CODEX_FAILURE_RETENTION_HOURS: int = 168
-    OPENAI_CODEX_CONTRACT_VERSION: str = "1.0.2"
+    OPENAI_CODEX_CONTRACT_VERSION: str = "1.3.10"
     OPENAI_CODEX_WORKER_HEALTH_TTL_SECONDS: int = 90
 
     # Text segmentation/cleanup LLM (native DeepSeek when configured, otherwise OpenRouter).
@@ -463,6 +482,42 @@ class Settings(BaseSettings):
             raise ValueError("OpenAI Codex stream retention limits must be at least 4096 bytes")
         if self.OPENAI_CODEX_WORKSPACE_MAX_BYTES < 1_048_576:
             raise ValueError("OPENAI_CODEX_WORKSPACE_MAX_BYTES must be at least 1 MiB")
+        if not 1 <= self.CODEX_CONTEXT_MAX_BACKGROUND_ENTITIES <= self.CODEX_CONTEXT_MAX_ENTITIES:
+            raise ValueError(
+                "CODEX_CONTEXT_MAX_BACKGROUND_ENTITIES must be between 1 and "
+                "CODEX_CONTEXT_MAX_ENTITIES"
+            )
+        if not (
+            self.CODEX_CONTEXT_MAX_TOKENS
+            <= self.CODEX_VERIFY_CONTEXT_MAX_TOKENS
+            <= 128_000
+        ):
+            raise ValueError(
+                "CODEX_VERIFY_CONTEXT_MAX_TOKENS must be between the primary Codex "
+                "context cap and 128000"
+            )
+        if not (
+            20 <= self.CODEX_CHAPTER_SUMMARY_MIN_TOKENS
+            < self.CODEX_CHAPTER_SUMMARY_MAX_TOKENS
+        ):
+            raise ValueError("Codex chapter summary token bounds are invalid")
+        if not (
+            50 <= self.CODEX_CHECKPOINT_SUMMARY_MIN_TOKENS
+            < self.CODEX_CHECKPOINT_SUMMARY_MAX_TOKENS
+        ):
+            raise ValueError("Codex checkpoint summary token bounds are invalid")
+        if not (
+            50 <= self.CODEX_VOLUME_SUMMARY_MIN_TOKENS
+            < self.CODEX_VOLUME_SUMMARY_MAX_TOKENS
+        ):
+            raise ValueError("Codex volume summary token bounds are invalid")
+        if not 0.1 <= self.RRF_SOURCE_QUOTA_RATIO <= 0.5:
+            raise ValueError("RRF_SOURCE_QUOTA_RATIO must be between 0.1 and 0.5")
+        if not 1 <= self.BM25_PREFIX_CACHE_SIZE <= 32:
+            raise ValueError("BM25_PREFIX_CACHE_SIZE must be between 1 and 32")
+        for field in ("CODEX_QA_CACHE_VERSION", "CODEX_PROFILE_CACHE_VERSION"):
+            if not getattr(self, field).strip():
+                raise ValueError(f"{field} must not be empty")
         valid_efforts = {"low", "medium", "high", "xhigh", "max"}
         for field in ("OPENAI_CODEX_REASONING_TRANSLATE", "OPENAI_CODEX_REASONING_CODEX"):
             if getattr(self, field) not in valid_efforts:
@@ -470,6 +525,29 @@ class Settings(BaseSettings):
         for field in ("OPENAI_CODEX_MODEL_TRANSLATE", "OPENAI_CODEX_MODEL_CODEX"):
             if not getattr(self, field).strip():
                 raise ValueError(f"{field} must not be empty")
+        model_effort_policy = (
+            (
+                "OPENAI_CODEX_MODEL_TRANSLATE",
+                "OPENAI_CODEX_REASONING_TRANSLATE",
+            ),
+            (
+                "OPENAI_CODEX_MODEL_CODEX",
+                "OPENAI_CODEX_REASONING_CODEX",
+            ),
+        )
+        for model_field, effort_field in model_effort_policy:
+            model = getattr(self, model_field).strip().lower()
+            effort = getattr(self, effort_field)
+            required_effort = (
+                "xhigh"
+                if model.endswith(("-luna", "-terra"))
+                else None
+            )
+            if required_effort is not None and effort != required_effort:
+                raise ValueError(
+                    f"{effort_field} must be {required_effort!r} when "
+                    f"{model_field} selects {model!r}"
+                )
         return self
 
     model_config = SettingsConfigDict(

@@ -109,17 +109,101 @@ ThreadRef = Annotated[str, Field(pattern=r"^(?:t|p)[1-9][0-9]*$", max_length=80)
 Keyword = Annotated[str, Field(min_length=1, max_length=100)]
 WarningText = Annotated[str, Field(max_length=500)]
 _ROSTER_REF_RE = re.compile(r"^e[1-9][0-9]*$")
+_EXTRACTION_REF_FIELDS = (
+    "entity_ref",
+    "source_ref",
+    "target_ref",
+    "persona_ref",
+    "true_entity_ref",
+    "location_ref",
+    "value_entity_ref",
+    "perspective_ref",
+)
+_EXTRACTION_CLAIM_GROUPS = (
+    "facts",
+    "relationships",
+    "events",
+    "identity_reveals",
+    "new_aliases",
+    "state_changes",
+    "relationship_state_changes",
+    "thread_updates",
+)
+_GENERIC_ENTITY_SURFACES = {
+    "courier", "giant lizard", "hydra", "lucky rat", "dining hall", "pub",
+    "yellow cylinder", "man", "young man", "old man", "woman", "young woman",
+    "young lady", "boy", "girl", "child", "baby", "maid", "maidservant",
+    "young mistress", "master", "teacher", "professor", "guard", "soldier",
+    "merchant", "innkeeper", "adventurer", "doctor", "nurse", "driver",
+    "the protagonist", "the narrator", "mother", "father", "sister", "brother",
+}
+_DESCRIPTIVE_PERSON_RE = re.compile(
+    r"(?i)(?:^|\b)(?:man|woman|boy|girl|child|baby|lady|maid|mistress|master|"
+    r"guard|soldier|merchant|teacher|professor|doctor|nurse|driver)$"
+)
 
 
-def normalize_extraction_candidate(value: Any) -> tuple[Any, tuple[str, ...]]:
+def eligible_entity_surface(surface: str, entity_type: str) -> bool:
+    """Conservative host-side named-entity gate shared by every AI backend."""
+    value = " ".join((surface or "").strip().split())
+    if not value or len(value) > 160 or value.casefold() in _GENERIC_ENTITY_SURFACES:
+        return False
+    # Determiner- and pronoun-led descriptions are contextual noun phrases, not
+    # stable names. Treating "our house" or "his mother" as lore entities causes
+    # long-book rosters to grow with one-off duplicates.
+    if value.casefold().startswith((
+        "a ", "an ", "the ", "my ", "our ", "your ", "his ", "her ",
+        "its ", "their ", "this ", "that ", "these ", "those ",
+    )):
+        return False
+    # CJK proper names have no case distinction. For Latin-script output, require
+    # at least one uppercase letter so ordinary lowercase nouns cannot become lore.
+    has_cased_letter = any(char.isalpha() and (char.islower() or char.isupper()) for char in value)
+    if has_cased_letter and not any(char.isupper() for char in value):
+        return False
+    if entity_type == "character" and _DESCRIPTIVE_PERSON_RE.search(value):
+        tokens = re.findall(r"[A-Za-z][A-Za-z'’.-]*", value)
+        if len(tokens) <= 3:
+            return False
+    return True
+
+
+def _literal_surface_occurs(surface: str, chapter_text: str) -> bool:
+    surface = surface.strip()
+    if not surface:
+        return False
+    return re.search(
+        rf"(?<!\w){re.escape(surface)}(?!\w)", chapter_text, re.IGNORECASE
+    ) is not None
+
+
+def _extraction_item_refs(item: dict[str, Any]) -> set[str]:
+    refs = {
+        str(item[field])
+        for field in _EXTRACTION_REF_FIELDS
+        if item.get(field)
+    }
+    refs.update(str(ref) for ref in (item.get("participant_refs") or []) if ref)
+    return refs
+
+
+def normalize_extraction_candidate(
+    value: Any,
+    *,
+    chapter_text: str | None = None,
+    allowed_chunk_ids: set[int] | None = None,
+) -> tuple[Any, tuple[str, ...]]:
     """Apply narrow, loss-minimizing repairs before strict extraction validation.
 
     Existing roster refs are valid in claims but redundant in ``mentions``, whose
     records only declare new local ``mN`` refs. Temporal state keys are closed
     vocabularies; an item outside those vocabularies cannot be committed safely, so
     discard that optional item without weakening validation for the rest of the
-    payload. All other malformed shapes, references, and provenance remain strict
-    validation errors.
+    payload. When trusted chapter text is supplied, remove nonliteral new mentions
+    and only the claims that depend on those local refs. When trusted chunk ids are
+    supplied, mixed provenance keeps its valid ids and removes only unsupplied ids;
+    provenance with no valid id remains untouched so strict validation rejects it.
+    All other malformed shapes and references remain strict validation errors.
     """
     if not isinstance(value, dict):
         return value, ()
@@ -166,6 +250,120 @@ def normalize_extraction_candidate(value: Any) -> tuple[Any, tuple[str, ...]]:
             candidate[group] = kept_items
             repairs.append(f"removed {removed} unsupported {label}")
 
+    if chapter_text is not None:
+        mentions = candidate.get("mentions")
+        invalid_refs: set[str] = set()
+        if isinstance(mentions, list):
+            kept_mentions = []
+            for item in mentions:
+                invalid = (
+                    isinstance(item, dict)
+                    and isinstance(item.get("entity_ref"), str)
+                    and isinstance(item.get("surface_form"), str)
+                    and not _literal_surface_occurs(item["surface_form"], chapter_text)
+                )
+                if invalid:
+                    invalid_refs.add(item["entity_ref"])
+                else:
+                    kept_mentions.append(item)
+            removed = len(mentions) - len(kept_mentions)
+            if removed:
+                candidate["mentions"] = kept_mentions
+                repairs.append(f"removed {removed} nonliteral mention(s)")
+
+        if invalid_refs:
+            removed_claims = 0
+            for group in _EXTRACTION_CLAIM_GROUPS:
+                items = candidate.get(group)
+                if not isinstance(items, list):
+                    continue
+                kept_items = [
+                    item
+                    for item in items
+                    if not (
+                        isinstance(item, dict)
+                        and _extraction_item_refs(item) & invalid_refs
+                    )
+                ]
+                removed_claims += len(items) - len(kept_items)
+                candidate[group] = kept_items
+            if removed_claims:
+                repairs.append(f"removed {removed_claims} dependent claim(s)")
+
+    mentions = candidate.get("mentions")
+    if isinstance(mentions, list):
+        invalid_refs = {
+            str(item.get("entity_ref"))
+            for item in mentions
+            if isinstance(item, dict)
+            and isinstance(item.get("entity_ref"), str)
+            and isinstance(item.get("surface_form"), str)
+            and isinstance(item.get("type"), str)
+            and not eligible_entity_surface(item["surface_form"], item["type"])
+        }
+        if invalid_refs:
+            candidate["mentions"] = [
+                item for item in mentions
+                if not isinstance(item, dict) or item.get("entity_ref") not in invalid_refs
+            ]
+            removed_claims = 0
+            for group in _EXTRACTION_CLAIM_GROUPS:
+                items = candidate.get(group)
+                if not isinstance(items, list):
+                    continue
+                kept_items = [
+                    item for item in items
+                    if not (
+                        isinstance(item, dict)
+                        and _extraction_item_refs(item) & invalid_refs
+                    )
+                ]
+                removed_claims += len(items) - len(kept_items)
+                candidate[group] = kept_items
+            repairs.append(f"removed {len(invalid_refs)} generic entity mention(s)")
+            if removed_claims:
+                repairs.append(
+                    f"removed {removed_claims} generic-entity dependent claim(s)"
+                )
+
+    if allowed_chunk_ids is not None:
+        removed_citations = 0
+
+        def repair_ids(item: Any, field: str) -> None:
+            nonlocal removed_citations
+            if not isinstance(item, dict) or not isinstance(item.get(field), list):
+                return
+            submitted = item[field]
+            repaired: list[int] = []
+            for raw_id in submitted:
+                if isinstance(raw_id, bool):
+                    continue
+                try:
+                    chunk_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                if chunk_id in allowed_chunk_ids and chunk_id not in repaired:
+                    repaired.append(chunk_id)
+            # Never manufacture acceptable provenance. If none of the submitted
+            # ids are trusted, leave the candidate unchanged for strict rejection.
+            if repaired and repaired != submitted:
+                item[field] = repaired
+                removed_citations += len(submitted) - len(repaired)
+
+        for group in _EXTRACTION_CLAIM_GROUPS:
+            items = candidate.get(group)
+            if isinstance(items, list):
+                for item in items:
+                    repair_ids(item, "source_chunk_ids")
+        memory_updates = candidate.get("memory_updates")
+        if isinstance(memory_updates, list):
+            for update in memory_updates:
+                repair_ids(update, "evidence_chunk_ids")
+        if removed_citations:
+            repairs.append(
+                f"removed {removed_citations} unsupplied chunk citation(s)"
+            )
+
     return candidate, tuple(repairs)
 
 
@@ -192,6 +390,7 @@ class ExtractionFact(StrictModel):
     entity_ref: EntityRef
     fact_type: str = Field(default="", max_length=80)
     content: str = Field(min_length=1, max_length=4000)
+    evidence_text: str | None = Field(default=None, min_length=1, max_length=2000)
     source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
 
 
@@ -201,6 +400,7 @@ class ExtractionRelationship(StrictModel):
     relation_type: str = Field(default="", max_length=80)
     directed: bool = True
     content: str = Field(default="", max_length=4000)
+    evidence_text: str | None = Field(default=None, min_length=1, max_length=2000)
     source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
 
 
@@ -209,6 +409,7 @@ class ExtractionEvent(StrictModel):
     participant_refs: list[EntityRef] = Field(default_factory=list, max_length=100)
     location_ref: EntityRef | None = None
     significance: str = Field(default="", max_length=1000)
+    evidence_text: str | None = Field(default=None, min_length=1, max_length=2000)
     source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
 
 
@@ -216,6 +417,7 @@ class ExtractionIdentityReveal(StrictModel):
     persona_ref: EntityRef
     true_entity_ref: EntityRef
     note: str = Field(default="", max_length=2000)
+    evidence_text: str | None = Field(default=None, min_length=1, max_length=2000)
     source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
 
 
@@ -223,6 +425,7 @@ class ExtractionAlias(StrictModel):
     entity_ref: EntityRef
     alias: str = Field(min_length=1, max_length=300)
     is_reveal: bool = False
+    evidence_text: str | None = Field(default=None, min_length=1, max_length=2000)
     source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
 
 
@@ -235,6 +438,7 @@ class StateTransitionProposal(StrictModel):
     perspective_ref: EntityRef | None = None
     certainty: Literal["uncertain", "alleged", "presumed", "confirmed", "contradicted"] = "confirmed"
     narrative_scope: Literal["current", "historical", "dream", "prophecy", "alternate"] = "current"
+    evidence_text: str | None = Field(default=None, min_length=1, max_length=2000)
     source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
 
     @field_validator("state_key")
@@ -254,6 +458,7 @@ class RelationshipStateTransitionProposal(StrictModel):
     operation: Literal["set", "clear", "add", "remove", "confirm", "contradict"]
     value: Any = None
     certainty: Literal["uncertain", "alleged", "presumed", "confirmed", "contradicted"] = "confirmed"
+    evidence_text: str | None = Field(default=None, min_length=1, max_length=2000)
     source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
 
     @field_validator("state_key")
@@ -272,17 +477,28 @@ class PlotThreadUpdateProposal(StrictModel):
     participant_refs: list[EntityRef] = Field(default_factory=list, max_length=100)
     keywords: list[Keyword] = Field(default_factory=list, max_length=50)
     certainty: Literal["uncertain", "alleged", "presumed", "confirmed", "contradicted"] = "confirmed"
+    evidence_text: str | None = Field(default=None, min_length=1, max_length=2000)
     source_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=50)
+
+
+class MemoryCoverageBeat(StrictModel):
+    chapter_refs: list[float] = Field(min_length=1, max_length=6)
+    summary: str = Field(min_length=40, max_length=2000)
 
 
 class MemoryUpdateProposal(StrictModel):
     kind: Literal["checkpoint", "volume"]
-    summary: str = Field(min_length=1, max_length=12_000)
+    # The trusted host renders the persisted summary from the distributed beats.
+    # Keeping this nullable preserves a simple structured-output shape without
+    # trusting a second, potentially endpoint-biased free-form reducer field.
+    summary: str | None = Field(default=None, max_length=12_000)
+    covered_chapters: list[float] = Field(min_length=1, max_length=1000)
+    key_beats: list[MemoryCoverageBeat] = Field(min_length=1, max_length=200)
     evidence_chunk_ids: list[PositiveInt] = Field(min_length=1, max_length=500)
 
 
 class ExtractionPayload(StrictModel):
-    schema_version: Literal["2.0"] = "2.0"
+    schema_version: Literal["2.2"] = "2.2"
     chapter: float
     source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     mentions: list[ExtractionMention] = Field(default_factory=list, max_length=200)

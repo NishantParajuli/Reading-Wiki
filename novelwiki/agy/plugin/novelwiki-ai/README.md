@@ -1,6 +1,6 @@
 # NovelWiki AI plugin
 
-Version 1.3.2. Preflight imports this plugin into disposable isolated CLI state to validate
+Version 1.4.3. Preflight imports this plugin into disposable isolated CLI state to validate
 the registry. Workload runs copy the same hash-pinned assets into the private workspace's
 direct `.agents` customization paths because AGY 1.1.2 does not activate imported hooks in
 print mode. It has no database, MCP, network, unrestricted terminal, or secret-bearing
@@ -13,3 +13,8 @@ Entity-disambiguation instructions inline the complete decision shape. The stop 
 that every requested case has exactly one decision, that each selection is `NEW` or a supplied
 candidate reference, and that confidence/evidence fields match the host contract before it
 finalizes the manifest.
+
+Codex extraction and verification instructions also prevent newly spoken aliases for a supplied
+entity from becoming duplicate mentions, and require cross-reference identity state to carry the
+same explicit identity-reveal pair enforced by the host. Material claims carry contiguous verbatim
+evidence anchors so reader-facing prose can paraphrase without relying on a brittle shared-word test.

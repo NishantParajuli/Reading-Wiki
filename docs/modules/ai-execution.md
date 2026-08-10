@@ -59,6 +59,9 @@ multiple model calls, so they're gated like costed writes:
 429), and `concurrency_slot` (at most `ASK_MAX_CONCURRENT_PER_USER`=2 in flight, backed
 by self-expiring `ai_request_locks` rows with a `ASK_CONCURRENCY_TTL_SECONDS`=180 lease
 so a crashed request frees its slot). **Cache hits skip every gate.**
+These controls bound spend; Codex owns the separate quality boundary. An uncached Ask is
+cacheable only after its verifier and deterministic retrieved-evidence citation checks pass,
+while entity prose is cacheable only after profile verification/repair and model/version checks.
 
 ### `policy.py` — grants and backend resolution
 
@@ -110,7 +113,8 @@ so a crashed request frees its slot). **Cache hits skip every gate.**
 - **`prompts.py`** — inlines the hash-pinned workload instructions into the initial print
   prompt. This avoids AGY 1.1.2's workspace-skill activation loop and redundant discovery
   turns; Codex supplies one bounded-memory `input/task.md` bundle with strict extraction
-  schema 2.0 and exact reducer targets, while disambiguation inlines its complete decision
+  artifact schema 2.2, verbatim per-claim evidence anchors, and exact distributed-coverage
+  reducer targets, while disambiguation inlines its complete decision
   object and supplied-candidate rule. The trusted stop hook creates the final manifest after
   the model writes only its semantic artifacts and validates exact disambiguation case
   coverage before allowing the child run to stop.
@@ -134,8 +138,11 @@ admin panel and `/auth/me` capability), orphan-run detection, resumable-run quer
   `turn/start`; it enforces an ephemeral thread, never-approve policy, read-only/no-network
   sandbox, cancellation/interrupt, process identity, stream limits, and token-usage metrics.
 - **`contracts.py` / `runner.py`** supply strict workload JSON Schemas. The host parses the
-  final structured message and materializes the same hashed translation/extraction/
-  disambiguation artifacts expected by the existing validators; the model never writes files.
+  final structured message, injects sealed-input identity into extraction artifacts, and
+  materializes the same hashed translation/extraction/disambiguation artifacts expected by the
+  existing validators; the shared validation path then applies loss-minimizing grounded
+  normalization, retaining only trusted ids from mixed chunk provenance while rejecting
+  all-unsupplied provenance. The model never writes files.
 - **`workspace.py`** creates the private run root and isolated sibling `CODEX_HOME`, linking
   only the official `auth.json` while disabling persisted history and web search.
 - **`smoke.py`** implements the explicitly consuming, rate-limited admin readiness turn and
