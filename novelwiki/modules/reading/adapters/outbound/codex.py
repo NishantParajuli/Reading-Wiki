@@ -62,7 +62,7 @@ class PostgresReadingCodexGateway:
                 "SELECT number FROM chapters WHERE novel_id=$1 "
                 "AND ($2::numeric IS NULL OR number>=$2) "
                 "AND ($3::numeric IS NULL OR number<=$3) "
-                "AND (NOT $4 OR content IS NOT NULL) "
+                "AND (NOT $4 OR NULLIF(btrim(content),'') IS NOT NULL) "
                 "AND (NOT $5 OR COALESCE(kind,'chapter')=ANY($6::text[])) "
                 "ORDER BY number;",
                 novel_id, start, end, require_content, narrative_only,

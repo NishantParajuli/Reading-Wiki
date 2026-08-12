@@ -33,6 +33,7 @@ class CodexExtractionTransactionApi(Protocol):
         thread_refs: dict[str, int], memory_targets: list[dict],
         context_manifest: dict, context_sha256: str, context_token_count: int,
         run_id: Any | None, model_label: str | None, force: bool,
+        thread_relevance_verified: bool,
     ) -> dict: ...
 
 

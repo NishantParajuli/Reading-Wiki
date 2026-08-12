@@ -170,6 +170,11 @@ cached row as the completed regeneration.
 self, admins may add `user_id`) · `GET /api/jobs/{id}` · `POST /api/jobs/{id}/cancel`
 (queued never starts; running stops before its next expensive stage).
 
+For `codex_build`, extraction progress reports `{step,steps,stage,done,total,current_chapter}`.
+`done/total` is the durable whole-job position including chapters committed before a retry;
+`current_chapter` is the actual source chapter being processed, and `stage` includes both that
+source chapter and its overall position. These fields do not reset to a retry-local `1/N` view.
+
 ## Admin (`/api/admin`, admin session; served by Experience)
 
 `GET /users` · `PATCH /users/{id}` (status/role/quota overrides; null resets) ·

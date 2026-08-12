@@ -56,10 +56,33 @@ appropriate or omit the item.
 
 Use `thread_updates` only for important unresolved questions, objectives, mysteries, threats, or
 promises that matter beyond this scene. Reuse a supplied thread_ref; a new thread must use a unique
-local ref such as `p1`, operation `open`, and a stable title. Do not create threads for ordinary
-scene actions. Memory updates must be produced only for the exact targets supplied in context.
-Checkpoint and volume summaries are grounded recomputations from the supplied child summaries plus
-this chapter, not free-form knowledge and not summary-of-summary mutation.
+local ref such as `p1`, operation `open`, and a stable title. Update a supplied thread only when the
+current chapter explicitly mentions its stable title/topic keywords; sharing a character or being
+recent is not enough. Aliases, personas, nicknames, and paraphrases may express that stable topic
+when the chapter actually advances it; shared participants alone are still insufficient. A supplied
+`mark_dormant` thread must use `reopen` before it can advance. Do
+not create threads for ordinary scene actions. Emit at most one update per thread_ref per chapter;
+combine separately supported developments into that single grounded update. Memory updates must be produced only for the exact
+targets supplied in context. Copy `covered_chapters` exactly, partition every covered chapter once
+across `key_beats[].chapter_refs` (at most six chapters per beat), and write a concrete durable beat
+for every group. The trusted host renders the persisted checkpoint/volume summary from those beats;
+set the nullable `summary` field to null. This distributed reducer contract prevents an endpoint-only
+summary. Checkpoint and volume beats are grounded recomputations from all supplied child summaries
+plus this chapter, not free-form knowledge and not summary-of-summary mutation.
+
+Write every fact's content so it explicitly names its entity. Write every relationship's content so
+it names both endpoints, and every event description so it names at least one participant. Never put
+local refs such as m1/e2/t3/p4 or chunk-marker/citation notation in user-facing text.
+Every material item must also include `evidence_text`: a short contiguous verbatim span copied from
+one of its `source_chunk_ids`. Never stitch separated lines or omit intervening source words. When
+chunks overlap, cite the chunk containing the entire span. The reader-facing claim may paraphrase
+that span, but the evidence must semantically entail the claim. Related vocabulary without
+entailment is not support.
+
+Reconcile temporal state against this chapter. When the chapter clearly supersedes a supplied
+location, occupation, goal, condition, or custody value, emit a set or clear transition instead of
+leaving the stale value untouched. A confirmed death clears living-only goals, occupations,
+conditions, and custody. Do not repeat unchanged persistent state.
 
 Output a strict JSON matching this schema:
 {
@@ -67,28 +90,28 @@ Output a strict JSON matching this schema:
     {"surface_form": "exact literal word-bounded span copied from the CURRENT CHAPTER (never an inferred role, kinship label, description, or normalized name)", "entity_ref": "m1", "type": "character|location|faction|item|concept|organization", "description": "one short clause describing who/what this is, as known in THIS chapter", "provisional": true}
   ],
   "facts": [
-    {"entity_ref": "string", "fact_type": "trait|status|backstory|action|location|possession|belief", "content": "string", "source_chunk_ids": [1234]}
+    {"entity_ref": "string", "fact_type": "trait|status|backstory|action|location|possession|belief", "content": "string", "evidence_text": "short verbatim cited span", "source_chunk_ids": [1234]}
   ],
   "relationships": [
-    {"source_ref": "string", "target_ref": "string", "relation_type": "mentor|ally|enemy|family|romantic|rival", "directed": true, "content": "string", "source_chunk_ids": [1234]}
+    {"source_ref": "string", "target_ref": "string", "relation_type": "mentor|ally|enemy|family|romantic|rival", "directed": true, "content": "string", "evidence_text": "short verbatim cited span", "source_chunk_ids": [1234]}
   ],
   "events": [
-    {"description": "string", "participant_refs": ["string"], "location_ref": "string", "significance": "string", "source_chunk_ids": [1234]}
+    {"description": "string", "participant_refs": ["string"], "location_ref": "string", "significance": "string", "evidence_text": "short verbatim cited span", "source_chunk_ids": [1234]}
   ],
   "identity_reveals": [
-    {"persona_ref": "string", "true_entity_ref": "string", "note": "string", "source_chunk_ids": [1234]}
+    {"persona_ref": "string", "true_entity_ref": "string", "note": "string", "evidence_text": "short verbatim cited span", "source_chunk_ids": [1234]}
   ],
   "new_aliases": [
-    {"entity_ref": "string", "alias": "string", "is_reveal": true, "source_chunk_ids": [1234]}
+    {"entity_ref": "string", "alias": "string", "is_reveal": true, "evidence_text": "short verbatim cited span", "source_chunk_ids": [1234]}
   ],
   "state_changes": [
-    {"entity_ref": "string", "state_key": "last_known_location|life_status|occupation|rank|affiliation|possession|ability|identity|title|goal|knowledge|condition|custody", "operation": "set|clear|add|remove|confirm|contradict", "value": "JSON value or null", "value_entity_ref": null, "perspective_ref": null, "certainty": "uncertain|alleged|presumed|confirmed|contradicted", "narrative_scope": "current|historical|dream|prophecy|alternate", "source_chunk_ids": [1234]}
+    {"entity_ref": "string", "state_key": "last_known_location|life_status|occupation|rank|affiliation|possession|ability|identity|title|goal|knowledge|condition|custody", "operation": "set|clear|add|remove|confirm|contradict", "value": "JSON value or null", "value_entity_ref": null, "perspective_ref": null, "certainty": "uncertain|alleged|presumed|confirmed|contradicted", "narrative_scope": "current|historical|dream|prophecy|alternate", "evidence_text": "short verbatim cited span", "source_chunk_ids": [1234]}
   ],
   "relationship_state_changes": [
-    {"source_ref": "string", "target_ref": "string", "state_key": "status|affiliation|family|romantic|trust|hostility|hierarchy", "operation": "set|clear|add|remove|confirm|contradict", "value": "JSON value or null", "certainty": "uncertain|alleged|presumed|confirmed|contradicted", "source_chunk_ids": [1234]}
+    {"source_ref": "string", "target_ref": "string", "state_key": "status|affiliation|family|romantic|trust|hostility|hierarchy", "operation": "set|clear|add|remove|confirm|contradict", "value": "JSON value or null", "certainty": "uncertain|alleged|presumed|confirmed|contradicted", "evidence_text": "short verbatim cited span", "source_chunk_ids": [1234]}
   ],
   "thread_updates": [
-    {"thread_ref": "t1 or new p1", "title": "required only for new threads", "operation": "open|advance|clarify|resolve|reopen|mark_dormant|contradict", "summary": "grounded update", "participant_refs": ["string"], "keywords": ["short stable term"], "certainty": "confirmed", "source_chunk_ids": [1234]}
+    {"thread_ref": "t1 or new p1", "title": "required only for new threads", "operation": "open|advance|clarify|resolve|reopen|mark_dormant|contradict", "summary": "grounded update", "participant_refs": ["string"], "keywords": ["short stable term"], "certainty": "confirmed", "evidence_text": "short verbatim cited span", "source_chunk_ids": [1234]}
   ],
   "memory_updates": __MEMORY_UPDATES_EXAMPLE__
 }
@@ -110,8 +133,10 @@ Passages (each starts with its [chunk <id>] marker):
 {chapter_text}
 
 Extract structured JSON strictly based on the schema and instructions. For every
-material item include the supporting `source_chunk_ids` using the marker
-ids above. Do not include markdown code block formatting (like ```json), just raw JSON.
+material item include the supporting `source_chunk_ids` using the marker ids above and a short
+contiguous `evidence_text` copied verbatim from one cited passage without omitting intervening
+words. Do not include markdown code block
+formatting (like ```json), just raw JSON.
 """
 
 # ── Extraction Verification / Second Pass (Flash) ──
@@ -131,7 +156,11 @@ Pay special attention to:
 
 Output STRICT JSON in the SAME schema as the first pass. Preserve supported first-pass
 items, add material omissions, and remove or correct unsupported/wrong items. Every material
-item MUST include `source_chunk_ids` drawn from markers actually present in the text.
+item MUST include `source_chunk_ids` drawn from markers actually present in the text and a short
+contiguous verbatim `evidence_text` span from one cited chunk. Never stitch separated lines, omit
+intervening source words, or cite the adjacent overlap instead of the chunk containing the whole
+span. A paraphrased claim is valid when that evidence semantically entails it; shared words alone
+do not prove support.
 Apply the SAME strict entity criteria as the first pass: only significant, NAMED, recurring
 entities (characters, named places, named factions/orgs, uniquely named items, proper-noun
 concepts). Do NOT add generic nouns, unnamed roles, rank/class labels, scene props, materials,
@@ -203,7 +232,7 @@ You see only compressed, cited digests of prior tool results.
 Your tools:
 1. resolve_entity(name) -> candidate entities (id, canonical_name, type)
 2. get_entity_profile(entity_id) -> facts + aliases (folded personas)
-3. hybrid_search(query, k) -> passages (chunk ids)
+3. hybrid_search(query, k) -> BM25+dense passages, automatically relevance-reranked (chunk ids)
 4. get_relationships(entity_id, other_id) -> relationship edges
 5. get_timeline(entity_id) -> chronological facts + events
 6. get_chunk(chunk_id) -> verbatim passage drill-down
@@ -223,6 +252,10 @@ If you have gathered sufficient information, output exactly "DONE".
 SYNTHESIS_SYSTEM = """Write the answer to the user's question using ONLY the cited evidence digests below (all from chapters <= {chapter_ceiling}).
 You have no independent knowledge of this story - if a claim is not in the evidence, do not state it.
 Represent what the reader knows at chapter {chapter_ceiling}, including beliefs the story may later overturn.
+You may draw a reasonable conclusion directly from multiple cited facts. For subjective questions
+(for example, who seems most important), clearly frame the conclusion as an interpretation based on
+the available chapters and cite the factual premises. Do not pretend the interpretation is an
+explicit statement from the novel.
 
 CITATION FORMAT (mandatory, machine-parsed — follow EXACTLY):
 - Every factual claim must end with one or more inline citations in square brackets.
@@ -245,10 +278,13 @@ Write a comprehensive, cited, and grounded answer.
 
 # ── Verification (Flash) ──
 VERIFY_SYSTEM = """Check the draft answer against the provided cited evidence.
-For each sentence, verify if it is supported by a citation in the provided evidence (all from chapters <= {chapter_ceiling}).
-Flag any sentence that:
-(a) lacks support or citation,
-(b) appears to use knowledge not present in the evidence (possible spoiler/hallucination).
+Verify factual story claims against the cited evidence (all from chapters <= {chapter_ceiling}).
+Allow faithful paraphrases and reasonable conclusions drawn directly from cited premises; the
+evidence does not need to state an interpretive conclusion word-for-word. An interpretation must be
+framed as such (for example, "based on the chapters so far"), not presented as an explicit fact.
+Do not flag headings, transitions, uncertainty qualifiers, or a separately paragraphed conclusion
+solely because each Markdown block does not repeat a citation. Flag material contradictions,
+uncited story facts, details absent from the evidence, invented evidence ids, and possible spoilers.
 
 Output a JSON:
 {{
@@ -273,7 +309,9 @@ REPAIR_SYSTEM = """You revise a draft answer so that EVERY remaining claim is su
 by the cited evidence (all from chapters <= {chapter_ceiling}).
 A verification pass flagged some sentences as unsupported or as possible spoilers/hallucinations.
 Rewrite the answer to remove or correct exactly those flagged claims, keeping everything that is
-supported and preserving the inline citations. Do not introduce any new facts. If removing the
+supported and preserving the inline citations. Preserve reasonable conclusions drawn from cited
+premises by explicitly framing them as interpretations instead of deleting them merely because the
+evidence does not state the conclusion word-for-word. Do not introduce any new facts. If removing the
 flagged claims leaves nothing substantive, say what little is supported, or that the answer is not
 available in the read chapters. Output only the corrected answer in Markdown.
 """
@@ -301,7 +339,9 @@ current-state snapshot, open threads, and relationship descriptions.
 Strict Invariants:
 1. Never include any facts or developments revealed in any chapter > {chapter_ceiling}.
 2. Do not speculate about the future.
-3. Every factual claim must be grounded in the provided facts, and you should cite the chapter number inline (e.g. (Ch 3.0)).
+3. Every narrative claim must end with an exact machine-readable citation to supplied evidence:
+   [Fact 29, Chapter 3], [Rel 4, Chapter 2], or [Chunk 14, Chapter 5]. Never invent an id.
+   The aliases list may reproduce supplied aliases without citations.
 4. Structure the profile with a brief summary, aliases, facts grouped by type, and key relationships.
 """
 
@@ -326,4 +366,46 @@ Relevant Open Plot Threads:
 {open_threads}
 
 Write a beautiful, well-structured Markdown wiki entry for {canonical_name}.
+"""
+
+WIKI_PROFILE_VERIFY_SYSTEM = """You verify a spoiler-safe entity profile against its complete,
+bounded source packet. The ceiling is chapter {chapter_ceiling}. Flag every narrative claim that is
+unsupported, uncited, cites an id absent from the source packet, or implies knowledge beyond the
+ceiling. Exact citations are [Fact N, Chapter X], [Rel N, Chapter X], or [Chunk N, Chapter X].
+The aliases list may reproduce aliases explicitly supplied by the source packet without citations.
+
+Output strict JSON:
+{{
+  "unsupported": true_or_false,
+  "flags": [{{"sentence": "string", "reason": "string"}}]
+}}
+"""
+
+WIKI_PROFILE_VERIFY_USER = """Source packet:
+{evidence}
+
+Draft profile:
+{draft}
+
+Verify the draft against the source packet and return only JSON.
+"""
+
+WIKI_PROFILE_REPAIR_SYSTEM = """Repair a spoiler-safe entity profile using only the supplied
+source packet at chapter ceiling {chapter_ceiling}. Remove or correct every flagged claim. Every
+remaining narrative claim must end with an exact supplied-evidence citation in one of these forms:
+[Fact N, Chapter X], [Rel N, Chapter X], or [Chunk N, Chapter X]. Never invent an id or add future
+knowledge. The aliases list may reproduce explicitly supplied aliases without citations. Return
+only the corrected Markdown profile.
+"""
+
+WIKI_PROFILE_REPAIR_USER = """Source packet:
+{evidence}
+
+Grounding problems:
+{flags}
+
+Draft profile:
+{draft}
+
+Return the corrected Markdown profile.
 """

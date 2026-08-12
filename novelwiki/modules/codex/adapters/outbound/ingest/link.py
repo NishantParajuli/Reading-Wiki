@@ -3,6 +3,7 @@ import logging
 import asyncpg
 from dataclasses import dataclass
 from novelwiki.platform.config import settings
+from novelwiki.modules.ai_execution.public import eligible_entity_surface
 from novelwiki.modules.codex.adapters.outbound.cache import clear_caches
 from novelwiki.modules.codex.domain.prompts import DISAMBIGUATION_SYSTEM, DISAMBIGUATION_USER
 
@@ -109,14 +110,56 @@ async def create_entity(
         """,
         novel_id, name, entity_type or "concept", desc, vector, chapter,
     )
-    await conn.execute(
-        """
-        INSERT INTO entity_aliases (novel_id,entity_id,alias,revealed_at_chapter)
-        VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING;
-        """,
-        novel_id, entity_id, name, chapter,
-    )
+    # Exact and fuzzy resolution already query ``entities.canonical_name``.
+    # Mirroring that value into ``entity_aliases`` adds no recall, but it does
+    # enlarge every future roster and retrieval context for a long novel.
     return int(entity_id)
+
+
+async def promote_canonical_name_if_safe(
+    novel_id: int,
+    entity_id: int,
+    alias: str,
+    revealed_at_chapter: float,
+    conn: asyncpg.Connection,
+    *,
+    runtime,
+) -> bool:
+    """Promote a same-introduction proper alias without leaking a later reveal.
+
+    Canonical names are visible at every ceiling after first appearance, so a name
+    learned later can never be promoted safely. A proper name learned in the exact
+    introduction chapter may replace a descriptive placeholder while the old label
+    remains a ceiling-safe alias.
+    """
+    row = await conn.fetchrow(
+        "SELECT canonical_name,type,description,first_seen_chapter FROM entities "
+        "WHERE novel_id=$1 AND id=$2;",
+        novel_id, entity_id,
+    )
+    if row is None or float(row["first_seen_chapter"]) != float(revealed_at_chapter):
+        return False
+    candidate = " ".join((alias or "").strip().split())
+    current = str(row["canonical_name"] or "").strip()
+    entity_type = str(row["type"] or "concept")
+    if (
+        not candidate
+        or candidate.casefold() == current.casefold()
+        or not eligible_entity_surface(candidate, entity_type)
+        or eligible_entity_surface(current, entity_type)
+    ):
+        return False
+    description = str(row["description"] or "").strip()
+    embedding = await runtime.ai.get_embedding(
+        f"{candidate}: {description}" if description else candidate
+    )
+    vector = "[" + ",".join(map(str, embedding)) + "]" if embedding else None
+    await conn.execute(
+        "UPDATE entities SET canonical_name=$1,name_embedding=$2::vector "
+        "WHERE novel_id=$3 AND id=$4;",
+        candidate, vector, novel_id, entity_id,
+    )
+    return True
 
 async def resolve_entity(
     novel_id: int,

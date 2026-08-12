@@ -27,6 +27,7 @@ async def commit_codex_extraction(
     run_id: Any | None = None,
     model_label: str | None = None,
     force: bool = False,
+    thread_relevance_verified: bool = False,
 ) -> dict:
     """Atomically verify Reading source bytes and commit Codex-owned artifacts."""
     async with uow_factory() as uow:
@@ -55,4 +56,5 @@ async def commit_codex_extraction(
             run_id=run_id,
             model_label=model_label,
             force=force,
+            thread_relevance_verified=thread_relevance_verified,
         )

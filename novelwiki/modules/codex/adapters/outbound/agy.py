@@ -21,8 +21,27 @@ from novelwiki.modules.ai_execution.public import PreflightResult
 from novelwiki.platform.config import settings
 from novelwiki.platform.database import get_db_pool
 from novelwiki.modules.codex.adapters.outbound.ingest.extract import (
+    ClaimAlignmentRecoveryError,
+    EvidenceAnchorRecoveryError,
+    ThreadRelevanceRecoveryError,
+    ThreadUpdateRecoveryError,
+    EXTRACTION_SCHEMA_VERSION,
+    _accept_verified_thread_relevance_issues,
+    _claim_entity_alignment_issues,
+    _evidence_anchor_issues,
+    _grounding_issue_message,
+    _duplicate_thread_update_issues,
+    _quarantine_alignment_issues,
+    _quarantine_evidence_issues,
+    _quarantine_duplicate_thread_updates,
+    _repair_verified_evidence_issues,
+    _thread_relevance_issues,
+    _validate_local_reference_graph,
+    _validate_memory_updates,
+    _validate_summary_text,
     chapter_source_sha256,
     commit_extraction_proposal,
+    memory_update_examples,
 )
 from novelwiki.modules.codex.adapters.outbound.context import build_chapter_context, count_tokens
 from novelwiki.modules.codex.adapters.outbound.ingest.link import find_resolution_candidates
@@ -39,19 +58,28 @@ _EXTRACTION_GROUPS = (
 logger = logging.getLogger(__name__)
 
 
-def _bounded_task_document(source: dict, chapter_number: float, **kwargs) -> str:
+def _bounded_task_document(
+    source: dict,
+    chapter_number: float,
+    *,
+    max_tokens: int | None = None,
+    **kwargs,
+) -> str:
     document = _codex_task_document(source, chapter_number, **kwargs)
     tokens = count_tokens(document)
-    if tokens > settings.CODEX_CONTEXT_MAX_TOKENS:
+    limit = int(max_tokens or settings.CODEX_CONTEXT_MAX_TOKENS)
+    if tokens > limit:
         raise AgyValidationError(
-            f"codex task has {tokens} input tokens; limit is {settings.CODEX_CONTEXT_MAX_TOKENS}"
+            f"codex task has {tokens} input tokens; limit is {limit}",
+            code="codex_context_budget_exceeded",
         )
     return document
 
 
 def _extraction_schema_input(source: dict) -> dict:
     return {
-        "schema_version": "2.0", "required_groups": list(_EXTRACTION_GROUPS),
+        "schema_version": EXTRACTION_SCHEMA_VERSION,
+        "required_groups": list(_EXTRACTION_GROUPS),
         "mention_rules": "one unique m-ref per distinct new entity; roster e-refs are not mentions",
         "allowed_chunk_ids": sorted(source["chunk_ids"]),
         "allowed_entity_refs": sorted(source.get("roster_map", {})),
@@ -85,7 +113,12 @@ async def _chapter_input(novel_id: int, chapter_number: float, runtime) -> dict:
         novel_id, chapter_number
     )
     if not chapter or not chapter["content"]:
-        raise RuntimeError("chapter source is missing")
+        raise AgyValidationError(
+            "chapter source is missing or blank",
+            code="codex_source_missing",
+            retryable=False,
+            safe_detail="codex_source_missing: chapter source is missing or blank",
+        )
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         chunks = await conn.fetch(
@@ -104,8 +137,11 @@ async def _chapter_input(novel_id: int, chapter_number: float, runtime) -> dict:
         "title": chapter["title"] or f"Chapter {chapter_number}", "content": chapter["content"],
         "marked": marked, "source_sha256": chapter_source_sha256(chapter["content"]),
         "chunk_ids": {int(row["id"]) for row in chunks},
+        "chunk_texts": {int(row["id"]): str(row["text"] or "") for row in chunks},
         "memory_context": bounded["context"], "memory_context_json": bounded["serialized"],
         "roster_map": bounded["roster_map"], "thread_map": bounded["thread_map"],
+        "roster_terms": bounded["roster_terms"], "roster_types": bounded["roster_types"],
+        "thread_terms": bounded["thread_terms"],
         "memory_targets": bounded["memory_targets"], "context_manifest": bounded["manifest"],
         "context_sha256": bounded["context_sha256"], "context_token_count": bounded["token_count"],
     }
@@ -150,24 +186,20 @@ def _codex_task_document(
     *,
     draft: dict | None = None,
     draft_summary: str | None = None,
+    grounding_issues: list[dict[str, int | str]] | None = None,
+    alignment_issues: list[dict[str, object]] | None = None,
+    thread_issues: list[dict[str, object]] | None = None,
+    thread_relevance_issues: list[dict[str, object]] | None = None,
 ) -> str:
     """Pack model inputs into one view-file turn without changing source identity."""
     example_chunk_id = min(source["chunk_ids"])
-    memory_examples = [
-        {
-            "kind": target["kind"],
-            "summary": (
-                f"grounded {target['kind']} recomputation for chapters "
-                f"{target['start_chapter']}–{target['end_chapter']}"
-            ),
-            "evidence_chunk_ids": [example_chunk_id],
-        }
-        for target in source["memory_targets"]
-    ]
+    memory_examples = memory_update_examples(
+        source["memory_targets"], example_chunk_id
+    )
     schema = {
-        "schema_version": "2.0",
+        "schema_version": EXTRACTION_SCHEMA_VERSION,
         "output_shape": {
-            "schema_version": "2.0",
+            "schema_version": EXTRACTION_SCHEMA_VERSION,
             "chapter": chapter_number,
             "source_sha256": source["source_sha256"],
             "mentions": [{
@@ -179,24 +211,32 @@ def _codex_task_document(
             }],
             "facts": [{
                 "entity_ref": "m1 or supplied e-ref", "fact_type": "type",
-                "content": "supported fact", "source_chunk_ids": [example_chunk_id],
+                "content": "supported fact",
+                "evidence_text": "short verbatim span from the cited chunk",
+                "source_chunk_ids": [example_chunk_id],
             }],
             "relationships": [{
                 "source_ref": "m/e-ref", "target_ref": "m/e-ref",
                 "relation_type": "type", "directed": True,
-                "content": "supported relationship", "source_chunk_ids": [example_chunk_id],
+                "content": "supported relationship",
+                "evidence_text": "short verbatim span from the cited chunk",
+                "source_chunk_ids": [example_chunk_id],
             }],
             "events": [{
                 "description": "supported event", "participant_refs": ["m/e-ref"],
                 "location_ref": None, "significance": "brief significance",
+                "evidence_text": "short verbatim span from the cited chunk",
                 "source_chunk_ids": [example_chunk_id],
             }],
             "identity_reveals": [{
                 "persona_ref": "m/e-ref", "true_entity_ref": "m/e-ref",
-                "note": "supported reveal", "source_chunk_ids": [example_chunk_id],
+                "note": "supported reveal",
+                "evidence_text": "short verbatim span from the cited chunk",
+                "source_chunk_ids": [example_chunk_id],
             }],
             "new_aliases": [{
                 "entity_ref": "m/e-ref", "alias": "exact alias", "is_reveal": False,
+                "evidence_text": "short verbatim span from the cited chunk",
                 "source_chunk_ids": [example_chunk_id],
             }],
             "state_changes": [{
@@ -205,19 +245,23 @@ def _codex_task_document(
                 "value_entity_ref": None, "perspective_ref": None,
                 "certainty": "uncertain|alleged|presumed|confirmed|contradicted",
                 "narrative_scope": "current|historical|dream|prophecy|alternate",
+                "evidence_text": "short verbatim span from the cited chunk",
                 "source_chunk_ids": [example_chunk_id],
             }],
             "relationship_state_changes": [{
                 "source_ref": "m/e-ref", "target_ref": "m/e-ref",
                 "state_key": "status|affiliation|family|romantic|trust|hostility|hierarchy",
                 "operation": "set|clear|add|remove|confirm|contradict", "value": "JSON value or null",
-                "certainty": "confirmed", "source_chunk_ids": [example_chunk_id],
+                "certainty": "confirmed",
+                "evidence_text": "short verbatim span from the cited chunk",
+                "source_chunk_ids": [example_chunk_id],
             }],
             "thread_updates": [{
                 "thread_ref": "supplied t-ref or new p-ref", "title": "required for new thread",
                 "operation": "open|advance|clarify|resolve|reopen|mark_dormant|contradict",
                 "summary": "supported durable thread update", "participant_refs": ["m/e-ref"],
                 "keywords": ["stable keyword"], "certainty": "confirmed",
+                "evidence_text": "short verbatim span from the cited chunk",
                 "source_chunk_ids": [example_chunk_id],
             }],
             "memory_updates": memory_examples,
@@ -235,6 +279,26 @@ def _codex_task_document(
             "state keys are closed vocabularies exactly as listed in output_shape; "
             "never invent age, parent, sibling, attitude, affection, or another key. "
             "Use a supported fact or relationship when appropriate, otherwise omit it."
+        ),
+        "quality_rules": (
+            "Every fact content names its entity; every relationship content names both "
+            "endpoints; every event description names at least one participant. Existing "
+            "threads require explicit current-chapter topic grounding, and dormant threads "
+            "require reopen. Aliases, personas, nicknames, and paraphrases may ground the same "
+            "thread only when the chapter semantically advances its stable topic; shared "
+            "participants alone are insufficient. Emit at most one thread_updates item for each thread_ref in this "
+            "chapter; combine multiple developments into one grounded update. When a newly "
+            "spoken name belongs to a supplied e-ref, emit a new "
+            "alias for that e-ref instead of minting a duplicate mention. A cross-ref identity "
+            "state requires the same pair in identity_reveals; identity_reveals may only link "
+            "entities that existed before this chapter, because an identity introduced and "
+            "revealed now is only an alias. Reconcile superseded transient "
+            "state. Never expose m/e/t/p refs or chunk/citation notation in user-facing text or "
+            "summaries. Every material item includes evidence_text copied verbatim from one of "
+            "its cited chunks. The claim may paraphrase that evidence, but the evidence must "
+            "semantically entail the claim; related vocabulary alone is not sufficient. Memory "
+            "coverage copies every trusted child chapter and partitions it once across "
+            "<=6-chapter beats."
         ),
         "allowed_chunk_ids": sorted(source["chunk_ids"]),
         "allowed_entity_refs": sorted(source["roster_map"]),
@@ -257,11 +321,61 @@ def _codex_task_document(
         sections.extend([
             "## Draft extraction to verify",
             json.dumps({
-                "schema_version": "2.0", "chapter": chapter_number,
+                "schema_version": EXTRACTION_SCHEMA_VERSION,
+                "chapter": chapter_number,
                 "source_sha256": source["source_sha256"], **draft, "warnings": [],
-            }, ensure_ascii=False, indent=2),
+            }, ensure_ascii=False, separators=(",", ":")),
             "## Draft chapter summary to verify",
             draft_summary or "(none)",
+        ])
+    if grounding_issues:
+        sections.extend([
+            "## Host-detected evidence repairs required",
+            json.dumps(grounding_issues, ensure_ascii=False, indent=2),
+            (
+                "Repair or drop each listed draft item. A repaired item must contain a short "
+                "contiguous verbatim evidence_text span that occurs in one of its "
+                "source_chunk_ids and semantically entails the reader-facing claim. Never "
+                "stitch separated lines or omit intervening source words. When overlapping "
+                "chunks are available, cite the chunk containing the entire span. Preserve all "
+                "other supported items and still audit the complete chapter."
+            ),
+        ])
+    if alignment_issues:
+        sections.extend([
+            "## Host-detected claim-reference repairs required",
+            json.dumps(alignment_issues, ensure_ascii=False, indent=2),
+            (
+                "Repair or drop each listed draft item. Do not change a ref merely to silence "
+                "the check: first verify that the claim is attached to the correct entity. A "
+                "retained fact must explicitly name its entity, a retained relationship must "
+                "explicitly name both endpoints, and a retained event must explicitly name at "
+                "least one participant using the supplied accepted terms. Preserve every other "
+                "supported item and still audit the complete chapter."
+            ),
+        ])
+    if thread_issues:
+        sections.extend([
+            "## Host-detected duplicate thread repairs required",
+            json.dumps(thread_issues, ensure_ascii=False, indent=2),
+            (
+                "Combine or drop the listed duplicates so each thread_ref occurs at most once. "
+                "For a new p-ref, retain one operation=open update with a stable title. Preserve "
+                "all distinct supported developments in one summary only when its single "
+                "evidence_text anchor semantically entails that combined update."
+            ),
+        ])
+    if thread_relevance_issues:
+        sections.extend([
+            "## Host-detected semantic thread-topic review required",
+            json.dumps(thread_relevance_issues, ensure_ascii=False, indent=2),
+            (
+                "For each listed update, decide from the current chapter evidence whether it "
+                "actually advances the supplied trusted thread. Names may appear through aliases, "
+                "personas, nicknames, or paraphrases. Retain a semantically grounded update even "
+                "when exact stable-title words are absent; otherwise drop it. Shared participants "
+                "alone are not sufficient. Do not change thread_ref merely to silence the check."
+            ),
         ])
     sections.extend(["## Current chapter chunks", source["marked"]])
     return "\n\n".join(sections) + "\n"
@@ -269,8 +383,25 @@ def _codex_task_document(
 
 def validate_extraction_output(
     run_root: Path, run_id: uuid.UUID, chapter_number: float, source: dict,
-    *, workload: str = "codex_extract", runtime,
+    *, workload: str = "codex_extract", runtime, evidence_policy: str = "reject",
+    alignment_policy: str = "reject", thread_duplicate_policy: str = "reject",
+    thread_relevance_policy: str = "reject",
 ) -> tuple[dict, str]:
+    if evidence_policy not in {"reject", "defer", "quarantine", "verified"}:
+        raise AgyValidationError("unknown evidence validation policy")
+    if alignment_policy not in {"reject", "defer", "quarantine"}:
+        raise AgyValidationError("unknown claim-alignment validation policy")
+    if thread_duplicate_policy not in {"reject", "defer", "quarantine"}:
+        raise AgyValidationError("unknown duplicate-thread validation policy")
+    if thread_relevance_policy not in {"reject", "defer", "verified"}:
+        raise AgyValidationError("unknown thread-relevance validation policy")
+    if thread_relevance_policy == "verified" and workload != "codex_verify":
+        raise AgyValidationError("semantic thread-relevance override requires codex verification")
+    if evidence_policy == "verified" and workload != "codex_verify":
+        raise AgyValidationError("verified evidence repair requires codex verification")
+    chapter_text = str(source.get("content") or "")
+    if not chapter_text:
+        raise AgyValidationError("codex source lacks current chapter text")
     manifest, roles = runtime.ai.validate_output_manifest(
         run_root, run_id=str(run_id), workload=workload,
         expected_roles={"codex_extraction": 1, "running_summary": 1, "codex_audit": 1},
@@ -282,7 +413,9 @@ def validate_extraction_output(
             runtime.ai.load_json(
                 extraction_path,
                 expected_sha256=expected_hashes[extraction_path.resolve()],
-            )
+            ),
+            chapter_text=chapter_text,
+            allowed_chunk_ids=set(source["chunk_ids"]),
         )
         if repairs:
             logger.warning(
@@ -294,14 +427,11 @@ def validate_extraction_output(
         )
     except ValidationError as exc:
         raise AgyValidationError("codex extraction schema is invalid") from exc
-    if payload.schema_version != "2.0":
+    if payload.schema_version != EXTRACTION_SCHEMA_VERSION:
         raise AgyValidationError("codex extraction uses an obsolete pipeline schema")
     if float(payload.chapter) != float(chapter_number) or payload.source_sha256 != source["source_sha256"]:
         raise AgyValidationError("codex chapter/source snapshot mismatch")
     data = payload.model_dump(exclude={"schema_version", "chapter", "source_sha256", "warnings"})
-    chapter_text = str(source.get("content") or "")
-    if not chapter_text:
-        raise AgyValidationError("codex source lacks current chapter text")
     mentions = {}
     for mention in data["mentions"]:
         if not isinstance(mention, dict):
@@ -323,7 +453,6 @@ def validate_extraction_output(
         "facts", "relationships", "events", "identity_reveals", "state_changes",
         "relationship_state_changes", "thread_updates",
     )
-    seen_thread_refs = set()
     for group in material_groups:
         for item in data[group]:
             if not isinstance(item, dict):
@@ -349,14 +478,8 @@ def validate_extraction_output(
                 raise AgyValidationError("identity reveal is missing an endpoint")
             if group == "thread_updates":
                 thread_ref = str(item.get("thread_ref") or "")
-                if not _THREAD_REF_RE.fullmatch(thread_ref) or thread_ref in seen_thread_refs:
+                if not _THREAD_REF_RE.fullmatch(thread_ref):
                     raise AgyValidationError("plot thread has an unsafe reference")
-                seen_thread_refs.add(thread_ref)
-                if thread_ref not in source["thread_map"] and (
-                    not _NEW_THREAD_REF_RE.fullmatch(thread_ref)
-                    or item.get("operation") != "open" or not item.get("title")
-                ):
-                    raise AgyValidationError("new plot thread requires operation=open and a title")
     for alias in data["new_aliases"]:
         if not isinstance(alias, dict) or alias.get("entity_ref") not in allowed_refs or not alias.get("alias"):
             raise AgyValidationError("invalid alias proposal")
@@ -366,20 +489,117 @@ def validate_extraction_output(
             raise AgyValidationError("invalid alias provenance") from exc
         if not alias_ids or not alias_ids.issubset(source["chunk_ids"]):
             raise AgyValidationError("alias cites an unsupplied chunk")
-    target_kinds = [target["kind"] for target in source["memory_targets"]]
-    update_kinds = [update["kind"] for update in data["memory_updates"]]
-    if sorted(update_kinds) != sorted(target_kinds) or len(update_kinds) != len(set(update_kinds)):
-        raise AgyValidationError("memory updates do not exactly match the trusted targets")
+    try:
+        _validate_memory_updates(data, source["memory_targets"])
+        graph_alignment_policy = (
+            "defer" if alignment_policy == "quarantine" else alignment_policy
+        )
+        graph_thread_policy = (
+            "defer"
+            if thread_duplicate_policy in {"defer", "quarantine"}
+            else thread_duplicate_policy
+        )
+        graph_relevance_policy = (
+            "defer"
+            if thread_relevance_policy in {"defer", "verified"}
+            else "reject"
+        )
+        thread_issues = _duplicate_thread_update_issues(data)
+        thread_relevance_issues = _thread_relevance_issues(
+            data, source.get("thread_terms") or {}, chapter_text
+        )
+        alignment_issues = _validate_local_reference_graph(
+            data, source["roster_map"], source["thread_map"],
+            trusted_entity_terms=source.get("roster_terms") or {},
+            trusted_entity_types=source.get("roster_types") or {},
+            trusted_threads=source.get("thread_terms") or {},
+            chapter_text=chapter_text,
+            alignment_policy=graph_alignment_policy,
+            thread_duplicate_policy=graph_thread_policy,
+            thread_relevance_policy=graph_relevance_policy,
+        )
+        if source.get("chunk_texts"):
+            issues = _evidence_anchor_issues(data, source["chunk_texts"])
+            if issues and evidence_policy == "reject":
+                raise ValueError(_grounding_issue_message(issues[0]))
+            if issues and evidence_policy == "verified":
+                data, warnings = _repair_verified_evidence_issues(
+                    data, source["chunk_texts"], issues
+                )
+                if warnings:
+                    logger.warning(
+                        "Applied bounded verifier-reviewed evidence repair: %s.",
+                        "; ".join(warnings),
+                    )
+                issues = _evidence_anchor_issues(data, source["chunk_texts"])
+            if issues and evidence_policy in {"quarantine", "verified"}:
+                data, warnings = _quarantine_evidence_issues(data, issues)
+                logger.warning(
+                    "Applied item-level evidence quarantine: %s.",
+                    "; ".join(warnings),
+                )
+                alignment_issues = _validate_local_reference_graph(
+                    data, source["roster_map"], source["thread_map"],
+                    trusted_entity_terms=source.get("roster_terms") or {},
+                    trusted_entity_types=source.get("roster_types") or {},
+                    trusted_threads=source.get("thread_terms") or {},
+                    chapter_text=chapter_text,
+                    alignment_policy="defer",
+                    thread_duplicate_policy=graph_thread_policy,
+                    thread_relevance_policy=graph_relevance_policy,
+                )
+                thread_issues = _duplicate_thread_update_issues(data)
+                thread_relevance_issues = _thread_relevance_issues(
+                    data, source.get("thread_terms") or {}, chapter_text
+                )
+        graph_recheck_required = False
+        if thread_issues and thread_duplicate_policy == "quarantine":
+            data, warnings = _quarantine_duplicate_thread_updates(data, thread_issues)
+            logger.warning(
+                "Applied item-level duplicate-thread quarantine: %s.",
+                "; ".join(warnings),
+            )
+            graph_recheck_required = True
+            thread_relevance_issues = _thread_relevance_issues(
+                data, source.get("thread_terms") or {}, chapter_text
+            )
+        if alignment_issues and alignment_policy == "quarantine":
+            data, warnings = _quarantine_alignment_issues(data, alignment_issues)
+            logger.warning(
+                "Applied item-level claim-alignment quarantine: %s.",
+                "; ".join(warnings),
+            )
+            graph_recheck_required = True
+        if thread_relevance_issues and thread_relevance_policy == "verified":
+            warnings = _accept_verified_thread_relevance_issues(
+                data, source.get("thread_terms") or {}, thread_relevance_issues
+            )
+            logger.warning(
+                "Applied bounded verifier-reviewed thread-topic acceptance: %s.",
+                "; ".join(warnings),
+            )
+        if graph_recheck_required:
+            _validate_local_reference_graph(
+                data, source["roster_map"], source["thread_map"],
+                trusted_entity_terms=source.get("roster_terms") or {},
+                trusted_entity_types=source.get("roster_types") or {},
+                trusted_threads=source.get("thread_terms") or {},
+                chapter_text=chapter_text,
+                thread_relevance_policy=graph_relevance_policy,
+            )
+    except (
+        EvidenceAnchorRecoveryError,
+        ClaimAlignmentRecoveryError,
+        ThreadRelevanceRecoveryError,
+        ThreadUpdateRecoveryError,
+    ) as exc:
+        raise AgyValidationError(str(exc), code=exc.code) from exc
+    except ValueError as exc:
+        raise AgyValidationError(str(exc)) from exc
     for update in data["memory_updates"]:
         ids = update.get("evidence_chunk_ids")
         if not ids or not {int(value) for value in ids}.issubset(source["chunk_ids"]):
             raise AgyValidationError("memory update lacks current-chapter provenance")
-        maximum = (
-            settings.CODEX_CHECKPOINT_SUMMARY_MAX_TOKENS
-            if update["kind"] == "checkpoint" else settings.CODEX_VOLUME_SUMMARY_MAX_TOKENS
-        )
-        if count_tokens(update["summary"]) > maximum:
-            raise AgyValidationError(f"{update['kind']} summary exceeds its token limit")
     if any(len(text) > 10_000 for text in _walk_strings(data)):
         raise AgyValidationError("codex output contains an oversized string")
     # Reject explicit future chapter fields wherever they occur.
@@ -398,8 +618,10 @@ def validate_extraction_output(
     summary_path = roles["running_summary"][0]
     summary = runtime.ai.read_text_artifact(summary_path, max_bytes=128_000,
                                  expected_sha256=expected_hashes[summary_path.resolve()]).strip()
-    if not summary or count_tokens(summary) > settings.CODEX_CHAPTER_SUMMARY_MAX_TOKENS:
-        raise AgyValidationError("chapter summary is empty or exceeds its token limit")
+    try:
+        summary = _validate_summary_text(summary, chapter_text)
+    except ValueError as exc:
+        raise AgyValidationError(str(exc)) from exc
     audit_path = roles["codex_audit"][0]
     audit = runtime.ai.load_json(audit_path, max_bytes=1_000_000,
                       expected_sha256=expected_hashes[audit_path.resolve()])
@@ -412,8 +634,21 @@ def validate_extraction_output(
 
 async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source: dict,
                                      chapter_number: float, draft: dict, draft_summary: str,
-                                     preflight: PreflightResult, runtime
+                                     preflight: PreflightResult, runtime,
+                                     grounding_issues: list[dict[str, int | str]] | None = None,
+                                     alignment_issues: list[dict[str, object]] | None = None,
+                                     thread_issues: list[dict[str, object]] | None = None,
+                                     thread_relevance_issues: list[dict[str, object]] | None = None,
                                      ) -> tuple[dict, str, uuid.UUID, Path, object]:
+    task_document = _bounded_task_document(
+        source, chapter_number, draft=draft, draft_summary=draft_summary,
+        grounding_issues=grounding_issues,
+        alignment_issues=alignment_issues,
+        thread_issues=thread_issues,
+        thread_relevance_issues=thread_relevance_issues,
+        max_tokens=settings.CODEX_VERIFY_CONTEXT_MAX_TOKENS,
+    )
+    task_tokens = count_tokens(task_document)
     run_id = await runtime.ai.create_run(
         job=job, workload="codex_verify", model=runtime.ai.model_codex,
         runner_version=preflight.version, plugin_version=runtime.ai.contract_version,
@@ -423,9 +658,7 @@ async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source
     inputs = [
         runtime.ai.add_input(
             root, "task.md",
-            _bounded_task_document(
-                source, chapter_number, draft=draft, draft_summary=draft_summary,
-            ).encode(),
+            task_document.encode(),
             role="codex_task_bundle", media_type="text/markdown; charset=utf-8",
         ),
         runtime.ai.add_input(root, "schema.json", json.dumps(
@@ -438,7 +671,9 @@ async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source
         novel_ref="novel", chapter_ceiling=chapter_number, inputs=inputs,
         limits={"allowed_chunk_ids": sorted(source["chunk_ids"]),
                 "context_tokens": source["context_token_count"],
-                "context_sha256": source["context_sha256"]},
+                "context_sha256": source["context_sha256"],
+                "task_tokens": task_tokens,
+                "max_task_tokens": settings.CODEX_VERIFY_CONTEXT_MAX_TOKENS},
         created_at=datetime.now(UTC),
     )
     runtime.ai.write_json(root / "input" / "manifest.json", manifest.model_dump(mode="json")); runtime.ai.seal_inputs(root)
@@ -454,7 +689,10 @@ async def _run_separate_verification(job: dict, parent_run_id: uuid.UUID, source
         await runtime.ai.update_run(run_id, status="validating", exit_code=result.exit_code)
         revised, summary = validate_extraction_output(
             root, run_id, chapter_number, source,
-            workload="codex_verify", runtime=runtime,
+            workload="codex_verify", runtime=runtime, evidence_policy="verified",
+            alignment_policy="quarantine",
+            thread_duplicate_policy="quarantine",
+            thread_relevance_policy="verified",
         )
         return revised, summary, run_id, root, result
     except Exception as exc:
@@ -590,6 +828,8 @@ async def _extract_chapter(
     job: dict, chapter_number: float, preflight: PreflightResult, runtime
 ) -> None:
     source = await _chapter_input(int(job["novel_id"]), chapter_number, runtime)
+    task_document = _bounded_task_document(source, chapter_number)
+    task_tokens = count_tokens(task_document)
     run_id = await runtime.ai.create_run(
         job=job, workload="codex_extract", model=runtime.ai.model_codex,
         runner_version=preflight.version, plugin_version=runtime.ai.contract_version,
@@ -598,7 +838,7 @@ async def _extract_chapter(
     root = runtime.ai.create_run_workspace(int(job["id"]), str(run_id))
     inputs = [
         runtime.ai.add_input(
-            root, "task.md", _bounded_task_document(source, chapter_number).encode(),
+            root, "task.md", task_document.encode(),
             role="codex_task_bundle", media_type="text/markdown; charset=utf-8",
         ),
         runtime.ai.add_input(root, "schema.json", json.dumps(
@@ -611,7 +851,9 @@ async def _extract_chapter(
         novel_ref="novel", chapter_ceiling=chapter_number, inputs=inputs,
         limits={"allowed_chunk_ids": sorted(source["chunk_ids"]), "max_items": 5000,
                 "context_tokens": source["context_token_count"],
-                "context_sha256": source["context_sha256"]},
+                "context_sha256": source["context_sha256"],
+                "task_tokens": task_tokens,
+                "max_task_tokens": settings.CODEX_CONTEXT_MAX_TOKENS},
         created_at=datetime.now(UTC),
     )
     runtime.ai.write_json(root / "input" / "manifest.json", manifest.model_dump(mode="json"))
@@ -629,13 +871,36 @@ async def _extract_chapter(
         )
         await runtime.ai.update_run(run_id, status="validating", exit_code=result.exit_code)
         data, summary = validate_extraction_output(
-            root, run_id, chapter_number, source, runtime=runtime
+            root, run_id, chapter_number, source, runtime=runtime,
+            evidence_policy="defer",
+            alignment_policy=(
+                "defer" if runtime.ai.separate_codex_verify else "reject"
+            ),
+            thread_duplicate_policy=(
+                "defer" if runtime.ai.separate_codex_verify else "reject"
+            ),
+            thread_relevance_policy=(
+                "defer" if runtime.ai.separate_codex_verify else "reject"
+            ),
+        )
+        grounding_issues = _evidence_anchor_issues(data, source["chunk_texts"])
+        alignment_issues = _claim_entity_alignment_issues(
+            data, source.get("roster_terms") or {},
+            source.get("roster_types") or {},
+        )
+        thread_issues = _duplicate_thread_update_issues(data)
+        thread_relevance_issues = _thread_relevance_issues(
+            data, source.get("thread_terms") or {}, source["content"]
         )
         artifacts_valid = True
         final_run_id, verify_root, verify_result = run_id, None, None
         if runtime.ai.separate_codex_verify:
             data, summary, final_run_id, verify_root, verify_result = await _run_separate_verification(
                 job, run_id, source, chapter_number, data, summary, preflight, runtime,
+                grounding_issues=grounding_issues,
+                alignment_issues=alignment_issues,
+                thread_issues=thread_issues,
+                thread_relevance_issues=thread_relevance_issues,
             )
         resolved = await _resolve_mentions(
             job, final_run_id, source, data, chapter_number, preflight, runtime
@@ -650,6 +915,7 @@ async def _extract_chapter(
             context_token_count=source["context_token_count"],
             model_label=runtime.ai.model_label,
             force=bool((job.get("options") or {}).get("force")),
+            thread_relevance_verified=runtime.ai.separate_codex_verify,
             uow_factory=runtime.extraction_uow_factory,
         )
         await runtime.ai.update_run(run_id, status="completed", output_sha256=runtime.ai.sha256_file(root / "output" / "manifest.json"),
@@ -681,12 +947,17 @@ async def _extract_chapter(
         raise
 
 
+def _resumable_codex_workloads(separate_verify: bool) -> tuple[str, ...]:
+    """Return only artifacts that satisfy the active verification policy."""
+    return ("codex_verify",) if separate_verify else ("codex_extract",)
+
+
 async def _resume_ready_commits(
     job: dict, preflight: PreflightResult, runtime
 ) -> set[float]:
     """Use a complete extraction artifact after worker loss without rerunning extraction."""
     rows = list(reversed(await runtime.runs.list(
-        int(job["id"]), ("codex_extract", "codex_verify")
+        int(job["id"]), _resumable_codex_workloads(runtime.ai.separate_codex_verify)
     )))
     completed: set[float] = set()
     for row in rows:
@@ -707,6 +978,18 @@ async def _resume_ready_commits(
                 raise AgyValidationError("saved extraction context is stale")
             data, summary = validate_extraction_output(
                 root, run_id, chapter, source, workload=row["workload"], runtime=runtime,
+                evidence_policy=(
+                    "verified" if row["workload"] == "codex_verify" else "defer"
+                ),
+                alignment_policy=(
+                    "quarantine" if row["workload"] == "codex_verify" else "reject"
+                ),
+                thread_duplicate_policy=(
+                    "quarantine" if row["workload"] == "codex_verify" else "reject"
+                ),
+                thread_relevance_policy=(
+                    "verified" if row["workload"] == "codex_verify" else "reject"
+                ),
             )
             resolved = await _resolve_mentions(
                 job, run_id, source, data, chapter, preflight, runtime
@@ -721,6 +1004,7 @@ async def _resume_ready_commits(
                 context_token_count=source["context_token_count"],
                 model_label=runtime.ai.model_label,
                 force=bool((job.get("options") or {}).get("force")),
+                thread_relevance_verified=(row["workload"] == "codex_verify"),
                 uow_factory=runtime.extraction_uow_factory,
             )
             await runtime.ai.update_run(run_id, status="completed",
@@ -770,23 +1054,38 @@ async def execute_codex_job(job: dict, preflight: PreflightResult, *, runtime) -
     ]
     total = len(chapters)
     overall = len(completed) + total
-    await runtime.work.set_progress(int(job["id"]), {"step": 3, "steps": 4, "done": len(completed),
-                                                "total": overall, "resumed_commits": len(resumed),
-                                                "checkpointed_chapters": len(checkpointed)},
-                               stage=f"waiting for {runtime.ai.provider_label} extraction")
+    attempt = int(job.get("attempts") or 1)
+    waiting_stage = f"waiting for {runtime.ai.provider_label} extraction"
+    await runtime.work.set_progress(int(job["id"]), {
+        "step": 3, "steps": 4, "stage": waiting_stage,
+        "attempt": attempt,
+        "done": len(completed), "total": overall,
+        "resumed_commits": len(resumed),
+        "checkpointed_chapters": len(checkpointed),
+    }, stage=waiting_stage)
     for index, chapter in enumerate(chapters, 1):
         if await runtime.work.is_canceled(int(job["id"])):
             raise AgyCanceled()
-        await runtime.work.update_job(
-            int(job["id"]),
-            stage=f"extracting {runtime.ai.provider_label} chapter {index}/{total}",
+        durable_position = len(completed) + index
+        extraction_stage = (
+            f"extracting {runtime.ai.provider_label} source chapter {chapter:g} "
+            f"({durable_position}/{overall})"
         )
-        await _extract_chapter(job, chapter, preflight, runtime)
         await runtime.work.set_progress(int(job["id"]), {
-            "step": 3, "steps": 4, "done": len(completed) + index, "total": overall,
+            "step": 3, "steps": 4, "stage": extraction_stage,
+            "attempt": attempt,
+            "done": durable_position - 1, "total": overall,
             "current_chapter": chapter, "resumed_commits": len(resumed),
             "checkpointed_chapters": len(checkpointed),
-        })
+        }, stage=extraction_stage)
+        await _extract_chapter(job, chapter, preflight, runtime)
+        await runtime.work.set_progress(int(job["id"]), {
+            "step": 3, "steps": 4, "stage": extraction_stage,
+            "attempt": attempt,
+            "done": durable_position, "total": overall,
+            "current_chapter": chapter, "resumed_commits": len(resumed),
+            "checkpointed_chapters": len(checkpointed),
+        }, stage=extraction_stage)
     from novelwiki.modules.codex.adapters.outbound.maintenance import prune_orphan_entities
     pruned_entities = await prune_orphan_entities(int(job["novel_id"]))
     return {

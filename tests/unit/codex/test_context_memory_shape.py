@@ -31,6 +31,7 @@ def test_unlabeled_fixed_boundary_closes_checkpoint():
         "end_chapter": 25.0,
         "through_chapter": 25.0,
         "part_label": None,
+        "covered_chapters": [float(number) for number in range(1, 26)],
     }]
     assert shape["block_numbers"] == [float(number) for number in range(1, 25)]
 
