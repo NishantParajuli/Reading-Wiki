@@ -2080,6 +2080,7 @@ async def extract_knowledge_for_chapter(
             chapter_text=chapter["content"] or "",
         )
         _validate_current_chunk_provenance(data, valid_chunk_ids)
+        _validate_citation_locality(data, _marked_chunk_texts(marked_text))
 
         # 3. Build the forward summary proposal, then send both provider paths
         # through the same source-checked transactional commit adapter.
