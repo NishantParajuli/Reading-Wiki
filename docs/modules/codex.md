@@ -78,11 +78,14 @@ handler (or individually from the CLI):
    transitions, topic-grounded thread updates, and distributed-coverage reducer targets. Host
    validation rejects generic or determiner-led descriptive entities, wrong subject attachment,
    nonlocal citations, internal refs, stale thread drift, undersized/meta summaries, and
-   endpoint-only memory. Compound words participate in citation-locality checks as both the full
-   compound and its component words, possessive names match their base name, and explicit negative
-   forms such as “no longer” and “wasn't … anymore” share one polarity token. Same-chapter proposed aliases are valid subject terms for
-   attachment checks. Concept and item attachment checks accept a conservative mechanically
-   derived regular plural (`Stone Treant` / `Stone Treants`), but never fuzzy or stem matches.
+   endpoint-only memory. Plot-thread relevance tokenization indexes hyphenated compounds as both
+   the full compound and its component words, strips possessive suffixes, and folds explicit
+   negative forms such as “no longer” and “wasn't … anymore” into one polarity token. Citation
+   locality instead preserves exact normalized word order after Unicode, case, apostrophe, and
+   punctuation normalization; it does not apply those thread-topic variants. Same-chapter proposed
+   aliases are valid subject terms for attachment checks. Concept and item attachment checks accept
+   a conservative mechanically derived regular plural (`Stone Treant` / `Stone Treants`), but never
+   fuzzy or stem matches.
    Organization/category terms accept the equally bounded possessive-number variant
    (`Adventurer's Guild` / `Adventurers' Guild`) and normalized apostrophe typography.
    A separate verifier may lose one residual misaligned claim without losing the chapter; broad
