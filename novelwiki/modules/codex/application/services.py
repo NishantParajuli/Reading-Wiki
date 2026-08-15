@@ -25,6 +25,7 @@ class CodexQueryService:
         agent: CodexAgentPort, costs: AiCostControlPort, *,
         ask_max_query_chars: int, ask_requires_verified: bool,
         profile_requires_verified: bool, profile_model: str,
+        profile_cache_version: str,
     ):
         self._ceiling = ceiling
         self._queries = queries
@@ -34,6 +35,7 @@ class CodexQueryService:
         self._ask_requires_verified = ask_requires_verified
         self._profile_requires_verified = profile_requires_verified
         self._profile_model = profile_model
+        self._profile_cache_version = profile_cache_version
 
     async def meta(self, novel_id: int, principal: Principal) -> dict:
         boundary = await self._ceiling.resolve(novel_id, principal, None)
@@ -107,7 +109,10 @@ class CodexQueryService:
         self, novel_id: int, entity_id: int, requested: float, principal: Principal
     ) -> dict:
         boundary = await self._ceiling.resolve(novel_id, principal, requested)
-        cached = await self._queries.cached_profile(novel_id, entity_id, boundary.ceiling)
+        cached = await self._queries.cached_profile(
+            novel_id, entity_id, boundary.ceiling,
+            self._profile_model, self._profile_cache_version,
+        )
         profile = await self._queries.entity_profile(novel_id, entity_id, boundary.ceiling)
         if profile is None:
             raise NotFound("Entity not found or not yet visible.")
@@ -126,6 +131,7 @@ class CodexQueryService:
                 profile, relationships, boundary.ceiling, self._profile_model
             )
             evidence = {
+                "cache_version": self._profile_cache_version,
                 "fact_ids": [fact["id"] for fact in profile["facts"]],
                 "rel_ids": [rel["id"] for rel in relationships],
                 "state_transition_ids": sorted({
@@ -192,7 +198,8 @@ class CodexQueryService:
         )
         if cached:
             citations = await self._agent.citations(
-                novel_id, cached["answer_md"], boundary.ceiling
+                novel_id, cached["answer_md"], boundary.ceiling,
+                cached["evidence_ids"],
             )
             return response({
                 "answer": cached["answer_md"], "citations": citations,
@@ -232,7 +239,8 @@ class CodexQueryService:
         )
         if cached:
             citations = await self._agent.citations(
-                novel_id, cached["answer_md"], boundary.ceiling
+                novel_id, cached["answer_md"], boundary.ceiling,
+                cached["evidence_ids"],
             )
             return response(cached["answer_md"], citations)
         if self._ask_requires_verified:

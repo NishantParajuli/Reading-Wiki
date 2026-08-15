@@ -141,9 +141,13 @@ quota-reserved) · `GET|PUT /api/novels/{id}/glossary` ·
 may extend beyond the reader's ceiling but contains no story content) · `GET /api/novels/{id}/entities`
 (`ceiling`, `type`, `q`) · `GET /api/novels/{id}/entity/resolve?name=…` ·
 `GET /api/novels/{id}/entity/{eid}` (profile; wiki-cache fast path, LLM synthesis on
-miss) · `GET …/entity/{eid}/relationships` (`other_id` filter) · `GET …/entity/{eid}/timeline` ·
+miss followed by fail-closed grounding verification/repair; optional heartbeat NDJSON) ·
+`GET …/entity/{eid}/relationships` (`other_id` filter) · `GET …/entity/{eid}/timeline` ·
 `GET …/entity/{eid}/identities` (reveals within ceiling) ·
-`POST /api/novels/{id}/ask` (agentic Q&A with citations; cache → cost gates → agent) ·
+`POST /api/novels/{id}/ask` (agentic Q&A with retrieved-evidence-only citations;
+cache → cost gates → agent → semantic verifier/repair → hard machine provenance checks;
+hard failures return a safe, uncached insufficient-evidence answer, while citation placement
+alone does not discard an otherwise grounded answer; optional heartbeat NDJSON) ·
 `POST /api/novels/{id}/codex/build` (durable build job; reserves a `codex_builds` unit) ·
 `POST /api/novels/{id}/merge-entities` (owner/admin duplicate repair).
 

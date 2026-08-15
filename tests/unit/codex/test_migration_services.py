@@ -38,8 +38,11 @@ class Queries:
             "built_chapter_count": 4, "built_through_chapter": 4.0,
         }
 
-    async def cached_profile(self, novel_id, entity_id, ceiling):
+    async def cached_profile(
+        self, novel_id, entity_id, ceiling, model, cache_version
+    ):
         assert isinstance(ceiling, ChapterCeiling)
+        assert (model, cache_version) == ("pro", "profiles-v2")
         return "cached profile"
 
     async def entity_profile(self, novel_id, entity_id, ceiling):
@@ -58,7 +61,8 @@ class Agent:
         assert isinstance(ceiling, ChapterCeiling)
         return self.cached
 
-    async def citations(self, novel_id, answer, ceiling):
+    async def citations(self, novel_id, answer, ceiling, evidence_ids=None):
+        assert evidence_ids == {"fact_ids": [1]}
         return [{"kind": "fact", "id": 1, "chapter": 4.0, "snippet": "x"}]
 
 
@@ -86,6 +90,7 @@ def query_service(*, cached=None):
         ceiling, Queries(), Agent(cached), costs,
         ask_max_query_chars=20, ask_requires_verified=True,
         profile_requires_verified=True, profile_model="pro",
+        profile_cache_version="profiles-v2",
     ), ceiling, costs
 
 

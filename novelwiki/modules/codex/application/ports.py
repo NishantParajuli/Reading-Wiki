@@ -43,7 +43,8 @@ class CodexQueryPort(Protocol):
         self, novel_id: int, entity_id: int, ceiling: ChapterCeiling
     ) -> list[dict]: ...
     async def cached_profile(
-        self, novel_id: int, entity_id: int, ceiling: ChapterCeiling
+        self, novel_id: int, entity_id: int, ceiling: ChapterCeiling,
+        model: str, cache_version: str,
     ) -> str | None: ...
     async def save_profile(
         self, novel_id: int, entity_id: int, ceiling: ChapterCeiling,
@@ -57,7 +58,8 @@ class CodexAgentPort(Protocol):
         self, novel_id: int, query_hash: str, ceiling: ChapterCeiling
     ) -> dict | None: ...
     async def citations(
-        self, novel_id: int, answer: str, ceiling: ChapterCeiling
+        self, novel_id: int, answer: str, ceiling: ChapterCeiling,
+        evidence_ids: dict | None = None,
     ) -> list[dict]: ...
     async def answer(
         self, novel_id: int, question: str, ceiling: ChapterCeiling

@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import logging
+from collections import OrderedDict
 import numpy as np
 import bm25s
 from novelwiki.platform.config import settings
@@ -28,6 +29,7 @@ class BM25Manager:
         self.corpus: list[dict] = []          # [{"id", "chapter", "text"}], aligned to index order
         self.chapter_arr = np.array([])        # vectorized chapters, aligned to corpus
         self.retriever: bm25s.BM25 | None = None
+        self._prefix_retrievers: OrderedDict[float, tuple[bm25s.BM25, np.ndarray]] = OrderedDict()
         self._loaded = False
         # Serializes build/load so two coroutines can't race a rebuild of this novel's index.
         self._lock = asyncio.Lock()
@@ -83,6 +85,31 @@ class BM25Manager:
         retriever = bm25s.BM25()
         retriever.index(tokens, show_progress=False)
         self.retriever = retriever
+        self._prefix_retrievers.clear()
+
+    def _retriever_for_ceiling(
+        self, chapter_ceiling: float,
+    ) -> tuple[bm25s.BM25 | None, np.ndarray]:
+        """Return an index whose IDF corpus contains no future chapters."""
+        eligible = np.flatnonzero(self.chapter_arr <= chapter_ceiling)
+        if not len(eligible):
+            return None, eligible
+        if len(eligible) == len(self.corpus):
+            return self.retriever, eligible
+        key = float(chapter_ceiling)
+        cached = self._prefix_retrievers.pop(key, None)
+        if cached is not None:
+            self._prefix_retrievers[key] = cached
+            return cached
+        texts = [self.corpus[int(index)]["text"] for index in eligible]
+        tokens = bm25s.tokenize(texts, stopwords="english", show_progress=False)
+        retriever = bm25s.BM25()
+        retriever.index(tokens, show_progress=False)
+        value = (retriever, eligible)
+        self._prefix_retrievers[key] = value
+        while len(self._prefix_retrievers) > settings.BM25_PREFIX_CACHE_SIZE:
+            self._prefix_retrievers.popitem(last=False)
+        return value
 
     def _save(self):
         if self.retriever is None:
@@ -158,13 +185,15 @@ class BM25Manager:
         if not self.corpus or self.retriever is None:
             return []
 
-        # Mask future chapters to a 0 weight (Invariant 7).
-        mask = (self.chapter_arr <= chapter_ceiling).astype(np.float32)
-        if not mask.any():
+        # Build/cache an exact ceiling corpus. Masking only the returned rows is not
+        # sufficient: future documents would still alter IDF and therefore reorder
+        # otherwise spoiler-safe results at an earlier reader ceiling.
+        retriever, eligible = self._retriever_for_ceiling(chapter_ceiling)
+        if retriever is None or not len(eligible):
             logger.info(f"No chunks at/below chapter ceiling {chapter_ceiling}.")
             return []
 
-        top_k = min(k, len(self.corpus))
+        top_k = min(k, len(eligible))
         if top_k <= 0:
             return []
 
@@ -172,8 +201,8 @@ class BM25Manager:
             query_tokens = bm25s.tokenize(
                 [query], stopwords="english", return_ids=False, show_progress=False
             )
-            results, scores = self.retriever.retrieve(
-                query_tokens, k=top_k, weight_mask=mask, show_progress=False
+            results, scores = retriever.retrieve(
+                query_tokens, k=top_k, show_progress=False
             )
         except Exception as e:
             logger.error(f"Error during BM25 retrieve: {e}")
@@ -183,7 +212,7 @@ class BM25Manager:
         for doc_idx, score in zip(results[0], scores[0]):
             if score <= 0:
                 continue  # masked future chapter or non-match
-            doc = self.corpus[int(doc_idx)]
+            doc = self.corpus[int(eligible[int(doc_idx)])]
             if doc["chapter"] > chapter_ceiling:  # defense-in-depth
                 continue
             hits.append({
