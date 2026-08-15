@@ -827,18 +827,38 @@ def test_broad_duplicate_thread_output_retries_instead_of_hiding_loss():
     assert exc.value.code == "thread_update_broad_failure"
 
 
-def test_stale_transient_state_and_living_state_after_death_are_removed(monkeypatch):
+def test_stale_transient_state_and_living_state_after_death_are_removed():
     state = {
-        "life_status": {"value": "dead", "chapter": 50.0},
-        "goal": {"value": "rescue Zenith", "chapter": 10.0},
-        "occupation": {"value": "adventurer", "chapter": 40.0},
-        "condition": {"value": "wounded", "chapter": 90.0},
+        "life_status": {"value": "dead", "certainty": "confirmed", "chapter": 50.0},
+        "goal": {"value": "rescue Zenith", "chapter": 250.0},
+        "occupation": {"value": "adventurer", "chapter": 250.0},
+        "condition": {"value": "wounded", "chapter": 250.0},
+        "custody": {"value": "Millishion jail", "chapter": 250.0},
         "last_known_location": {"value": "Buena Village", "chapter": 1.0},
     }
 
     _reconcile_entity_state(state, 250.0)
 
     assert set(state) == {"life_status"}
+
+
+@pytest.mark.parametrize(
+    "certainty", ["presumed", "alleged", "uncertain", "contradicted", None],
+)
+def test_unconfirmed_death_preserves_living_state(certainty: str | None):
+    state = {
+        "life_status": {"value": "dead", "certainty": certainty, "chapter": 10.0},
+        "goal": {"value": "rescue Zenith", "chapter": 10.0},
+        "occupation": {"value": "adventurer", "chapter": 10.0},
+        "condition": {"value": "wounded", "chapter": 10.0},
+        "custody": {"value": "Millishion jail", "chapter": 10.0},
+    }
+
+    _reconcile_entity_state(state, 10.0)
+
+    assert set(state) == {
+        "life_status", "goal", "occupation", "condition", "custody",
+    }
 
 
 def test_transient_state_recorded_at_chapter_zero_can_expire():

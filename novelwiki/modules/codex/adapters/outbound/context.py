@@ -113,7 +113,12 @@ def _apply_transition(state: dict[str, Any], row: dict) -> None:
 
 
 def _state_value_is_dead(entry: Any) -> bool:
-    value = entry.get("value") if isinstance(entry, dict) else entry
+    if not isinstance(entry, dict):
+        return False
+    certainty = entry.get("certainty")
+    if not isinstance(certainty, str) or certainty.strip().casefold() != "confirmed":
+        return False
+    value = entry.get("value")
     if isinstance(value, dict):
         value = value.get("value") or value.get("status")
     return isinstance(value, str) and value.strip().casefold() in {
