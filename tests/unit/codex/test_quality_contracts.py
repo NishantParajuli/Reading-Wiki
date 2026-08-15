@@ -162,11 +162,19 @@ def test_generic_entity_mentions_and_dependent_claims_are_removed():
             "description": "the narrator's unnamed family home",
             "provisional": True,
         },
+        {
+            "entity_ref": "m4",
+            "surface_form": "Masked Man",
+            "type": "character",
+            "description": "an unnamed masked man",
+            "provisional": True,
+        },
     ]
     candidate["facts"] = [
         {"entity_ref": "m1", "fact_type": "action", "content": "courier arrived", "source_chunk_ids": [1]},
         {"entity_ref": "m2", "fact_type": "action", "content": "Rudeus arrived", "source_chunk_ids": [1]},
         {"entity_ref": "m3", "fact_type": "setting", "content": "Our house is wooden", "source_chunk_ids": [1]},
+        {"entity_ref": "m4", "fact_type": "action", "content": "Masked Man arrived", "source_chunk_ids": [1]},
     ]
 
     normalized, repairs = normalize_extraction_candidate(candidate)
@@ -174,6 +182,29 @@ def test_generic_entity_mentions_and_dependent_claims_are_removed():
     assert [item["entity_ref"] for item in normalized["mentions"]] == ["m2"]
     assert [item["entity_ref"] for item in normalized["facts"]] == ["m2"]
     assert any("generic entity" in repair for repair in repairs)
+
+
+def test_proper_names_ending_in_role_words_and_dependent_claims_are_preserved():
+    candidate = _empty()
+    candidate["mentions"] = [
+        {"entity_ref": "m1", "surface_form": "Iron Man", "type": "character"},
+        {"entity_ref": "m2", "surface_form": "Spider-Man", "type": "character"},
+    ]
+    candidate["facts"] = [{"entity_ref": "m1", "content": "Iron Man arrived."}]
+    candidate["relationships"] = [{
+        "source_ref": "m1", "target_ref": "m2", "content": "They met.",
+    }]
+    candidate["events"] = [{
+        "participant_refs": ["m1", "m2"], "description": "They fought together.",
+    }]
+    candidate["thread_updates"] = [{
+        "participant_refs": ["m2"], "summary": "Spider-Man joined the fight.",
+    }]
+
+    normalized, repairs = normalize_extraction_candidate(candidate)
+
+    assert normalized == candidate
+    assert repairs == ()
 
 
 def _memory_update() -> tuple[dict, list[dict]]:

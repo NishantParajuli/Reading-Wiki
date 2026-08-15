@@ -137,10 +137,30 @@ _GENERIC_ENTITY_SURFACES = {
     "merchant", "innkeeper", "adventurer", "doctor", "nurse", "driver",
     "the protagonist", "the narrator", "mother", "father", "sister", "brother",
 }
-_DESCRIPTIVE_PERSON_RE = re.compile(
-    r"(?i)(?:^|\b)(?:man|woman|boy|girl|child|baby|lady|maid|mistress|master|"
-    r"guard|soldier|merchant|teacher|professor|doctor|nurse|driver)$"
-)
+_PERSON_ROLE_WORDS = {
+    "man", "woman", "boy", "girl", "child", "baby", "lady", "maid", "mistress",
+    "master", "guard", "soldier", "merchant", "teacher", "professor", "doctor",
+    "nurse", "driver",
+}
+_DESCRIPTIVE_PERSON_MODIFIERS = {
+    "young", "old", "elderly", "middle-aged", "little", "big", "large", "tall",
+    "short", "thin", "slender", "stocky", "burly", "muscular", "fat", "pale",
+    "beautiful", "handsome", "pretty", "masked", "hooded", "cloaked", "armored",
+    "scarred", "bearded", "bald", "blind", "wounded", "injured", "dying", "dead",
+    "mysterious", "strange", "unknown", "unnamed",
+}
+
+
+def _is_descriptive_person_surface(value: str) -> bool:
+    """Identify short descriptor-only role phrases without rejecting proper names."""
+    tokens = re.findall(r"[A-Za-z][A-Za-z'’.-]*", value)
+    if not 2 <= len(tokens) <= 3 or tokens[-1].casefold() not in _PERSON_ROLE_WORDS:
+        return False
+    modifiers = [token.casefold().strip(".'’-") for token in tokens[:-1]]
+    possessive_description = modifiers[0].endswith(("'s", "’s"))
+    return possessive_description or all(
+        modifier in _DESCRIPTIVE_PERSON_MODIFIERS for modifier in modifiers
+    )
 
 
 def eligible_entity_surface(surface: str, entity_type: str) -> bool:
@@ -161,10 +181,8 @@ def eligible_entity_surface(surface: str, entity_type: str) -> bool:
     has_cased_letter = any(char.isalpha() and (char.islower() or char.isupper()) for char in value)
     if has_cased_letter and not any(char.isupper() for char in value):
         return False
-    if entity_type == "character" and _DESCRIPTIVE_PERSON_RE.search(value):
-        tokens = re.findall(r"[A-Za-z][A-Za-z'’.-]*", value)
-        if len(tokens) <= 3:
-            return False
+    if entity_type == "character" and _is_descriptive_person_surface(value):
+        return False
     return True
 
 
