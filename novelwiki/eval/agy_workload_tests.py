@@ -31,7 +31,11 @@ from novelwiki.modules.codex.adapters.outbound.agy import (
 from novelwiki.modules.codex.adapters.outbound.context import (
     build_chapter_context, current_entity_state, current_relationship_state,
 )
-from novelwiki.modules.codex.adapters.outbound.ingest.link import merge_entities
+from novelwiki.modules.codex.adapters.outbound.ingest.link import (
+    create_entity,
+    find_resolution_candidates,
+    merge_entities,
+)
 from novelwiki.modules.codex.adapters.outbound.retrieval.tools import (
     get_entity_profile, get_timeline, list_entities,
 )
@@ -519,6 +523,48 @@ async def test_entity_merge_rejects_cross_novel_ids(workload_db):
         assert await conn.fetchval(
             "SELECT count(*) FROM entities WHERE id=ANY($1::bigint[]);", [keep, drop]
         ) == 2
+
+
+@pytest.mark.asyncio
+async def test_entity_merge_preserves_agy_created_canonical_name(workload_db):
+    pool, novel = workload_db["pool"], workload_db["novel_id"]
+
+    class AI:
+        async def get_embedding(self, _text):
+            return []
+
+    runtime = SimpleNamespace(ai=AI())
+    async with pool.acquire() as conn:
+        keep = await conn.fetchval(
+            "INSERT INTO entities (novel_id,canonical_name,type,first_seen_chapter) "
+            "VALUES ($1,'Klein Moretti','character',1) RETURNING id;",
+            novel,
+        )
+        drop = await create_entity(
+            novel, "The Fool", "character", 2.0, conn, runtime=runtime,
+        )
+        assert await conn.fetchval(
+            "SELECT count(*) FROM entity_aliases WHERE entity_id=$1;", drop,
+        ) == 0
+
+        await merge_entities(novel, keep, drop, conn)
+
+        alias = await conn.fetchrow(
+            "SELECT entity_id,revealed_at_chapter FROM entity_aliases "
+            "WHERE novel_id=$1 AND alias='The Fool';",
+            novel,
+        )
+        before_reveal = await find_resolution_candidates(
+            novel, "The Fool", "character", 1.0, "", conn, runtime=runtime,
+        )
+        after_reveal = await find_resolution_candidates(
+            novel, "The Fool", "character", 2.0, "", conn, runtime=runtime,
+        )
+
+    assert int(alias["entity_id"]) == keep
+    assert float(alias["revealed_at_chapter"]) == 2.0
+    assert before_reveal.existing_id is None
+    assert after_reveal.existing_id == keep
 
 
 @pytest.mark.asyncio

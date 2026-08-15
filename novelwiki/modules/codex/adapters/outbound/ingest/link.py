@@ -333,10 +333,12 @@ async def merge_entities(novel_id: int, keep_id: int, drop_id: int, conn: asyncp
             7_200_000_000_000_000 + int(novel_id),
         )
         rows = await conn.fetch(
-            "SELECT id FROM entities WHERE novel_id=$1 AND id=ANY($2::bigint[]) FOR UPDATE;",
+            "SELECT id,canonical_name,first_seen_chapter FROM entities "
+            "WHERE novel_id=$1 AND id=ANY($2::bigint[]) FOR UPDATE;",
             novel_id, [keep_id, drop_id],
         )
-        if {int(row["id"]) for row in rows} != {keep_id, drop_id}:
+        entities = {int(row["id"]): row for row in rows}
+        if set(entities) != {keep_id, drop_id}:
             raise ValueError("both entities must belong to the supplied novel")
         # 1. Update facts
         await conn.execute(
@@ -422,7 +424,24 @@ async def merge_entities(novel_id: int, keep_id: int, drop_id: int, conn: asyncp
             keep_id, drop_id,
         )
         
-        # 5. Union entity aliases
+        # 5. Union entity aliases. AGY-created entities intentionally have no
+        # redundant self-alias, so preserve the dropped canonical name explicitly.
+        # Its original first-seen chapter remains the spoiler-safe reveal ceiling.
+        dropped = entities[drop_id]
+        kept = entities[keep_id]
+        if dropped["canonical_name"] != kept["canonical_name"]:
+            await conn.execute(
+                """
+                INSERT INTO entity_aliases (novel_id,entity_id,alias,revealed_at_chapter)
+                VALUES ($1,$2,$3,$4)
+                ON CONFLICT (entity_id, alias) DO UPDATE
+                SET revealed_at_chapter = LEAST(
+                    entity_aliases.revealed_at_chapter,
+                    EXCLUDED.revealed_at_chapter
+                );
+                """,
+                novel_id, keep_id, dropped["canonical_name"], dropped["first_seen_chapter"],
+            )
         aliases = await conn.fetch(
             "SELECT alias, revealed_at_chapter FROM entity_aliases WHERE entity_id = $1;", 
             drop_id

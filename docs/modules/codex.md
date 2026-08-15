@@ -96,7 +96,8 @@ handler (or individually from the CLI):
    0.6 auto-accepts) → embedding similarity (`SEMANTIC_MATCH_THRESHOLD` 0.85) → LLM
    disambiguation for gray cases → create new entity. `merge_entities` repairs
    duplicates after the fact (re-pointing historical and temporal references, aggregating
-   activity, folding descriptions/aliases/identity links, clearing caches).
+   activity, folding descriptions/aliases/identity links, preserving the dropped canonical
+   name as an alias at its original reveal ceiling, and clearing caches).
 5. **BM25 index** — `retrieval/bm25.py::BM25Manager`: per-novel bm25s index persisted
    under `data/bm25_index/`, staleness-checked against a cheap DB signature, lazily
    loaded, rebuilt by the job/CLI; blocking tokenize/search offloaded to a thread

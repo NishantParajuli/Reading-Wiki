@@ -42,7 +42,7 @@ clean Ctrl-C).
 | `embed NOVEL_ID [--from F] [--to T]` | Batch-embeds all chunks missing vectors. |
 | `extract NOVEL_ID [--force] [--from F] [--to T]` | Forward-only v2 extraction; force replaces selected chapters and invalidates downstream state/context/hierarchical memory for chronological rebuild. |
 | `rebuild-bm25 NOVEL_ID` | Rebuilds + persists the per-novel BM25 index. |
-| `merge NOVEL_ID --keep ID --drop ID` | Merges duplicate entities (re-points facts/relations/aliases, clears caches). |
+| `merge NOVEL_ID --keep ID --drop ID` | Merges duplicate entities, preserving the dropped canonical name as a spoiler-safe alias while re-pointing references and clearing caches. |
 | `reset-codex NOVEL_ID [--force]` | Deletes derived structured Codex knowledge/caches while preserving chunks/embeddings; refuses during an active build. |
 
 The web UI's codex **Build** button runs `chunk → embed → extract → rebuild-bm25` as one
