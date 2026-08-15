@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from novelwiki.platform.auth import current_user
@@ -18,6 +21,9 @@ from ...application import BuildCodex, CodexMigrationService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_CODEX_STREAM_MEDIA_TYPE = "application/x-ndjson"
+_CODEX_HEARTBEAT_SECONDS = 15.0
 
 
 class AskRequest(BaseModel):
@@ -62,19 +68,85 @@ async def codex_principal_factory_dependency() -> Callable[[dict], Principal]:
     raise RuntimeError("Codex principal factory was not wired by the composition root")
 
 
-def _expected_http(exc: Exception) -> None:
-    status = (
+def _expected_status(exc: Exception) -> int:
+    return (
         404 if isinstance(exc, NotFound) else
         403 if isinstance(exc, Forbidden) else
         409 if isinstance(exc, Conflict) else
         429 if isinstance(exc, QuotaExceeded) else
         503 if isinstance(exc, ProviderUnavailable) else 422
     )
-    raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+def _expected_http(exc: Exception) -> None:
+    raise HTTPException(status_code=_expected_status(exc), detail=str(exc)) from exc
 
 
 def _principal(factory: Callable[[dict], Principal], user: dict) -> Principal:
     return factory(user)
+
+
+def _stream_frame(event: str, **payload) -> str:
+    return json.dumps({"event": event, **payload}, ensure_ascii=False) + "\n"
+
+
+async def _stream_codex_result(
+    operation: Callable[[], Awaitable[dict]],
+    *,
+    failure_detail: str,
+    heartbeat_seconds: float = _CODEX_HEARTBEAT_SECONDS,
+):
+    """Keep an expensive Codex read alive while preserving cancellation and safe errors."""
+    task = asyncio.create_task(operation())
+    try:
+        # Commit response bytes immediately, before the first provider call can exceed a
+        # reverse proxy's read timeout.
+        yield _stream_frame("started")
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=heartbeat_seconds)
+            if task not in done:
+                yield _stream_frame("heartbeat")
+                continue
+            if task.cancelled():
+                yield _stream_frame(
+                    "error", detail="Codex generation was canceled.", status=499
+                )
+                return
+            try:
+                result = task.result()
+            except (
+                NotFound, Forbidden, Conflict, QuotaExceeded,
+                ProviderUnavailable, ValidationFailed,
+            ) as exc:
+                yield _stream_frame(
+                    "error", detail=str(exc), status=_expected_status(exc)
+                )
+            except Exception:
+                logger.exception("Streamed Codex read failed")
+                yield _stream_frame("error", detail=failure_detail, status=502)
+            else:
+                yield _stream_frame("result", data=result)
+            return
+    finally:
+        # A closed browser connection must release the read-side concurrency slot and stop
+        # any provider work still owned by this request.
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+def _streaming_response(stream) -> StreamingResponse:
+    return StreamingResponse(
+        stream,
+        media_type=_CODEX_STREAM_MEDIA_TYPE,
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/novels/{novel_id}/meta")
@@ -142,17 +214,41 @@ async def api_resolve_entity(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.get("/novels/{novel_id}/entity/{entity_id}")
+@router.get(
+    "/novels/{novel_id}/entity/{entity_id}",
+    responses={
+        200: {
+            "description": (
+                "A JSON entity profile, or newline-delimited keepalive events followed "
+                "by the profile when application/x-ndjson is requested."
+            ),
+            "content": {
+                _CODEX_STREAM_MEDIA_TYPE: {"schema": {"type": "string"}},
+            },
+        }
+    },
+)
 async def api_get_entity_profile(
-    novel_id: int, entity_id: int, ceiling: float,
+    novel_id: int, entity_id: int, ceiling: float, request: Request = None,
     user: dict = Depends(current_user),
     service: CodexMigrationService = Depends(codex_migration_service_dependency),
     principal_factory: Callable[[dict], Principal] = Depends(codex_principal_factory_dependency),
 ):
     """Structured profile at the ceiling, using the wiki_cache fast path."""
     try:
+        principal = _principal(principal_factory, user)
+        if (
+            request is not None
+            and _CODEX_STREAM_MEDIA_TYPE in request.headers.get("accept", "").lower()
+        ):
+            return _streaming_response(_stream_codex_result(
+                lambda: service.queries.entity_profile(
+                    novel_id, entity_id, ceiling, principal
+                ),
+                failure_detail="The AI service failed to build this Codex entry. Please try again.",
+            ))
         return await service.queries.entity_profile(
-            novel_id, entity_id, ceiling, _principal(principal_factory, user)
+            novel_id, entity_id, ceiling, principal
         )
     except (NotFound, Forbidden, QuotaExceeded, ValidationFailed) as exc:
         _expected_http(exc)
@@ -215,9 +311,24 @@ async def api_get_identities(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.post("/novels/{novel_id}/ask", response_model=AskResponse)
+@router.post(
+    "/novels/{novel_id}/ask",
+    response_model=AskResponse,
+    responses={
+        200: {
+            "description": (
+                "A JSON answer, or newline-delimited keepalive events followed by the "
+                "answer when application/x-ndjson is requested."
+            ),
+            "content": {
+                _CODEX_STREAM_MEDIA_TYPE: {"schema": {"type": "string"}},
+            },
+        }
+    },
+)
 async def ask_question(
-    novel_id: int, req: AskRequest, user: dict = Depends(current_user),
+    novel_id: int, req: AskRequest, request: Request = None,
+    user: dict = Depends(current_user),
     service: CodexMigrationService = Depends(codex_migration_service_dependency),
     principal_factory: Callable[[dict], Principal] = Depends(codex_principal_factory_dependency),
 ):
@@ -229,8 +340,19 @@ async def ask_question(
     cap (checked before any provider call), a verified-email spend gate, a per-user hourly
     cap on uncached asks, and a small concurrency ceiling."""
     try:
+        principal = _principal(principal_factory, user)
+        if (
+            request is not None
+            and _CODEX_STREAM_MEDIA_TYPE in request.headers.get("accept", "").lower()
+        ):
+            return _streaming_response(_stream_codex_result(
+                lambda: service.queries.ask(
+                    novel_id, req.question, req.ceiling, principal
+                ),
+                failure_detail="The AI service failed to answer. Please try again.",
+            ))
         return await service.queries.ask(
-            novel_id, req.question, req.ceiling, _principal(principal_factory, user)
+            novel_id, req.question, req.ceiling, principal
         )
     except (NotFound, Forbidden, QuotaExceeded, ValidationFailed) as exc:
         _expected_http(exc)

@@ -27,8 +27,8 @@ stored meaning or integrity boundary:
 
 | Property | API | AGY | OpenAI Codex |
 |---|---|---|---|
-| Context and proposal | shared deterministic bounded context and v2 schema | same | same |
-| Review | optional best-effort second call, default on via `EXTRACTION_VERIFY` | mandatory self-review in the primary artifact run; optional separate child via `AGY_SEPARATE_CODEX_VERIFY` | strict structured primary result; optional separate child via `OPENAI_CODEX_SEPARATE_CODEX_VERIFY` |
+| Context and proposal | shared deterministic bounded context and v2.1 schema | same | same |
+| Review | optional best-effort second call, default on via `EXTRACTION_VERIFY` | mandatory self-review in the primary artifact run; optional separate child via `AGY_SEPARATE_CODEX_VERIFY` | strict structured primary result plus a default independent Luna/xhigh verification child via `OPENAI_CODEX_SEPARATE_CODEX_VERIFY` |
 | Chapter summary | separate API call | emitted with the reviewed extraction artifacts | emitted with the structured extraction result |
 | Ambiguous linking | direct per-mention gray-case calls when needed | gray cases batched into one disambiguation child run | same batched disambiguation contract |
 | Validation and storage | trusted proposal/provenance/ref validation, then source/context-checked atomic commit | same semantic validators and the same `commit_codex_extraction` workflow | same semantic validators and workflow |
@@ -71,10 +71,14 @@ Schema normalized to OpenAI's strict Structured Outputs subset (all properties r
 `additionalProperties=false` for every object, nullable types preserved, defaults removed, and
 otherwise unconstrained transition values bounded to JSON scalars or scalar arrays). Closed host
 vocabularies are emitted as enums, and the same loss-minimizing extraction normalization used by
-AGY runs before final Pydantic validation. Story content is passed inside an explicit
-untrusted-data boundary. The model cannot write files: the host validates the final structured
-message, writes the exact artifact files and SHA-256 manifest, then enters the same validators,
-resumable-commit logic, quota settlement, and atomic database workflows as AGY. Cancellation sends
+AGY runs before final Pydantic validation. The host injects extraction chapter/source identity from
+the sealed inputs and removes nonliteral new mentions together with only claims that depend on
+those refs. For mixed provenance it keeps only supplied chunk ids; an item with no supplied chunk
+id still fails closed, and all retained shapes and references remain strict. Story content is
+passed inside an explicit untrusted-data boundary. The model cannot write files: the host validates
+the final structured message, writes the exact artifact files and SHA-256 manifest, then enters the
+same validators, resumable-commit logic, quota settlement, and atomic database workflows as AGY.
+Cancellation sends
 `turn/interrupt` and then identity-checked process-group termination. Token usage notifications are
 stored as run metrics; failed turns retain only an allowlisted App Server error tag/HTTP status,
 and request-level authentication/permission rejections are reduced to safe worker-health
@@ -92,7 +96,7 @@ The dedicated host worker (never the web process) claims `jobs` rows with
 2. **Orphan reaping** — kill *identity-verified* stale process groups (pid + start-time
    match from `ai_execution_runs`) before new work.
 3. **Workspace** — per-run directory under `AGY_WORK_DIR` plus a sibling per-run CLI
-   state directory: content-hashed input manifests (Codex packs chapter, strict v2 schema,
+   state directory: content-hashed input manifests (Codex packs chapter, strict v2.1 schema,
    and bounded memory into one `input/task.md` read turn; translation likewise bundles its glossary and
    sub-batch), direct `.agents` customizations and a minimal Git marker required
    by AGY 1.1.2, then inputs/customizations/Git metadata are **sealed read-only**;
@@ -143,7 +147,9 @@ The dedicated host worker (never the web process) claims `jobs` rows with
 Ask and profile synthesis execute inline on the API backend (their subscription policy names are
 reserved but not implemented), guarded not by monthly
 quota but by the denial-of-wallet gates (verified email; 30 uncached/h; 2 concurrent;
-tool-arg clamps) — see
+tool-arg clamps). Ask then requires verifier + deterministic retrieved-evidence citation checks;
+profile prose requires verifier/repair + machine-valid evidence ids. Failed grounding returns a
+safe uncached Ask response or fails profile synthesis without populating its cache — see
 [codex-build-and-ask.md](codex-build-and-ask.md) and AI Execution's
 `adapters/outbound/limits.py`.
 

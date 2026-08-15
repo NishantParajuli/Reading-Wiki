@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -98,3 +100,57 @@ async def test_agy_codex_retry_reruns_idempotent_preprocessing():
     }
     assert callable(embed_call[2]["cancel_check"])
     assert result["checkpointed_chapters"] == 1
+
+
+@pytest.mark.asyncio
+async def test_codex_retry_progress_uses_durable_position_and_source_chapter(monkeypatch):
+    from novelwiki.modules.codex.adapters.outbound import agy
+    from novelwiki.modules.codex.adapters.outbound import maintenance
+
+    progress = []
+    extracted = []
+
+    async def chapters(*_args):
+        return [3.0, 4.0, 5.0]
+
+    async def resumed(*_args):
+        return {3.0}
+
+    async def checkpointed(*_args):
+        return {4.0}
+
+    async def extract(_job, chapter, _preflight, _runtime):
+        extracted.append(chapter)
+
+    async def prune(_novel_id):
+        return 0
+
+    class Work:
+        async def set_progress(self, job_id, payload, stage=None):
+            progress.append((job_id, payload, stage))
+
+        async def is_canceled(self, _job_id):
+            return False
+
+    monkeypatch.setattr(agy, "_chapters", chapters)
+    monkeypatch.setattr(agy, "_resume_ready_commits", resumed)
+    monkeypatch.setattr(agy, "_checkpointed_job_chapters", checkpointed)
+    monkeypatch.setattr(agy, "_extract_chapter", extract)
+    monkeypatch.setattr(maintenance, "prune_orphan_entities", prune)
+    runtime = SimpleNamespace(
+        work=Work(),
+        ai=SimpleNamespace(provider_label="OpenAI Codex"),
+    )
+
+    result = await agy.execute_codex_job(
+        {"id": 42, "novel_id": 7, "options": {}}, object(), runtime=runtime,
+    )
+
+    assert extracted == [5.0]
+    active = progress[1]
+    assert active[1]["done"] == 2
+    assert active[1]["total"] == 3
+    assert active[1]["current_chapter"] == 5.0
+    assert active[1]["stage"] == "extracting OpenAI Codex source chapter 5 (3/3)"
+    assert active[2] == active[1]["stage"]
+    assert result["chapters"] == 3

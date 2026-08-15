@@ -250,14 +250,17 @@ description *as of the reader's ceiling*, not the latest.
 ### `entity_aliases`
 
 Alternate names with **`revealed_at_chapter`** — an alias only resolves once its reveal
-chapter is within the ceiling. Extracted aliases (including a new entity's self-alias) are
-timestamped at their source chapter; the schema's chapter-0 default is reserved for explicit
-pre-story/owner-seeded terms. Trigram-indexed.
+chapter is within the ceiling. Extracted aliases are timestamped at their source chapter,
+case-insensitively deduplicated, and omitted when they equal the canonical name because exact
+and fuzzy linking already query that field. The schema's chapter-0 default is reserved for
+explicit pre-story/owner-seeded terms. Trigram-indexed.
 
 ### `identity_links`
 
 "A is B" reveals (`entity_a`, `entity_b`, **`revealed_at_chapter`**, `note`) — powers
-identity-reveal banners and persona folding, only past the reveal chapter.
+identity-reveal banners and persona folding, only past the reveal chapter. Both rows must already
+exist before the reveal chapter; a name introduced and revealed in one chapter is stored as a
+ceiling-timestamped alias instead of creating a redundant persona entity.
 
 ### `entity_facts`
 
@@ -285,7 +288,8 @@ Stores summary/token count, exact source hash, evidence chunks, model, and run.
 
 Immutable hierarchical versions: `kind` (`checkpoint`|`volume`), start/end/through
 chapters, optional `part_label`, summary/token count, source hash, child evidence hashes,
-pipeline version, model, and run. The unique key includes all range/through coordinates.
+ordered covered chapters and distributed key beats, pipeline version, model, and run. The
+trusted host renders the stored summary from those beats. The unique key includes all range/through coordinates.
 Every row is complete (`through_chapter=end_chapter`); a volume additionally requires a
 real non-empty label.
 
@@ -299,7 +303,9 @@ and source chunks. It powers recent-entity selection and is aggregated on entity
 Temporal current-world changes: constrained state key, `set`/`clear`/`add`/`remove`/
 `confirm`/`contradict`, JSON value, optional perspective entity, certainty, narrative
 scope, `supersedes_id`, provenance, pipeline version, and run. Reads replay transitions
-through the ceiling instead of treating every historical value as current.
+through the ceiling instead of treating every historical value as current. The projection
+clears living-only state after confirmed death and ages unreconfirmed transient fields to
+unknown under configured key-specific windows.
 
 ### `relationship_state_transitions`
 
@@ -310,7 +316,8 @@ trust, hostility, or hierarchy), with operation, value, certainty, and provenanc
 
 Stable thread titles plus append-only open/advance/clarify/resolve/reopen/dormant/
 contradict updates. Updates carry cumulative participants/keywords, certainty,
-provenance, pipeline version, and run.
+provenance, pipeline version, and run. Projection marks sufficiently old open threads
+dormant; a later topic-grounded update must explicitly reopen one.
 
 ### `extraction_contexts`
 
@@ -324,7 +331,7 @@ a mismatch.
 Per-chapter compatibility/checkpoint state: PK `(novel_id, chapter)`;
 `running_summary` now mirrors the grounded chapter summary for older readers, plus
 `run_id`, `model_label`, exact `source_sha256`, `pipeline_version`, `context_sha256`, and
-`processed_at`. Force/source invalidation deletes the derived v2 suffix from chapter N;
+`processed_at`. Force/source invalidation deletes the derived v2.1 suffix from chapter N;
 chronological builds recreate it from grounded children.
 
 ### `wiki_cache`
@@ -332,12 +339,16 @@ chronological builds recreate it from grounded children.
 Synthesized entity profiles, cached per ceiling: PK `(novel_id, entity_id,
 chapter_ceiling)`; `rendered_md`, `model`, `evidence_ids JSONB`.
 Profile evidence includes fact/relationship ids plus current state-transition,
-thread-update, and supporting chunk ids.
+thread-update, and supporting chunk ids. `evidence_ids.cache_version` stores the
+`CODEX_PROFILE_CACHE_VERSION`; a hit is accepted only when that value and `model` match
+the current profile contract.
 
 ### `query_cache`
 
 Ask answers, cached per ceiling: `UNIQUE (novel_id, query_hash, chapter_ceiling)` where
-`query_hash` = md5 of the normalized question; `answer_md`, `evidence_ids`.
+`query_hash` = md5 of `CODEX_QA_CACHE_VERSION`, `MODEL_PRO`, `MODEL_FLASH`, and the
+normalized question; `answer_md`, `evidence_ids`. Only answers whose citations are a
+subset of those evidence ids are written.
 
 ## Narration-owned
 

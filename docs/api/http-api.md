@@ -82,10 +82,11 @@ prefs) · `POST /api/me/avatar`.
 `GET /api/novels/{id}/cost-estimate` (`action=codex_build|translate|audiobook`, range
 params — estimated units vs remaining quota, shown before spending) ·
 `POST /api/novels/{id}/recap` (spoiler-safe story-so-far; executed by Codex, cached per
-(novel, ceiling)). The SPA requests `Accept: application/x-ndjson`; the response emits an
-immediate `started` event, periodic `heartbeat` events, then one `result` or `error` event so
-a cache-miss recap can run beyond the reverse proxy's 120-second read timeout. Clients that
-do not request the stream continue to receive the original JSON response.
+(novel, ceiling)). Long AI-backed Codex reads (`recap`, `ask`, and an uncached entity profile)
+support `Accept: application/x-ndjson`; the response emits an immediate `started` event,
+periodic `heartbeat` events, then one `result` or `error` event so generation can run beyond
+the reverse proxy's 120-second read timeout. Clients that do not request the stream continue
+to receive the original JSON response.
 
 ## Reading (`/api`, auth)
 
@@ -140,9 +141,13 @@ quota-reserved) · `GET|PUT /api/novels/{id}/glossary` ·
 may extend beyond the reader's ceiling but contains no story content) · `GET /api/novels/{id}/entities`
 (`ceiling`, `type`, `q`) · `GET /api/novels/{id}/entity/resolve?name=…` ·
 `GET /api/novels/{id}/entity/{eid}` (profile; wiki-cache fast path, LLM synthesis on
-miss) · `GET …/entity/{eid}/relationships` (`other_id` filter) · `GET …/entity/{eid}/timeline` ·
+miss followed by fail-closed grounding verification/repair; optional heartbeat NDJSON) ·
+`GET …/entity/{eid}/relationships` (`other_id` filter) · `GET …/entity/{eid}/timeline` ·
 `GET …/entity/{eid}/identities` (reveals within ceiling) ·
-`POST /api/novels/{id}/ask` (agentic Q&A with citations; cache → cost gates → agent) ·
+`POST /api/novels/{id}/ask` (agentic Q&A with retrieved-evidence-only citations;
+cache → cost gates → agent → semantic verifier/repair → hard machine provenance checks;
+hard failures return a safe, uncached insufficient-evidence answer, while citation placement
+alone does not discard an otherwise grounded answer; optional heartbeat NDJSON) ·
 `POST /api/novels/{id}/codex/build` (durable build job; reserves a `codex_builds` unit) ·
 `POST /api/novels/{id}/merge-entities` (owner/admin duplicate repair).
 
@@ -168,6 +173,11 @@ cached row as the completed regeneration.
 `GET /api/jobs` (`kind`, `status`, `novel_id`, `active`, `limit`; non-admins scoped to
 self, admins may add `user_id`) · `GET /api/jobs/{id}` · `POST /api/jobs/{id}/cancel`
 (queued never starts; running stops before its next expensive stage).
+
+For `codex_build`, extraction progress reports `{step,steps,stage,done,total,current_chapter}`.
+`done/total` is the durable whole-job position including chapters committed before a retry;
+`current_chapter` is the actual source chapter being processed, and `stage` includes both that
+source chapter and its overall position. These fields do not reset to a retry-local `1/N` view.
 
 ## Admin (`/api/admin`, admin session; served by Experience)
 

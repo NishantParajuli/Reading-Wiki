@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import pytest_asyncio
 from fastapi import BackgroundTasks, HTTPException
@@ -6,6 +8,7 @@ import novelwiki.db.connection as db_connection
 from novelwiki.api import routes
 from novelwiki.db.connection import close_db_pool, get_db_pool
 from novelwiki.db.schema import init_database
+from novelwiki.platform.config import settings
 
 
 async def _reset_pool():
@@ -141,9 +144,10 @@ async def boundary_db():
             await conn.execute(
                 """
                 INSERT INTO wiki_cache (novel_id, entity_id, chapter_ceiling, rendered_md, model, evidence_ids)
-                VALUES ($1, $2, 1, 'cached hero profile', 'test', '{}'::jsonb);
+                VALUES ($1, $2, 1, 'cached hero profile', $3, $4::jsonb);
                 """,
-                novel_id, hero_id,
+                novel_id, hero_id, settings.MODEL_PRO,
+                json.dumps({"cache_version": settings.CODEX_PROFILE_CACHE_VERSION}),
             )
 
     yield {

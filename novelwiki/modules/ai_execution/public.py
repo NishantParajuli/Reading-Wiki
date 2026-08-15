@@ -7,9 +7,11 @@ from uuid import UUID
 
 from .application.contracts import (
     ArtifactRef, DisambiguationPayload, ExtractionPayload, InputManifest,
-    MemoryUpdateProposal, OutputManifest, PlotThreadUpdateProposal, PreflightResult,
+    MemoryCoverageBeat, MemoryUpdateProposal, OutputManifest, PlotThreadUpdateProposal,
+    PreflightResult,
     RELATIONSHIP_STATE_KEYS, RelationshipStateTransitionProposal, STATE_KEYS,
-    StateTransitionProposal, TranslationMeta, normalize_extraction_candidate,
+    StateTransitionProposal, TranslationMeta, eligible_entity_surface,
+    normalize_extraction_candidate,
 )
 from .application.errors import (
     AgyCanceled, AgyError, AgyPreflightError, AgyValidationError, BudgetExhausted,
@@ -42,10 +44,12 @@ class ResumableRunQuery(Protocol):
 __all__ = [
     "AgyCanceled", "AgyError", "AgyPreflightError", "AgyValidationError", "BudgetExhausted",
     "ArtifactRef", "ChatGateway", "DisambiguationPayload", "EmbeddingGateway",
-    "ExecutionBackend", "ExtractionPayload", "InputManifest", "MemoryUpdateProposal",
+    "ExecutionBackend", "ExtractionPayload", "InputManifest", "MemoryCoverageBeat",
+    "MemoryUpdateProposal",
     "OutputManifest", "PlotThreadUpdateProposal", "PreflightResult",
     "PROVIDER_WAIT_CODES", "RequestedBackend", "RerankGateway", "ResumableRunQuery",
     "RELATIONSHIP_STATE_KEYS", "RelationshipStateTransitionProposal", "STATE_KEYS",
     "StateTransitionProposal", "TranslationMeta", "VisionGateway", "Workload",
     "normalize_extraction_candidate",
+    "eligible_entity_surface",
 ]

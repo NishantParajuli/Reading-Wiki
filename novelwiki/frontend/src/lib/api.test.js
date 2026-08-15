@@ -5,6 +5,7 @@ import { catalogApi } from "../modules/catalog/api.js";
 import { authApi } from "../modules/identity/api.js";
 import { readingApi } from "../modules/reading/api.js";
 import { experienceApi } from "../modules/experience/api.js";
+import { codexApi } from "../modules/codex/api.js";
 import { setUnauthorizedHandler } from "../shared/api/http.js";
 
 function response(body, { status = 200, statusText = "OK" } = {}) {
@@ -114,6 +115,44 @@ describe("HTTP compatibility transport", () => {
         "X-Tideglass-Request": "1",
       },
       body: JSON.stringify({ ceiling: 19 }),
+    });
+  });
+
+  it("keeps long Ask requests alive and returns the streamed answer", async () => {
+    fetch.mockResolvedValue(streamResponse([
+      '{"event":"started"}\n{"event":"heartbeat"}\n',
+      '{"event":"result","data":{"answer":"Grounded.","citations":[]}}\n',
+    ]));
+
+    await expect(codexApi.ask(7, "Who is central?", 19)).resolves.toEqual({
+      answer: "Grounded.", citations: [],
+    });
+    expect(fetch).toHaveBeenCalledWith("/api/novels/7/ask", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        Accept: "application/x-ndjson",
+        "Content-Type": "application/json",
+        "X-Tideglass-CSRF": "reader-token",
+        "X-Tideglass-Request": "1",
+      },
+      body: JSON.stringify({ question: "Who is central?", ceiling: 19 }),
+    });
+  });
+
+  it("keeps long entity-profile reads alive without mutation headers", async () => {
+    fetch.mockResolvedValue(streamResponse([
+      '{"event":"started"}\n{"event":"heartbeat"}\n',
+      '{"event":"result","data":{"id":42,"canonical_name":"Hero"}}\n',
+    ]));
+
+    await expect(codexApi.entityProfile(7, 42, 19)).resolves.toEqual({
+      id: 42, canonical_name: "Hero",
+    });
+    expect(fetch).toHaveBeenCalledWith("/api/novels/7/entity/42?ceiling=19", {
+      method: "GET",
+      credentials: "include",
+      headers: { Accept: "application/x-ndjson" },
     });
   });
 });

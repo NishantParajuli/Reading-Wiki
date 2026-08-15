@@ -123,6 +123,10 @@ async def chunk_chapter(
     if (chapter.get("kind") or "chapter") not in {"chapter", "interlude"}:
         async with pool.acquire() as conn:
             async with conn.transaction():
+                # Memory checkpoint ranges use their first and last narrative
+                # chapters as endpoints. They can therefore span an excluded
+                # section without containing any claim derived from that section;
+                # the chapter-scoped tables below are the dependency authority.
                 dependent = await conn.fetchval(
                     """
                     SELECT
@@ -139,9 +143,7 @@ async def chunk_chapter(
                       OR EXISTS (SELECT 1 FROM entity_state_transitions WHERE novel_id=$1 AND chapter=$2)
                       OR EXISTS (SELECT 1 FROM relationship_state_transitions WHERE novel_id=$1 AND chapter=$2)
                       OR EXISTS (SELECT 1 FROM plot_thread_updates WHERE novel_id=$1 AND chapter=$2)
-                      OR EXISTS (SELECT 1 FROM extraction_contexts WHERE novel_id=$1 AND chapter=$2)
-                      OR EXISTS (SELECT 1 FROM memory_segments WHERE novel_id=$1
-                                    AND $2 BETWEEN start_chapter AND through_chapter);
+                      OR EXISTS (SELECT 1 FROM extraction_contexts WHERE novel_id=$1 AND chapter=$2);
                     """,
                     novel_id, chapter_number,
                 )

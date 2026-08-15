@@ -31,7 +31,11 @@ from novelwiki.modules.codex.adapters.outbound.agy import (
 from novelwiki.modules.codex.adapters.outbound.context import (
     build_chapter_context, current_entity_state, current_relationship_state,
 )
-from novelwiki.modules.codex.adapters.outbound.ingest.link import merge_entities
+from novelwiki.modules.codex.adapters.outbound.ingest.link import (
+    create_entity,
+    find_resolution_candidates,
+    merge_entities,
+)
 from novelwiki.modules.codex.adapters.outbound.retrieval.tools import (
     get_entity_profile, get_timeline, list_entities,
 )
@@ -75,6 +79,28 @@ async def workload_db():
         )
     yield {"pool": pool, "user": dict(user), "novel_id": int(novel)}
     await close_db_pool(); db_connection._pool = None
+
+
+@pytest.mark.asyncio
+async def test_codex_chapter_range_excludes_blank_content(workload_db):
+    pool, novel = workload_db["pool"], workload_db["novel_id"]
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO chapters
+              (novel_id,number,title,content,kind,language,translation_status,content_version)
+            VALUES ($1,2,'Blank','', 'chapter','en','none',1),
+                   ($1,3,'Whitespace','   ', 'chapter','en','none',1),
+                   ($1,4,'Narrative','Present text.', 'chapter','en','none',1);
+            """,
+            novel,
+        )
+
+    numbers = await PostgresReadingCodexGateway(pool).chapter_numbers(
+        novel, require_content=True, narrative_only=True
+    )
+
+    assert numbers == [4.0]
 
 
 @pytest.mark.asyncio
@@ -182,6 +208,7 @@ def test_agy_task_bundles_put_each_workload_in_one_exact_read():
     }
     codex = _codex_task_document(source, 1.0)
     assert '"source_chunk_ids": [\n          10' in codex
+    assert '"evidence_text": "short verbatim span from the cited chunk"' in codex
     assert "one record per distinct newly introduced entity" in codex
 
 
@@ -189,10 +216,12 @@ def test_codex_contract_requires_supplied_provenance(tmp_path):
     output = tmp_path / "output"; output.mkdir(); run_id = uuid.uuid4()
     source = {"source_sha256": "a" * 64, "chunk_ids": {10}, "roster_map": {},
               "thread_map": {}, "memory_targets": [],
-              "content": "Lin Xuan entered the mountain gate."}
-    extraction = {"schema_version": "2.0", "chapter": 1.0, "source_sha256": "a" * 64,
+              "content": "Lin Xuan entered the mountain gate.",
+              "chunk_texts": {10: "Lin Xuan entered the mountain gate."}}
+    extraction = {"schema_version": "2.2", "chapter": 1.0, "source_sha256": "a" * 64,
         "mentions": [{"entity_ref": "m1", "surface_form": "Lin Xuan", "type": "character"}],
-        "facts": [{"entity_ref": "m1", "fact_type": "action", "content": "Entered.", "source_chunk_ids": [10]}],
+        "facts": [{"entity_ref": "m1", "fact_type": "action", "content": "Lin Xuan entered.",
+                   "evidence_text": "Lin Xuan entered the mountain gate", "source_chunk_ids": [10]}],
         "relationships": [], "events": [], "identity_reveals": [], "new_aliases": [],
         "state_changes": [], "relationship_state_changes": [], "thread_updates": [],
         "memory_updates": [], "warnings": []}
@@ -202,6 +231,14 @@ def test_codex_contract_requires_supplied_provenance(tmp_path):
     _manifest(output, run_id, "codex_extract", artifacts)
     data, summary = validate_extraction_output(tmp_path, run_id, 1.0, source)
     assert len(data["facts"]) == 1 and summary
+    extraction["facts"][0]["source_chunk_ids"] = [10, 999]
+    content = json.dumps(extraction).encode(); (output / "extraction.json").write_bytes(content)
+    manifest = json.loads((output / "manifest.json").read_text())
+    manifest["artifacts"][0].update(bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
+    (output / "manifest.json").write_text(json.dumps(manifest))
+    data, _summary = validate_extraction_output(tmp_path, run_id, 1.0, source)
+    assert data["facts"][0]["source_chunk_ids"] == [10]
+
     extraction["facts"][0]["source_chunk_ids"] = [999]
     content = json.dumps(extraction).encode(); (output / "extraction.json").write_bytes(content)
     manifest = json.loads((output / "manifest.json").read_text())
@@ -218,8 +255,9 @@ def test_codex_contract_requires_supplied_provenance(tmp_path):
         bytes=len(content), sha256=hashlib.sha256(content).hexdigest()
     )
     (output / "manifest.json").write_text(json.dumps(manifest))
-    with pytest.raises(AgyValidationError, match="does not occur literally"):
-        validate_extraction_output(tmp_path, run_id, 1.0, source)
+    data, _summary = validate_extraction_output(tmp_path, run_id, 1.0, source)
+    assert data["mentions"] == []
+    assert data["facts"] == []
 
 
 @pytest.mark.asyncio
@@ -273,32 +311,45 @@ async def test_codex_v2_commit_atomically_persists_temporal_and_hierarchical_mem
     data = {
         "mentions": [],
         "facts": [{"entity_ref": "e1", "fact_type": "location", "content": "Klein stays in Tingen.",
-                   "source_chunk_ids": [chunk_id]}],
+                   "evidence_text": content, "source_chunk_ids": [chunk_id]}],
         "relationships": [], "events": [], "identity_reveals": [],
         "new_aliases": [{
             "entity_ref": "e1", "alias": "The Fool", "is_reveal": False,
-            "source_chunk_ids": [chunk_id],
+            "evidence_text": content, "source_chunk_ids": [chunk_id],
+        }, {
+            "entity_ref": "e1", "alias": "Klein", "is_reveal": False,
+            "evidence_text": content, "source_chunk_ids": [chunk_id],
         }],
         "state_changes": [{
             "entity_ref": "e1", "state_key": "last_known_location", "operation": "set",
             "value": "Tingen", "value_entity_ref": "e2", "certainty": "confirmed",
-            "narrative_scope": "current", "source_chunk_ids": [chunk_id],
+            "narrative_scope": "current", "evidence_text": content,
+            "source_chunk_ids": [chunk_id],
         }],
         "relationship_state_changes": [{
             "source_ref": "e1", "target_ref": "e2", "state_key": "status",
             "operation": "set", "value": "present in", "certainty": "confirmed",
-            "source_chunk_ids": [chunk_id],
+            "evidence_text": content, "source_chunk_ids": [chunk_id],
         }],
         "thread_updates": [{
             "thread_ref": "p1", "title": "Antigonus mystery", "operation": "open",
             "summary": "The Antigonus mystery remains unresolved.", "participant_refs": ["e1"],
-            "keywords": ["Antigonus"], "certainty": "confirmed", "source_chunk_ids": [chunk_id],
+            "keywords": ["Antigonus"], "certainty": "confirmed",
+            "evidence_text": content, "source_chunk_ids": [chunk_id],
         }],
         "memory_updates": [{
-            "kind": "checkpoint", "summary": "Klein remains in Tingen while investigating Antigonus.",
+            "kind": "checkpoint", "summary": None, "covered_chapters": [1.0],
+            "key_beats": [{
+                "chapter_refs": [1.0],
+                "summary": "Klein remains in Tingen and actively investigates the Antigonus mystery, preserving the unresolved threat, his current location, his newly established identity and title, and the durable question that must carry into later chapters without adding any outside knowledge or future resolution. The inquiry is still active and materially shapes his next choices.",
+            }],
             "evidence_chunk_ids": [chunk_id],
         }, {
-            "kind": "volume", "summary": "Klein begins investigating the Antigonus mystery in Tingen.",
+            "kind": "volume", "summary": None, "covered_chapters": [1.0],
+            "key_beats": [{
+                "chapter_refs": [1.0],
+                "summary": "Klein begins the volume in Tingen while the Antigonus mystery remains open, establishing his present location, the durable investigation, the important identity context around the Fool, and the unresolved consequence that the next volume-level memory must preserve without inventing a later outcome. This opening remains the volume's central unresolved narrative pressure.",
+            }],
             "evidence_chunk_ids": [chunk_id],
         }],
     }
@@ -308,9 +359,9 @@ async def test_codex_v2_commit_atomically_persists_temporal_and_hierarchical_mem
         expected_source_hash=digest, resolved_refs={}, roster_refs={"e1": klein, "e2": tingen},
         memory_targets=[
             {"kind": "checkpoint", "start_chapter": 1.0, "end_chapter": 1.0,
-             "through_chapter": 1.0, "part_label": "Volume 1"},
+             "through_chapter": 1.0, "part_label": "Volume 1", "covered_chapters": [1.0]},
             {"kind": "volume", "start_chapter": 1.0, "end_chapter": 1.0,
-             "through_chapter": 1.0, "part_label": "Volume 1"},
+             "through_chapter": 1.0, "part_label": "Volume 1", "covered_chapters": [1.0]},
         ],
         run_id=uuid.uuid4(), model_label="agy:fake",
     )
@@ -334,6 +385,9 @@ async def test_codex_v2_commit_atomically_persists_temporal_and_hierarchical_mem
             "SELECT revealed_at_chapter FROM entity_aliases WHERE entity_id=$1 AND alias='The Fool';",
             klein,
         )
+        alias_count = await conn.fetchval(
+            "SELECT count(*) FROM entity_aliases WHERE entity_id=$1;", klein,
+        )
         memories = await conn.fetch(
             "SELECT kind,source_hash,evidence FROM memory_segments WHERE novel_id=$1 ORDER BY kind;",
             novel,
@@ -342,12 +396,15 @@ async def test_codex_v2_commit_atomically_persists_temporal_and_hierarchical_mem
     assert state[klein]["last_known_location"]["value"]["entity"] == "Tingen"
     assert dict(counts) == {"summaries": 1, "memories": 2, "threads": 1, "rel_states": 1}
     assert float(alias_chapter) == 1.0
+    assert alias_count == 1
     by_kind = {row["kind"]: row for row in memories}
     volume_evidence = by_kind["volume"]["evidence"]
     if isinstance(volume_evidence, str):
         volume_evidence = json.loads(volume_evidence)
     assert volume_evidence["current_checkpoint_source_hash"] \
         == by_kind["checkpoint"]["source_hash"]
+    assert volume_evidence["covered_chapters"] == [1.0]
+    assert volume_evidence["key_beats"][0]["chapter_refs"] == [1.0]
     assert relationship_state[0]["value"] == "present in"
     assert version == settings.CODEX_PIPELINE_VERSION
 
@@ -469,6 +526,48 @@ async def test_entity_merge_rejects_cross_novel_ids(workload_db):
 
 
 @pytest.mark.asyncio
+async def test_entity_merge_preserves_agy_created_canonical_name(workload_db):
+    pool, novel = workload_db["pool"], workload_db["novel_id"]
+
+    class AI:
+        async def get_embedding(self, _text):
+            return []
+
+    runtime = SimpleNamespace(ai=AI())
+    async with pool.acquire() as conn:
+        keep = await conn.fetchval(
+            "INSERT INTO entities (novel_id,canonical_name,type,first_seen_chapter) "
+            "VALUES ($1,'Klein Moretti','character',1) RETURNING id;",
+            novel,
+        )
+        drop = await create_entity(
+            novel, "The Fool", "character", 2.0, conn, runtime=runtime,
+        )
+        assert await conn.fetchval(
+            "SELECT count(*) FROM entity_aliases WHERE entity_id=$1;", drop,
+        ) == 0
+
+        await merge_entities(novel, keep, drop, conn)
+
+        alias = await conn.fetchrow(
+            "SELECT entity_id,revealed_at_chapter FROM entity_aliases "
+            "WHERE novel_id=$1 AND alias='The Fool';",
+            novel,
+        )
+        before_reveal = await find_resolution_candidates(
+            novel, "The Fool", "character", 1.0, "", conn, runtime=runtime,
+        )
+        after_reveal = await find_resolution_candidates(
+            novel, "The Fool", "character", 2.0, "", conn, runtime=runtime,
+        )
+
+    assert int(alias["entity_id"]) == keep
+    assert float(alias["revealed_at_chapter"]) == 2.0
+    assert before_reveal.existing_id is None
+    assert after_reveal.existing_id == keep
+
+
+@pytest.mark.asyncio
 async def test_non_narrative_chunk_cleanup_is_safe_and_requires_reset_for_dependencies(workload_db):
     pool, novel = workload_db["pool"], workload_db["novel_id"]
     content = "Publisher front matter."
@@ -493,6 +592,20 @@ async def test_non_narrative_chunk_cleanup_is_safe_and_requires_reset_for_depend
         assert await conn.fetchval(
             "SELECT count(*) FROM chunks WHERE novel_id=$1 AND chapter=1;", novel
         ) == 0
+        # Memory ranges use their first/last narrative chapters as endpoints, so a
+        # range can cross excluded front/back matter without depending on it. This
+        # is the normal state seen by preprocessing on a retried v2 build.
+        await conn.execute(
+            """
+            INSERT INTO memory_segments
+              (novel_id,kind,start_chapter,end_chapter,through_chapter,summary,
+               token_count,source_hash,evidence,pipeline_version,model_label)
+            VALUES ($1,'checkpoint',0,2,2,'Narrative-only checkpoint.',3,$2,'{}','2.0','test');
+            """,
+            novel, "a" * 64,
+        )
+    assert await chunk_chapter(novel, 1.0, runtime=runtime) == 0
+    async with pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO extraction_state (novel_id,chapter,pipeline_version) VALUES ($1,1,'1.0');",
             novel,
@@ -880,7 +993,7 @@ async def test_chapter_1200_context_stays_bounded_and_ignores_historical_fact_bl
     assert historical_fact_count == 20_280
     assert first["context_sha256"] == second["context_sha256"]
     assert first["serialized"] == second["serialized"]
-    assert len(first["roster_map"]) <= settings.CODEX_CONTEXT_MAX_ENTITIES == 80
+    assert len(first["roster_map"]) <= settings.CODEX_CONTEXT_MAX_ENTITIES == 120
     assert len(first["context"]["open_threads"]) == settings.CODEX_CONTEXT_MAX_THREADS == 10
     assert len(first["context"]["current_checkpoint_children"]) == 24
     assert first["manifest"]["checkpoint_child_chapters"] == [
@@ -896,9 +1009,10 @@ async def test_chapter_1200_context_stays_bounded_and_ignores_historical_fact_bl
     }
     assert first["memory_targets"] == [{
         "kind": "checkpoint", "start_chapter": 1176.0,
-        "end_chapter": 1200.0, "through_chapter": 1200.0,
-        "part_label": "Volume 6: Lightseeker",
-    }]
+            "end_chapter": 1200.0, "through_chapter": 1200.0,
+            "part_label": "Volume 6: Lightseeker",
+            "covered_chapters": [float(number) for number in range(1176, 1201)],
+        }]
     assert future_id not in first["roster_map"].values()
     assert "FutureOnly" not in first["serialized"]
     tokens = first["manifest"]["tokens"]

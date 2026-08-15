@@ -59,6 +59,43 @@ metrics, so the admin failure projection and retention sweep can account for it.
 Only after that succeeds should an admin grant `translate_batch` to a pilot user. Enable
 `OPENAI_CODEX_CODEX_ENABLED=true` separately before granting `codex_extract`.
 
+The supported quality/latency policy is enforced at application startup: high-volume Codex,
+verification, disambiguation, and smoke workloads use `gpt-5.6-luna` at `xhigh`; translation
+uses `gpt-5.6-terra` at `xhigh`. Luna is the preferred/default Codex role. An environment
+override that selects Luna/Terra with weaker effort is rejected. Production Codex builds also
+run the separate Luna/xhigh verification child by default.
+
+Extraction contract `1.3.10` emits artifact schema `2.2`. Every material claim carries a short
+contiguous verbatim `evidence_text` anchor from one cited current-chapter chunk. The host proves literal
+locality using exact source-word sequences independent of punctuation and dialogue typography;
+changed words or word order still fail. The independent verifier checks whether that evidence semantically entails the
+reader-facing claim and receives targeted group/index repair instructions for malformed draft
+anchors. A final verifier anchor that selects exact source words in order but omits a bounded
+intervening span is canonicalized to the complete contiguous source passage. An otherwise exact
+anchor citing an adjacent overlapping chunk is relocated to the supplied chunk containing it.
+This verified-only repair is capped at 32 inserted tokens, 24 tokens in any one gap, three-times
+expansion, and 1,200 source characters; changed/reordered words and distant stitching still reach
+quarantine or broad-failure handling. Claim/ref alignment accepts safe regular plurals for concept and item names plus a
+whole-name possessive-number variant for organization/category names, not prefix, stem, or fuzzy
+matches. First-pass duplicate plot-thread updates are sent to the independent verifier as exact
+repair targets instead of failing before review. The final artifact still permits only one update
+per thread and chapter; one isolated leftover duplicate is quarantined, while broader duplication
+retries the chapter. The same bounded quarantine applies to isolated residual evidence or alignment
+items. A first-pass plot-thread topic miss also reaches the verifier instead of failing on exact
+stable-title vocabulary. The verifier may retain one semantic alias/persona/paraphrase match only
+when the update preserves strong trusted-participant continuity; multiple misses or weak continuity
+fail with `thread_relevance_broad_failure`. Dormant threads still require an explicit `reopen`.
+The atomic database commit replays the same bounded verified policy; it does not fall back to the
+pre-verification lexical-only gate.
+Broad grounding or alignment failure still rejects the chapter with an explicit recovery code. This contract changes no
+persisted Codex table shape and does not invalidate already committed pipeline-2.1 chapters.
+Primary extraction remains under `CODEX_CONTEXT_MAX_TOKENS` (48k). Verification serializes the
+complete draft as compact JSON and uses the separate `CODEX_VERIFY_CONTEXT_MAX_TOKENS` (64k)
+ceiling because its input necessarily contains primary context plus that draft. Neither source,
+memory, nor claims are truncated. A true overflow reports `codex_context_budget_exceeded` rather
+than the misleading generic artifact-invalid code. Sealed input manifests record both
+`limits.task_tokens` and `limits.max_task_tokens` for direct operator diagnosis.
+
 ## Security and data boundary
 
 Every invocation receives a new sibling `CODEX_HOME`. It contains a read-only symlink to the
@@ -70,9 +107,13 @@ starting a turn: every object rejects additional properties, every declared prop
 nullable fields remain nullable, model-side defaults are removed, and otherwise unconstrained
 state values are bounded to JSON scalars or scalar arrays. Validator-owned vocabularies (entity
 types, state keys, relationship-state keys, and translation term types) are emitted as schema
-enums. The existing safe extraction normalizer also removes unsupported optional state-transition
-items before final host validation. Story data is passed as explicitly untrusted task data. The
-host—not the model—writes the output files and SHA-256 manifest, after which the existing
+enums. The safe extraction normalizer removes unsupported optional state-transition items. For
+extraction, the host injects the trusted chapter number and source hash from the sealed inputs; it
+also removes nonliteral new-mention records and only claims that depend on those local refs. Mixed
+provenance retains supplied chunk ids and drops unsupplied ids, while all-unsupplied provenance
+still fails closed before strict validation of everything retained. Story data is passed as
+explicitly untrusted task data. The host—not the model—writes the output files and SHA-256
+manifest, after which the existing
 translation or extraction validators and atomic commit workflows run.
 
 Workspaces live below `OPENAI_CODEX_WORK_DIR`, outside the checkout and public asset root,
@@ -89,6 +130,9 @@ with mode `0700`. Do not point this setting at `ASSET_DIR`, the repository, or a
   after capacity returns.
 - Each OpenAI Codex job uses `OPENAI_CODEX_MAX_ATTEMPTS`, independently of the AGY retry
   limit.
+- Drain or cancel active model turns before activating a new extraction contract. Uncommitted
+  artifact-schema 2.1 runs cannot resume under contract 1.3.3 or later; committed pipeline-2.1 chapters
+  remain valid checkpoints.
 - Failed turns classify only App Server's protocol-defined `codexErrorInfo` tag and optional
   HTTP status. JSON-RPC request rejections also recognize structured error metadata, 401/403,
   and a small authentication/permission marker allowlist. Only the resulting safe category

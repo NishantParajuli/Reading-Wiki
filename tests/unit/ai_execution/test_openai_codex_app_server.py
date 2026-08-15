@@ -25,6 +25,7 @@ from novelwiki.modules.ai_execution.application.contracts import (
     RELATIONSHIP_STATE_KEYS,
     STATE_KEYS,
     TERM_TYPES,
+    normalize_extraction_candidate,
 )
 from novelwiki.modules.ai_execution.application.errors import AgyError
 from novelwiki.platform.config.settings import _replace_database_host
@@ -150,22 +151,45 @@ def test_output_schema_exposes_host_validator_vocabularies():
     )
 
 
+def test_output_schema_requires_nullable_verbatim_evidence_anchors():
+    extraction_defs = output_schema("codex_extract")["$defs"]
+    for name in (
+        "ExtractionFact", "ExtractionRelationship", "ExtractionEvent",
+        "ExtractionIdentityReveal", "ExtractionAlias", "StateTransitionProposal",
+        "RelationshipStateTransitionProposal", "PlotThreadUpdateProposal",
+    ):
+        item = extraction_defs[name]
+        assert "evidence_text" in item["required"]
+        assert {branch.get("type") for branch in item["properties"]["evidence_text"]["anyOf"]} == {
+            "string", "null",
+        }
+
+
 def test_materialize_extraction_applies_safe_contract_normalization(tmp_path):
     root = tmp_path / "run"
     (root / "input").mkdir(parents=True)
     (root / "output").mkdir()
     (root / "input" / "manifest.json").write_text(
-        json.dumps({"run_id": "run-normalize", "workload": "codex_extract"})
+        json.dumps(
+            {
+                "run_id": "run-normalize",
+                "workload": "codex_extract",
+                "chapter_ceiling": 13,
+            }
+        )
     )
     source_hash = "a" * 64
+    (root / "input" / "schema.json").write_text(
+        json.dumps({"source_sha256": source_hash, "allowed_chunk_ids": [1]})
+    )
     materialize_result(
         root,
         "codex_extract",
         {
             "extraction": {
-                "schema_version": "2.0",
-                "chapter": 13,
-                "source_sha256": source_hash,
+                "schema_version": "2.2",
+                "chapter": 999,
+                "source_sha256": "b" * 64,
                 "mentions": [],
                 "facts": [],
                 "relationships": [],
@@ -193,7 +217,55 @@ def test_materialize_extraction_applies_safe_contract_normalization(tmp_path):
         },
     )
     extraction = json.loads((root / "output" / "extraction.json").read_text())
+    assert extraction["chapter"] == 13
+    assert extraction["source_sha256"] == source_hash
     assert extraction["relationship_state_changes"] == []
+
+
+def test_grounded_normalizer_drops_nonliteral_mentions_and_dependent_claims():
+    candidate, repairs = normalize_extraction_candidate(
+        {
+            "mentions": [
+                {
+                    "entity_ref": "m1",
+                    "surface_form": "cat-eared maid",
+                    "type": "character",
+                },
+                {"entity_ref": "m2", "surface_form": "Alice", "type": "character"},
+            ],
+            "facts": [
+                {
+                    "entity_ref": "m1",
+                    "content": "Untrusted normalized mention.",
+                    "source_chunk_ids": [11],
+                },
+                {
+                    "entity_ref": "m2",
+                    "content": "Grounded mention.",
+                    "source_chunk_ids": [11, 99],
+                },
+            ],
+            "events": [
+                {"description": "Event.", "participant_refs": ["m1"]},
+            ],
+            "thread_updates": [
+                {"summary": "Update.", "participant_refs": ["m2"]},
+            ],
+        },
+        chapter_text="Alice greeted the cat-eared maids.",
+        allowed_chunk_ids={11},
+    )
+
+    assert [item["entity_ref"] for item in candidate["mentions"]] == ["m2"]
+    assert [item["entity_ref"] for item in candidate["facts"]] == ["m2"]
+    assert candidate["facts"][0]["source_chunk_ids"] == [11]
+    assert candidate["events"] == []
+    assert len(candidate["thread_updates"]) == 1
+    assert repairs == (
+        "removed 1 nonliteral mention(s)",
+        "removed 2 dependent claim(s)",
+        "removed 1 unsupplied chunk citation(s)",
+    )
 
 
 @pytest.mark.parametrize(

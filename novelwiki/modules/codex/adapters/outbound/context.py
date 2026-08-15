@@ -10,7 +10,7 @@ from novelwiki.modules.codex.adapters.outbound.ingest.chunk import get_encoder
 from novelwiki.platform.config import settings
 
 
-_MULTI_STATE_KEYS = {"affiliation", "possession", "ability", "identity", "title", "goal", "knowledge"}
+_MULTI_STATE_KEYS = {"affiliation", "possession", "ability", "identity", "title", "knowledge"}
 _NARRATIVE_KINDS = {"chapter", "interlude"}
 _TITLE_SPAN = re.compile(
     r"\b[A-Z][\w'’.-]*(?:\s+(?:(?:of|the|and|de|von|van)\s+)?[A-Z][\w'’.-]*){0,4}\b"
@@ -112,6 +112,52 @@ def _apply_transition(state: dict[str, Any], row: dict) -> None:
         state.pop(key, None)
 
 
+def _state_value_is_dead(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    certainty = entry.get("certainty")
+    if not isinstance(certainty, str) or certainty.strip().casefold() != "confirmed":
+        return False
+    value = entry.get("value")
+    if isinstance(value, dict):
+        value = value.get("value") or value.get("status")
+    return isinstance(value, str) and value.strip().casefold() in {
+        "dead", "deceased", "killed", "confirmed dead",
+    }
+
+
+def _reconcile_entity_state(state: dict[str, Any], chapter_ceiling: float) -> None:
+    """Remove expired transient observations and living-only state after death."""
+    max_age = {
+        "condition": settings.CODEX_STATE_CONDITION_MAX_AGE_CHAPTERS,
+        "custody": settings.CODEX_STATE_CUSTODY_MAX_AGE_CHAPTERS,
+        "goal": settings.CODEX_STATE_GOAL_MAX_AGE_CHAPTERS,
+        "occupation": settings.CODEX_STATE_OCCUPATION_MAX_AGE_CHAPTERS,
+        "last_known_location": settings.CODEX_STATE_LOCATION_MAX_AGE_CHAPTERS,
+    }
+    def observed_chapter(entry: dict[str, Any]) -> float:
+        value = entry.get("chapter")
+        return chapter_ceiling if value is None else float(value)
+
+    for key, age in max_age.items():
+        current = state.get(key)
+        if isinstance(current, list):
+            kept = [
+                item for item in current
+                if not isinstance(item, dict)
+                or chapter_ceiling - observed_chapter(item) <= age
+            ]
+            if kept:
+                state[key] = kept
+            else:
+                state.pop(key, None)
+        elif isinstance(current, dict) and chapter_ceiling - observed_chapter(current) > age:
+            state.pop(key, None)
+    if _state_value_is_dead(state.get("life_status")):
+        for key in ("goal", "occupation", "condition", "custody"):
+            state.pop(key, None)
+
+
 async def current_entity_state(
     conn, novel_id: int, entity_ids: list[int], chapter_ceiling: float,
 ) -> dict[int, dict[str, Any]]:
@@ -134,6 +180,8 @@ async def current_entity_state(
     for raw in rows:
         row = dict(raw)
         _apply_transition(result[int(row["entity_id"])], row)
+    for state in result.values():
+        _reconcile_entity_state(state, chapter_ceiling)
     return dict(result)
 
 
@@ -212,6 +260,7 @@ def _chapter_memory_shape(chapter: float, metadata: dict | None) -> dict:
         "end_chapter": numbers[block_end_index],
         "through_chapter": float(chapter),
         "part_label": metadata.get("part_label"),
+        "covered_chapters": numbers[block_start_index:index + 1],
     }
     targets = [checkpoint] if closes_checkpoint else []
     if at_labeled_part_end:
@@ -221,6 +270,7 @@ def _chapter_memory_shape(chapter: float, metadata: dict | None) -> dict:
             "end_chapter": numbers[-1],
             "through_chapter": float(chapter),
             "part_label": metadata.get("part_label"),
+            "covered_chapters": numbers,
         })
     return {
         "narrative": True, "kind": kind, "part_label": metadata.get("part_label"),
@@ -404,7 +454,7 @@ async def _candidate_scores(conn, novel_id: int, chapter: float, content: str) -
 
 async def _thread_context(
     conn, novel_id: int, chapter: float, content: str, selected_refs: dict[int, str],
-) -> tuple[list[dict], dict[str, int]]:
+) -> tuple[list[dict], dict[str, int], dict[str, dict]]:
     rows = await conn.fetch(
         """
         SELECT t.id,t.stable_title,u.operation,u.summary,u.participants,u.keywords,u.chapter
@@ -434,13 +484,24 @@ async def _thread_context(
             continue
         ranked.append((score, row))
     ranked.sort(key=lambda item: (-item[0], int(item[1]["id"])))
-    result, mapping, used = [], {}, 0
+    result, mapping, trusted_terms, used = [], {}, {}, 0
     for index, (_score, row) in enumerate(ranked[:settings.CODEX_CONTEXT_MAX_THREADS], 1):
         participants = {int(value) for value in (row["participants"] or [])}
+        age = chapter - float(row["chapter"])
+        projected_status = (
+            "mark_dormant"
+            if age > settings.CODEX_THREAD_DORMANT_CHAPTERS
+            else row["operation"]
+        )
+        participant_refs = [
+            selected_refs[value] for value in sorted(participants) if value in selected_refs
+        ]
+        keywords = list(row["keywords"] or [])[:12]
         item = {
             "thread_ref": f"t{index}", "title": row["stable_title"],
-            "status": row["operation"], "summary": row["summary"],
-            "participants": [selected_refs[value] for value in sorted(participants) if value in selected_refs],
+            "status": projected_status, "summary": row["summary"],
+            "participants": participant_refs, "keywords": keywords,
+            "last_updated_chapter": float(row["chapter"]),
         }
         item_tokens = count_tokens(_compact(item))
         if used + item_tokens > settings.CODEX_CONTEXT_THREAD_TOKENS:
@@ -448,7 +509,11 @@ async def _thread_context(
         used += item_tokens
         result.append(item)
         mapping[item["thread_ref"]] = int(row["id"])
-    return result, mapping
+        trusted_terms[item["thread_ref"]] = {
+            "title": row["stable_title"], "keywords": keywords,
+            "participants": participant_refs, "status": projected_status,
+        }
+    return result, mapping, trusted_terms
 
 
 async def build_chapter_context(
@@ -479,26 +544,43 @@ async def build_chapter_context(
         by_id = {int(row["id"]): row for row in rows}
         details = [by_id[entity_id] for entity_id in ranked_ids if entity_id in by_id]
 
-    selected, roster_map, used_tokens, dropped = [], {}, 0, []
+    selected, roster_map, roster_terms, roster_types, used_tokens, dropped = [], {}, {}, {}, 0, []
+    background_entities = 0
     for row in details:
         entity_id = int(row["id"])
+        explicit = "exact_chapter_term" in reasons[entity_id]
         aliases = [
             alias for alias in (row["aliases"] or [])
             if alias.casefold() != row["canonical_name"].casefold()
-        ][:20]
+        ][:10]
         ref = f"e{len(selected)+1}"
         item = {
             "entity_ref": ref, "canonical_name": row["canonical_name"], "type": row["type"],
             "aliases": aliases, "first_seen_chapter": float(row["first_seen_chapter"]),
-            "identity_blurb": (row["description"] or "")[:500],
+            "identity_blurb": (row["description"] or "")[:300],
         }
         item_tokens = count_tokens(_compact(item))
-        if len(selected) >= settings.CODEX_CONTEXT_MAX_ENTITIES or used_tokens + item_tokens > settings.CODEX_CONTEXT_ENTITY_TOKENS:
+        if not explicit and background_entities >= settings.CODEX_CONTEXT_MAX_BACKGROUND_ENTITIES:
+            dropped.append({"entity_id": entity_id, "reason": "background_entity_cap"})
+            continue
+        if len(selected) >= settings.CODEX_CONTEXT_MAX_ENTITIES:
+            if explicit:
+                raise RuntimeError(
+                    "explicit chapter entities exceed CODEX_CONTEXT_MAX_ENTITIES; "
+                    "increase the hard cap instead of silently dropping visible names"
+                )
             dropped.append({"entity_id": entity_id, "reason": "entity_budget"})
+            continue
+        if used_tokens + item_tokens > settings.CODEX_CONTEXT_ENTITY_TOKENS and not explicit:
+            dropped.append({"entity_id": entity_id, "reason": "entity_token_budget"})
             continue
         used_tokens += item_tokens
         selected.append(item)
         roster_map[ref] = entity_id
+        roster_terms[ref] = [row["canonical_name"], *aliases]
+        roster_types[ref] = str(row["type"])
+        if not explicit:
+            background_entities += 1
 
     state_by_id = await current_entity_state(conn, novel_id, list(roster_map.values()), chapter - 0.000001)
     state_items, state_tokens = [], 0
@@ -534,7 +616,7 @@ async def build_chapter_context(
         state_tokens += item_tokens
         relationship_state_items.append(item)
 
-    threads, thread_map = await _thread_context(
+    threads, thread_map, thread_terms = await _thread_context(
         conn, novel_id, chapter, content,
         {entity_id: ref for ref, entity_id in roster_map.items()},
     )
@@ -693,6 +775,7 @@ async def build_chapter_context(
         while context["open_threads"] and total_estimate > settings.CODEX_CONTEXT_MAX_TOKENS:
             removed = context["open_threads"].pop()
             thread_map.pop(removed["thread_ref"], None)
+            thread_terms.pop(removed["thread_ref"], None)
             serialized = _compact(context)
             context_tokens = count_tokens(serialized)
             total_estimate = context_tokens + chapter_tokens + 3_000
@@ -709,6 +792,12 @@ async def build_chapter_context(
         while context["entities"] and total_estimate > settings.CODEX_CONTEXT_MAX_TOKENS:
             removed = context["entities"].pop()
             removed_id = roster_map.pop(removed["entity_ref"], None)
+            if removed_id is not None and "exact_chapter_term" in reasons[removed_id]:
+                raise RuntimeError(
+                    "explicit chapter entity roster exceeds the hard total context budget"
+                )
+            roster_terms.pop(removed["entity_ref"], None)
+            roster_types.pop(removed["entity_ref"], None)
             dropped.append({"entity_id": removed_id, "reason": "total_context_budget"})
             context["current_state"] = [
                 item for item in context["current_state"]
@@ -771,6 +860,15 @@ async def build_chapter_context(
             item["source_hash"] for item in context["completed_volume_checkpoint_children"]
         ],
         "memory_targets": context["memory_targets"],
+        "entity_terms": {
+            ref: roster_terms[ref] for ref in roster_map if ref in roster_terms
+        },
+        "entity_types": {
+            ref: roster_types[ref] for ref in roster_map if ref in roster_types
+        },
+        "thread_terms": {
+            ref: thread_terms[ref] for ref in thread_map if ref in thread_terms
+        },
         "tokens": {
             "chapter": chapter_tokens, "context": context_tokens,
             "entity_identity": final_identity_tokens, "entity_state": final_state_tokens,
@@ -783,5 +881,7 @@ async def build_chapter_context(
         "context": context, "serialized": serialized, "manifest": manifest,
         "context_sha256": context_sha256, "token_count": context_tokens,
         "roster_map": roster_map, "thread_map": thread_map,
+        "roster_terms": roster_terms, "roster_types": roster_types,
+        "thread_terms": thread_terms,
         "memory_targets": context["memory_targets"],
     }

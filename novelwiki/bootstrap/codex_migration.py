@@ -198,6 +198,7 @@ async def build_codex_migration_service(agent_gateway=None):
         ask_requires_verified=settings.ASK_REQUIRE_VERIFIED,
         profile_requires_verified=settings.ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED,
         profile_model=settings.MODEL_PRO,
+        profile_cache_version=settings.CODEX_PROFILE_CACHE_VERSION,
     )
     commands = CodexCommandService(
         CatalogEditBridge(), BackendBridge(), WorkBridge(), QuotaBridge(),

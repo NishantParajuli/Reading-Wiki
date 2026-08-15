@@ -109,15 +109,26 @@ class PostgresCodexQueries:
         )
 
     async def cached_profile(
-        self, novel_id: int, entity_id: int, ceiling: ChapterCeiling
+        self, novel_id: int, entity_id: int, ceiling: ChapterCeiling,
+        model: str, cache_version: str,
     ) -> str | None:
         async with self._pool.acquire() as connection:
             row = await connection.fetchrow(
-                "SELECT rendered_md FROM wiki_cache "
+                "SELECT rendered_md,model,evidence_ids FROM wiki_cache "
                 "WHERE novel_id=$1 AND entity_id=$2 AND chapter_ceiling=$3;",
                 novel_id, entity_id, ceiling.value,
             )
-        return row["rendered_md"] if row else None
+        if not row or row["model"] != model:
+            return None
+        evidence = row["evidence_ids"] or {}
+        if isinstance(evidence, str):
+            try:
+                evidence = json.loads(evidence)
+            except Exception:
+                return None
+        if not isinstance(evidence, dict) or evidence.get("cache_version") != cache_version:
+            return None
+        return row["rendered_md"]
 
     async def save_profile(
         self, novel_id: int, entity_id: int, ceiling: ChapterCeiling,

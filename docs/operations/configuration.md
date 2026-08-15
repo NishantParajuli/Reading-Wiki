@@ -74,12 +74,12 @@ content.
 | Setting | Default | Notes |
 |---|---|---|
 | `CHUNK_TARGET_TOKENS` / `CHUNK_OVERLAP` | 500 / 80 | chunking geometry |
-| `RRF_K` | 60 | reciprocal-rank-fusion constant |
+| `RRF_K` / `RRF_SOURCE_QUOTA_RATIO` | 60 / 0.4 | reciprocal-rank-fusion constant and the candidate share reserved for each sparse/dense source before reranking |
 | `RETRIEVE_K` | 50 | candidates per retriever before fusion |
 | `RERANK_TOP_N` | 8 | passages surviving rerank |
 | `MAX_ITERATIONS` | 5 | agent plan→act→reason loop cap |
 | `BM25_INDEX_PATH` | `./data/bm25_index` | per-novel lexical indexes |
-| `BM25_THREAD_OFFLOAD` | `true` | run blocking BM25 ops off the event loop (keep on in prod) |
+| `BM25_THREAD_OFFLOAD` / `BM25_PREFIX_CACHE_SIZE` | `true` / 4 | run blocking BM25 ops off the event loop and retain a bounded LRU of exact reader-ceiling IDF indexes |
 
 ## Read-side AI cost controls (denial-of-wallet)
 
@@ -89,7 +89,8 @@ content.
 | `ASK_MAX_UNIQUE_PER_USER_HOUR` | 30 | fixed-window cap on **uncached** AI reads (cache hits free) |
 | `ASK_MAX_CONCURRENT_PER_USER` / `ASK_CONCURRENCY_TTL_SECONDS` | 2 / 180 | in-flight slots (self-expiring `ai_request_locks`) |
 | `ASK_REQUIRE_VERIFIED` / `ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED` | `true` | verified email to trigger uncached AI reads |
-| `ASK_TOOL_MAX_K` / `ASK_TOOL_MAX_TOP_N` / `ASK_TOOL_MAX_RERANK_HITS` / `ASK_TOOL_MAX_QUERY_CHARS` / `ASK_MAX_TOOL_CALLS_PER_ITER` | 100 / 20 / 100 / 2000 / 4 | hard clamps on *model-planned* tool calls, so the LLM can't be steered into huge fan-outs |
+| `CODEX_QA_CACHE_VERSION` / `CODEX_PROFILE_CACHE_VERSION` | `3` / `2` | operator-bumped read-side grounding namespaces; Ask also varies by both model ids, while profile hits require the stored `MODEL_PRO` |
+| `ASK_TOOL_MAX_K` / `ASK_TOOL_MAX_QUERY_CHARS` / `ASK_MAX_TOOL_CALLS_PER_ITER` | 100 / 2000 / 4 | hard clamps on *model-planned* tool calls; reranking is host-controlled and accepts only retrieved candidates |
 
 ## Extraction accuracy
 
@@ -99,17 +100,21 @@ content.
 | `SEMANTIC_MATCH_THRESHOLD` | 0.85 | cosine floor for the vector fallback fold-in |
 | `EXTRACTION_VERIFY` | `true` | direct API only: best-effort second extraction call per chapter; AGY review is controlled separately |
 
-## Bounded Codex memory v2
+## Bounded Codex memory v2.1
 
 | Setting | Default | Notes |
 |---|---|---|
-| `CODEX_PIPELINE_VERSION` | `2.0` | generated-row/context version; v1 checkpoints are rebuilt in place |
-| `CODEX_CONTEXT_MAX_TOKENS` / `CODEX_CONTEXT_MAX_ENTITIES` | 48000 / 80 | hard total input ceiling and entity-count cap |
+| `CODEX_PIPELINE_VERSION` | `2.1` | generated-row/context version; older generated rows do not satisfy a v2.1 build |
+| `CODEX_CONTEXT_MAX_TOKENS` / `CODEX_VERIFY_CONTEXT_MAX_TOKENS` | 48000 / 64000 | primary extraction cap and second-pass cap; verification keeps the same full bounded source/memory plus compact complete draft JSON, so its cap must be at least the primary cap and may not exceed 128000 |
+| `CODEX_CONTEXT_MAX_ENTITIES` / `CODEX_CONTEXT_MAX_BACKGROUND_ENTITIES` | 120 / 20 | hard entity caps; all literal current-chapter names are retained or the build fails, while semantic/recent/graph-only background is separately bounded |
 | `CODEX_CONTEXT_VECTOR_MIN_SIMILARITY` | 0.45 | floor below which name/chapter vector candidates are ignored |
-| `CODEX_CONTEXT_ENTITY_TOKENS` / `CODEX_CONTEXT_STATE_TOKENS` / `CODEX_CONTEXT_THREAD_TOKENS` | 6000 / 2000 / 1000 | independent section budgets |
+| `CODEX_CONTEXT_ENTITY_TOKENS` / `CODEX_CONTEXT_STATE_TOKENS` / `CODEX_CONTEXT_THREAD_TOKENS` | 8000 / 2000 / 1000 | independent section budgets |
 | `CODEX_RECENT_SUMMARY_CHAPTERS` / `CODEX_CHECKPOINT_CHAPTERS` | 3 / 25 | local continuity and grounded reducer width |
-| `CODEX_CHAPTER_SUMMARY_MAX_TOKENS` / `CODEX_CHECKPOINT_SUMMARY_MAX_TOKENS` / `CODEX_VOLUME_SUMMARY_MAX_TOKENS` | 300 / 1500 / 2000 | fail-closed summary output limits |
-| `CODEX_RECENT_ACTIVITY_CHAPTERS` / `CODEX_CONTEXT_MAX_THREADS` | 15 / 10 | relevance windows |
+| `CODEX_CHAPTER_SUMMARY_MIN_TOKENS` / `CODEX_CHAPTER_SUMMARY_MAX_TOKENS` | 64 / 300 | source-length-aware validation floor (reduced for short sources) and hard upper bound; the prompt targets 80-220 tokens while the lower floor tolerates normal model variance without encouraging RAG inflation, and internal chunk/ref notation is rejected |
+| `CODEX_CHECKPOINT_SUMMARY_MIN_TOKENS` / `CODEX_CHECKPOINT_SUMMARY_MAX_TOKENS` / `CODEX_VOLUME_SUMMARY_MIN_TOKENS` / `CODEX_VOLUME_SUMMARY_MAX_TOKENS` | 200 / 1500 / 300 / 2000 | distributed reducer bounds, dynamically reduced only for short child ranges |
+| `CODEX_RECENT_ACTIVITY_CHAPTERS` / `CODEX_CONTEXT_MAX_THREADS` / `CODEX_THREAD_DORMANT_CHAPTERS` | 15 / 10 / 50 | relevance and projected thread-dormancy windows |
+| `CODEX_STATE_CONDITION_MAX_AGE_CHAPTERS` / `CODEX_STATE_CUSTODY_MAX_AGE_CHAPTERS` / `CODEX_STATE_GOAL_MAX_AGE_CHAPTERS` | 30 / 50 / 75 | transient state becomes unknown unless reconfirmed |
+| `CODEX_STATE_OCCUPATION_MAX_AGE_CHAPTERS` / `CODEX_STATE_LOCATION_MAX_AGE_CHAPTERS` | 100 / 100 | longer-lived transient-state freshness windows |
 | `CODEX_READ_MAX_FACTS` / `CODEX_READ_MAX_RELATIONSHIPS` / `CODEX_READ_MAX_TIMELINE_ITEMS` / `CODEX_READ_MAX_ENTITIES` | 200 / 120 / 250 / 200 | hard structured-tool SQL limits |
 | `CODEX_ASK_TOTAL_EVIDENCE_TOKENS` / `CODEX_ASK_MAX_DIGEST_TOKENS` | 30000 / 8000 | whole-request raw and distilled evidence budgets |
 
@@ -264,15 +269,15 @@ owned by the dedicated worker user, not an application API key. See the
 | `OPENAI_CODEX_BINARY` / `OPENAI_CODEX_MIN_VERSION` / `OPENAI_CODEX_BINARY_SHA256` | `~/.local/bin/codex` / `0.146.0` / empty in code | official executable, minimum protocol version, optional integrity pin; `.env.example` pins the tested launcher, and `~` expands to the worker service user's home |
 | `OPENAI_CODEX_WORK_DIR` | `~/.local/share/novelwiki/openai-codex-jobs` | private story-bearing run workspaces outside checkout/public roots; `~` expands to the worker service user's home |
 | `OPENAI_CODEX_CREDENTIAL_DIR` | `~/.codex` | official auth source under the worker service user's home; only `auth.json` is linked into per-run state, never parsed by NovelWiki |
-| `OPENAI_CODEX_MODEL_TRANSLATE` / `OPENAI_CODEX_MODEL_CODEX` | `gpt-5.6-terra` / `gpt-5.6-luna` | translation and high-volume extraction roles; preflight requires both in App Server `model/list` |
-| `OPENAI_CODEX_REASONING_TRANSLATE` / `OPENAI_CODEX_REASONING_CODEX` | `medium` / `medium` | allowed: low, medium, high, xhigh, max |
+| `OPENAI_CODEX_MODEL_TRANSLATE` / `OPENAI_CODEX_MODEL_CODEX` | `gpt-5.6-terra` / `gpt-5.6-luna` | Terra is reserved for translation while Luna is preferred for high-volume extraction, verification, disambiguation, and smoke tests; preflight requires both in App Server `model/list` |
+| `OPENAI_CODEX_REASONING_TRANSLATE` / `OPENAI_CODEX_REASONING_CODEX` | `xhigh` / `xhigh` | enforced model policy: Terra and Luna must use `xhigh`; other model families may use low, medium, high, xhigh, or max |
 | `OPENAI_CODEX_TURN_TIMEOUT_SECONDS` / `OPENAI_CODEX_KILL_GRACE_SECONDS` | 1200 / 10 | turn deadline and process-group termination grace |
 | `OPENAI_CODEX_STDOUT_MAX_BYTES` / `OPENAI_CODEX_STDERR_MAX_BYTES` / `OPENAI_CODEX_WORKSPACE_MAX_BYTES` | 16 MiB / 1 MiB / 128 MiB | JSONL, diagnostic-tail, and workspace caps |
 | `OPENAI_CODEX_TRANSLATE_BATCH_CHAPTERS` / `OPENAI_CODEX_TRANSLATE_BATCH_MAX_CHARS` | 3 / 120000 | per-turn translation bound |
-| `OPENAI_CODEX_SEPARATE_CODEX_VERIFY` | `false` | when true, run a separate structured verification child turn |
+| `OPENAI_CODEX_SEPARATE_CODEX_VERIFY` | `true` | quality-first default: run a separate Luna/xhigh structured verification child turn for every extracted chapter |
 | `OPENAI_CODEX_MAX_ATTEMPTS` / `OPENAI_CODEX_PROVIDER_RETRY_MINUTES` | 2 / 30 | OpenAI Codex job retries (independent of `AGY_MAX_ATTEMPTS`) and provider-capacity parking |
 | `OPENAI_CODEX_SUCCESS_RETENTION_HOURS` / `OPENAI_CODEX_FAILURE_RETENTION_HOURS` | 24 / 168 | private workspace retention |
-| `OPENAI_CODEX_CONTRACT_VERSION` | `1.0.2` | host prompt/schema contract recorded on every run and heartbeat; 1.0.2 adds strict schema normalization and validator-owned enums |
+| `OPENAI_CODEX_CONTRACT_VERSION` | `1.3.10` | host prompt/schema contract recorded on every run and heartbeat; 1.3.10 emits artifact schema 2.2 with separate primary/verification context budgets, compact lossless draft transport, exact lexical evidence locality, verified-only bounded contiguous-anchor canonicalization, safe regular plural and possessive-number matching, semantic verifier repair, bounded evidence/claim-alignment/duplicate-thread recovery, one strongly connected verifier-reviewed thread-topic override, and durable retry progress while retaining pipeline-2.1 database rows and the Luna/xhigh policy |
 | `OPENAI_CODEX_WORKER_HEALTH_TTL_SECONDS` | 90 | heartbeat staleness for capabilities/admin health |
 
 ## Minimal production checklist

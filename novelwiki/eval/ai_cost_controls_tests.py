@@ -290,28 +290,26 @@ async def test_concurrency_limit_blocks_extra_inflight(ai_db, monkeypatch):
 # ── Tool fan-out clamps ──────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_tool_k_and_top_n_are_clamped(monkeypatch):
+async def test_tool_k_is_clamped_and_explicit_rerank_is_rejected(monkeypatch):
     captured = {}
 
     async def _fake_hybrid(novel_id, query, ceiling, k):
         captured["k"] = k
         return []
 
-    async def _fake_rerank(query, hits, top_n):
-        captured["top_n"] = top_n
-        captured["hits_len"] = len(hits)
-        return []
+    async def _unexpected_rerank(*args, **kwargs):
+        raise AssertionError("planner-supplied rerank hits must never reach the provider")
 
     monkeypatch.setattr(orchestrator, "hybrid_search", _fake_hybrid)
-    monkeypatch.setattr(orchestrator, "rerank", _fake_rerank)
+    monkeypatch.setattr(orchestrator, "rerank", _unexpected_rerank)
 
     await orchestrator.execute_tool(1, "hybrid_search", {"query": "q", "k": 99999}, 3)
     assert captured["k"] == settings.ASK_TOOL_MAX_K
 
-    too_many_hits = [{"text": f"x{i}"} for i in range(settings.ASK_TOOL_MAX_RERANK_HITS + 5)]
-    await orchestrator.execute_tool(1, "rerank", {"query": "q", "hits": too_many_hits, "top_n": 99999}, 3)
-    assert captured["top_n"] == settings.ASK_TOOL_MAX_TOP_N
-    assert captured["hits_len"] == settings.ASK_TOOL_MAX_RERANK_HITS
+    out = await orchestrator.execute_tool(
+        1, "rerank", {"query": "q", "hits": [{"id": 999}]}, 3
+    )
+    assert "not recognized" in out
 
     # Empty query is rejected without dispatching.
     captured.clear()

@@ -38,7 +38,9 @@ async def hybrid_search(
     )
 
     # 3. Reciprocal Rank Fusion
-    fused_hits = reciprocal_rank_fusion(sparse_hits, dense_hits)
+    fused_hits = reciprocal_rank_fusion(
+        sparse_hits, dense_hits, result_limit=k
+    )
 
     # Limit to top k
     return fused_hits[:k]

@@ -19,9 +19,9 @@
    and validate counts/health before reopening traffic. Do not use destructive down migrations as
    rollback.
 
-## First Codex v2 production rollout
+## Codex v2.1 quality-contract rollout
 
-Use this controlled path once for any production novel that already has v1 Codex data.
+Use this controlled path once for any production novel that has pre-v2.1 Codex data.
 It applies to both API and AGY builds; backend choice does not change the schema, context,
 or commit contract.
 
@@ -41,8 +41,8 @@ or commit contract.
 3. Choose one data path per novel:
 
    - **Chronological in-place migration:** retain v1 rows and existing narrative
-     chunks/embeddings. The first v2 Build must begin at the novel's first narrative
-     chapter; a middle-of-book start fails closed until all preceding v2 chapter summaries
+     chunks/embeddings. The first v2.1 Build must begin at the novel's first narrative
+     chapter; a middle-of-book start fails closed until all preceding v2.1 chapter summaries
      and checkpoints exist.
    - **Clean structured rebuild:** recommended when legacy extraction touched front/back
      matter or when a clean comparison is preferred. Using the candidate image, run
@@ -51,20 +51,37 @@ or commit contract.
      narrative chapter.
 
 4. Start the candidate web service. Canary the earliest chapter first, then extend only in
-   chronological ranges. Before a whole-book continuation, verify pipeline version `2.0`,
-   source/context hashes, provenance, literal mention spans, context token/entity counts,
-   and the first 25-chapter checkpoint. Where real `part_label` values exist, verify a
+   chronological ranges. Before a whole-book continuation, verify pipeline version `2.1`,
+   source/context hashes, chunk provenance, artifact-schema 2.2 evidence-anchor locality and
+   semantic verifier repair, named mention spans, explicit-first
+   context counts, clean reader-facing text, and distributed coverage in the first 25-chapter
+   checkpoint. Where real `part_label` values exist, verify a
    volume summary only after that labeled volume's final narrative chapter. Do not jump
    directly to a late/checkpoint/volume chapter without its v2 prerequisites.
 5. Keep `AGY_CODEX_ENABLED=false` until the pinned plugin passes representative early,
    late, checkpoint-end, and final-volume canaries. API can remain the controlled fallback;
    both backends ultimately use the same atomic commit workflow.
 
-The eight v2 tables and two `extraction_state` columns are additive, so the previous image
+The v2 tables and `extraction_state` columns are reused by v2.1, so the previous image
 can run after schema creation **only if no reset or v2 extraction has changed Codex data**.
-Once a clean reset or any v2 chapter commit has occurred, do not treat an image-only rollback
+Once a clean reset or any v2.1 chapter commit has occurred, do not treat an image-only rollback
 as data-safe: restore the pre-rollout database backup with the previous image. Never drop the
 additive tables as an ad-hoc rollback.
+
+Artifact-schema 2.2 / OpenAI contract 1.3.10 / AGY plugin 1.4.4 is an application-contract
+upgrade over the same persisted pipeline-2.1 rows. Drain active Codex turns before restarting
+workers with the new pins. Already committed pipeline-2.1 chapters remain valid; uncommitted
+artifacts whose recorded contract differs are regenerated. Canary a supported paraphrase, a
+wrong-chunk anchor, a regular concept plural, a possessive-number organization variant, duplicate
+thread consolidation, and isolated evidence/alignment/thread quarantine before reopening long builds.
+Also canary an alias/persona-only thread-topic paraphrase with two trusted participants and prove
+that an unrelated scene sharing only one participant still fails.
+Replay one verifier anchor that omits a nearby sentence and one that cites the wrong side of an
+overlapping chunk; both must canonicalize to one contiguous source span. Changed values, reordered
+endpoints, and distant stitched passages must remain invalid.
+Replay a long-chapter verifier whose complete task exceeds 48k but remains below 64k after compact
+draft serialization; verify every source, memory, and draft field remains present and the verifier
+starts instead of consuming a deterministic retry.
 
 For ordinary merged changes, the local deploy agent performs steps 4-5 automatically after the
 GitHub `quality` workflow succeeds for the current `main` SHA. It retains the previous web image as

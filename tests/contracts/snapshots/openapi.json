@@ -3704,9 +3704,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/AskResponse"
                 }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "A JSON answer, or newline-delimited keepalive events followed by the answer when application/x-ndjson is requested."
           },
           "422": {
             "content": {
@@ -5153,9 +5158,14 @@
             "content": {
               "application/json": {
                 "schema": {}
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "A JSON entity profile, or newline-delimited keepalive events followed by the profile when application/x-ndjson is requested."
           },
           "422": {
             "content": {

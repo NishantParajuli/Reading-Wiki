@@ -14,6 +14,9 @@ from novelwiki.modules.codex.domain.prompts import (
     REPAIR_SYSTEM, REPAIR_USER
 )
 from novelwiki.modules.codex.adapters.outbound.ingest.chunk import get_encoder
+from novelwiki.modules.codex.adapters.outbound.grounding import (
+    citation_refs, evidence_refs, grounding_issues,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,16 +28,6 @@ def _truncate_tokens(text: str, maximum: int) -> tuple[str, int]:
     if len(tokens) <= maximum:
         return text, len(tokens)
     return encoder.decode(tokens[:maximum]) + "\n[truncated at evidence token budget]", maximum
-
-# Matches inline citations in two shapes the models actually produce:
-#   keyword-first  → [Chunk 12, Chapter 5] / [Fact 29] / [Event 7, Chapter 3]   (group 1 = kind, 2 = id)
-#   chapter-first  → [Ch.1, id 3] / [Chapter 2, id10]                            (group 3 = id, kind defaults to chunk)
-# The digests are chunk-keyed (DISTILL cites chunk_id), so a keyword-less `id N` is a chunk ref.
-_CITATION_RE = re.compile(
-    r"\[(?:(chunk|fact|rel|relationship|event)s?\s+(\d+)|[^\]]*?\bid\s*(\d+))",
-    re.IGNORECASE,
-)
-
 
 def _clamp_int(value, default: int, lo: int, hi: int) -> int:
     """Clamp a model-supplied numeric arg into [lo, hi], tolerating bad/missing values."""
@@ -63,8 +56,8 @@ async def execute_tool(
     novel_id: int, tool: str, args: dict, chapter_ceiling: float, *, runtime=None
 ) -> str:
     """Safely dispatches tool calls from the LLM, strictly injecting novel_id + chapter_ceiling.
-    Model-supplied fan-out args (`k`, `top_n`, query length, rerank hits) are hard-limited
-    so the planner can't be steered into runaway/expensive retrieval."""
+    Model-supplied fan-out args (`k`, query length) are hard-limited so the planner
+    cannot trigger runaway retrieval. Reranking consumes only host-retrieved hits."""
     try:
         if tool == "hybrid_search":
             query, err = _tool_query(args)
@@ -80,24 +73,22 @@ async def execute_tool(
                 )
             else:
                 res = await hybrid_search(novel_id, query, chapter_ceiling, k)
-            return json.dumps(res, default=str)
-
-        elif tool == "rerank":
-            query, err = _tool_query(args)
-            if err:
-                return f"Error: rerank {err}"
-            hits = args.get("hits", [])
-            if not isinstance(hits, list):
-                hits = []
-            hits = hits[: settings.ASK_TOOL_MAX_RERANK_HITS]
-            top_n = _clamp_int(args.get("top_n"), settings.RERANK_TOP_N, 1, settings.ASK_TOOL_MAX_TOP_N)
-            import inspect
-            if "runtime" in inspect.signature(rerank).parameters:
-                if runtime is None:
-                    raise RuntimeError("Codex runtime was not supplied")
-                res = await rerank(query, hits, top_n, runtime=runtime)
-            else:
-                res = await rerank(query, hits, top_n)
+            # Reranking is part of hybrid retrieval, not an optional planner skill. Keep
+            # the fused candidates as a resilient fallback if the rerank provider fails.
+            if res:
+                top_n = min(settings.RERANK_TOP_N, len(res))
+                try:
+                    if "runtime" in inspect.signature(rerank).parameters:
+                        if runtime is None:
+                            raise RuntimeError("Codex runtime was not supplied")
+                        res = await rerank(query, res, top_n, runtime=runtime)
+                    else:
+                        res = await rerank(query, res, top_n)
+                except Exception as exc:
+                    logger.warning(
+                        "Ask rerank failed; using fused candidates (%s).",
+                        type(exc).__name__,
+                    )
             return json.dumps(res, default=str)
 
         elif tool == "get_chunk":
@@ -146,6 +137,22 @@ def _accumulate_evidence(tool: str, raw_result: str, evidence: dict):
         data = json.loads(raw_result)
     except Exception:
         return
+    def collect_source_chunks(value) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "source_chunk_ids" and isinstance(child, list):
+                    for chunk_id in child:
+                        try:
+                            evidence["chunk_ids"].add(int(chunk_id))
+                        except (TypeError, ValueError):
+                            continue
+                else:
+                    collect_source_chunks(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_source_chunks(child)
+
+    collect_source_chunks(data)
     items = data if isinstance(data, list) else [data]
     for it in items:
         if not isinstance(it, dict):
@@ -165,20 +172,21 @@ def _accumulate_evidence(tool: str, raw_result: str, evidence: dict):
             evidence["rel_ids"].add(int(it["id"]))
 
 
-async def build_citations(novel_id: int, answer: str, chapter_ceiling: float) -> list[dict]:
-    """Resolves inline citations in the answer to structured {kind,id,chapter,snippet}.
-    Every snippet lookup is bounded by the ceiling, so a citation that points past the
-    ceiling is dropped rather than leaked."""
-    seen = set()
-    refs = []
-    for m in _CITATION_RE.finditer(answer or ""):
-        kind = (m.group(1) or "chunk").lower()
-        if kind == "relationship":
-            kind = "rel"
-        rid = int(m.group(2) or m.group(3))
-        if (kind, rid) not in seen:
-            seen.add((kind, rid))
-            refs.append((kind, rid))
+async def build_citations(
+    novel_id: int,
+    answer: str,
+    chapter_ceiling: float,
+    allowed_evidence_ids: dict | None = None,
+) -> list[dict]:
+    """Resolve inline citations to structured ``{kind,id,chapter,snippet}`` rows.
+
+    Lookups are bounded by the reader ceiling and, when supplied, by the provenance ids
+    gathered for this exact question. Future or un-retrieved references are dropped.
+    """
+    refs = citation_refs(answer)
+    if allowed_evidence_ids is not None:
+        allowed = evidence_refs(allowed_evidence_ids)
+        refs = [ref for ref in refs if ref in allowed]
     if not refs:
         return []
 
@@ -214,11 +222,15 @@ async def build_citations(novel_id: int, answer: str, chapter_ceiling: float) ->
 
 
 def compute_query_hash(question: str) -> str:
-    """MD5 of a normalized question for cache keying. Normalization (lowercase + collapse
-    all runs of whitespace to a single space) maximizes cache hits so trivially-varied
-    phrasings of the same question don't each incur a fresh uncached spend."""
+    """Version/model-namespaced MD5 of a normalized question for cache keying."""
     norm = re.sub(r"\s+", " ", (question or "").strip().lower())
-    return hashlib.md5(norm.encode("utf-8")).hexdigest()
+    namespace = "\0".join((
+        settings.CODEX_QA_CACHE_VERSION,
+        settings.MODEL_PRO,
+        settings.MODEL_FLASH,
+        norm,
+    ))
+    return hashlib.md5(namespace.encode("utf-8")).hexdigest()
 
 
 async def get_cached_answer(novel_id: int, query_hash: str, ceiling: float):
@@ -257,6 +269,13 @@ def _is_done(decision_clean: str) -> bool:
     return decision_clean.strip().strip('"').strip("'").upper() == "DONE"
 
 
+_INSUFFICIENT_EVIDENCE_ANSWER = (
+    "I couldn't find enough grounded evidence in the available chapters to answer "
+    "that confidently. Try a more specific name or event, or ask again after more of "
+    "the Codex has been built."
+)
+
+
 async def answer_question(
     novel_id: int, question: str, chapter_ceiling: float, *, runtime
 ) -> dict:
@@ -272,7 +291,10 @@ async def answer_question(
     cached = await get_cached_answer(novel_id, query_hash, chapter_ceiling)
     if cached:
         logger.info(f"Returning cached answer for {query_hash} at ceiling {chapter_ceiling}")
-        citations = await build_citations(novel_id, cached["answer_md"], chapter_ceiling)
+        citations = await build_citations(
+            novel_id, cached["answer_md"], chapter_ceiling,
+            cached["evidence_ids"],
+        )
         return {"answer": cached["answer_md"], "citations": citations, "evidence_ids": cached["evidence_ids"]}
 
     logger.info(f"Agent orchestrator start: '{question}' (ceiling {chapter_ceiling})")
@@ -393,6 +415,15 @@ async def answer_question(
             logger.info("Ask retrieval stopped at the configured evidence token budget.")
             break
 
+    evidence_ids = {k: sorted(v) for k, v in evidence.items()}
+    if not digests or not evidence_refs(evidence_ids):
+        logger.info("Ask stopped without citeable retrieved evidence.")
+        return {
+            "answer": _INSUFFICIENT_EVIDENCE_ANSWER,
+            "citations": [],
+            "evidence_ids": evidence_ids,
+        }
+
     # 3. Pro synthesizes from the cited digests
     logger.info("Synthesizing final answer via Pro...")
     digests_str = "\n\n=============\n\n".join(digests) if digests else "No retrieval evidence gathered."
@@ -406,8 +437,10 @@ async def answer_question(
         temperature=0.0,
     )
 
-    # 4. Flash verifies grounding against the SAME cited digests Pro saw
+    # 4. Flash verifies grounding against the SAME cited digests Pro saw. A verifier
+    # failure is not permission to publish or cache an unchecked story answer.
     logger.info("Running grounding verification pass via Flash...")
+    flags: list[dict] = []
     try:
         verdict_str = await runtime.ai.call_chat_completion(
             model=settings.MODEL_FLASH,
@@ -425,12 +458,50 @@ async def answer_question(
             logger.warning(f"Standard JSON decoding failed for verification: {json_err}. Attempting json-repair...")
             verdict = json_repair.loads(verdict_clean)
 
+        if not isinstance(verdict, dict):
+            raise ValueError("verification response is not an object")
         if verdict.get("unsupported", False):
-            flags = verdict.get("flags", [])
-            logger.warning(f"Verification flagged {len(flags)} unsupported/future claim(s); repairing...")
-            flags_str = "\n".join(
-                f"- {f.get('sentence', '')} (reason: {f.get('reason', '')})" for f in flags
-            ) or "(none specified)"
+            raw_flags = verdict.get("flags", [])
+            if isinstance(raw_flags, list):
+                flags.extend(flag for flag in raw_flags if isinstance(flag, dict))
+            if not flags:
+                flags.append({
+                    "sentence": "Draft answer",
+                    "reason": "The verifier marked the draft unsupported.",
+                })
+    except Exception as e:
+        logger.error(
+            "Grounding verification failed closed (%s).",
+            type(e).__name__,
+        )
+        return {
+            "answer": _INSUFFICIENT_EVIDENCE_ANSWER,
+            "citations": [],
+            "evidence_ids": evidence_ids,
+        }
+
+    # Ask uses the semantic verifier for claim-level support. The deterministic gate is
+    # deliberately narrower: it catches invented/unretrieved citations and answers with no
+    # request-grounded citation at all. Requiring one citation in every Markdown block made
+    # harmless formatting (for example, a separately paragraphed conclusion) fatal even after
+    # a successful semantic repair.
+    machine_issues = grounding_issues(
+        draft, evidence_ids, require_each_block=False
+    )
+    flags.extend(
+        {"sentence": "Machine grounding check", "reason": issue}
+        for issue in machine_issues
+    )
+
+    if flags:
+        logger.warning(
+            "Verification found %s grounding issue(s); repairing.", len(flags)
+        )
+        flags_str = "\n".join(
+            f"- {flag.get('sentence', '')} (reason: {flag.get('reason', '')})"
+            for flag in flags
+        )
+        try:
             draft = await runtime.ai.call_chat_completion(
                 model=settings.MODEL_PRO,
                 messages=[
@@ -440,13 +511,41 @@ async def answer_question(
                 ],
                 temperature=0.0,
             )
-            logger.info("Repair pass complete.")
-    except Exception as e:
-        logger.error(f"Grounding verification error: {e}. Returning unrepaired draft.")
+        except Exception as exc:
+            logger.error("Grounding repair failed closed (%s).", type(exc).__name__)
+            return {
+                "answer": _INSUFFICIENT_EVIDENCE_ANSWER,
+                "citations": [],
+                "evidence_ids": evidence_ids,
+            }
+
+    final_issues = grounding_issues(
+        draft, evidence_ids, require_each_block=False
+    )
+    if final_issues:
+        logger.error(
+            "Grounding repair remained invalid; returning safe fallback: %s",
+            "; ".join(final_issues),
+        )
+        return {
+            "answer": _INSUFFICIENT_EVIDENCE_ANSWER,
+            "citations": [],
+            "evidence_ids": evidence_ids,
+        }
 
     # 5. Structured citations + evidence, then cache
-    citations = await build_citations(novel_id, draft, chapter_ceiling)
-    evidence_ids = {k: sorted(v) for k, v in evidence.items()}
+    citations = await build_citations(
+        novel_id, draft, chapter_ceiling, evidence_ids
+    )
+    if len(citations) != len(citation_refs(draft)):
+        logger.error(
+            "Grounded draft did not resolve every database citation; returning safe fallback."
+        )
+        return {
+            "answer": _INSUFFICIENT_EVIDENCE_ANSWER,
+            "citations": [],
+            "evidence_ids": evidence_ids,
+        }
     await save_cached_answer(novel_id, query_hash, chapter_ceiling, draft, evidence_ids)
 
     return {"answer": draft, "citations": citations, "evidence_ids": evidence_ids}
