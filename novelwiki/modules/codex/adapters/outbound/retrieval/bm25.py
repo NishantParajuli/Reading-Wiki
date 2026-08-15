@@ -29,7 +29,7 @@ class BM25Manager:
         self.corpus: list[dict] = []          # [{"id", "chapter", "text"}], aligned to index order
         self.chapter_arr = np.array([])        # vectorized chapters, aligned to corpus
         self.retriever: bm25s.BM25 | None = None
-        self._prefix_retrievers: OrderedDict[float, tuple[bm25s.BM25, np.ndarray]] = OrderedDict()
+        self._prefix_retrievers: OrderedDict[int, tuple[bm25s.BM25, np.ndarray]] = OrderedDict()
         self._loaded = False
         # Serializes build/load so two coroutines can't race a rebuild of this novel's index.
         self._lock = asyncio.Lock()
@@ -96,7 +96,9 @@ class BM25Manager:
             return None, eligible
         if len(eligible) == len(self.corpus):
             return self.retriever, eligible
-        key = float(chapter_ceiling)
+        # Distinct numeric ceilings between two stored chapters materialize the
+        # same eligible corpus. Cache that corpus boundary, not the raw request.
+        key = len(eligible)
         cached = self._prefix_retrievers.pop(key, None)
         if cached is not None:
             self._prefix_retrievers[key] = cached
