@@ -21,13 +21,18 @@ _MAX_SNAPSHOTS = 2048
 def _snapshot(job: dict) -> dict[str, Any]:
     options = job.get("options") or {}
     execution_backend = job.get("execution_backend") or "api"
+    ai_workload = job.get("current_run_workload") or (
+        _WORKLOADS.get(job.get("kind"))
+        if execution_backend in {"agy", "openai_codex"}
+        else None
+    )
     return {
         "job_system": "generic",
         "job_id": int(job["id"]),
         "job_kind": job.get("kind"),
-        "agy_workload": job.get("current_run_workload") or (
-            _WORKLOADS.get(job.get("kind")) if execution_backend == "agy" else None
-        ),
+        "ai_workload": ai_workload,
+        # Retained for existing AGY dashboards; provider-neutral consumers use ai_workload.
+        "agy_workload": ai_workload if execution_backend == "agy" else None,
         "user_id": job.get("user_id"),
         "novel_id": job.get("novel_id"),
         "status": job.get("status"),
@@ -123,7 +128,7 @@ class StructuredJobObserver:
                 else logging.INFO
             )
             backend = snapshot.get("execution_backend")
-            workload = snapshot.get("agy_workload") or snapshot.get("job_kind")
+            workload = snapshot.get("ai_workload") or snapshot.get("job_kind")
             run = f"; run {snapshot['ai_run_id']} is {run_status}" if snapshot.get("ai_run_id") else ""
             model = f" using {snapshot['backend_model']}" if snapshot.get("backend_model") else ""
             log_event(

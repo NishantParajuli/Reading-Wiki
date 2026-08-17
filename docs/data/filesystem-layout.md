@@ -29,19 +29,26 @@ rebuilds.
 Outside the repo/volume:
 
 ```
-~/.local/share/novelwiki/agy-jobs/     AI Execution — AGY run workspaces (AGY_WORK_DIR)
-~/.local/share/novelwiki/openai-codex-jobs/  AI Execution — Codex App Server workspaces
+~/.local/share/novelwiki/agy-jobs/     AI Execution — AGY workspaces (AGY_WORK_DIR)
 └── <job_id>/
-    ├── <run_id>/                      input/ plus `.agents`/`.git` customizations
-    │                                  (sealed read-only), writable output/ and logs/;
-    │                                  size-capped and hash-verified.
-    └── .<run_id>.agy-state/           isolated mutable AGY CLI state and run-only
-                                       settings; links only the validated CLI-owned
-                                       credential files and is never agent-readable.
+    ├── <run_id>/                      sealed input/ + .agents/ + .git + AGENTS.md;
+    │   └── output/ and logs/          writable, size-capped, hash-verified output
+    └── .<run_id>.agy-state/           isolated mutable CLI state; links only the
+                                       validated CLI-owned credential files
+
+~/.local/share/novelwiki/openai-codex-jobs/  AI Execution — App Server workspaces
+└── <job_id>/
+    ├── <run_id>/                      sealed input/ + .agents/ + .git + AGENTS.md;
+    │   └── output/ and logs/          host-materialized, size-capped artifacts/logs
+    └── .<run_id>.codex-home/          per-run CODEX_HOME with disabled search/history
+        ├── auth.json                  read-only symlink to the official credential
+        └── config.toml                run-only containment settings
 ```
 
-Both directories are swept together after `AGY_SUCCESS/FAILURE_RETENTION_HOURS`. They stay
-outside the checkout and public asset roots because the workspace and CLI transcript state
+Each host worker sweeps its own directory using its own success/failure settings:
+`AGY_SUCCESS_RETENTION_HOURS`/`AGY_FAILURE_RETENTION_HOURS` or
+`OPENAI_CODEX_SUCCESS_RETENTION_HOURS`/`OPENAI_CODEX_FAILURE_RETENTION_HOURS`. Both roots
+stay outside the checkout and public asset roots because workspaces and transcript state
 can contain story text.
 
 Sidecar-adjacent:
@@ -84,8 +91,8 @@ sidecar-tts/voices/              narrator reference clips (voice cloning prompts
 - **Novel deletion** cleans import-job artifacts via `AcquisitionCleanupApi` post-commit.
   Known debt (ADR 002): orphaned audio files and BM25 directories of a deleted novel are
   tracked as a separate storage change — harmless leftovers, recreated-from-DB semantics.
-- **AGY workspaces and their sibling CLI state directories** are retention-swept by the
-  host worker (24 h success / 168 h failure).
+- **Subscription workspaces and sibling provider-state directories** are swept by their
+  respective host worker (both default to 24 h after success / 168 h after failure).
 
 ## Backup guidance
 

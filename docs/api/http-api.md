@@ -47,7 +47,7 @@ apply their own durable rate limits.
 | `POST /api/auth/register` | create account (username/email/password); sends verification mail (or logs the link without SMTP) |
 | `POST /api/auth/login` | password login → session cookie. Per-IP and per-account windows |
 | `POST /api/auth/logout` | delete the session row |
-| `GET  /api/auth/me` | current user: profile, prefs, quota limits, capabilities (e.g. AGY availability) |
+| `GET  /api/auth/me` | current user: profile, prefs, quota limits, capabilities (including AGY/OpenAI Codex availability) |
 | `POST /api/auth/change-password` | set/change password (current one required if set) |
 | `GET  /api/auth/verify` · `POST /api/auth/verify` | email verification (link target · SPA confirm) |
 | `POST /api/auth/request-reset` · `POST /api/auth/reset` | password reset flow (single-use hashed tokens) |

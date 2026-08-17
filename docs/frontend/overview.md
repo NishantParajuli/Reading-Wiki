@@ -55,7 +55,7 @@ needs go through props/shared hooks or another slice's public `api.js`/`queries.
 
 ## Routing (`app/Root.jsx`)
 
-Signed-out: `/login`, `/register`, `/reset`, `/verify`, `/verify-failed` (an auth gate
+Signed-out: `/login`, `/register`, `/forgot`, `/reset`, `/verify`, `/verify-failed` (an auth gate
 resolves the session before anything renders; a mid-session 401 re-gates and returns the
 user to the interrupted URL after sign-in; a shim redirects legacy `#/…` hash URLs).
 
@@ -143,7 +143,8 @@ completed build.
 - `src/modules/reading/narrationPolling.test.js` +
   `src/modules/reading/AudioPlayer.test.jsx` — single-flight retry/cancellation and
   reload recovery while cached audio and forced regeneration coexist.
-- `e2e/critical-paths.spec.js` — Playwright against a mocked/real backend
-  (`e2e/real-backend.spec.js`, `scripts/test_real_browser.py` fixture): register→read→
-  codex critical journeys, including mobile narration highlighting and reveal behavior.
+- `e2e/critical-paths.spec.js` — twelve mocked Playwright scenarios for register→read→
+  codex journeys, including mobile narration highlighting and reveal behavior.
+  `e2e/real-backend.spec.js` uses the disposable fixture prepared by
+  `scripts/test_real_browser.py` for the corresponding real-stack path.
 - The production build itself is a release gate (`npm run build`).

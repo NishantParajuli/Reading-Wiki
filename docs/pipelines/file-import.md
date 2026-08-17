@@ -6,16 +6,21 @@
 > the Gemini free tier. Module reference:
 > [../modules/acquisition.md](../modules/acquisition.md).
 
-## State machine (contract-frozen in `job_states.json`)
+## State machine
 
 ```
- receiving ──complete──▶ uploaded ──claim──▶ parsing ──▶ awaiting_review
- (chunked upload)                                              │ user commits
-                                                               ▼
-                     ocr_pending ──claim──▶ ocr_running    committing ──claim──▶ commit_running ──▶ committed
-                        ▲    │ budget hold                     ▲
-                        │    ▼                                 │
-                        └─ ocr_paused ─(quota returns)─────────┘
+ receiving ──complete──▶ uploaded ──claim──▶ parsing ───────────────▶ awaiting_review
+ (chunked upload)                         │ scanned PDF                    │ user commits
+                                          ▼                                ▼
+                              awaiting_ocr_confirm ──consent──▶ ocr_pending
+                                                                    │ claim
+                                                                    ▼
+                                  awaiting_review ◀──────────── ocr_running
+                                                                    │ budget hold
+                                                                    ▼
+                                      ocr_pending ◀──────────── ocr_paused
+
+                              committing ──claim──▶ commit_running ──▶ committed
  any state ──▶ failed | canceled          (stale lease ⇒ marker resumes to its trigger:
                                            parsing→uploaded, ocr_running→ocr_pending,
                                            commit_running→committing)
@@ -25,7 +30,11 @@ Trigger statuses (`uploaded`, `ocr_pending`, `committing`) are claimed atomicall
 (`FOR UPDATE SKIP LOCKED`) into distinct in-progress markers with a leased
 `claim_token`/`claimed_at` heartbeat — the same pattern as the generic Work worker
 ([background-jobs-and-quota.md](background-jobs-and-quota.md)); recovery is purely
-lease-expiry-based.
+lease-expiry-based. The trigger and marker-resume transitions are contract-frozen in
+`tests/contracts/snapshots/job_states.json`; the human-confirm and terminal states are
+covered by the import application/evaluation tests. The snapshot also preserves
+`segmenting → uploaded` recovery for legacy rows; current jobs use `segmenting` only as a
+human-readable stage while their in-progress status remains `parsing`.
 
 ## 1. Getting the file in
 
@@ -73,9 +82,15 @@ not in the DB):
   confidence < `OCR_CONFIDENCE_ESCALATE` (0.80) escalates to **Gemini vision**
   (batched `GEMINI_PAGES_PER_REQUEST`, RPM-limited, and bounded by the *persistent*
   daily budget in `provider_budget` — exhaustion parks the job `ocr_paused`, resumed
-  automatically next day). Before any *paid* OCR the job stops at `ocr_pending` with a
-  `cost_estimate` until the owner consents via `POST …/confirm-ocr` (`ocr_pages` quota
+  automatically next day). Before OCR starts, the job stops at
+  `awaiting_ocr_confirm` with a `cost_estimate`; owner consent via
+  `POST …/confirm-ocr` moves it to the claimable `ocr_pending` state (`ocr_pages` quota
   metered). Text detected as CJK marks the import raw → flows into translation later.
+
+The in-process worker serializes OCR with a process-local `asyncio.Lock`. Claim leases
+prevent two workers from processing the same import job, but the lock does not coordinate
+different processes or different OCR jobs; do not point multiple OCR-capable workers at
+one capacity-constrained sidecar unless the sidecar itself provides that scheduling.
 
 Rich output (`application/render.py`): sanitized HTML (nh3) with inline images for the
 reader's rich mode + plain text for pipelines.

@@ -91,7 +91,7 @@ reference: [../modules/README.md](../modules/README.md)):
 | **Reading** | chapters and the act of reading: progress, bookmarks, overlays, contributions, the trusted spoiler ceiling | `chapters`, `reading_progress`, `bookmarks`, `chapter_overlays`, `contributions` |
 | **Acquisition** | getting text in: scraping sources, EPUB/PDF import jobs, extracted image assets | `sources`, `import_jobs`, `assets` |
 | **Translation** | raw-chapter translation and the per-novel glossary | `translation_glossary` |
-| **Codex** | the spoiler-safe knowledge base: chunks, entities, facts, relationships, events, retrieval, Ask, recap | `chunks`, `entities`, `entity_descriptions`, `entity_aliases`, `identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state`, `wiki_cache`, `query_cache` |
+| **Codex** | the spoiler-safe knowledge base: chunks, entities, facts, relationships, events, bounded memory, retrieval, Ask, recap | `chunks`, `entities`, `entity_descriptions`, `entity_aliases`, `identity_links`, `entity_facts`, `relationships`, `events`, `extraction_state`, `chapter_summaries`, `memory_segments`, `entity_activity`, `entity_state_transitions`, `relationship_state_transitions`, `plot_threads`, `plot_thread_updates`, `extraction_contexts`, `wiki_cache`, `query_cache` |
 | **Narration** | audiobook TTS jobs and the chapter-audio cache | `tts_jobs`, `chapter_audio` |
 | **Work** | the generic durable-job system (scrape/codex/translate batches): scheduling, dedupe, leases, retries, quota settlement | `jobs` |
 | **AI Execution** | *how* AI runs: backend policy (API, AGY, or OpenAI Codex), provider gateways, cost controls, isolated runners/workspaces, run records | `user_ai_backend_policies`, `ai_request_locks`, `provider_budget`, `ai_execution_runs`, `ai_worker_heartbeats` |
@@ -186,8 +186,9 @@ Everything in the codex subsystem serves a single hard rule:
 > When a reader's ceiling is chapter *N*, no information from any chapter > *N* may appear
 > in any codex entry, stat, answer, or recap.
 
-It is enforced *structurally* — every codex-owned row carries a chapter key and every read
-path filters `WHERE chapter <= ceiling` at the SQL/retrieval layer; the ceiling itself is
+It is enforced *structurally* — every codex row carries a chapter-derived visibility
+boundary (chapter, reveal/first-seen chapter, range, or cache ceiling), and every read
+path applies that boundary at the SQL/retrieval layer; the ceiling itself is
 computed from server-observed reads (`reading_progress.max_chapter_read`), never from a
 client-supplied number. The LLM is never trusted to withhold anything: it simply never
 receives out-of-bounds text. Full treatment:
@@ -199,10 +200,9 @@ receives out-of-bounds text. Full treatment:
 
 | Fact | Value |
 |---|---|
-| Backend Python files / lines | ~401 files, ~37.7k lines |
 | HTTP routes | 122 (snapshot: `tests/contracts/snapshots/routes.json`) |
 | CLI commands | 14 (`tests/contracts/snapshots/cli.json`) |
-| Database tables | 39, one writer each (`docs/architecture/module-ownership.md`) |
+| Database tables | 47, one writer each (`docs/architecture/module-ownership.md`) |
 | Business modules | 10 + Platform |
 | Named cross-module workflows | 8: 7 transaction-bound + 1 guarded-compensation (`novelwiki/workflows/`) |
 | In-process durable workers | 3 (import, TTS, generic jobs) + 2 optional dedicated subscription host workers |

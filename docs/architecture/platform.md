@@ -23,7 +23,7 @@ novelwiki/platform/
 │   ├── audit.py               # append-only audit events + request-id contextvar
 │   └── logging.py             # JSON formatter + async-safe structured context
 ├── cli.py / cli_runtime.py    # reset-db command + uniform async CLI runner
-└── architecture/checks.py     # the machine-readable architecture rules (394 lines)
+└── architecture/checks.py     # the machine-readable architecture rules
 ```
 
 ## 1. Configuration (`platform/config/settings.py`)
@@ -46,9 +46,9 @@ Highlights of the structure (the full annotated reference is
 - **Workers** — heartbeat/lease/attempt settings for the import and generic job workers.
 - **Logging** — format/level, service/environment tags, HTTP events, and job-progress
   controls.
-- **AGY** — a large, *validated* block (a `@model_validator` enforces sane ranges for
-  concurrency, timeouts, batch sizes, retention, and non-empty model names; bad AGY
-  config refuses to boot).
+- **Subscription backends** — validated AGY and OpenAI Codex blocks (a
+  `@model_validator` enforces safe modes/ranges for concurrency, timeouts, batch sizes,
+  stream/workspace caps, and model names; invalid configuration refuses to boot).
 - **Auth/web** — session/CSRF cookie names, TTLs, rate-limit windows, CORS origins,
   cookie security, SMTP, OAuth client credentials, bootstrap admin.
 - **Sidecars** — URLs, enablement, and the shared/per-service auth tokens with the
@@ -154,15 +154,15 @@ Grafana/Loki operations.
 
 `cli_runtime.run_cli(coro)` gives every Typer command the same asyncio entry (loop setup,
 pool teardown, clean Ctrl-C). `platform/cli.py` contributes the one platform-owned
-command, `reset-db` (interactive confirm unless `--force`; drops the 38 tables in the
+command, `reset-db` (interactive confirm unless `--force`; drops the 46 tables in the
 historically frozen `ALL_TABLES` list, then re-applies all DDL). The omitted
 `auth_rate_limits` table survives reset by ADR-002 compatibility policy, so “reset” is
 not a literal empty-schema operation.
 
 ## 6. The architecture checker (`platform/architecture/checks.py`)
 
-Platform owns the *rules as code* — 394 lines of AST/text analysis over the production
-tree exposing the violation finders that `tools/check_architecture.py` and
+Platform owns the *rules as code*: AST/text analysis over the production tree exposing
+the violation finders that `tools/check_architecture.py` and
 `tests/architecture/test_architecture.py` run:
 
 - `table_boundary_violations` — SQL literals anywhere in production code are parsed for

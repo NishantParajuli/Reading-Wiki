@@ -114,7 +114,8 @@ monthly, per user, admin-overridable per row.
 
 **RRF** — Reciprocal Rank Fusion, the tuning-free merge of BM25 + dense rankings.
 
-**Chapter summary** — a grounded, approximately 150–250-token recap of one chapter.
+**Chapter summary** — a grounded recap whose prompt targets 80–220 tokens. Validation
+uses a source-length-aware lower floor (normally 64) and a hard 300-token upper bound.
 The compatibility column `extraction_state.running_summary` mirrors this value; it is
 not recursively fed forward as a story-so-far summary.
 
@@ -145,14 +146,14 @@ participants get connection-bound capabilities; commit/rollback decided once.
 
 **Vertical slice** — organizing code by business capability, not technical layer.
 
-**`waiting_provider`** — the parked-for-capacity job status (AGY subscription
-exhausted): no lease, no retries burned, still dedupes, auto-released at `not_before`.
+**`waiting_provider`** — the parked-for-capacity job status for AGY or OpenAI Codex:
+no lease, no retries burned, still dedupes, auto-released at `not_before`.
 
 **Workflow** — a named cross-module write coordinator in `novelwiki/workflows/` (8 of
 them): seven transaction-bound operations plus ADR 003's guarded-compensation AI
 scheduler. See [workflows-and-transactions](../architecture/workflows-and-transactions.md).
 
 **Workload (AI)** — the backend-policy vocabulary: `translate_batch`, `codex_extract`,
-`segment_import`, `ocr_pages`, `ask`, `profile_synthesis`. Only the first two
-currently have end-to-end AGY executors; the rest stay on API for automatic/default
-selection and reject an explicit AGY request.
+`segment_import`, `ocr_pages`, `ask`, `profile_synthesis`. The first two have end-to-end
+AGY and OpenAI Codex executors; the other four stay on API for automatic/default
+selection and reject an explicit subscription-backend request.

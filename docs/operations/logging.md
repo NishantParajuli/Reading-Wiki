@@ -77,10 +77,11 @@ The high-value lifecycle events are:
 - Narration: `tts_job.scheduled`, `tts_job.started`, `tts_job.state_changed`,
   per-chapter start/heartbeat/cache/skip/completion events, `tts_job.failed`, and
   `tts_job.attempt_finished`.
-- Subscription workers: provider-prefixed lock/preflight/heartbeat events; `agy.job_claimed` or `openai_codex.job_claimed`,
+- Subscription workers: provider-prefixed lock/preflight/heartbeat/wait events; `agy.job_claimed` or `openai_codex.job_claimed`,
   `agy.run.started`, `agy.run.completed`/`failed`/`canceled`, run-state changes,
-  equivalent `openai_codex.*` events, subprocess start/spawn/exit, provider waits, orphan
-  recovery, and the final job attempt.
+  equivalent `openai_codex.*` events, provider waits, orphan recovery, and the final job
+  attempt. AGY additionally emits its CLI subprocess start/spawn/exit events; OpenAI App
+  Server process outcomes are represented by the provider run state and bounded metrics.
 - Other background work: the translation prefetch task emits
   `background_task.started`, `background_task.completed`, or `background_task.failed`.
 - Provider calls: `ai.provider_call_started`/`completed`/`failed` records provider,

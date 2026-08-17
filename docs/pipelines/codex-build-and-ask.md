@@ -130,7 +130,7 @@ For each chapter ascending (never backwards — Invariant 2 of the pipeline):
    policy: when separate verification is enabled, only a valid
    verifier artifact is resumable; a draft-only artifact is never committed as a shortcut.
    All paths still pass the 2.2 artifact proposal through trusted validation
-   and the same atomic commit checks. Before the shared host schema validation, both
+   and the same atomic commit checks. Before the shared host schema validation, all
    transports apply the same narrow provider-neutral normalization: redundant
    supplied-roster `eN` records are removed from `mentions` (claims keep using those
    refs), generic/unnamed entity declarations plus dependent claims are removed, and optional
@@ -154,7 +154,7 @@ For each chapter ascending (never backwards — Invariant 2 of the pipeline):
 
 #### Hierarchical summaries and current state
 
-- Chapter summaries use that chapter text only, target 150–250 tokens, and are rejected
+- Chapter summaries use that chapter text only, target 80–220 tokens, and are rejected
   outside a dynamic minimum/300-token maximum. Summaries that expose chunks, numeric
   citations, or local candidate refs are rejected.
 - Checkpoints are emitted only after 25 narrative chapters (`chapter`/`interlude`) inside
@@ -181,7 +181,7 @@ For each chapter ascending (never backwards — Invariant 2 of the pipeline):
   window are projected dormant and must be explicitly reopened; accumulated keywords and
   participants are bounded.
 
-AGY retries repeat idempotent chunking and missing-embedding work, then resume only when
+Subscription-worker retries repeat idempotent chunking and missing-embedding work, then resume only when
 the saved context hash still matches. Force extraction invalidates all derived v2.1 state,
 summaries, contexts, and memory from the changed chapter onward. Builds recreate the suffix
 chronologically and prune omitted entities only when a completed v2.1 first-chapter extraction
@@ -191,15 +191,18 @@ Starting in the middle of an unbuilt v2.1 checkpoint block fails closed: every p
 summary and completed preceding checkpoint must exist before extraction continues. This is
 why an initial or quality-contract rebuild starts at the book's first narrative chapter.
 
-The two transports are semantically equivalent, not call-for-call identical. Both use the
+The three transports are semantically equivalent, not call-for-call identical. All use the
 same deterministic bounded context, artifact-schema 2.2 proposal, reducer targets, provenance/ref
 rules, temporal/thread semantics, linking constraints, source/context revalidation, and
 `commit_codex_extraction` transaction. Direct API normally performs extraction → optional
 verification → separate chapter summary, with individual gray-case linking calls when
 needed. AGY normally performs extraction + self-review + chapter summary in one isolated
 artifact run, then batches ambiguous mentions into one child run; its separate verifier is
-optional. For AGY, the chapter chunks, bounded-memory JSON, exact source hash, and output
-shape are packed into one `input/task.md` file.
+optional. OpenAI Codex uses strict structured App Server turns, with a separate verifier by
+default; the host materializes its result into the shared artifact contract. Subscription
+workers batch ambiguous mentions into the same validated child-run path. For AGY, the
+chapter chunks, bounded-memory JSON, exact source hash, and output shape are packed into
+one `input/task.md` file.
 Hash-pinned task instructions are inlined in the initial print prompt instead of activated as
 a workspace skill. The model writes only `extraction.json`, `running-summary.md`, and
 `audit.json`; the trusted stop hook creates `manifest.json`. Plugin `1.4.4` additionally

@@ -126,7 +126,9 @@ async def _chapter_input(novel_id: int, chapter_number: float, runtime) -> dict:
             novel_id, chapter_number,
         )
         if not chunks:
-            raise RuntimeError("codex AGY extraction requires precomputed chunks for provenance")
+            raise RuntimeError(
+                "codex subscription extraction requires precomputed chunks for provenance"
+            )
     marked = "\n\n".join(f"[chunk {int(row['id'])}]\n{row['text']}" for row in chunks)
     async with pool.acquire() as conn:
         bounded = await build_chapter_context(
@@ -419,7 +421,7 @@ def validate_extraction_output(
         )
         if repairs:
             logger.warning(
-                "Applied safe AGY extraction contract normalization: %s.",
+                "Applied safe subscription extraction contract normalization: %s.",
                 "; ".join(repairs),
             )
         payload = ExtractionPayload.model_validate(
@@ -817,7 +819,8 @@ async def _resolve_mentions(job: dict, parent_run_id: uuid.UUID, source: dict, d
             # NEW preserves separation and lets an owner merge duplicates later.
             resolved.update({case["mention_ref"]: None for case in cases})
             await audit_log.record(
-                "agy.disambiguation.fallback_new", user_id=job.get("user_id"),
+                f"{getattr(runtime.ai, 'provider', 'agy')}.disambiguation.fallback_new",
+                user_id=job.get("user_id"),
                 novel_id=job.get("novel_id"), data={"job_id": int(job["id"]),
                 "cases": len(cases), "failure_code": getattr(exc, "code", "unknown")},
             )

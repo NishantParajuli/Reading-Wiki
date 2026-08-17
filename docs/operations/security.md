@@ -94,6 +94,28 @@ OAuth token into settings or the child environment.
 Eval: `agy_contract_tests.py`, `agy_policy_tests.py`, `agy_runner_tests.py`,
 `agy_workload_tests.py`. Ops: [../agy-operator-runbook.md](../agy-operator-runbook.md).
 
+## OpenAI Codex containment (AI Execution)
+
+The App Server backend has an independent dormant-by-default global switch, extraction
+switch, and per-user/workload grant. Preflight checks the official executable version
+and optional SHA-256 pin, verifies a worker-owned `auth.json` with mode `0600`, confirms
+a ChatGPT subscription account, and requires the configured models to appear in
+`model/list`. NovelWiki links that credential into a new private per-run `CODEX_HOME`
+without parsing it; persisted history, analytics, and web search are disabled.
+
+Each task uses a fresh ephemeral App Server thread over bounded stdio JSONL with
+`approvalPolicy=never`, a read-only sandbox, network access disabled, and no
+MCP/apps/plugins/skills/subagents or external files. The model returns a strict
+Structured Outputs object; the host normalizes it, injects trusted source identity,
+materializes artifacts, and runs the same hash/schema/provenance validators and atomic
+commit path as AGY. Workspaces and streams are capped, cancellation terminates the owned
+process group, safe error summaries exclude raw provider messages, authorization is
+rechecked immediately before execution, and run records preserve contract/input/output
+hashes. Eval: `tests/unit/ai_execution/test_openai_codex_app_server.py`,
+`tests/unit/ai_execution/test_openai_codex_smoke.py`,
+`tests/unit/platform/test_openai_codex_model_policy.py`. Ops:
+[../openai-codex-operator-runbook.md](../openai-codex-operator-runbook.md).
+
 ## The spoiler boundary (product security)
 
 Server-computed ceilings from observed reads; `WHERE chapter <= ceiling` at the

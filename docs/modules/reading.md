@@ -21,7 +21,7 @@ Nine protocol declarations, grouped by seven consumer relationships:
 | `ReadingApi` | HTTP layer | progress + bookmarks basics |
 | `ReadingTransactionApi` | workflows (`update_source_offset`) + route façade | chapter listing/snapshots, renumbering, base-content updates, overlays, contributions |
 | `ReadingTranslationTransactionApi` | `commit_translation` workflow | the atomic, optimistic-concurrency chapter-translation commit |
-| `ReadingTranslationApi` | Translation module/worker | staging batches (AGY), candidates, pending ranges, started/failed marks, source lengths |
+| `ReadingTranslationApi` | Translation module/worker | staging subscription batches, candidates, pending ranges, started/failed marks, source lengths |
 | `ReadingIngestionApi` / `ReadingIngestionTransactionApi` | Acquisition (scraper + `commit_import` workflow) | `resume_url`, `upsert_ingested_chapter` (the single funnel through which ALL new text enters), source versions, overlay-conflict marking, content-version preservation |
 | `ReadingNarrationApi` | Narration | `resolve_narration_text` (overlay-aware), `prose_chapters` |
 | `ReadingCodexApi` / `ReadingCodexTransactionApi` | Codex | chapter snapshots/numbers, `chapter_at_or_before(ceiling)`, and `locked_chapter_snapshot` (row-locked read inside the extraction-commit transaction) |

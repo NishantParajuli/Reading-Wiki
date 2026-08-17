@@ -1,4 +1,4 @@
-"""Application orchestration for a claimed AGY job."""
+"""Application orchestration for a claimed subscription-provider job."""
 from __future__ import annotations
 
 from typing import Any, Protocol
@@ -67,8 +67,11 @@ class AgyWorkerService:
             else:
                 await self._ops.mark_canceled(job_id)
         except Exception as exc:
+            provider_label = (
+                "OpenAI Codex" if self._provider == "openai_codex" else "AGY"
+            )
             self._ops.exception(
-                f"AGY {job.get('kind', 'unknown')} job {job_id} raised "
+                f"{provider_label} {job.get('kind', 'unknown')} job {job_id} raised "
                 f"{type(exc).__name__}."
             )
             if self._ops.is_canceled_error(exc):

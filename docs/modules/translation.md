@@ -46,7 +46,7 @@ Other entry points in the same file: `translate_raw_text` (returns text without 
 the chapter — powers self-translate overlays), `prefetch_translations` (next
 `TRANSLATE_PREFETCH`=3 pending raws after the one just opened),
 `translate_range` (batch/CLI), `seed_glossary_from_entities` (pull canonical English
-spellings from codex entities so a source switch keeps names stable), and the AGY
+spellings from codex entities so a source switch keeps names stable), and the subscription
 staging trio `stage_translation_batch` / `reset_staged_translations` /
 `commit_translation` with `run_id` identity (`SourceChangedError` when the chapter moved
   under a staged batch). OpenAI Codex reuses this sealed staging and commit contract.
@@ -85,12 +85,13 @@ keeps only what it finished charged.
 - `postgres.py::PostgresTranslationTransactionService` — glossary SQL (the owned table).
 - `runtime.py` — the engine above (provider calls via the AI Execution chat gateway in
   the runtime bundle).
-- `agy.py` — the AGY variant of a batch job: stage snapshot → build sealed workspace input
-  manifests plus a one-read `task.md` bundle (chapters + glossary) → run the AGY CLI per sub-batch
-  (`AGY_TRANSLATE_BATCH_CHAPTERS`/`_MAX_CHARS`) → validate output artifacts (length/
-  glossary-respect checks in `_validate_quality`) → commit through the *same*
-  `commit_translation` workflow → `_resume_ready_commits` can commit completed artifacts
-  after a crash without re-running the model.
+- `agy.py` — the provider-neutral staged subscription batch executor: snapshot → sealed
+  workspace manifests → provider runner per bounded sub-batch → validate output
+  artifacts (length/glossary-respect checks in `_validate_quality`) → commit through the
+  *same* `commit_translation` workflow. AGY supplies a one-read `task.md` bundle and uses
+  `AGY_TRANSLATE_BATCH_*`; OpenAI Codex supplies strict structured output through App
+  Server and uses `OPENAI_CODEX_TRANSLATE_BATCH_*`. `_resume_ready_commits` can commit
+  completed artifacts after a crash without re-running the model.
 - `scheduling.py` — the three bridges Bootstrap wires into the scheduling service's ports
   (`BackendResolutionBridge`, `TranslationWorkBridge`, `TranslationQuotaBridge`).
 

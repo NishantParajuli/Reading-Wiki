@@ -80,7 +80,7 @@ validator repeats those checks before linking, and the atomic commit remains the
 boundary. A broad residual grounding failure is reported as
 `evidence_anchor_broad_failure`, not an unclassified `ValueError`.
 After deploying, follow the backend-neutral
-[release rollout](release-runbook.md#first-codex-v2-production-rollout), apply the additive
+[release rollout](release-runbook.md#codex-v21-quality-contract-rollout), apply the additive
 startup DDL before enabling workers, and update both
 `AGY_PLUGIN_VERSION` and `AGY_PLUGIN_SHA256` to the values shipped by the release. Drain
 workers before changing the pin; v1 extraction artifacts cannot resume under v2.

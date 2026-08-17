@@ -20,7 +20,7 @@ wiki/
 │   │   ├── codex/             #   spoiler-safe knowledge base            → docs/modules/codex.md
 │   │   ├── narration/         #   audiobook TTS                          → docs/modules/narration.md
 │   │   ├── work/              #   generic durable jobs                   → docs/modules/work.md
-│   │   ├── ai_execution/      #   API/AGY backends, cost controls        → docs/modules/ai-execution.md
+│   │   ├── ai_execution/      #   API/subscription backends, cost controls → docs/modules/ai-execution.md
 │   │   └── experience/        #   cross-module read projections, admin   → docs/modules/experience.md
 │   │   #  each: public.py + domain/ + application/ + adapters/{inbound,outbound}
 │   │
@@ -32,7 +32,7 @@ wiki/
 │   ├── bootstrap/             # THE composition root: web app assembly, DI wiring,
 │   │                          # lifecycle, worker registry, CLI composition
 │   │
-│   ├── db/                    # schema.py (39-table idempotent DDL — a stable explicit
+│   ├── db/                    # schema.py (47-table idempotent DDL — a stable explicit
 │   │                          # entrypoint), migrate_multiuser.py, legacy aliases
 │   ├── frontend/              # React SPA (Vite)                        → docs/frontend/overview.md
 │   ├── eval/                  # DB-backed integration test suites (*_tests.py)

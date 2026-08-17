@@ -65,8 +65,9 @@ def _looks_raw(language: str | None) -> bool:
     lang = (language or "").strip().lower()
     return bool(lang) and not lang.startswith("en")
 
-# One GPU behind the OCR sidecar → never run two OCR jobs at once (the worker is already
-# sequential, but this also guards a future standalone worker process).
+# One GPU behind the OCR sidecar → never run two OCR jobs concurrently in this process.
+# Cross-process safety comes from the import claim lease for each job, not this asyncio lock;
+# operators should still avoid pointing multiple OCR-capable workers at one small sidecar.
 _OCR_LOCK = asyncio.Lock()
 
 

@@ -131,8 +131,8 @@ queue without double-processing. It does not apply to the deliberately single-in
 TTS worker.
 [../pipelines/background-jobs-and-quota.md](../pipelines/background-jobs-and-quota.md).
 
-**Reserve/consume/refund.** Money-safety depends on the workload: codex and AGY
-translation reserve up front and generic Work settles once; API translation and TTS
+**Reserve/consume/refund.** Money-safety depends on the workload: codex builds and
+subscription-backed translation reserve up front and generic Work settles once; API translation and TTS
 charge one completed unit at a time. The common goal is the same—never charge work that
 did not land and never double-refund.
 

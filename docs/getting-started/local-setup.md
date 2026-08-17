@@ -91,7 +91,7 @@ All 14 commands: [../api/cli.md](../api/cli.md).
 ## 6. Run the tests
 
 ```bash
-uv run python tools/check_architecture.py   # boundary rules (no DB needed)
+uv run python tools/check_architecture.py --strict  # all boundary/layer rules (no DB needed)
 uv run pytest -q tests                      # unit + architecture + contracts (no DB)
 TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/novelwiki \
 TEST_DB_SUPERUSER_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres \
@@ -104,12 +104,16 @@ Details: [../testing.md](../testing.md).
 ## 7. Optional extras
 
 - **Sidecars** (GPU): `docker compose up -d ocr` / `docker compose up -d tts`; set
-  `SIDECAR_AUTH_TOKEN`. Without them: scanned-PDF OCR falls back to Gemini-only or
-  waits; narration jobs fail politely with "sidecar unavailable".
+  `SIDECAR_AUTH_TOKEN`. Without them: scanned-PDF OCR falls back to Gemini when it is
+  configured; otherwise the import fails with `No OCR backend available` and must be
+  resubmitted after an OCR backend is available. Narration jobs fail politely with
+  "sidecar unavailable".
 - **OAuth buttons**: set `GOOGLE_*` / `DISCORD_*` client credentials; redirect URI is
   `{PUBLIC_BASE_URL}/api/auth/oauth/{provider}/callback`.
 - **AGY backend**: deliberately involved to enable — follow
   [../agy-operator-runbook.md](../agy-operator-runbook.md).
+- **OpenAI Codex backend**: also an explicit operator rollout — follow
+  [../openai-codex-operator-runbook.md](../openai-codex-operator-runbook.md).
 
 ## Troubleshooting
 

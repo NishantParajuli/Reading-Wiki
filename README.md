@@ -69,8 +69,8 @@ unlock future codex data. Full model:
   cancellation. Generic Work jobs and imports use claim leases and heartbeats; the TTS
   queue is a deliberately single-instance, idempotent worker. Generic metered jobs settle
   quota exactly once, while TTS charges only audio actually generated. Codex builds and
-  translation batches can optionally use the **AGY** subscription backend instead of the
-  metered API (admin-granted, heavily sandboxed).
+  translation batches can optionally use the admin-granted, isolated **AGY** or
+  **OpenAI Codex App Server** subscription backends instead of the metered API.
 
 ---
 
@@ -79,7 +79,7 @@ unlock future codex data. Full model:
 **A modular monolith, organized as vertical slices, with Clean/Hexagonal boundaries
 inside each module.** One FastAPI process + one PostgreSQL database + one React SPA —
 but the code is partitioned into ten business modules that each own their tables (all
-39 have exactly one writer), expose a small `public.py` contract, and receive every
+47 have exactly one writer), expose a small `public.py` contract, and receive every
 cross-module capability by injection from a single composition root. Eight named
 workflows coordinate cross-module writes: seven use an opaque unit-of-work for one DB
 transaction; initial AI scheduling uses guarded compensation by explicit ADR. Boundaries are
@@ -132,7 +132,8 @@ evidence: [docs/architecture/](docs/README.md#architecture).
 **Auth** server-side sessions, argon2-cffi, hand-rolled OAuth (httpx), aiosmtplib ·
 **Retrieval** bm25s ⊕ pgvector → RRF → reranker ·
 **LLM** native DeepSeek V4 when configured, with OpenRouter for embeddings/reranking
-and other generation; Gemini vision for OCR escalation; optional AGY CLI backend ·
+and other generation; Gemini vision for OCR escalation; optional AGY CLI and OpenAI
+Codex App Server subscription backends ·
 **Scraping** curl-cffi + selectolax/lxml, json-repair ·
 **Import** ebooklib, pymupdf, nh3, pillow, ftfy ·
 **TTS** OmniVoice sidecar, ffmpeg → Opus ·
@@ -176,7 +177,7 @@ Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (122 route
 ## 🧪 Testing & gates
 
 ```bash
-uv run python tools/check_architecture.py    # boundary rules (no DB)
+uv run python tools/check_architecture.py --strict  # all boundary/layer rules (no DB)
 uv run pytest -q tests                       # unit + architecture + contract snapshots (no DB)
 TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/novelwiki \
 TEST_DB_SUPERUSER_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres \

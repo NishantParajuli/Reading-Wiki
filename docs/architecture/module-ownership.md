@@ -45,7 +45,7 @@ FastAPI, asyncpg, provider, or filesystem implementation.
 
 Experience owns the reviewed, read-only composite projections: Library cards, novel detail,
 Discover, public profile, Home, Activity, novel health, cost estimate, job+AI-run view, and the
-admin user/usage/novel/AGY views. The exact table set for each projection is the executable
+admin user/usage/novel/AI-backend views. The exact table set for each projection is the executable
 `PROJECTION_TABLES` registry. Authorization commands never consume these projections.
 
 ## Where new code goes

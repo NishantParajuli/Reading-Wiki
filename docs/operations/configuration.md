@@ -4,7 +4,8 @@
 > `novelwiki/config/settings.py`). Settings load from environment variables and `.env`
 > (pydantic-settings, unknown keys ignored). This page lists **every** setting with its
 > default and what it actually controls. A runtime `@model_validator` checks logging
-> values and range-checks the AGY block at boot — invalid config refuses to start.
+> values, Codex memory bounds, and both subscription-provider blocks at boot — invalid
+> config refuses to start.
 
 Operating-system environment variables override `.env`, and code defaults apply when
 neither supplies a value. `.env.example` is an opinionated deployment template, not a
@@ -12,13 +13,9 @@ copy of code defaults (for example it may deliberately override a model or verif
 toggle). Unknown/stale template keys are ignored because `extra="ignore"`; confirm the
 field exists on `Settings` before relying on it.
 
-At this revision, `.env.example` contains one such ignored legacy key:
-`SCRAPER_CONCURRENCY`. Scraping is sequential and controlled by delay/timeout settings;
-setting that name has no runtime effect.
-
 ## Logging and observability
 
-Application, HTTP, worker, job, and AGY lifecycle logs use a shared structured schema.
+Application, HTTP, worker, job, and subscription-provider lifecycle logs use a shared structured schema.
 See [logging.md](logging.md) for fields, event names, Grafana/Loki queries, and the
 sensitive-data boundary.
 
@@ -54,7 +51,7 @@ key, so `OPENROUTER_API_KEY` remains required.
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible native endpoint |
 | `OPENROUTER_API_KEY` | `""` | embeddings and rerank; chat/translation when native DeepSeek is not selected |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | |
-| `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | repo URL / app title | attribution headers |
+| `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | `https://github.com/epick/novelwiki` / `Spoiler-Aware Webnovel Wiki` | attribution headers |
 | `MODEL_FLASH` | `deepseek/deepseek-v4-flash` | cheap reader/distiller ("Flash reads…") |
 | `MODEL_PRO` | `deepseek/deepseek-v4-pro` | planner/reasoner ("…Pro thinks"); may equal FLASH |
 | `MODEL_TRANSLATE` | `deepseek/deepseek-v4-pro` | raw-chapter translation |
@@ -66,8 +63,9 @@ key, so `OPENROUTER_API_KEY` remains required.
 
 ## Display
 
-`NOVEL_TITLE` (`The Codex`), `NOVEL_BLURB` — hero/home display strings only; never gate
-content.
+`NOVEL_TITLE` (`The Codex`), `NOVEL_BLURB` (`A spoiler-safe wiki for the novel you're
+reading — every fact bounded to where you are.`) — hero/home display strings only;
+never gate content.
 
 ## Retrieval & agent
 
@@ -98,7 +96,7 @@ content.
 |---|---|---|
 | `FUZZY_MATCH_THRESHOLD` / `FUZZY_AUTO_ACCEPT` | 0.35 / 0.6 | pg_trgm entity-linking bands (between them → LLM disambiguation) |
 | `SEMANTIC_MATCH_THRESHOLD` | 0.85 | cosine floor for the vector fallback fold-in |
-| `EXTRACTION_VERIFY` | `true` | direct API only: best-effort second extraction call per chapter; AGY review is controlled separately |
+| `EXTRACTION_VERIFY` | `true` | direct API only: best-effort second extraction call per chapter; AGY self/separate review and OpenAI Codex separate verification are controlled independently |
 
 ## Bounded Codex memory v2.1
 
@@ -127,7 +125,7 @@ content.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `SCRAPER_ADAPTER` / `SCRAPER_BASE_URL` | `fenrirealm` / its URL | legacy defaults for single-source flows |
+| `SCRAPER_ADAPTER` / `SCRAPER_BASE_URL` | `fenrirealm` / `https://fenrirealm.com` | legacy defaults for single-source flows |
 | `SCRAPER_DELAY` | 1.0 s | politeness delay between fetches |
 | `SCRAPER_TIMEOUT_SECONDS` / `SCRAPER_MAX_RESPONSE_MB` | 30 / 8 | network guardrails |
 | `SCRAPER_REQUIRE_SAME_HOST` | `true` | binds crawls (incl. redirects/CDN hops) to the source host; adapters declare known extra hosts via `allowed_hosts` |
@@ -155,7 +153,7 @@ content.
 |---|---|---|
 | `OCR_SIDECAR_URL` / `OCR_ENABLED` | `http://localhost:8077` / `true` | PaddleOCR PP-StructureV3 sidecar (compose overrides URL to `http://ocr:8077`) |
 | `OCR_CONFIDENCE_ESCALATE` | 0.80 | page mean confidence below this → Gemini vision |
-| `GEMINI_API_KEY` / `GEMINI_BASE_URL` / `GEMINI_VISION_MODEL` | "" / OpenAI-compatible endpoint / `gemini-2.5-flash` | escalation provider |
+| `GEMINI_API_KEY` / `GEMINI_BASE_URL` / `GEMINI_VISION_MODEL` | `""` / `https://generativelanguage.googleapis.com/v1beta/openai/` / `gemini-2.5-flash` | escalation provider |
 | `GEMINI_DAILY_BUDGET` / `GEMINI_RPM` / `GEMINI_PAGES_PER_REQUEST` | 2000 / 10 / 3 | free-tier guards (budget persisted in `provider_budget`) |
 
 ## Audiobook TTS
@@ -173,11 +171,11 @@ content.
 
 ## Sidecar service auth
 
-| Setting | Notes |
-|---|---|
-| `SIDECAR_AUTH_TOKEN` | shared token sent as `X-Tideglass-Sidecar-Token`; each sidecar **requires** it (set a long random value in prod) |
-| `OCR_SIDECAR_TOKEN` / `TTS_SIDECAR_TOKEN` | per-service overrides (effective values via the `ocr_sidecar_token`/`tts_sidecar_token` properties) |
-| *(sidecar env)* `SIDECAR_ALLOW_UNAUTHENTICATED=1` | explicit dev-only opt-out; otherwise expensive endpoints fail closed with no token |
+| Setting | Default | Notes |
+|---|---|---|
+| `SIDECAR_AUTH_TOKEN` | `""` | shared token sent as `X-Tideglass-Sidecar-Token`; each sidecar **requires** it (set a long random value in prod) |
+| `OCR_SIDECAR_TOKEN` / `TTS_SIDECAR_TOKEN` | `""` / `""` | per-service overrides (effective values via the `ocr_sidecar_token`/`tts_sidecar_token` properties) |
+| *(sidecar env)* `SIDECAR_ALLOW_UNAUTHENTICATED=1` | unset | explicit dev-only opt-out; otherwise expensive endpoints fail closed with no token |
 
 ## Sessions, CSRF & web
 
@@ -201,21 +199,23 @@ content.
 
 ## Bootstrap admin & migration
 
-`ADMIN_EMAIL` / `ADMIN_PASSWORD` (blank ⇒ skip bootstrap) / `ADMIN_USERNAME` — first
-admin created by the guarded multi-user migration, which also adopts any pre-multi-user
-library as the admin's Global shelf. `MULTIUSER_MIGRATION_BACKUP_CONFIRMED` (`false`) —
+`ADMIN_EMAIL` (`admin@example.com`) / `ADMIN_PASSWORD` (`""`; blank ⇒ skip bootstrap) /
+`ADMIN_USERNAME` (`admin`) — first admin created by the guarded multi-user migration,
+which also adopts any pre-multi-user library as the admin's Global shelf.
+`MULTIUSER_MIGRATION_BACKUP_CONFIRMED` (`false`) —
 the data-rewriting migration refuses to run on legacy data without an explicit backup
 confirmation.
 
 ## Email (transactional)
 
-`SMTP_HOST` (blank ⇒ log links instead of sending — dev mode), `SMTP_PORT` 587,
-`SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_STARTTLS` `true`.
+`SMTP_HOST` (`""`; blank ⇒ log links instead of sending — dev mode), `SMTP_PORT` 587,
+`SMTP_USER`/`SMTP_PASSWORD` (`""`), `SMTP_FROM`
+(`Tideglass <no-reply@tideglass.local>`), `SMTP_STARTTLS` `true`.
 
 ## OAuth
 
-`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` —
-blank hides the button. Redirect URI:
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`
+(all `""`) — blank hides the button. Redirect URI:
 `{PUBLIC_BASE_URL}/api/auth/oauth/{provider}/callback`.
 
 ## Monthly quotas (per user; per-user overrides on the user row)
@@ -236,7 +236,7 @@ authenticated real-CLI canary passes against the pinned binary. Validated at boo
 |---|---|---|
 | `AGY_ENABLED` | `false` | global kill switch |
 | `AGY_CODEX_ENABLED` | `false` | independent Codex kill switch, checked both when scheduling and immediately before execution; translation is unaffected |
-| `AGY_BINARY` / `AGY_MIN_VERSION` / `AGY_BINARY_SHA256` | local path / `1.1.2` / pinned hash | integrity pin; updating AGY is an explicit operator action (empty hash = deliberate unpinned dev) |
+| `AGY_BINARY` / `AGY_MIN_VERSION` / `AGY_BINARY_SHA256` | `/home/nishantp/.local/bin/agy` / `1.1.2` / `70bf6eaf2e82fbb243db999b9c7c61fcf7f6e537f41980650eb2341ed84b24de` | integrity pin; updating AGY is an explicit operator action (empty hash = deliberate unpinned dev) |
 | `AGY_WORK_DIR` | `~/.local/share/novelwiki/agy-jobs` | story-bearing workspaces outside checkout + public roots |
 | `AGY_CREDENTIAL_DIR` | `~/.gemini/antigravity-cli` | official CLI-owned login source; NovelWiki verifies ownership/mode and links files into isolated per-run state without reading token contents |
 | `AGY_MODEL_TRANSLATE` / `AGY_MODEL_CODEX` / `AGY_MODEL_SEGMENT` / `AGY_MODEL_OCR` | Gemini 3.6 Flash (Medium/High/Medium/High) | **exact display names** from `agy models`; preflight hard-fails on catalog drift |
@@ -252,7 +252,7 @@ authenticated real-CLI canary passes against the pinned binary. Validated at boo
 | `AGY_MAX_ATTEMPTS` / `AGY_PROVIDER_RETRY_MINUTES` | 2 / 30 | retry + `waiting_provider` park duration |
 | `AGY_SUCCESS_RETENTION_HOURS` / `AGY_FAILURE_RETENTION_HOURS` | 24 / 168 | workspace sweep |
 | `AGY_FALLBACK_TO_API_DEFAULT` | `false` | default fallback stance |
-| `AGY_PLUGIN_VERSION` / `AGY_PLUGIN_SHA256` | pinned | plugin integrity |
+| `AGY_PLUGIN_VERSION` / `AGY_PLUGIN_SHA256` | `1.4.4` / `e6eb9407806cfbea32966331f2f6d62cc8cdc4d509ec1c150db9ae27d3b5f360` | plugin integrity |
 | `AGY_WORKER_HEALTH_TTL_SECONDS` | 90 | heartbeat staleness for `/auth/me` + admin panel |
 
 ## OpenAI Codex App Server backend
