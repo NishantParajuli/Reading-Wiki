@@ -302,7 +302,7 @@ async def cleanup_expired_workspaces() -> int:
         rows = await conn.fetch(
             """
             SELECT id,workspace_relpath,status FROM ai_execution_runs
-            WHERE workspace_relpath IS NOT NULL AND finished_at IS NOT NULL
+            WHERE backend='agy' AND workspace_relpath IS NOT NULL AND finished_at IS NOT NULL
               AND finished_at < now() - CASE WHEN status='completed'
                     THEN make_interval(hours => $1) ELSE make_interval(hours => $2) END;
             """,
@@ -318,7 +318,10 @@ async def cleanup_expired_workspaces() -> int:
             shutil.rmtree(cli_state_path(candidate), ignore_errors=True)
             removed += 1
             async with pool.acquire() as conn:
-                await conn.execute("UPDATE ai_execution_runs SET workspace_relpath=NULL WHERE id=$1;", row["id"])
+                await conn.execute(
+                    "UPDATE ai_execution_runs SET workspace_relpath=NULL WHERE id=$1;",
+                    row["id"],
+                )
         except OSError:
             continue
 

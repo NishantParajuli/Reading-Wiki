@@ -28,7 +28,7 @@ Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md) an
   implement `translate_batch` and `codex_extract`; extraction additionally requires that
   provider's default-off Codex kill switch. For the other four workloads, selection remains
   on API and an explicit subscription request is rejected even if the policy stores the name.
-- **Contracts** (`application/contracts.py`): the AGY manifest dataclasses —
+- **Contracts** (`application/contracts.py`): the shared subscription-run manifest dataclasses —
   `InputManifest`/`OutputManifest`/`ArtifactRef`, `ExtractionPayload`,
   `DisambiguationPayload`, `TranslationMeta`, `PreflightResult`.
 - **Errors** (`application/errors.py`): `AgyError`, `AgyPreflightError`,

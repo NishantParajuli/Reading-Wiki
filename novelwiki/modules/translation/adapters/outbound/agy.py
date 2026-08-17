@@ -310,7 +310,7 @@ async def _run_batch(
 
 
 async def _resume_ready_commits(job: dict, runtime) -> int:
-    """Commit complete artifacts left by a crash after AGY exit, without rerunning AGY."""
+    """Commit complete artifacts left after provider exit without rerunning the model."""
     rows = await runtime.runs.list(int(job["id"]), ("translate_batch",))
     committed = 0
     for row in rows:

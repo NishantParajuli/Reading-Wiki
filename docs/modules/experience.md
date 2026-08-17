@@ -7,7 +7,7 @@ entire admin dashboard. Experience is the **only** business module allowed to ru
 registered, read-only cross-owner SQL projections — and it owns **no tables and writes
 none** (checker-enforced: "Experience keeps its SQL projections read-only").
 
-Where an admin screen needs a *mutation* (update a user, grant an AGY policy, retry
+Where an admin screen needs a *mutation* (update a user, grant an AI-backend policy, retry
 waiting jobs), Experience does not write — it calls capabilities injected through its own
 application ports, and the owning module performs the write.
 
@@ -42,7 +42,7 @@ The operational/admin reads: per-system activity slices (`generic_activity`,
 `home_rows`, `novel_health`, `translation_units` and `audiobook_missing` (cost-estimate
 inputs), `admin_users` (accounts + month usage + effective limits), `admin_usage`
 (month totals, active spenders, six-month history, top spenders), `admin_novels`,
-`global_novels` (curated Global library + pipeline status), `agy_health`,
+`global_novels` (curated Global library + pipeline status), provider-keyed `agy_health`,
 `recent_smoke`, `job_run_metadata` (AI-run decoration for job lists).
 
 ## HTTP surfaces
@@ -67,9 +67,9 @@ Cover/asset URLs in projections are rewritten onto the access-controlled asset r
 
 `GET /users` (search + usage), `PATCH /users/{id}` (status/role/quota overrides — null
 resets to default), `DELETE /users/{id}` (cascade personal data; owned novels survive
-ownerless), `GET /usage`, `GET /novels`, `GET /global-novels`, and the AI-policy/AGY
-panel (`GET/PUT/DELETE /users/{id}/ai-backend-policy`, `GET /ai/agy/health`,
-`POST /ai/agy/retry-waiting`, `POST /ai/agy/smoke-test`).
+ownerless), `GET /usage`, `GET /novels`, `GET /global-novels`, and the AI-backend
+panels: `GET/PUT/DELETE /users/{id}/ai-backend-policy`, plus health/retry/smoke routes
+under both `/ai/agy/` and `/ai/openai-codex/`.
 
 ## Application layer
 

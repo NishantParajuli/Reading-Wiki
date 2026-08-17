@@ -12,7 +12,7 @@
 | Manual batch | `POST /api/novels/{id}/translate` (range) → durable Work job | the requester |
 | CLI | `translate <novel> --from --to [--seed]` | system/exempt |
 | Self-translate (shared novel) | `POST …/chapter/{n}/self-translate` → the reader's **overlay**, base untouched | the reader |
-| AGY batch | same durable job, `execution_backend='agy'` | the requester |
+| Subscription batch | same durable job, `execution_backend='agy'` or `'openai_codex'` | the requester |
 
 Quota kind: `translated_chapters` (default 1000/month). A verified email is required to
 spend.
@@ -50,26 +50,28 @@ spend.
 
 `TranslationSchedulingService`: editable check → fast active-job dedupe → resolve backend
 (API, AGY, or OpenAI Codex per the user's grant) → count pending → quota guard → create/dedupe the
-durable job (idempotency key over novel+range). AGY reserves the pending count up front
-and finalization refunds the unconsumed remainder. API merely checks availability at
+durable job (idempotency key over novel+range). Either subscription backend reserves the
+pending count up front and finalization refunds the unconsumed remainder. API merely checks availability at
 scheduling, then reserves/refunds one unit inside each per-chapter execution; therefore
 it has no batch reservation. A zero pending count is a valid no-op job because the worker
 recomputes the range at execution time.
 
-## The AGY variant
+## Subscription-backend variants
 
 Staging gives the subscription backend the same safety the API path gets from its
 in-transaction hash check: `stage_translation_batch` snapshots and marks each chapter
-with a `translation_run_id` + `translation_source_sha256` **before** any AGY work;
-workspace manifests retain sealed chapters + glossary for source identity while a single
-`input/task.md` bundles the exact model context into one read turn; the CLI runs per sub-batch
-(`AGY_TRANSLATE_BATCH_CHAPTERS`=3, ≤ `AGY_TRANSLATE_BATCH_MAX_CHARS`); output artifacts
-are validated (schema, length sanity, glossary respect) and committed through the *same*
-workflow keyed by the run id — a crashed/retried batch can't commit a chapter staged by
-another run (`SourceChangedError`), and `_resume_ready_commits` salvages complete
-artifacts after a worker loss without re-running the model. Capacity exhaustion parks
-the job `waiting_provider`; permanent failure can fall back to the API backend
-(releasing AGY's unused reservation first). See [ai-backends.md](ai-backends.md).
+with a `translation_run_id` + `translation_source_sha256` **before** provider work.
+Workspace manifests retain sealed chapters + glossary for source identity. AGY bundles
+the exact model context in `input/task.md` and invokes the CLI; OpenAI Codex sends the
+same bounded batch to an ephemeral App Server turn with a strict output schema. Their
+per-call limits are independently configured by `AGY_TRANSLATE_BATCH_*` and
+`OPENAI_CODEX_TRANSLATE_BATCH_*`. The host validates schema, length sanity, and glossary
+respect, materializes artifacts, and commits through the *same* workflow keyed by the
+run id — a crashed/retried batch can't commit a chapter staged by another run
+(`SourceChangedError`), and `_resume_ready_commits` salvages complete artifacts after a
+worker loss without re-running the model. Capacity exhaustion parks the job
+`waiting_provider`; permanent failure can fall back to the API backend, releasing the
+selected provider's unused reservation first. See [ai-backends.md](ai-backends.md).
 The authenticated one-chapter translation canary on pinned AGY 1.1.2 completed in five
 model requests after one task-bundle read; the runner's configured request ceiling remains
 the authoritative bound because print mode does not report provider token totals.

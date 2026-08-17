@@ -25,10 +25,9 @@ never used as a locator."*
 | CLI | `python -m novelwiki.cli` | re-exports `bootstrap/cli.py::app` |
 | Standalone import worker | `python -m novelwiki.cli import-worker` | `bootstrap/acquisition_cli.py::run_standalone_import_worker` |
 | Dedicated AGY host worker | `python -m novelwiki.agy.worker` (systemd) | wraps `modules/ai_execution/adapters/inbound/worker.py` with the AGY runtime from `bootstrap/ai_execution_worker.py` |
-| Dedicated OpenAI Codex host worker | `python -m novelwiki.openai_codex.worker` (systemd) | wraps the same inbound worker with the isolated App Server runtime from `bootstrap/ai_execution_worker.py` |
 | Dedicated OpenAI Codex host worker | `python -m novelwiki.openai_codex.worker` (systemd) | reuses the subscription worker orchestration with the isolated App Server runtime and provider-specific registry |
 
-## 2. The web app (`bootstrap/web.py`, 475 lines)
+## 2. The web app (`bootstrap/web.py`)
 
 Read this file top to bottom and you know the entire runtime shape of the server:
 
@@ -99,7 +98,7 @@ Startup/shutdown is an explicit, ordered list of `LifecycleHook`s executed by
 | 5 | `import_worker` | build the Acquisition runtime + start the import worker loop | no | 10 (first) |
 | 6 | `tts_worker` | configure + start the Narration worker (quota, chapter-text resolver via Reading gateway, sidecar client, worker state) | no | 20 |
 | 7 | `jobs_worker` | configure + start the generic Work worker (`claim_next`, handler registry factory, repositories) | no | 30 |
-| 8 | `agy_health` | if `AGY_ENABLED`, warn when no healthy dedicated-worker heartbeat exists | no | – |
+| 8 | `agy_health` | for each enabled AGY/OpenAI Codex provider, warn when no healthy dedicated-worker heartbeat exists | no | – |
 
 Shutdown stops workers **before** closing the pool (10 → 20 → 30 → 40), so an in-flight
 job can finish its last write. Worker `stop()`s cancel their loop tasks and wait.
@@ -127,9 +126,9 @@ build_api_worker_registry()
 Handlers receive `(job, context)` where `context` is the worker's execution context
 (cancel checks, progress updates, user loading) — again passed in, never imported.
 Registering the same workload twice raises immediately (`ValueError`), so a typo can't
-silently shadow a handler. The AGY worker builds its own registry variant
-(`bootstrap/ai_execution_worker.py`) whose codex/translation handlers run the AGY
-adapters instead.
+silently shadow a handler. Each subscription worker builds a provider-specific registry
+variant (`bootstrap/ai_execution_worker.py`); Codex/Translation reuse their shared staged
+handlers with either the AGY CLI runtime or the OpenAI Codex App Server runtime injected.
 
 ## 5. Runtime bundles (`bootstrap/*_runtime.py`, `*_worker.py`)
 
@@ -164,7 +163,7 @@ Their application packages contain no mutable provider/work/repository locators.
    code);
 3. assembles the commands into the **exact baseline order** (`add-novel`, `scrape`,
    `chunk`, `embed`, `extract`, `translate`, `import`, `import-batch`, `import-series`,
-   `import-worker`, `rebuild-bm25`, `merge`, `reset-db`) so the CLI help surface matches
+   `import-worker`, `rebuild-bm25`, `merge`, `reset-codex`, `reset-db`) so the CLI help surface matches
    the frozen contract snapshot byte-for-byte (semantically normalized).
 
 `platform/cli_runtime.py::run_cli` gives every command a uniform asyncio bootstrap with

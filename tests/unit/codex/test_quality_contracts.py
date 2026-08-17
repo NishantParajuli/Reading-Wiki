@@ -18,6 +18,7 @@ from novelwiki.modules.codex.adapters.outbound.ingest.extract import (
     ClaimAlignmentRecoveryError,
     EvidenceAnchorRecoveryError,
     EXTRACTION_KEYS,
+    SUMMARY_SYSTEM,
     ThreadRelevanceRecoveryError,
     ThreadUpdateRecoveryError,
     _accept_verified_thread_relevance_issues,
@@ -41,6 +42,10 @@ from novelwiki.platform.config import settings
 
 def _empty() -> dict:
     return {key: [] for key in EXTRACTION_KEYS}
+
+
+def test_direct_chapter_summary_prompt_matches_the_shared_quality_target():
+    assert "Target 80-220 tokens" in SUMMARY_SYSTEM
 
 
 def test_resume_never_bypasses_separate_verification():

@@ -59,6 +59,9 @@ Full explanation: [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md)
 - **AGY / Antigravity CLI** (optional, admin-granted) — an alternative execution backend
   that drives a subscription account instead of the metered API
   ([../pipelines/ai-backends.md](../pipelines/ai-backends.md)).
+- **OpenAI Codex App Server** (optional, admin-granted) — a second subscription backend
+  using the dedicated worker account's official ChatGPT login and strict structured
+  outputs through an isolated local App Server process.
 
 ## Where the name things live
 

@@ -185,7 +185,7 @@ async def _handle_codex(job: dict, preflight: object) -> dict:
 
 async def execute_codex_job(job: dict, preflight):
     """Compatibility seam replaced by Bootstrap in production and tests."""
-    raise RuntimeError("Codex AGY execution was not wired")
+    raise RuntimeError("Codex subscription execution was not wired")
 
 
 class _AgyExecutionContext:

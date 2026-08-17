@@ -69,8 +69,8 @@ handler (or individually from the CLI):
 2. **`embed.py`** — batch-embeds every chunk with `embedding IS NULL`
    (`EMBED_MODEL`, `EMBED_DIM`-sized pgvector column; HNSW index when dim ≤ 2000).
 3. **`context.py` + `extract.py`** — **forward-only** v2.1 extraction, strictly ascending.
-   The shared direct/AGY context builder scores exact names/aliases, recent activity,
-   unresolved threads, graph neighbors, trigram spans, and exact vector matches; packs at
+   The shared direct/subscription context builder scores exact names/aliases, recent activity,
+   unresolved threads, graph neighbors, trigram spans, and exact vector matches; packs
    all literal current-chapter entities (hard cap 120) plus at most 20 background entities,
    current state, three recent summaries, completed memory, and ten threads under hard
    section/total token limits; and emits a reproducible context hash. The backend returns
@@ -148,12 +148,14 @@ handler (or individually from the CLI):
 - **Inbound `cli.py`**: `chunk`, `embed`, `extract`, `rebuild-bm25`, `merge`,
   `reset-codex` (derived structured data only; chunks/embeddings remain).
 - **Inbound `jobs.py`**: `execute_codex_job` (API backend) and `execute_agy_codex_job`.
-  The AGY executor repeats idempotent chunking and missing-embedding passes on retries,
-  then resumes extraction; unchanged vectors are retained, while interrupted preprocessing
-  is completed before extraction requires its chunks.
+  Despite the compatibility-era function name, the latter is the provider-neutral
+  subscription executor used by both AGY and OpenAI Codex. It repeats idempotent chunking
+  and missing-embedding passes on retries, then resumes extraction; unchanged vectors are
+  retained, while interrupted preprocessing is completed before extraction requires its chunks.
 - **Outbound `postgres_queries.py`** — all bounded read SQL (`WHERE … <= ceiling` on
   every statement) + `wiki_cache` read/write + `PostgresEntityMerger`.
-- **Outbound `agy.py`** — the AGY extraction job: one per-chapter `task.md` bundle
+- **Outbound `agy.py`** — the shared staged subscription extraction job (the filename is
+  retained for compatibility): one per-chapter `task.md` bundle
   (chunks, bounded memory, exact artifact-schema 2.2 output shape) plus sealed workspace manifests,
   strict output validation (`validate_extraction_output` — schema, refs, exact reducer
   targets/coverage beats, summary token/notation limits, literal named mention spans,

@@ -73,9 +73,9 @@ contracts. Importing a protocol still tells you *nothing* about who implements i
 decision belongs to Bootstrap.
 
 Sizes vary with responsibility: Reading's contract is the largest (`reading/public.py`,
-149 lines, nine protocol declarations, because chapters are the shared substrate that
-translation, codex, narration, and import all touch), while Experience's is six lines
-(`ExperienceQueries` with `home()` and `activity()`).
+with nine protocol declarations because chapters are the shared substrate that translation,
+codex, narration, and import all touch), while Experience intentionally exposes only
+`ExperienceQueries` with `home()` and `activity()`.
 
 ## 2. `domain/` — pure business rules
 
@@ -118,7 +118,7 @@ class CodexAgentPort(Protocol):       # "answer a question / synthesize a profil
 
 class AiCostControlPort(Protocol):    # "guard spend" (verified email, rate, concurrency)
 class CatalogEditPort(Protocol):      # "is this principal allowed to edit the novel?"
-class BackendResolutionPort(Protocol) # "API or AGY for this user+workload?"
+class BackendResolutionPort(Protocol) # "API or subscription backend for this user+workload?"
 class CodexWorkPort(Protocol):        # "schedule/dedupe a durable job"
 class CodexQuotaPort(Protocol):       # "reserve/refund a codex build"
 class CodexReadingPort(Protocol):     # "give me chapter text/numbers" (backed by Reading)
@@ -193,7 +193,7 @@ results/errors back into the transport's language. They are deliberately thin an
   signal-free shutdown) and delegates every state-machine decision to an application
   service.
 - **`jobs.py`** — handlers for the generic Work worker (`execute_scrape_job`,
-  `execute_codex_job`, `execute_translation_job`, and their AGY variants). Registered in
+  `execute_codex_job`, `execute_translation_job`, and their subscription variants). Registered in
   Bootstrap's `WorkerRegistry`; never discovered magically.
 
 ## 5. `adapters/outbound/` — implementations of ports

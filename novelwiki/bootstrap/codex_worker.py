@@ -100,7 +100,7 @@ def build_codex_runtime(provider: str = "agy"):
         run_agy=run_subscription,
         build_task_prompt=build_task_prompt,
         create_run=partial(create_run, backend=provider),
-        update_run=update_run,
+        update_run=partial(update_run, event_backend=provider),
         workspace_relpath=workspace_relpath,
         load_json=load_json,
         read_text_artifact=read_text_artifact,
@@ -114,7 +114,8 @@ def build_codex_runtime(provider: str = "agy"):
         safe_error_summary=safe_error_summary,
         model_codex=model_codex, model_label=f"{provider}:{model_codex}",
         contract_version=contract_version, work_root=work_root,
-        separate_codex_verify=separate_verify, provider_label=provider_label,
+        separate_codex_verify=separate_verify, provider=provider,
+        provider_label=provider_label,
     )
 
     runtime = None

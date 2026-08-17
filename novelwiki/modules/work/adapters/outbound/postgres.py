@@ -17,9 +17,10 @@ exactly once at a terminal state and is guarded by ``quota_finalized``:
 - success  → the reservation counts as consumed (``quota_consumed := quota_reserved``); no refund.
 - failure/cancel → the unconsumed remainder (``reserved - consumed``) is refunded to the user.
 
-API translation meters per chapter as it works. AGY translation reserves the whole pending batch
-before subscription work starts, then increments ``quota_consumed`` in the same transaction as
-each validated chapter commit. Finalization refunds the untouched remainder exactly once.
+API translation meters per chapter as it works. Subscription-backed translation reserves the
+whole pending batch before provider work starts, then increments ``quota_consumed`` in the same
+transaction as each validated chapter commit. Finalization refunds the untouched remainder exactly
+once.
 """
 from __future__ import annotations
 
@@ -47,6 +48,10 @@ ACTIVE_STATUSES = ("queued", "running", "waiting_provider")
 TERMINAL_STATUSES = ("done", "failed", "canceled")
 
 _JSON_FIELDS = {"progress", "options"}
+
+
+def _provider_label(backend: str | None) -> str:
+    return "OpenAI Codex" if backend == "openai_codex" else "AGY"
 
 
 class PostgresWorkRepository:
@@ -332,9 +337,9 @@ async def cancel_job(job_id: int) -> bool:
     credit on a terminal-but-unfinalized row."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        # A live AGY child needs its lease and running state until the runner kills
-        # the process group. API jobs retain the historical immediate/cooperative
-        # cancellation behavior.
+        # A live subscription-provider child needs its lease and running state until
+        # the runner kills the process group. API jobs retain the historical
+        # immediate/cooperative cancellation behavior.
         row = await conn.fetchrow(
             """
             UPDATE jobs SET
@@ -349,7 +354,7 @@ async def cancel_job(job_id: int) -> bool:
                                 THEN claimed_at ELSE NULL END,
               updated_at=now()
             WHERE id=$1 AND status IN ('queued','running','waiting_provider')
-            RETURNING id, status;
+            RETURNING id, status, execution_backend;
             """,
             job_id,
         )
@@ -359,7 +364,10 @@ async def cancel_job(job_id: int) -> bool:
         await finalize(job_id, success=False)
         await audit.record("job.canceled", data={"job_id": job_id})
     else:
-        await audit.record("agy.run.cancel_requested", data={"job_id": job_id})
+        await audit.record(
+            f"{row['execution_backend']}.run.cancel_requested",
+            data={"job_id": job_id},
+        )
     log_event(
         logger, logging.WARNING, "job.cancel_requested",
         f"Cancellation was requested for background job {job_id}; status is {row['status']}.",
@@ -384,17 +392,20 @@ async def mark_canceled_if_running(job_id: int) -> bool:
             UPDATE jobs SET status='canceled', stage='canceled', claim_token=NULL,
               claimed_at=NULL, updated_at=now()
             WHERE id=$1 AND status='running' AND cancel_requested_at IS NOT NULL
-            RETURNING id;
+            RETURNING id, execution_backend;
             """,
             job_id,
         )
     if row:
+        backend = row["execution_backend"]
         await finalize(job_id, success=False)
         await audit.record("job.canceled", data={"job_id": job_id})
         log_event(
             logger, logging.WARNING, "job.canceled",
-            f"Canceled running AGY job {job_id} after its child process stopped.",
-            job_system="generic", job_id=job_id, execution_backend="agy",
+            f"Canceled running {_provider_label(backend)} job {job_id} "
+            "after its child process stopped.",
+            job_system="generic", job_id=job_id,
+            execution_backend=backend,
         )
     return row is not None
 
@@ -471,24 +482,32 @@ async def fail_or_retry(job: dict, error: str) -> None:
 
 
 async def wait_for_provider(job_id: int, failure_code: str, error: str, minutes: int) -> bool:
-    """Park a running AGY job without holding a lease or burning tight retries."""
+    """Park a running subscription job without holding a lease or burning tight retries."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            UPDATE jobs SET status='waiting_provider', stage='waiting for AGY provider',
+            UPDATE jobs SET status='waiting_provider',
+              stage=CASE execution_backend
+                WHEN 'openai_codex' THEN 'waiting for OpenAI Codex provider'
+                ELSE 'waiting for AGY provider' END,
               error=$2, not_before=now() + make_interval(mins => $3),
               claim_token=NULL, claimed_at=NULL, updated_at=now()
-            WHERE id=$1 AND status='running' RETURNING id;
+            WHERE id=$1 AND status='running' RETURNING id, execution_backend;
             """,
             job_id, str(error)[:4000], max(1, int(minutes)),
         )
     if row:
-        await audit.record("agy.run.waiting_provider", data={"job_id": job_id, "failure_code": failure_code})
+        backend = row["execution_backend"]
+        await audit.record(
+            f"{backend}.run.waiting_provider",
+            data={"job_id": job_id, "failure_code": failure_code},
+        )
         log_event(
-            logger, logging.WARNING, "agy.run.waiting_provider",
-            f"AGY job {job_id} is waiting {max(1, int(minutes))} minute(s) for the provider.",
-            job_system="generic", job_id=job_id, execution_backend="agy",
+            logger, logging.WARNING, f"{backend}.run.waiting_provider",
+            f"{_provider_label(backend)} job {job_id} is waiting "
+            f"{max(1, int(minutes))} minute(s) for the provider.",
+            job_system="generic", job_id=job_id, execution_backend=backend,
             failure_code=failure_code, retry_after_minutes=max(1, int(minutes)),
             error=str(error)[:4000],
         )
@@ -513,11 +532,12 @@ async def retry_waiting(
             )
     count = int(result.rsplit(" ", 1)[-1])
     if count:
+        backend = execution_backend or "subscription"
         log_event(
-            logger, logging.INFO, "agy.waiting_jobs_released",
-            f"Released {count} AGY provider-wait job(s) back to the queue.",
+            logger, logging.INFO, f"{backend}.waiting_jobs_released",
+            f"Released {count} {backend} provider-wait job(s) back to the queue.",
             job_system="generic", job_id=job_id, released_jobs=count,
-            execution_backend="agy",
+            execution_backend=execution_backend,
         )
     return count
 
@@ -542,7 +562,7 @@ async def increment_quota_consumed(job_id: int, units: int = 1, *, conn=None) ->
 
 
 async def release_translation_reservation_for_fallback(job_id: int) -> None:
-    """Refund AGY translation's unused reservation before API meters remaining chapters."""
+    """Refund a subscription translation reservation before API meters remaining chapters."""
     await finalize(job_id, success=False)
 
 

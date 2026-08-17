@@ -86,7 +86,7 @@ against `HEAD` and the living references above before implementation.
 | [background-jobs-and-quota](pipelines/background-jobs-and-quota.md) | the shared durable-job machinery + the money lifecycle (read first) |
 | [scraping](pipelines/scraping.md) | adapters, multi-source stitching, SSRF boundary |
 | [file-import](pipelines/file-import.md) | upload → parse → OCR → segment → review → commit |
-| [translation](pipelines/translation.md) | engine, glossary, atomic commits, overlays, AGY staging |
+| [translation](pipelines/translation.md) | engine, glossary, atomic commits, overlays, subscription staging |
 | [codex-build-and-ask](pipelines/codex-build-and-ask.md) | chunk/embed/extract/link/index; retrieval; the agent; recap |
 | [narration](pipelines/narration.md) | TTS worker, sidecar, caching, invalidation |
 | [ai-backends](pipelines/ai-backends.md) | API, AGY, and OpenAI Codex: selection, hardened execution, failure paths |

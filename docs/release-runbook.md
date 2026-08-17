@@ -22,13 +22,14 @@
 ## Codex v2.1 quality-contract rollout
 
 Use this controlled path once for any production novel that has pre-v2.1 Codex data.
-It applies to both API and AGY builds; backend choice does not change the schema, context,
-or commit contract.
+It applies to API, AGY, and OpenAI Codex builds; backend choice does not change the
+schema, bounded context, validation, or commit contract.
 
-1. Enter a Codex maintenance window. Set `AGY_CODEX_ENABLED=false`, stop the AGY host
-   worker if it is running, prevent new Build requests, and let active `codex_build` jobs
-   finish or request cancellation through `POST /api/jobs/{job_id}/cancel`. Do not reset
-   while any Codex job remains active.
+1. Enter a Codex maintenance window. Set `AGY_CODEX_ENABLED=false` and
+   `OPENAI_CODEX_CODEX_ENABLED=false`; stop either subscription worker if it is running,
+   prevent new Build requests, and let active `codex_build` jobs finish or request
+   cancellation through `POST /api/jobs/{job_id}/cancel`. Do not reset while any Codex
+   job remains active.
 2. Complete the backup and candidate-image steps above. Apply the candidate's additive
    schema before allowing either worker path to run:
 
@@ -58,9 +59,10 @@ or commit contract.
    checkpoint. Where real `part_label` values exist, verify a
    volume summary only after that labeled volume's final narrative chapter. Do not jump
    directly to a late/checkpoint/volume chapter without its v2 prerequisites.
-5. Keep `AGY_CODEX_ENABLED=false` until the pinned plugin passes representative early,
-   late, checkpoint-end, and final-volume canaries. API can remain the controlled fallback;
-   both backends ultimately use the same atomic commit workflow.
+5. Keep each subscription provider's extraction switch false until its pinned
+   binary/contract passes representative early, late, checkpoint-end, and final-volume
+   canaries. API can remain the controlled fallback; all three backends ultimately use
+   the same validators and atomic commit workflow.
 
 The v2 tables and `extraction_state` columns are reused by v2.1, so the previous image
 can run after schema creation **only if no reset or v2 extraction has changed Codex data**.

@@ -15,7 +15,7 @@ Architecture note: `novelwiki/cli.py` is a stable 9-line alias; real composition
 command bootstraps via `platform/cli_runtime.py::run_cli` (schema ensure, pool lifecycle,
 clean Ctrl-C).
 
-## Commands (baseline order)
+## Commands (grouped by capability)
 
 ### Ingestion — Acquisition
 
@@ -52,7 +52,7 @@ durable job; the CLI exposes the stages individually (all idempotent, all range-
 
 | Command | What it does |
 |---|---|
-| `reset-db [--force]` | **Destructive.** Drops all tables in dependency order and re-applies the schema. Interactive confirmation unless `--force`. (Quirk preserved by contract: `auth_rate_limits` is not in the drop list — ADR 002.) |
+| `reset-db [--force]` | **Destructive.** Drops the 46-table reset list in dependency order and re-applies the schema. Interactive confirmation unless `--force`. (`auth_rate_limits` is intentionally absent from the drop list — ADR 002.) |
 
 ## Related module-style entrypoints (not Typer commands)
 

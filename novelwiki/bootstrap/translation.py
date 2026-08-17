@@ -104,7 +104,8 @@ def build_translation_execution_runtime(provider: str = "agy"):
     ai = SimpleNamespace(
         call_chat_completion=providers.call_chat_completion,
         run_agy=run_subscription, build_task_prompt=build_task_prompt,
-        create_run=partial(create_run, backend=provider), update_run=update_run,
+        create_run=partial(create_run, backend=provider),
+        update_run=partial(update_run, event_backend=provider),
         workspace_relpath=workspace_relpath, load_json=load_json,
         read_text_artifact=read_text_artifact,
         validate_output_manifest=validate_output_manifest,
@@ -116,7 +117,7 @@ def build_translation_execution_runtime(provider: str = "agy"):
         workspace_max_bytes=workspace_max_bytes,
         translate_batch_chapters=batch_chapters,
         translate_batch_max_chars=batch_chars,
-        provider_label=provider_label,
+        provider=provider, provider_label=provider_label,
     )
     return TranslationRuntime(
         reading=ReadingBridge(), uow_factory=LazyUnitOfWork,

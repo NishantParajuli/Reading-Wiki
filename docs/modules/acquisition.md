@@ -21,7 +21,8 @@ shape.
 - **`ImportNovelDraft`** — how an import describes the novel it wants created.
 - **`AcquisitionTransactionApi`** — workflow-bound capability used by
   `create_novel_with_source`, `delete_novel`, `update_source_offset`, and
-  `commit_import`: `create_source`, `list_import_job_ids`, `store_novel_asset`,
+  `commit_import`: `create_source`, `list_import_job_ids`, `lock_volume_append`,
+  `store_novel_asset`,
   `source_offset_state`/`set_source_offset`, `import_source`/`replace_import_source`/
   `create_import_source`, `commit_import_asset`, `finalize_import_job`.
 - **`AcquisitionCleanupApi`** — post-commit filesystem cleanup for a deleted novel.
@@ -65,9 +66,12 @@ shape.
 - **`import_worker.py`** — the durable import state machine (docstring is the canonical
   spec): trigger statuses `uploaded`/`ocr_pending`/`committing` are claimed atomically
   (`FOR UPDATE SKIP LOCKED`) into distinct in-progress markers
-  `parsing`/`ocr_running`/`commit_running`; leased claims with heartbeats; lease-expiry
-  recovery only (no requeue-on-boot); `ocr_paused` budget holds; owner-spend re-checks
-  before paid work; one `asyncio.Lock` serializing OCR (one GPU).
+  `parsing`/`ocr_running`/`commit_running` (plus recovery support for the legacy
+  `segmenting` status); leased claims with heartbeats; lease-expiry
+  recovery only (no requeue-on-boot); `awaiting_ocr_confirm` human gate;
+  `ocr_paused` budget holds; owner-spend re-checks before paid work; one process-local
+  `asyncio.Lock` serializing OCR (claim leases protect a job across workers, but this
+  lock does not coordinate separate processes or different jobs).
 - **`render.py`** — block-stream IR → reader HTML (sanitized via nh3) + plain text.
 - **`runtime_dependencies.py`** — the immutable runtime bundle (parsers, OCR client,
   segmentation LLM, storage, Reading ingestion gateway, catalog/workflow factories,

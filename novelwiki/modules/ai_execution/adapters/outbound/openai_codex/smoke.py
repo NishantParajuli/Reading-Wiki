@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import partial
 
 from novelwiki.modules.ai_execution.application.contracts import InputManifest
 from novelwiki.modules.ai_execution.application.errors import AgyCanceled
-from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import create_run, update_run
+from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import (
+    create_run,
+    update_run as _update_run,
+)
 from novelwiki.modules.ai_execution.adapters.outbound.agy.validators import (
     load_json,
     validate_output_manifest,
@@ -22,6 +26,9 @@ from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.workspace imp
     write_json,
 )
 from novelwiki.platform.config import settings
+
+
+update_run = partial(_update_run, event_backend="openai_codex")
 
 
 async def run_smoke_test(job: dict, preflight, work) -> dict:

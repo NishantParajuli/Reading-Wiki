@@ -68,7 +68,7 @@ management primitives.
 - **`cookies.py`** — `tg_session` (httpOnly, Secure per `COOKIE_SECURE`, SameSite) and
   the JS-readable `tg_csrf` cookie for the double-submit CSRF scheme.
 - **`presentation.py`** — response shaping: `self_user` (includes prefs, quota limits,
-  capabilities like AGY availability), `public_user` (profile-safe subset), `avatar_url`.
+  capabilities like AGY/OpenAI Codex availability), `public_user` (profile-safe subset), `avatar_url`.
 
 ### Outbound adapters
 

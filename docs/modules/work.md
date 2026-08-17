@@ -1,7 +1,7 @@
 # Work module (`novelwiki/modules/work/`)
 
 **Responsibility:** the **generic durable-job system** — the one queue behind scrapes,
-codex builds, translation batches, and the admin AGY smoke test. Work owns scheduling
+codex builds, translation batches, and the AGY/OpenAI Codex admin smoke tests. Work owns scheduling
 with idempotent dedupe, atomic leased claiming, heartbeats and crash recovery, retries,
 cooperative cancellation, provider-wait parking, and exactly-once quota settlement.
 The operational walkthrough is
@@ -35,7 +35,8 @@ Key fields: `kind` (`scrape` | `codex_build` | `translate` | `agy_smoke` | `open
 over **active** statuses — a repeated click dedupes onto the running job instead of
 double-charging), the quota triple `quota_kind`/`quota_reserved`/`quota_consumed` +
 `quota_finalized` (double-refund guard), `attempts`/`max_attempts`
-(`JOB_MAX_ATTEMPTS`=3), the lease pair `claim_token`/`claimed_at`, and the AI-backend
+(API default `JOB_MAX_ATTEMPTS`=3; subscription jobs use their provider-specific attempt
+cap), the lease pair `claim_token`/`claimed_at`, and the AI-backend
 block (`backend_requested` auto|api|agy|openai_codex, `execution_backend` api|agy|openai_codex,
 `backend_policy_version`, `backend_fallback_allowed`/`_from`, `backend_model`,
 `not_before`, `cancel_requested_at`).
@@ -45,7 +46,7 @@ block (`backend_requested` auto|api|agy|openai_codex, `execution_backend` api|ag
 A DB-polled loop (started by the lifecycle; also safe as extra processes) whose every
 decision lives in application services:
 
-- **Claim** (`adapters/outbound/claims.py::claim_next` — shared with the AGY worker):
+- **Claim** (`adapters/outbound/claims.py::claim_next` — shared with both subscription workers):
   one `UPDATE … FOR UPDATE SKIP LOCKED` moves the oldest eligible `queued` job (of this
   worker's `execution_backend` + registered kinds, respecting `not_before`) to
   `running`, bumps `attempts`, stamps this process's opaque `claim_token` +
@@ -64,7 +65,7 @@ decision lives in application services:
   `bail_if_canceled()` — i.e. before the next expensive stage, keeping finished work.
 - **Retry** — `fail_or_retry`: crashed attempt → back to `queued` while
   `attempts < max_attempts`, else `failed` (with `error`).
-- **Provider wait** — `wait_for_provider(job_id, failure_code, error, minutes)`: parks an
+- **Provider wait** — `wait_for_provider(job_id, failure_code, error, minutes)`: parks a
   subscription job as `waiting_provider` with `not_before = now + minutes` (no lease held, no
   tight retry loop when the subscription/quota is exhausted);
   `release_due_provider_waits` makes due rows claimable; admins can force it via

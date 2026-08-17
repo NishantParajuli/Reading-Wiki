@@ -56,6 +56,7 @@ def test_observer_emits_rich_snapshot_once_and_then_only_on_change(caplog):
     fields = records[0].event_fields
     assert fields["job_id"] == 8
     assert fields["job_kind"] == "codex_build"
+    assert fields["ai_workload"] == "codex_extract"
     assert fields["agy_workload"] == "codex_extract"
     assert fields["ai_run_id"] == UUID("3da33b7a-1a86-498c-a329-02ebbf82ed74")
     assert fields["status"] == "running"
@@ -88,6 +89,25 @@ def test_observer_emits_rich_snapshot_once_and_then_only_on_change(caplog):
         "run_status",
         "status",
     ]
+
+
+def test_observer_uses_provider_neutral_workload_for_openai(caplog):
+    observer = StructuredJobObserver()
+    caplog.set_level(logging.INFO)
+
+    observer.observe([
+        _job(
+            execution_backend="openai_codex",
+            backend_requested="openai_codex",
+            backend_model="gpt-5.6-luna",
+        )
+    ])
+
+    record = next(
+        item for item in caplog.records if item.event == "job.snapshot_changed"
+    )
+    assert record.event_fields["ai_workload"] == "codex_extract"
+    assert record.event_fields["agy_workload"] is None
 
 
 @pytest.mark.asyncio

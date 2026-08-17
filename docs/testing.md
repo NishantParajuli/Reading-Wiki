@@ -86,7 +86,7 @@ was read-only and the disposable databases were removed afterward.
 This evidence qualifies the early chapter path, shared commit contract, and bounded context. It
 does **not** claim that late, checkpoint-end, or final-volume AGY canaries have passed; those remain
 explicit production rollout gates in the
-[AGY operator runbook](agy-operator-runbook.md#codex-v2-rollout).
+[AGY operator runbook](agy-operator-runbook.md#codex-v21-quality-rollout).
 
 ### Dated Codex v2.1 OpenAI qualification (2026-08-03)
 
@@ -264,7 +264,7 @@ filtering, inferred and bare-filename volume metadata, and cover selection. Focu
 and frontend tests cover user metadata precedence, multi-file queueing, and manual series/volume
 review controls. Narration timing unit tests cover sidecar duration capture, manifest validation,
 sentence mapping within real paragraph boundaries, and the untimed legacy-audio fallback.
-Playwright covers eleven critical browser paths with fetch-level fixtures, including mobile
+Playwright covers twelve critical browser scenarios with fetch-level fixtures, including mobile
 narration highlighting and automatic reveal.
 
 To rehearse a backup and restore using two hard-coded disposable databases:

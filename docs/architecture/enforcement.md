@@ -77,7 +77,7 @@ checker → full pytest with a test DB → query benchmark → frontend test/bui
 
 ## 4. Pre-merge checklist
 
-1. `uv run python tools/check_architecture.py` — must print `architecture boundaries: ok`.
+1. `uv run python tools/check_architecture.py --strict` — must print `architecture boundaries: ok`.
 2. `uv run pytest -q tests` — architecture + contracts + unit, no DB required.
 3. If you touched routes/CLI/schema/job states: regenerate snapshots, review the diff.
 4. If you touched behavior with runtime surface: run the eval suite against a test DB.

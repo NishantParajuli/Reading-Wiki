@@ -17,7 +17,8 @@
   live DB gains new columns without a reset. One data-rewriting legacy migration exists
   (`db/migrate_multiuser.py`, marker-guarded via `app_migrations`).
 - Chapter numbers are `NUMERIC` everywhere (float chapters like `15.5` are legal), and
-  **chapter is the spoiler key**: every codex-owned row carries one.
+  **chapter is the spoiler key**: each codex row carries a chapter-derived visibility
+  boundary (chapter, reveal/first-seen chapter, bounded range, or cache ceiling).
 - `reset-db` drops `ALL_TABLES` in dependency order (note: `auth_rate_limits` is
   intentionally absent from that list — preserved behavior, ADR 002).
 
@@ -161,8 +162,9 @@ Durable, resumable EPUB/PDF ingestion state (big artifacts live on disk; this ro
 status + the small editable plan). `novel_id` (null until target chosen), `source_id`,
 `format` (`epub`|`pdf`), `original_path`, `file_sha256`, `status` (see
 [../pipelines/file-import.md](../pipelines/file-import.md): `receiving`, `uploaded`,
-`parsing`, `awaiting_review`, `ocr_pending`, `ocr_running`, `ocr_paused`, `committing`,
-`commit_running`, `committed`, `failed`, `canceled`), `stage` (human-readable step),
+`parsing`, legacy recovery-only `segmenting`, `awaiting_ocr_confirm`, `ocr_pending`, `ocr_running`, `ocr_paused`,
+`awaiting_review`, `committing`, `commit_running`, `committed`, `failed`, `canceled`),
+`stage` (human-readable step),
 `detected_meta JSONB`, **`plan JSONB`** (the editable segmentation plan the user reviews),
 `stats`, `cost_estimate`, `progress` (`{done,total,unit}`), `options`
 (`{gemini_first, target, is_raw, metadata_override, …}`; the override holds saved
@@ -191,8 +193,8 @@ text or the translation), `language`, `is_translated`, `translation_status`
 conflict detection and audio-cache invalidation), `kind`
 (`chapter`|`frontmatter`|`interlude`|`backmatter` — import sections the reader can
 skip), `part_label` ("Volume 1" TOC grouping), `translation_run_id UUID` +
-`translation_source_sha256` (AGY staging identity: a crashed/retried batch can't commit
-a chapter staged by another run), `scraped_at`.
+`translation_source_sha256` (subscription-backend staging identity: a crashed/retried
+batch can't commit a chapter staged by another run), `scraped_at`.
 
 ### `reading_progress`
 
@@ -222,7 +224,8 @@ Contribute-back "pull requests" of overlays to the novel owner. `novel_id`,
 
 Per-novel name/term consistency anchor. `UNIQUE (novel_id, source_term)`;
 `source_term` (e.g. 林轩), `translation` (canonical rendering, e.g. Lin Xuan),
-`term_type` (`name`|`place`|`skill`|`item`|`term`), `notes`, **`locked`** (user-pinned
+`term_type` (`name`|`place`|`skill`|`item`|`term`|`faction`|`organization`|`concept`),
+`notes`, **`locked`** (user-pinned
 renderings the auto-glossary never overwrites).
 
 ## Codex-owned (19 tables — every generated row is ceiling-safe)
