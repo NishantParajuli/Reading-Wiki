@@ -22,10 +22,13 @@ only).
   **no charge**. Else: dedupe onto an identical active job, or create a
   `scope='chapter'` `tts_jobs` row (quota `check_available` first).
 - **Whole book** — `POST /api/novels/{id}/audiobook`: candidate prose chapters
-  (non-chapter `kind`s and already-narrated ones skipped), hard-capped at
+  (`kind='chapter'` or legacy null kind; interludes and other kinds are excluded,
+  as are already-narrated chapters), hard-capped at
   `TTS_MAX_BATCH_CHAPTERS` (100), one active book job per (novel, voice); the explicit
   chapter list is stored in `options.chapters`; cancellable mid-run keeping finished
   chapters.
+- **Interludes** — a readable interlude can use the single-chapter audio endpoint,
+  but whole-book candidate selection and coverage counts currently omit it.
 - The reader's transport UI checks `GET …/audio/status`, which includes generation-time
   paragraph boundaries when available. While generation is active it polls
   `GET /api/tts/jobs/{id}`, then streams
@@ -33,6 +36,11 @@ only).
   supported, so scrubbing works). A forced regeneration keeps the previous cache playable;
   status returns that cache together with the active `job_id`/`job_status`, allowing a
   reloaded reader to resume following the durable job.
+
+`TTS_ENABLED=false` rejects new generation with 503 after checking for a cache hit or
+an already active job. Cached playback and tracking existing work remain available.
+Quota exhaustion returns 429 before a new job is created. Job reads re-check access to
+the underlying novel; a deleted requester does not make private job metadata public.
 
 ## The worker, per chapter
 
@@ -58,6 +66,8 @@ interrupted `generating` jobs (safe: step 1); a cross-process **target lock** pr
 two jobs synthesizing the same audio target; book jobs record
 `{done,total,current_chapter}` progress and a `stopped_reason` when the sidecar vanishes
 or spend runs out.
+Terminal states are protected from late worker writes: finishing a provider call after
+cancellation cannot turn the canceled job into `done` or `failed`.
 
 ## Cache invalidation
 
@@ -93,4 +103,4 @@ docker compose up -d tts     # GPU host; first start downloads OmniVoice into th
 On a single small GPU, don't run heavy OCR and TTS simultaneously (compose file note).
 Add a narrator: drop a clip in `sidecar-tts/voices/`, restart the sidecar (volume-mounted
 read-only — no rebuild). If the sidecar is down, jobs fail with "sidecar unavailable"
-and the rest of the app is unaffected. Auth eval: `eval/sidecar_auth_tests.py`.
+and the rest of the app is unaffected. Auth eval: `novelwiki/eval/sidecar_auth_tests.py`.

@@ -6,10 +6,13 @@ import json
 import logging
 import re
 import socket
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 from urllib.parse import urljoin, urlsplit, urlunsplit
+from weakref import WeakKeyDictionary
 
+from curl_cffi import CurlOpt
 from curl_cffi.requests import AsyncSession
 
 from novelwiki.platform.config import settings
@@ -19,6 +22,7 @@ logger = logging.getLogger(__name__)
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _DEFAULT_MAX_REDIRECTS = 5
 _CHARSET_RE = re.compile(r"charset=([A-Za-z0-9._-]+)", re.IGNORECASE)
+_SESSION_LOCKS: WeakKeyDictionary = WeakKeyDictionary()
 
 
 class SafeFetchError(ValueError):
@@ -62,6 +66,37 @@ class SafeFetchResponse:
 
     def json(self) -> Any:
         return json.loads(self.text())
+
+
+@asynccontextmanager
+async def _pinned_stream(session: AsyncSession, validated: ValidatedUrl, request_kwargs: dict):
+    """Pin curl's actual connection to the addresses checked before the request.
+
+    curl-cffi exposes extra curl options on the session, not on HTTP requests.
+    Serialize safe requests using that session while its temporary options are
+    installed, retaining cookies, headers, hostname verification, and TLS SNI.
+    """
+    lock = _SESSION_LOCKS.setdefault(session, asyncio.Lock())
+    async with lock:
+        original_options = getattr(session, "curl_options", {})
+        options = dict(original_options)
+        addresses = ",".join(
+            f"[{ip}]" if ip.version == 6 else str(ip) for ip in validated.ips
+        )
+        try:
+            ipaddress.ip_address(validated.host)
+        except ValueError:
+            options[CurlOpt.RESOLVE] = [f"{validated.host}:{validated.port}:{addresses}"]
+        # Proxy DNS and an old pooled connection could otherwise bypass the
+        # validated address set. Scraper requests always connect directly.
+        options[CurlOpt.PROXY] = ""
+        options[CurlOpt.FRESH_CONNECT] = 1
+        session.curl_options = options
+        try:
+            async with session.stream("GET", validated.url, **request_kwargs) as response:
+                yield response
+        finally:
+            session.curl_options = original_options
 
 
 def describe_url(url: str) -> str:
@@ -189,7 +224,7 @@ async def safe_fetch(
             "impersonate": impersonate,
         }
 
-        async with session.stream("GET", validated.url, **request_kwargs) as resp:
+        async with _pinned_stream(session, validated, request_kwargs) as resp:
             primary_ip = getattr(resp, "primary_ip", "")
             if primary_ip:
                 _ensure_public_ip(ipaddress.ip_address(primary_ip))

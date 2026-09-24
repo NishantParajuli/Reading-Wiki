@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from novelwiki.modules.acquisition.public import SourceDraft
+from ...application.sources import validate_source_draft
 
 from .importer import storage
 
@@ -12,6 +13,7 @@ class PostgresAcquisitionTransactionService:
         self._connection = connection
 
     async def create_source(self, novel_id: int, draft: SourceDraft) -> int:
+        validate_source_draft(draft)
         return int(await self._connection.fetchval(
             """
             INSERT INTO sources (novel_id, adapter, start_url, config, language, is_raw,

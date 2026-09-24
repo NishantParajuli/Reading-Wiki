@@ -77,54 +77,54 @@ function ShelfMenu({ n, onMove, onRemove }) {
 }
 
 function GridCard({ n, onMove, onRemove }) {
-  const navigate = useNavigate();
   const started = n.last_chapter != null;
   const resumeCh = started ? n.last_chapter : (n.min_chapter || 1);
   return (
-    <Link className="shelf-card" to={`/n/${n.id}`}>
+    <article className="shelf-card">
       <span style={{ position: "relative", display: "block" }}>
-        <Cover src={n.cover_url} title={n.title} />
+        <Link to={`/n/${n.id}`} aria-label={`About ${n.title}`}><Cover src={n.cover_url} title={n.title} /></Link>
         <span className="cover-actions">
           {(n.chapter_count || 0) > 0 && (
-            <button className="cover-action" aria-label={started ? "Resume" : "Start reading"}
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/n/${n.id}/read/${resumeCh}`); }}>
-              <Icon name="play" size={15} />
-            </button>
+            <Link className="cover-action" aria-label={`${started ? "Resume" : "Start reading"} ${n.title}`} to={`/n/${n.id}/read/${resumeCh}`}>
+              <Icon name="arrowRight" size={17} />
+            </Link>
           )}
           <ShelfMenu n={n} onMove={onMove} onRemove={onRemove} />
         </span>
       </span>
       <span>
-        <span className="shelf-card-title">{n.title}</span>
+        <Link className="shelf-card-title" to={`/n/${n.id}`}>{n.title}</Link>
         {n.author && <span className="shelf-card-author" style={{ display: "block" }}>{n.author}</span>}
       </span>
-      {started && pct(n) > 0 && <ProgressBar size="xs" value={pct(n)} />}
+      {started && pct(n) > 0 && <ProgressBar size="xs" value={pct(n)} label={`Reading progress for ${n.title}`} />}
       <span className="shelf-card-meta">{statusChip(n)}</span>
-    </Link>
+    </article>
   );
 }
 
 function ListRow({ n, onMove, onRemove }) {
   return (
-    <Link className="lib-row" to={`/n/${n.id}`}>
+    <article className="lib-row">
+      <Link className="lib-row-link" to={`/n/${n.id}`}>
       <Cover src={n.cover_url} title={n.title} />
       <span className="grow">
         <span className="lib-row-title" style={{ display: "block" }}>{n.title}</span>
         {n.author && <span className="lib-row-author">{n.author}</span>}
       </span>
-      <ProgressBar size="xs" value={pct(n)} />
+      </Link>
+      <ProgressBar size="xs" value={pct(n)} label={`Reading progress for ${n.title}`} />
       <span className="lib-row-nums">
         {n.last_chapter != null ? `${fmtChapter(n.last_chapter)}/${fmtChapter(n.max_chapter || 0)}` : `${n.chapter_count} ch.`}
       </span>
       {n.shelf && <Chip>{SHELF_LABELS[n.shelf]}</Chip>}
-      {n.last_read_at && <span className="muted" style={{ fontSize: "var(--text-xs)", flexShrink: 0 }}>{relativeTime(n.last_read_at)}</span>}
+      {n.last_read_at && <span className="lib-row-date">{relativeTime(n.last_read_at)}</span>}
       <ShelfMenu n={n} onMove={onMove} onRemove={onRemove} />
-    </Link>
+    </article>
   );
 }
 
 export function Library() {
-  const { data: novels, isLoading } = useNovelsQuery();
+  const { data: novels, isLoading, isError, refetch } = useNovelsQuery();
   const qc = useQueryClient();
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -200,11 +200,11 @@ export function Library() {
 
   return (
     <div className="page page-enter">
-      <PageHeader title="Library" subtitle="Everything you're reading, in one place."
+      <PageHeader title="Library" subtitle="Old favourites. New worlds. All yours to explore."
         actions={
           <>
             <Button variant="ghost" icon="upload" onClick={() => navigate("/import")}>Import</Button>
-            <Button variant="primary" icon="sparkles" onClick={() => setAdding(true)}>Add novel</Button>
+            <Button variant="primary" icon="plus" onClick={() => setAdding(true)}>Add novel</Button>
           </>
         } />
 
@@ -223,12 +223,15 @@ export function Library() {
 
       <Tabs className="wrap" tabs={LIBRARY_TABS.map(t => ({ ...t, count: counts[t.id] }))} value={tab} onChange={setTab} />
 
-      <div style={{ marginTop: 22 }}>
+      <p className="lib-results" role="status">{isLoading ? "Finding your books…" : isError ? "Library unavailable" : `${shown.length} ${shown.length === 1 ? "book" : "books"}${q.trim() ? ` matching “${q.trim()}”` : tab === "all" ? " in your collection" : ` on this shelf`}`}</p>
+      <div>
         {isLoading ? (
           <Loading label="Loading your library…" />
+        ) : isError ? (
+          <EmptyState icon="alert" title="Your library couldn't load" body="Try again to see your books and saved progress." primaryAction={<Button icon="refresh" onClick={() => refetch()}>Try again</Button>} />
         ) : shown.length === 0 ? (
           <EmptyState icon="library" title={q ? "No matches" : emptyCopy.title} body={q ? "Try a different search." : emptyCopy.body}
-            primaryAction={!q && tab === "all" ? <Button variant="primary" icon="sparkles" onClick={() => setAdding(true)}>Add a novel</Button> : null}
+            primaryAction={q ? <Button variant="ghost" onClick={() => setQ("")}>Clear search</Button> : tab === "all" ? <Button variant="primary" icon="plus" onClick={() => setAdding(true)}>Add a novel</Button> : null}
             secondaryAction={!q && tab === "all" ? <Button variant="ghost" icon="compass" onClick={() => navigate("/discover")}>Browse shared library</Button> : null} />
         ) : view === "grid" ? (
           <div className="lib-grid">

@@ -1,11 +1,10 @@
 import re
 import logging
-import asyncio
 from collections.abc import Awaitable, Callable
 
 import tiktoken
 from novelwiki.platform.config import settings
-from novelwiki.platform.database import get_db_pool, close_db_pool
+from novelwiki.platform.database import get_db_pool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,7 +18,8 @@ def get_encoder():
     return _encoder
 
 def count_tokens(text: str) -> int:
-    return len(get_encoder().encode(text))
+    # Chapters are ordinary source text, including any literal token markers.
+    return len(get_encoder().encode(text, disallowed_special=()))
 
 def split_by_sentences(text: str) -> list[str]:
     """Splits text by typical sentence boundaries, preserving punctuation."""
@@ -40,6 +40,10 @@ def chunk_chapter_text(
         target_tokens = settings.CHUNK_TARGET_TOKENS
     if overlap_tokens is None:
         overlap_tokens = settings.CHUNK_OVERLAP
+    if target_tokens <= 0:
+        raise ValueError("target_tokens must be positive")
+    if overlap_tokens < 0:
+        raise ValueError("overlap_tokens must be nonnegative")
 
     # 1. Split into paragraphs
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
@@ -78,13 +82,26 @@ def chunk_chapter_text(
             
             # Save the chunk
             chunks.append("\n\n".join(current_pieces))
+
+            if i == len(pieces):
+                # The final oversized piece has already been emitted. Keeping
+                # its overlap would append a duplicate tail below.
+                current_pieces = []
+                break
             
             # Backtrack pieces to form the overlap for the next chunk
+            # Always leave room for the next unconsumed piece. Otherwise a
+            # short retained paragraph before an oversized sentence repeatedly
+            # emits the same overlap without advancing i.
+            available_overlap = min(
+                overlap_tokens,
+                max(0, target_tokens - count_tokens(pieces[i])),
+            )
             overlap_accum = 0
             backtrack_count = 0
             for item in reversed(current_pieces):
                 item_tok = count_tokens(item)
-                if overlap_accum + item_tok <= overlap_tokens:
+                if overlap_accum + item_tok <= available_overlap:
                     overlap_accum += item_tok
                     backtrack_count += 1
                 else:
@@ -246,13 +263,7 @@ async def chunk_all_chapters(
     return total_chunks
 
 if __name__ == "__main__":
-    import sys
-    force = "--force" in sys.argv
-
-    async def main():
-        novel_id = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
-        cnt = await chunk_all_chapters(novel_id, force=force)
-        logger.info(f"Chunked a total of {cnt} chunks.")
-        await close_db_pool()
-
-    asyncio.run(main())
+    raise SystemExit(
+        "This internal adapter requires the application runtime. "
+        "Use: uv run python -m novelwiki.cli chunk NOVEL_ID"
+    )

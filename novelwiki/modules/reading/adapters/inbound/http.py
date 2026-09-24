@@ -5,7 +5,7 @@ import re
 import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from novelwiki.platform.auth import current_user
 from novelwiki.kernel.errors import (
@@ -64,12 +64,12 @@ async def _logged_translation_prefetch(
 
 
 class ProgressUpdate(BaseModel):
-    last_chapter: float
-    scroll_pct: float = 0
+    last_chapter: float = Field(allow_inf_nan=False)
+    scroll_pct: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
 
 
 class BookmarkCreate(BaseModel):
-    chapter: float
+    chapter: float = Field(allow_inf_nan=False)
     note: str | None = None
 
 
@@ -448,8 +448,8 @@ async def api_set_progress(
         await service.set_progress(
             novel_id, _principal(user), payload.last_chapter, payload.scroll_pct
         )
-    except (NotFound, Forbidden) as exc:
-        _translate_access_error(exc)
+    except (NotFound, Forbidden, ValidationFailed) as exc:
+        _translate_migration_error(exc)
     return {"status": "success"}
 
 
@@ -485,8 +485,8 @@ async def api_add_bookmark(
         bookmark_id = await service.add_bookmark(
             novel_id, _principal(user), payload.chapter, payload.note
         )
-    except (NotFound, Forbidden) as exc:
-        _translate_access_error(exc)
+    except (NotFound, Forbidden, ValidationFailed) as exc:
+        _translate_migration_error(exc)
     return {"id": bookmark_id}
 
 

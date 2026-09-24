@@ -24,6 +24,11 @@ rises), advanced server-side when chapter reads are recorded. The resume positio
 (`last_chapter`, `scroll_pct`) is separate and client-driven — moving your scrollbar
 can move where you *resume*, but cannot unlock codex data.
 
+The browser requests chapter content only on navigation. It must not speculatively
+prefetch the authenticated chapter endpoint: that response records a trusted read even
+if the browser never displays it. Server-side translation prefetch prepares future text
+without advancing the reader's progress.
+
 Resolution: every spoiler-sensitive use case starts with
 `CeilingPort.resolve(novel_id, principal, requested)` →
 `CeilingContext` (`modules/codex/application/dto.py`):
@@ -68,4 +73,4 @@ allowed the full chapter span (it's their text). The UI slider is a convenience 
 5. Never write an endpoint that trusts a client-supplied ceiling upward.
 
 Regression suites: `novelwiki/eval/spoiler_tests.py` and
-`eval/spoiler_boundary_tests.py` — extend them with any new surface.
+`novelwiki/eval/spoiler_boundary_tests.py` — extend them with any new surface.

@@ -6,7 +6,7 @@ import { authApi } from "../modules/identity/api.js";
 import { readingApi } from "../modules/reading/api.js";
 import { experienceApi } from "../modules/experience/api.js";
 import { codexApi } from "../modules/codex/api.js";
-import { setUnauthorizedHandler } from "../shared/api/http.js";
+import { postMultipart, setUnauthorizedHandler } from "../shared/api/http.js";
 
 function response(body, { status = 200, statusText = "OK" } = {}) {
   return {
@@ -76,6 +76,30 @@ describe("HTTP compatibility transport", () => {
     unauthorized.mockClear();
     await expect(authApi.login("reader", "wrong")).rejects.toThrow("Not authenticated.");
     expect(unauthorized).not.toHaveBeenCalled();
+  });
+
+  it("turns structured validation errors into useful field messages", async () => {
+    fetch.mockResolvedValue(response({ detail: [
+      { loc: ["body", "chapters", 0], msg: "Input should be a valid number" },
+      { loc: ["body", "title"], msg: "Field required" },
+    ] }, { status: 422, statusText: "Unprocessable Entity" }));
+    await expect(readingApi.setProgress(12, {})).rejects.toThrow(
+      "chapters.0: Input should be a valid number; title: Field required",
+    );
+  });
+
+  it("re-gates expired sessions during multipart uploads", async () => {
+    const unauthorized = vi.fn();
+    setUnauthorizedHandler(unauthorized);
+    fetch.mockResolvedValue(response({ detail: "Session expired" }, { status: 401 }));
+    await expect(postMultipart("/api/import", new FormData())).rejects.toThrow("Session expired");
+    expect(unauthorized).toHaveBeenCalledOnce();
+  });
+
+  it("does not crash mutations when the CSRF cookie contains malformed encoding", async () => {
+    document.cookie = "tg_csrf=%broken; path=/";
+    await expect(readingApi.setProgress(12, {})).resolves.toEqual({ status: "success" });
+    expect(fetch.mock.calls[0][1].headers["X-Tideglass-CSRF"]).toBeUndefined();
   });
 
   it("keeps resumable upload offsets and CSRF headers", async () => {

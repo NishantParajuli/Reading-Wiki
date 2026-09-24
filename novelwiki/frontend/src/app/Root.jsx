@@ -40,7 +40,7 @@ function ThemeProvider({ children }) {
   });
   const [accentHue, setAccentHue] = useState(() => {
     const h = parseInt(localStorage.getItem("nw-accent-h") || "", 10);
-    return isNaN(h) ? 64 : h;
+    return Number.isFinite(h) && h >= 0 && h <= 360 ? h : 165;
   });
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);

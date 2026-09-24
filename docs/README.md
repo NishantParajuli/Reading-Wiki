@@ -37,6 +37,7 @@ not promises about a later checkout.
 | [what-is-tideglass](getting-started/what-is-tideglass.md) | product tour, the invariant, external services |
 | [local-setup](getting-started/local-setup.md) | zero → running instance with a novel |
 | [repo-tour](getting-started/repo-tour.md) | every top-level path + task→entry-point table |
+| [Product principles](../PRODUCT.md) | intended readers, supported workflows, product constraints, and design priorities |
 
 ## Concepts
 
@@ -85,6 +86,7 @@ against `HEAD` and the living references above before implementation.
 |---|---|
 | [background-jobs-and-quota](pipelines/background-jobs-and-quota.md) | the shared durable-job machinery + the money lifecycle (read first) |
 | [scraping](pipelines/scraping.md) | adapters, multi-source stitching, SSRF boundary |
+| [supported-sites](pipelines/supported-sites.md) | website keys, accepted start URLs, languages, archive setup, limits, and verification scope |
 | [file-import](pipelines/file-import.md) | upload → parse → OCR → segment → review → commit |
 | [translation](pipelines/translation.md) | engine, glossary, atomic commits, overlays, subscription staging |
 | [codex-build-and-ask](pipelines/codex-build-and-ask.md) | chunk/embed/extract/link/index; retrieval; the agent; recap |
@@ -106,6 +108,7 @@ against `HEAD` and the living references above before implementation.
 | Doc | Contents |
 |---|---|
 | [frontend/overview](frontend/overview.md) | stack, slice structure, routing, data layer, reader, testing |
+| [Design system](../DESIGN.md) | implemented visual identity, theme tokens, typography, responsive layout, and component rules |
 
 ## Operations
 
@@ -116,6 +119,7 @@ against `HEAD` and the living references above before implementation.
 | [operations/logging](operations/logging.md) | JSON event schema, worker/job coverage, Grafana/Loki queries, incident use |
 | [operations/security](operations/security.md) | the full control inventory, layer by layer |
 | [testing](testing.md) | how to run every suite |
+| [Codex qualification history](testing-codex-qualification-history.md) | dated provider canaries and contract qualification evidence; historical counts and rollout outcomes |
 | [release-runbook](release-runbook.md) | release & rollback procedure |
 | [agy-operator-runbook](agy-operator-runbook.md) | enabling/operating the AGY host worker |
 | [openai-codex-operator-runbook](openai-codex-operator-runbook.md) | enabling/operating the ChatGPT Codex App Server worker |

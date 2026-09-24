@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from novelwiki.platform.auth import current_user
-from novelwiki.kernel.errors import Conflict, Forbidden, InvalidOperation, NotFound
+from novelwiki.kernel.errors import Conflict, Forbidden, InvalidOperation, NotFound, ProviderUnavailable, QuotaExceeded
 from novelwiki.modules.identity.public import Principal
 from novelwiki.modules.narration.application import (
     AudioFileGone, BookAudioCommand, ChapterAudioCommand, NarrationService,
@@ -56,6 +56,10 @@ async def _result(awaitable):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Conflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except QuotaExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AudioFileGone as exc:
         raise HTTPException(status_code=410, detail=str(exc)) from exc
 

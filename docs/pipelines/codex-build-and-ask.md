@@ -18,6 +18,11 @@ sentence/paragraph-bounded passages of
 ~`CHUNK_TARGET_TOKENS` (500) with `CHUNK_OVERLAP` (80) token overlap (tiktoken-counted),
 stored in `chunks` with `(novel_id, chapter, chunk_index)` identity. Chapter-bounded
 chunks are what make `WHERE chapter <= ceiling` airtight for retrieval.
+Overlap keeps complete trailing sentences/paragraphs only when they leave room for the
+next passage. An oversized sentence is emitted once on its own, so long unbroken text
+cannot stall a build; the target must be positive and overlap nonnegative.
+Literal tokenizer special-token markers are treated as ordinary source text during token
+counting, so they do not prevent ingestion.
 Rows whose content is null, empty, or whitespace-only are excluded from every Codex stage;
 the range scheduler and chapter loader use the same nonblank-source contract.
 
@@ -36,6 +41,10 @@ last narrative chapter as endpoints and can contain front/back-matter gaps.
 
 Every chunk with `embedding IS NULL` → `EMBED_MODEL` (batched) → pgvector column
 (HNSW cosine index when `EMBED_DIM ≤ 2000`).
+Each response is saved only if the chunk still contains the exact text sent to the provider
+and still lacks an embedding. Concurrent re-chunking therefore cannot attach a stale vector
+to edited text, and parallel embedding workers preserve the first completed result. Skipped
+rows are excluded from the embedded count; changed text remains eligible for the next pass.
 
 ### 3. Extract — bounded memory v2.1, forward-only in strict chapter order
 
@@ -225,9 +234,15 @@ the database job stage so the frontend does not remain on `chunking` while a mod
 ### 4. Index
 
 `BM25Manager.rebuild()` — the per-novel bm25s lexical index, persisted under
-`data/bm25_index/<novel_id>/`, staleness-fingerprinted against the chunk set, lazily
+`data/bm25_index/<novel_id>/`, staleness-fingerprinted against chunk ids, chapter boundaries,
+and exact source text (so equal-length edits also invalidate old indexes), lazily
 loaded on first query, blocking work offloaded to a thread. Partial reader ceilings build a
 bounded LRU of exact eligible-corpus indexes, so future documents affect neither results nor IDF.
+Corpus refreshes clear those prefix indexes; failed loads/builds are retried on the next load.
+Search and rebuild are serialized so result positions always refer to the matching corpus;
+cancelled requests let any in-flight thread operation finish before releasing that lock.
+A visible corpus with no vocabulary after stopword removal yields no lexical matches,
+including when only the reader's bounded prefix is empty of usable terms.
 
 ## Read side: everything ceiling-bounded
 

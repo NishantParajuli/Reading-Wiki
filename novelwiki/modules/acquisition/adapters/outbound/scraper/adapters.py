@@ -1,179 +1,28 @@
-import re
+"""Site-specific chapter extraction and the scraper adapter registry."""
+
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+import re
 from typing import AsyncIterator
-from urllib.parse import urljoin
-import lxml.html
-from curl_cffi.requests import AsyncSession
+from urllib.parse import urljoin, urlsplit
+
 from selectolax.parser import HTMLParser
+
 from novelwiki.platform.config import settings
-from novelwiki.modules.acquisition.adapters.outbound.scraper.safe_fetch import (
-    FetchHTTPError,
-    SafeFetchError,
-    describe_url,
-    safe_fetch_bytes,
-    safe_fetch_json,
-    safe_fetch_text,
+from novelwiki.modules.acquisition.adapters.outbound.scraper.safe_fetch import FetchHTTPError
+from novelwiki.modules.acquisition.adapters.outbound.scraper.base import (
+    HEADERS, BaseAdapter, ChapterData, PremiumReached, ScrapeContext, ScrapeError,
+    _absolutize, _chapter_text, _javascript_object, _predict_next_url, _rich_text,
+    _visit_url, parse_chapter_number,
+)
+from novelwiki.modules.acquisition.adapters.outbound.scraper.novelpia import FuckNovelpiaAdapter
+from novelwiki.modules.acquisition.adapters.outbound.scraper.raw_archive import RawFuckNovelpiaAdapter
+from novelwiki.modules.acquisition.adapters.outbound.scraper.translation_sites import (
+    AzureChroniclesAdapter, DreamyTranslationsAdapter, PenguinSquadAdapter,
 )
 
 logger = logging.getLogger(__name__)
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-
-# Words that, when they dominate an otherwise empty chapter body, indicate a
-# locked/premium chapter rather than a transient failure.
-_PREMIUM_MARKERS = ("premium", "unlock", "locked", "coins", "subscribe", "members only", "advance chapter")
-
-
-def _absolutize(href: str, current_url: str) -> str:
-    if not href or href == "#":
-        return ""
-    return urljoin(current_url, href)
-
-
-def parse_chapter_number(url: str, title: str) -> float | None:
-    """Parses a chapter number (int or float) from a title or URL. Shared by adapters."""
-    title_clean = re.sub(r"\s+", " ", title or "")
-
-    match = re.search(r"(?i)chapter\s+(\d+(?:\.\d+)?)", title_clean)
-    if match:
-        return float(match.group(1))
-
-    match = re.search(r"(?i)\bch\b\.?\s*(\d+(?:\.\d+)?)", title_clean)
-    if match:
-        return float(match.group(1))
-
-    match = re.search(r"(?i)chapter-(\d+(?:[.-]\d+)?)", url or "")
-    if match:
-        raw_num = match.group(1)
-        if "-" in raw_num:
-            raw_num = raw_num.replace("-", ".")
-        try:
-            return float(raw_num)
-        except ValueError:
-            pass
-
-    # Chinese patterns: e.g. 第123章, 第123话, 第123.5章
-    match = re.search(r"第\s*(\d+(?:\.\d+)?)\s*[章话集页]", title_clean)
-    if match:
-        return float(match.group(1))
-
-    match = re.search(r"\b(\d+(?:\.\d+)?)\b", title_clean)
-    if match:
-        return float(match.group(1))
-
-    return None
-
-
-def _predict_next_url(current_url: str, chapter_num: float | None) -> str:
-    """Predicts the next chapter URL by incrementing a trailing numeric path segment
-    (e.g. .../series/<slug>/1 -> .../series/<slug>/2). Returns "" if not applicable."""
-    parts = current_url.rstrip("/").split("/")
-    last_part = parts[-1]
-    if re.match(r"^\d+(?:\.\d+)?$", last_part) and chapter_num is not None:
-        try:
-            next_num = int(chapter_num) + 1
-            return "/".join(parts[:-1]) + f"/{next_num}"
-        except Exception:
-            return ""
-    return ""
-
-
-# ── Normalized scrape primitives ──────────────────────────────────────────
-
-@dataclass
-class ChapterData:
-    """One scraped chapter, in the source's own language. `number` is the source-LOCAL
-    chapter index; the runner adds the source's chapter_offset to derive the global number."""
-    number: float | None
-    title: str
-    content: str
-    url: str | None = None
-    raw_html: str | None = None
-
-
-class PremiumReached(Exception):
-    """Raised by an adapter when it reaches a locked/premium chapter it cannot scrape.
-    The runner catches it and stops the crawl cleanly (we scrape only what's free)."""
-    def __init__(self, number: float | None = None, title: str | None = None):
-        self.number = number
-        self.title = title
-        super().__init__(f"Premium/locked chapter reached (number={number}, title={title!r})")
-
-
-@dataclass
-class ScrapeContext:
-    """Everything an adapter needs to run a crawl. The runner builds this and the
-    adapter drives navigation, yielding ChapterData until exhausted or premium."""
-    start_url: str
-    session: AsyncSession
-    config: dict = field(default_factory=dict)   # per-source adapter config (e.g. selectors)
-    max_chapters: int | None = None
-    stop_on_premium: bool = True
-    source_host: str | None = None
-    allowed_hosts: set[str] = field(default_factory=set)
-    require_same_host: bool = True
-
-    def _fetch_kwargs(self, headers: dict | None = None) -> dict:
-        return {
-            "source_host": self.source_host,
-            "allowed_hosts": self.allowed_hosts,
-            "require_same_host": self.require_same_host,
-            "headers": headers,
-        }
-
-    async def fetch_text(self, url: str, headers: dict | None = None, encoding: str | None = None) -> str | None:
-        try:
-            return await safe_fetch_text(self.session, url, encoding=encoding, **self._fetch_kwargs(headers))
-        except SafeFetchError as e:
-            logger.error("Scraper fetch rejected for %s: %s", describe_url(url), e)
-            return None
-        except Exception as e:
-            logger.error("HTTP request error fetching %s: %s", describe_url(url), e)
-            return None
-
-    async def fetch_json(self, url: str, headers: dict | None = None) -> dict | list | None:
-        try:
-            return await safe_fetch_json(self.session, url, **self._fetch_kwargs(headers))
-        except (SafeFetchError, ValueError) as e:
-            logger.error("Scraper JSON fetch rejected for %s: %s", describe_url(url), e)
-            return None
-        except Exception as e:
-            logger.error("HTTP request error fetching JSON from %s: %s", describe_url(url), e)
-            return None
-
-    async def fetch_bytes(self, url: str, headers: dict | None = None, raise_errors: bool = False) -> bytes | None:
-        try:
-            return await safe_fetch_bytes(self.session, url, **self._fetch_kwargs(headers))
-        except SafeFetchError as e:
-            if raise_errors:
-                raise
-            logger.error("Scraper byte fetch rejected for %s: %s", describe_url(url), e)
-            return None
-        except Exception as e:
-            if raise_errors:
-                raise
-            logger.error("HTTP request error fetching bytes from %s: %s", describe_url(url), e)
-            return None
-
-
-class BaseAdapter:
-    """Base interface for all site/format adapters. An adapter OWNS its crawl: given a
-    ScrapeContext it yields normalized ChapterData in reading order, raising PremiumReached
-    when it can go no further on the free tier."""
-    name: str = "base"
-    label: str = "Base"
-    requires: list[str] = ["start_url"]   # what the Add-Source form must collect
-    default_language: str = "en"
-    allowed_hosts: list[str] = []
-
-    async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
-        raise NotImplementedError()
-        yield  # pragma: no cover (makes this an async generator)
 
 
 # ── HTML page-per-chapter adapters ────────────────────────────────────────
@@ -181,8 +30,8 @@ class BaseAdapter:
 class _PagedHtmlAdapter(BaseAdapter):
     """Shared crawl loop for sites that serve one chapter per page and link 'next'.
     Subclasses supply the per-page extraction (title/content/next). Empty content is
-    treated as the premium/end boundary; a missing 'next' link falls back to URL
-    prediction so sites without explicit nav still advance."""
+    rejected unless an explicit paywall is present. Numeric chapter paths can
+    predict a next URL when server-rendered navigation is absent."""
 
     def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
         raise NotImplementedError()
@@ -193,45 +42,58 @@ class _PagedHtmlAdapter(BaseAdapter):
     def _extract_next_url(self, parser: HTMLParser, current_url: str, ctx: ScrapeContext) -> str:
         raise NotImplementedError()
 
+    async def _fetch_page(self, ctx: ScrapeContext, url: str) -> str:
+        return await ctx.fetch_text(url)
+
     def _looks_premium(self, parser: HTMLParser) -> bool:
+        if parser.css_first('.paywall, .chapter-locked, [data-locked="true"]'):
+            return True
         body = parser.css_first("body")
         text = (body.text(strip=True).lower() if body else "")[:2000]
-        return any(marker in text for marker in _PREMIUM_MARKERS)
+        return bool(re.search(r"unlock (?:this |the )?chapter|chapter (?:is )?locked|members only|subscribe to (?:read|continue)", text))
 
     async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
         current_url = ctx.start_url
         count = 0
+        seen: set[str] = set()
+        predicted = False
         while current_url:
             if ctx.max_chapters is not None and count >= ctx.max_chapters:
                 return
 
-            html = await ctx.fetch_text(current_url)
+            _visit_url(current_url, seen)
+            try:
+                html = await self._fetch_page(ctx, current_url)
+            except FetchHTTPError as exc:
+                if predicted and exc.status_code in {404, 410}:
+                    return
+                raise
             if html is None:
-                return
+                raise ScrapeError("Chapter fetch returned no response.")
 
             parser = HTMLParser(html)
             title = self._extract_title(parser, ctx)
-            content = self._extract_content(parser, ctx)
             number = parse_chapter_number(current_url, title)
             next_url = self._extract_next_url(parser, current_url, ctx)
+            premium = self._looks_premium(parser)
+            # Content cleanup may remove navigation; capture it first.
+            content = self._extract_content(parser, ctx)
 
-            if not content or len(content) < 50:
-                # No real text: either a locked/premium chapter (stop) or a transient
-                # blank page. We scrape sequentially from ch.1, so the first empty
-                # chapter is the free-tier boundary.
+            if premium and (not content.strip() or parser.css_first('.paywall, .chapter-locked, [data-locked="true"]')):
                 if ctx.stop_on_premium:
-                    logger.info(f"Empty/locked chapter at {current_url}; treating as premium boundary and stopping.")
                     raise PremiumReached(number=number, title=title)
-                next_url = next_url or _predict_next_url(current_url, number)
                 if not next_url:
                     return
                 current_url = next_url
                 continue
+            if not content.strip():
+                raise ScrapeError(f"{self.label}: no chapter content found; the source may be blocked or its layout changed.")
 
             yield ChapterData(number=number, title=title, content=content, url=current_url, raw_html=html)
             count += 1
 
-            if not next_url:
+            predicted = not bool(next_url)
+            if predicted:
                 next_url = _predict_next_url(current_url, number)
             if not next_url:
                 logger.info("No next chapter URL found and could not predict next. Crawl complete.")
@@ -245,6 +107,7 @@ class ReadhiveAdapter(_PagedHtmlAdapter):
     label = "Readhive (readhive.org)"
     requires = ["start_url"]
     default_language = "en"
+    start_url_hint = "Paste a chapter URL: https://readhive.org/series/<series-id>/<chapter>/"
 
     def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
         node = parser.css_first("h1")
@@ -252,7 +115,7 @@ class ReadhiveAdapter(_PagedHtmlAdapter):
             strong = node.css_first("strong")
             span = node.css_first("span")
             if strong and span:
-                return f"{span.text(strip=True)} - {strong.text(strip=True)}"
+                return " - ".join(filter(None, [span.text(strip=True), strong.text(strip=True)]))
             elif strong:
                 return strong.text(strip=True)
             return node.text(strip=True)
@@ -267,17 +130,7 @@ class ReadhiveAdapter(_PagedHtmlAdapter):
             for el in node.css(tag):
                 el.decompose()
 
-        paragraphs = []
-        p_nodes = node.css("p")
-        if p_nodes:
-            for p in p_nodes:
-                text = p.text(strip=True)
-                if text:
-                    paragraphs.append(text)
-        if not paragraphs:
-            raw_text = node.text(separator="\n", strip=True)
-            paragraphs = [p.strip() for p in raw_text.split("\n") if p.strip()]
-        return "\n\n".join(paragraphs)
+        return _chapter_text(node)
 
     def _extract_next_url(self, parser: HTMLParser, current_url: str, ctx: ScrapeContext) -> str:
         for node in parser.css("a"):
@@ -297,8 +150,27 @@ class FenriRealmAdapter(_PagedHtmlAdapter):
     label = "FenriRealm (fenrirealm.com)"
     requires = ["start_url"]
     default_language = "en"
+    start_url_hint = "Paste a chapter URL: https://fenrirealm.com/series/<series-slug>/1"
+
+    def _chapter_data(self, parser: HTMLParser) -> dict | None:
+        for node in parser.css("script"):
+            if "chapterData:" in node.text() or "chapterData :" in node.text():
+                try:
+                    return _javascript_object(node.text(), "chapterData")
+                except (TypeError, ValueError) as exc:
+                    raise ScrapeError("FenriRealm returned invalid chapter data.") from exc
+        return None
+
+    def _looks_premium(self, parser: HTMLParser) -> bool:
+        data = self._chapter_data(parser)
+        if data is not None:
+            return bool(not data.get("content") and (data.get("locked") or {}).get("price"))
+        return super()._looks_premium(parser)
 
     def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
+        data = self._chapter_data(parser)
+        if data:
+            return str(data.get("name") or data.get("title") or "Untitled Chapter")
         selectors = ["h1.line-clamp-1", "h1.font-outfit", ".chapter-title", "h2", "h1"]
         for sel in selectors:
             node = parser.css_first(sel)
@@ -309,13 +181,25 @@ class FenriRealmAdapter(_PagedHtmlAdapter):
         return "Untitled Chapter"
 
     def _extract_content(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
+        data = self._chapter_data(parser)
+        if data is not None:
+            content = data.get("content") or ""
+            if not content:
+                return ""
+            if data.get("content_format") == "json":
+                try:
+                    return _rich_text(json.loads(content) if isinstance(content, str) else content).strip()
+                except (TypeError, ValueError) as exc:
+                    raise ScrapeError("FenriRealm returned invalid rich chapter text.") from exc
+            return _chapter_text(HTMLParser(str(content)).body)
         content_selectors = [
+            '[role="region"].reader-area',
             "div.content-area",
-            "div.chapter-view",
             "#reader-area",
             ".entry-content",
             "article",
             "div.reader-content",
+            "div.chapter-view",
         ]
         remove_selectors = [
             "div.my-2",
@@ -330,25 +214,15 @@ class FenriRealmAdapter(_PagedHtmlAdapter):
             "div.flex.justify-between.my-5",  # common pagination containers
         ]
 
-        for sel in remove_selectors:
-            for node in parser.css(sel):
-                node.decompose()
-
         for sel in content_selectors:
             node = parser.css_first(sel)
             if node:
-                paragraphs = []
-                p_nodes = node.css("p")
-                if p_nodes:
-                    for p in p_nodes:
-                        text = p.text(strip=True)
-                        if text:
-                            paragraphs.append(text)
-                if not paragraphs:
-                    raw_text = node.text(separator="\n", strip=True)
-                    paragraphs = [p.strip() for p in raw_text.split("\n") if p.strip()]
-                content = "\n\n".join(paragraphs)
-                if len(content) > 100:  # sanity check for length
+                isolated = HTMLParser(node.html)
+                for remove in remove_selectors:
+                    for unwanted in isolated.css(remove):
+                        unwanted.decompose()
+                content = _chapter_text(isolated.body)
+                if content:
                     return content
         return ""
 
@@ -374,18 +248,21 @@ class BotiTranslationAdapter(BaseAdapter):
     requires = ["start_url"]
     default_language = "en"
     allowed_hosts = ["api.mystorywave.com"]
+    start_url_hint = "Paste a chapter URL: https://www.botitranslation.com/chapter/<chapter-id>"
 
     async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
         current_url = ctx.start_url
         count = 0
+        seen: set[str] = set()
         while current_url:
             if ctx.max_chapters is not None and count >= ctx.max_chapters:
                 return
 
+            _visit_url(current_url, seen)
+
             match = re.search(r"/chapter/(\d+)", current_url)
             if not match:
-                logger.error(f"BotiTranslation: Could not parse chapter ID from URL: {current_url}")
-                return
+                raise ScrapeError("Boti Translation requires a chapter URL containing /chapter/<id>.")
 
             chapter_id = match.group(1)
             api_url = f"https://api.mystorywave.com/story-wave-backend/api/v1/content/chapters/{chapter_id}"
@@ -397,32 +274,34 @@ class BotiTranslationAdapter(BaseAdapter):
 
             resp_json = await ctx.fetch_json(api_url, headers=headers)
             if not isinstance(resp_json, dict):
-                logger.error(f"BotiTranslation: API response was not an object for chapter {chapter_id}")
-                return
+                raise ScrapeError("Boti Translation returned an invalid chapter response.")
             ch_data = resp_json.get("data")
-            if not ch_data:
-                logger.error(f"BotiTranslation: No data field in API response for chapter {chapter_id}")
-                return
+            if not isinstance(ch_data, dict) or not ch_data:
+                raise ScrapeError("Boti Translation returned no chapter data.")
 
             title = ch_data.get("title") or "Untitled Chapter"
             number = parse_chapter_number(current_url, title)
 
-            tier = ch_data.get("tier", 0)
-            paywall_status = ch_data.get("paywallStatus", "free")
+            tier = float(ch_data.get("tier") or 0)
+            paywall_status = str(ch_data.get("paywallStatus") or "free").lower()
+            next_id = ch_data.get("nextId")
+            if next_id is not None and (isinstance(next_id, bool) or not str(next_id).isdigit()):
+                raise ScrapeError("Boti Translation returned an invalid next chapter identifier.")
+            next_url = urljoin(current_url, f"/chapter/{next_id}") if next_id and int(next_id) > 0 else ""
 
             if paywall_status != "free" or tier > 0:
                 if ctx.stop_on_premium:
                     logger.info(f"BotiTranslation: Premium/locked chapter reached at {current_url} (tier={tier}, paywallStatus={paywall_status}). Stopping.")
                     raise PremiumReached(number=number, title=title)
                 else:
-                    logger.info(f"BotiTranslation: Premium chapter reached at {current_url} but stop_on_premium is False. Continuing.")
+                    current_url = next_url
+                    continue
 
             content_html = ch_data.get("content") or ""
             parser = HTMLParser(content_html)
-            paragraphs = [p.text(strip=True) for p in parser.css("p") if p.text(strip=True)]
-            if not paragraphs:
-                paragraphs = [p.strip() for p in parser.text(separator="\n", strip=True).split("\n") if p.strip()]
-            content = "\n\n".join(paragraphs)
+            content = _chapter_text(parser.body)
+            if not content:
+                raise ScrapeError("Boti Translation returned an empty free chapter.")
 
             yield ChapterData(
                 number=number,
@@ -433,12 +312,11 @@ class BotiTranslationAdapter(BaseAdapter):
             )
             count += 1
 
-            next_id = ch_data.get("nextId")
-            if not next_id:
+            if not next_url:
                 logger.info("BotiTranslation: No nextId in API response. Crawl complete.")
                 return
 
-            current_url = f"https://www.botitranslation.com/chapter/{next_id}"
+            current_url = next_url
 
 
 class SixtyNineShubaAdapter(_PagedHtmlAdapter):
@@ -447,60 +325,37 @@ class SixtyNineShubaAdapter(_PagedHtmlAdapter):
     label = "69书吧 (69shuba.com)"
     requires = ["start_url"]
     default_language = "zh"
+    start_url_hint = "Paste a chapter URL: https://www.69shuba.com/txt/<book-id>/<chapter-id>"
 
-    async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
-        original_fetch = ctx.fetch_text
-
-        async def wrapped_fetch(url: str) -> str | None:
-            http_url = url.replace("https://", "http://")
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "Referer": "http://www.69shuba.com/",
-            }
-            retries = 3
-            backoff = 5.0
-            for attempt in range(retries):
+    async def _fetch_page(self, ctx: ScrapeContext, url: str) -> str:
+        headers = {
+            **HEADERS,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": urljoin(url, "/"),
+        }
+        for attempt in range(3):
+            try:
+                body = await ctx.fetch_bytes(url, headers=headers, raise_errors=True)
+                if body is None:
+                    raise ScrapeError("69shuba returned no chapter response.")
+                # Older pages are GBK; newer pages can be UTF-8. Never silently
+                # discard undecodable source characters or downgrade HTTPS.
+                charset = re.search(rb'charset=["\']?([A-Za-z0-9_-]+)', body[:4096], re.I)
+                if charset:
+                    try:
+                        return body.decode(charset[1].decode("ascii"), errors="replace")
+                    except LookupError:
+                        pass
                 try:
-                    body = await ctx.fetch_bytes(http_url, headers=headers, raise_errors=True)
-                    if body is None:
-                        return None
-                    return body.decode("gbk", errors="ignore")
-                except FetchHTTPError as e:
-                    if e.status_code == 429 and attempt < retries - 1:
-                        logger.warning(f"69shuba: Rate limited (429) fetching {describe_url(http_url)}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
-                        await asyncio.sleep(backoff)
-                        backoff *= 2
-                        continue
-                    if attempt < retries - 1:
-                        logger.warning(f"69shuba: HTTP {e.status_code} fetching {describe_url(http_url)}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
-                        await asyncio.sleep(backoff)
-                        backoff *= 2
-                        continue
-                    logger.error(f"69shuba: HTTP request error fetching {describe_url(http_url)} after {retries} attempts: {e}")
-                    return None
-                except SafeFetchError as e:
-                    logger.error(f"69shuba: Rejected unsafe fetch for {describe_url(http_url)}: {e}")
-                    return None
-                except Exception as e:
-                    if attempt < retries - 1:
-                        logger.warning(f"69shuba: Error fetching {describe_url(http_url)}: {e}. Retrying in {backoff}s... (attempt {attempt+1}/{retries})")
-                        await asyncio.sleep(backoff)
-                        backoff *= 2
-                        continue
-                    logger.error(f"69shuba: HTTP request error fetching {describe_url(http_url)} after {retries} attempts: {e}")
-                    return None
-            return None
-
-        ctx.fetch_text = wrapped_fetch
-        try:
-            async for ch in super().crawl(ctx):
-                if ch.url:
-                    ch.url = ch.url.replace("https://", "http://")
-                yield ch
-        finally:
-            ctx.fetch_text = original_fetch
+                    return body.decode("utf-8")
+                except UnicodeDecodeError:
+                    return body.decode("gb18030", errors="replace")
+            except FetchHTTPError as exc:
+                if exc.status_code not in {429, 500, 502, 503, 504} or attempt == 2:
+                    raise
+                await asyncio.sleep(5.0 * (2 ** attempt))
+        raise ScrapeError("69shuba could not fetch the chapter.")
 
     def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
         node = parser.css_first("h1")
@@ -522,11 +377,12 @@ class SixtyNineShubaAdapter(_PagedHtmlAdapter):
 
         cleaned_lines = []
         for line in lines:
-            if re.match(r"^\d{4}-\d{2}-\d{2}$", line):
+            if re.match(r"^\d{4}-\d{2}-\d{2}(?:\s|$)", line):
                 continue
             if line.startswith("作者：") or "作者:" in line:
                 continue
-            if "(本章完)" in line or "（本章完）" in line:
+            line = line.replace("(本章完)", "").replace("（本章完）", "").strip()
+            if not line:
                 continue
             if "loadAdv(" in line:
                 continue
@@ -545,165 +401,123 @@ class SixtyNineShubaAdapter(_PagedHtmlAdapter):
             href = a.attributes.get("href", "")
             text = a.text(strip=True)
             if href and any(x in text for x in ["下一", "next", "下一页", "下一章"]):
-                return _absolutize(href, current_url).replace("https://", "http://")
+                return _absolutize(href, current_url)
         return ""
 
 
 class WeTriedTLSAdapter(BaseAdapter):
-    """Concrete adapter for wetriedtls.com which parses Next.js RSC next_f payload."""
+    """Read public chapter data from Next.js Flight without running scripts."""
     name = "wetriedtls"
     label = "WeTried TLS (wetriedtls.com)"
     requires = ["start_url"]
     default_language = "en"
+    start_url_hint = "Paste a chapter URL: https://wetriedtls.com/series/<series-slug>/chapter-1"
 
-    def _decode_js_string(self, s: str) -> str:
-        import json
-        import codecs
-        try:
-            return json.loads(f'"{s}"')
-        except Exception:
-            try:
-                return codecs.escape_decode(bytes(s, "utf-8"))[0].decode("utf-8")
-            except Exception:
-                return s
+    def _flight_records(self, parser: HTMLParser) -> dict:
+        parts = []
+        decoder = json.JSONDecoder()
+        for node in parser.css("script"):
+            script = node.text()
+            for marker in re.finditer(r"self\.__next_f\.push\(", script):
+                try:
+                    value, _ = decoder.raw_decode(script[marker.end():].lstrip())
+                except ValueError:
+                    continue
+                if isinstance(value, list) and len(value) > 1 and value[0] == 1 and isinstance(value[1], str):
+                    parts.append(value[1])
+        data = "".join(parts).encode("utf-8")
+        records = {}
+        position = 0
+        while position < len(data):
+            if data[position:position + 1] == b"\n":
+                position += 1
+                continue
+            marker = re.match(rb"([0-9a-fA-F]+):", data[position:])
+            if not marker:
+                following = data.find(b"\n", position)
+                if following < 0:
+                    break
+                position = following + 1
+                continue
+            ref = marker[1].decode("ascii")
+            position += marker.end()
+            text_record = re.match(rb"T([0-9a-fA-F]+),", data[position:])
+            if text_record:
+                position += text_record.end()
+                end = position + int(text_record[1], 16)
+                if end > len(data):
+                    raise ScrapeError("WeTried TLS returned incomplete chapter text.")
+                records[ref] = data[position:end].decode("utf-8")
+                position = end
+            else:
+                end = data.find(b"\n", position)
+                if end < 0:
+                    end = len(data)
+                try:
+                    records[ref] = json.loads(data[position:end])
+                except (ValueError, UnicodeDecodeError):
+                    pass  # import/debug/stream-control records are not chapter data
+                position = end + 1
+        return records
+
+    def _chapter_record(self, records: dict) -> tuple[dict, dict]:
+        def find(value, parent=None):
+            if isinstance(value, dict):
+                if "chapter_content" in value:
+                    return value, parent if isinstance(parent, dict) else value
+                children = value.values()
+            elif isinstance(value, list):
+                children = value
+            else:
+                return None
+            for child in children:
+                found = find(child, value)
+                if found:
+                    return found
+            return None
+        for value in records.values():
+            found = find(value)
+            if found:
+                return found
+        raise ScrapeError("WeTried TLS returned no chapter data; the source may be blocked or its layout changed.")
 
     async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
         current_url = ctx.start_url
         count = 0
+        seen: set[str] = set()
         while current_url:
             if ctx.max_chapters is not None and count >= ctx.max_chapters:
                 return
-
+            _visit_url(current_url, seen)
             html = await ctx.fetch_text(current_url)
             if html is None:
-                return
-
-            parser = HTMLParser(html)
-            buffer_parts = []
-            for node in parser.css("script"):
-                js_text = node.text()
-                if "self.__next_f.push" in js_text:
-                    start = 0
-                    while True:
-                        idx = js_text.find("self.__next_f.push(", start)
-                        if idx == -1:
-                            break
-                        pos = idx + len("self.__next_f.push(")
-                        while pos < len(js_text) and js_text[pos] not in ('[', '('):
-                            pos += 1
-                        if pos >= len(js_text):
-                            break
-                        pos += 1  # skip '['
-                        while pos < len(js_text) and js_text[pos].isdigit():
-                            pos += 1
-                        while pos < len(js_text) and js_text[pos] in (',', ' ', '\t', '\n', '\r'):
-                            pos += 1
-                        if pos >= len(js_text) or js_text[pos] != '"':
-                            start = pos
-                            continue
-                        pos += 1  # skip '"'
-                        string_chars = []
-                        while pos < len(js_text):
-                            c = js_text[pos]
-                            if c == '"':
-                                bs_count = 0
-                                temp = pos - 1
-                                while temp >= 0 and js_text[temp] == '\\':
-                                    bs_count += 1
-                                    temp -= 1
-                                if bs_count % 2 == 0:
-                                    break
-                                else:
-                                    string_chars.append(c)
-                            else:
-                                string_chars.append(c)
-                            pos += 1
-                        raw_str = "".join(string_chars)
-                        decoded = self._decode_js_string(raw_str)
-                        buffer_parts.append(decoded)
-                        start = pos + 1
-
-            full_buffer = "".join(buffer_parts)
-
-            # Extract title
-            title_match = re.search(r'"chapter_title"\s*:\s*"([^"]+)"', full_buffer)
-            chapter_name_match = re.search(r'"chapter_name"\s*:\s*"([^"]+)"', full_buffer)
-            title = "Untitled Chapter"
-            if chapter_name_match and title_match:
-                title = f"{chapter_name_match.group(1)} - {title_match.group(1)}"
-            elif title_match:
-                title = title_match.group(1)
-
+                raise ScrapeError("WeTried TLS returned no chapter response.")
+            records = self._flight_records(HTMLParser(html))
+            chapter, container = self._chapter_record(records)
+            title = " - ".join(str(chapter[key]) for key in ("chapter_name", "chapter_title") if chapter.get(key))
             number = parse_chapter_number(current_url, title)
-
-            # Check if locked/premium
-            price_match = re.search(r'"price"\s*:\s*(\d+)', full_buffer)
-            public_match = re.search(r'"public"\s*:\s*(true|false)', full_buffer)
-
-            is_premium = False
-            if price_match and int(price_match.group(1)) > 0:
-                is_premium = True
-            if public_match and public_match.group(1) == "false":
-                is_premium = True
-
-            if is_premium:
+            next_chapter = container.get("next_chapter") or {}
+            next_slug = next_chapter.get("chapter_slug") if isinstance(next_chapter, dict) else None
+            next_url = _absolutize(str(next_slug), current_url.rstrip("/")) if next_slug else ""
+            if chapter.get("public") is False or float(chapter.get("price") or 0) > 0:
                 if ctx.stop_on_premium:
-                    logger.info(f"Premium/locked chapter reached at {current_url}. Stopping.")
                     raise PremiumReached(number=number, title=title)
-
-            # Extract content reference
-            content_ref_match = re.search(r'"chapter_content"\s*:\s*"\$([^"]+)"', full_buffer)
-            if not content_ref_match:
-                logger.warning(f"Could not find chapter_content reference at {current_url}")
-                return
-
-            ref_id = content_ref_match.group(1)
-            decl_pattern = re.compile(re.escape(ref_id) + r':T([0-9a-fA-Z]+),')
-            decl_match = decl_pattern.search(full_buffer)
-            if not decl_match:
-                logger.warning(f"Could not find declaration for reference {ref_id} at {current_url}")
-                return
-
-            length_hex = decl_match.group(1)
-            length = int(length_hex, 16)
-            content_start = decl_match.end()
-            content_end = content_start + length
-            raw_content = full_buffer[content_start:content_end]
-
-            decoded_content = self._decode_js_string(raw_content)
-
-            # Parse HTML to paragraphs
-            content_parser = HTMLParser(decoded_content)
-            paragraphs = []
-            p_nodes = content_parser.css("p")
-            for p in p_nodes:
-                text = p.text(strip=True)
-                if text:
-                    paragraphs.append(text)
-            if not paragraphs:
-                paragraphs = [line.strip() for line in content_parser.text(separator="\n", strip=True).split("\n") if line.strip()]
-
-            content = "\n\n".join(paragraphs)
-
-            yield ChapterData(number=number, title=title, content=content, url=current_url, raw_html=html)
+                current_url = next_url
+                continue
+            content = chapter.get("chapter_content")
+            if isinstance(content, str) and content.startswith("$"):
+                content = records.get(content[1:])
+            if not isinstance(content, str) or not content:
+                raise ScrapeError("WeTried TLS returned no readable chapter text.")
+            # Flight T-record lengths count UTF-8 bytes. Their text has already
+            # been decoded from JavaScript exactly once; decoding it again would
+            # corrupt literal backslashes and quotation marks in the story.
+            text = _chapter_text(HTMLParser(content).body)
+            if not text:
+                raise ScrapeError("WeTried TLS returned an empty free chapter.")
+            yield ChapterData(number=number, title=title, content=text, url=current_url, raw_html=html)
             count += 1
-
-            # Extract next url slug
-            next_slug_match = re.search(r'"next_chapter"\s*:\s*\{[^}]+?"chapter_slug"\s*:\s*"([^"]+)"', full_buffer)
-            if not next_slug_match:
-                logger.info("No next chapter slug found in API response. Crawl complete.")
-                return
-
-            next_slug = next_slug_match.group(1)
-
-            # Construct next URL
-            base_url = current_url.rstrip("/")
-            parts = base_url.split("/")
-            if len(parts) > 1:
-                current_url = "/".join(parts[:-1]) + "/" + next_slug
-            else:
-                logger.error(f"Cannot construct next URL from current URL: {current_url} and slug: {next_slug}")
-                return
+            current_url = next_url
 
 
 class Novel543Adapter(_PagedHtmlAdapter):
@@ -712,6 +526,7 @@ class Novel543Adapter(_PagedHtmlAdapter):
     label = "Novel543 (novel543.com)"
     requires = ["start_url"]
     default_language = "zh"
+    start_url_hint = "Paste the first page of a chapter: https://www.novel543.com/<book-id>/8096_1.html"
 
     def _extract_title(self, parser: HTMLParser, ctx: ScrapeContext) -> str:
         node = parser.css_first(".chapter-content h1") or parser.css_first("h1")
@@ -751,93 +566,66 @@ class Novel543Adapter(_PagedHtmlAdapter):
                 return _absolutize(href, current_url)
         return ""
 
+    @staticmethod
+    def _page_identity(url: str) -> tuple[str, int] | None:
+        path = urlsplit(url).path
+        match = re.search(r"/([^/_]+)_(\d+)(?:_(\d+))?\.html$", path)
+        if not match:
+            return None
+        return path[:match.start()] + f"/{match[1]}_{match[2]}", int(match[3] or 1)
+
+    def _is_continuation(self, first_url: str, next_url: str) -> bool:
+        first, following = self._page_identity(first_url), self._page_identity(next_url)
+        return bool(first and following and first[0] == following[0] and following[1] > first[1])
+
     async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
         current_url = ctx.start_url
         count = 0
-        pending_chapter = None
+        pending = None
         last_number = None
-
+        seen: set[str] = set()
         while current_url:
             if ctx.max_chapters is not None and count >= ctx.max_chapters:
-                if pending_chapter:
-                    yield pending_chapter
                 return
-
+            _visit_url(current_url, seen)
             html = await ctx.fetch_text(current_url)
             if html is None:
-                if pending_chapter:
-                    yield pending_chapter
-                return
-
+                raise ScrapeError("Novel543 returned no chapter response.")
             parser = HTMLParser(html)
             title = self._extract_title(parser, ctx)
-            content = self._extract_content(parser, ctx)
-            parsed_num = parse_chapter_number(current_url, title)
-            next_url = self._extract_next_url(parser, current_url, ctx)
-
-            # Strip part info from title like (1/2) or (2/2)
             title_clean = re.sub(r"\s*[(（]\d+/\d+[)）]\s*$", "", title)
-
-            if not content or len(content) < 50:
+            parsed_number = parse_chapter_number(current_url, title_clean)
+            next_url = self._extract_next_url(parser, current_url, ctx)
+            premium = self._looks_premium(parser)
+            content = self._extract_content(parser, ctx)
+            if premium:
                 if ctx.stop_on_premium:
-                    if pending_chapter:
-                        yield pending_chapter
-                    logger.info(f"Empty/locked chapter at {current_url}; treating as premium boundary and stopping.")
-                    raise PremiumReached(number=parsed_num, title=title)
-                next_url = next_url or _predict_next_url(current_url, parsed_num)
-                if not next_url:
-                    if pending_chapter:
-                        yield pending_chapter
-                    return
+                    raise PremiumReached(number=parsed_number, title=title)
                 current_url = next_url
                 continue
-
-            # Determine the chapter number
-            if last_number is None:
-                number = parsed_num if parsed_num is not None else 1.0
+            if not content.strip():
+                raise ScrapeError("Novel543 returned no chapter text; the page may be blocked or its layout changed.")
+            if pending is not None:
+                if not self._is_continuation(pending.url, current_url):
+                    raise ScrapeError("Novel543 returned an inconsistent split-chapter sequence.")
+                pending.content += "\n\n" + content
+                pending.raw_html += "\n" + html
             else:
-                if parsed_num is not None and parsed_num > last_number:
-                    number = parsed_num
+                if last_number is None:
+                    number = parsed_number
+                elif parsed_number is not None and parsed_number > last_number:
+                    number = parsed_number
+                elif any(word in title_clean for word in ("番外", "外传", "外傳", "特別", "插画", "插畫", "感言", "通知", "請假", "请假")):
+                    number = round(last_number + 0.01, 2)
                 else:
-                    has_digits = any(c.isdigit() for c in title)
-                    is_extra = (not has_digits) or any(x in title for x in (
-                        "番外", "外传", "外傳", "特別", "插画", "插畫", "立绘", "立繪", 
-                        "感言", "通知", "請假", "请假", "懸賞", "悬赏"
-                    ))
-                    if is_extra:
-                        number = round(last_number + 0.01, 2)
-                    else:
-                        number = float(int(last_number) + 1)
-
-            is_continuation = False
-            if pending_chapter is not None:
-                if pending_chapter.number == number and number is not None:
-                    is_continuation = True
-                elif re.search(r"_\d+_[2-9]\.html$", current_url):
-                    is_continuation = True
-
-            if is_continuation and pending_chapter is not None:
-                pending_chapter.content += "\n\n" + content
-            else:
-                if pending_chapter is not None:
-                    yield pending_chapter
-                    count += 1
-                    if ctx.max_chapters is not None and count >= ctx.max_chapters:
-                        return
-                pending_chapter = ChapterData(number=number, title=title_clean, content=content, url=current_url, raw_html=html)
+                    number = float(int(last_number) + 1)
+                pending = ChapterData(number=number, title=title_clean, content=content, url=current_url, raw_html=html)
                 last_number = number
-
-            if not next_url:
-                next_url = _predict_next_url(current_url, number)
-            if not next_url:
-                logger.info("No next chapter URL found and could not predict next. Crawl complete.")
-                if pending_chapter:
-                    yield pending_chapter
-                return
+            if not next_url or not self._is_continuation(current_url, next_url):
+                yield pending
+                count += 1
+                pending = None
             current_url = next_url
-
-        if pending_chapter:
-            yield pending_chapter
 
 
 # ── Adapter registry ──────────────────────────────────────────────────────
@@ -848,6 +636,11 @@ ADAPTERS: dict[str, type[BaseAdapter]] = {
     "69shuba": SixtyNineShubaAdapter,
     "wetriedtls": WeTriedTLSAdapter,
     "novel543": Novel543Adapter,
+    "dreamy-translations": DreamyTranslationsAdapter,
+    "penguin-squad": PenguinSquadAdapter,
+    "azurechronicles": AzureChroniclesAdapter,
+    "fucknovelpia": FuckNovelpiaAdapter,
+    "raw-fucknovelpia": RawFuckNovelpiaAdapter,
 }
 
 
@@ -856,8 +649,7 @@ def get_adapter(name: str | None = None) -> BaseAdapter:
     key = (name or settings.SCRAPER_ADAPTER or "fenrirealm").lower()
     cls = ADAPTERS.get(key)
     if cls is None:
-        logger.warning(f"Unknown adapter '{key}', falling back to 'fenrirealm'.")
-        cls = FenriRealmAdapter
+        raise ValueError(f"Unknown scraper adapter: {key}")
     return cls()
 
 
@@ -870,5 +662,6 @@ def list_adapters() -> list[dict]:
             "label": getattr(cls, "label", key),
             "requires": list(getattr(cls, "requires", ["start_url"])),
             "default_language": getattr(cls, "default_language", "en"),
+            "start_url_hint": cls.start_url_hint,
         })
     return out

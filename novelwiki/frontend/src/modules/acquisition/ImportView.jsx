@@ -6,8 +6,10 @@ import { acquisitionApi } from "../../modules/acquisition/api.js";
 import { catalogApi } from "../../modules/catalog/api.js";
 import { useAuth } from "../../App.jsx";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, Chip, Cover, EmptyState, Loading, PageHeader, ProgressBar } from "../../components/ui.jsx";
+import { Button, Cover, EmptyState, Loading, PageHeader } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
+import { ImportHistory } from "./ImportHistory.jsx";
+import { ConfirmDialog } from "../../components/overlay.jsx";
 import { useTitle } from "../../lib/hooks.js";
 
 import {
@@ -57,12 +59,21 @@ export function ImportView() {
   const [seriesSel, setSeriesSel] = useState({});
   const [seriesTarget, setSeriesTarget] = useState("");
   const [novelChoices, setNovelChoices] = useState([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [jobError, setJobError] = useState(null);
+  const [jobsError, setJobsError] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   useTitle("Import");
 
   const openNovel = (id) => navigate(`/n/${id}`);
 
   const loadJobs = useCallback(() => {
-    acquisitionApi.importJobs().then(setJobs).catch(() => setJobs([]));
+    acquisitionApi.importJobs().then(rows => {
+      setJobs(rows); setJobsError(null);
+      setSeriesSel(previous => Object.fromEntries(Object.entries(previous).filter(
+        ([id, selected]) => selected && rows.some(row => row.id === Number(id) && row.status === "awaiting_review"),
+      )));
+    }).catch(error => setJobsError(error.message || "Could not load recent imports."));
   }, []);
   useEffect(() => {
     loadJobs();
@@ -74,10 +85,12 @@ export function ImportView() {
   // Load + poll the selected job while it's being worked on server-side.
   useEffect(() => {
     if (sel == null) { setJob(null); setPlan(null); setMetadata(null); return; }
+    setJobError(null);
     let cancel = false, timer = null;
     const tick = () => {
       acquisitionApi.importJob(sel).then(j => {
         if (cancel) return;
+        setJobError(null);
         setJob(j);
         setPlan(prev => {
           if (j.plan && (!prev || prev._forJob !== j.id || j.status === "committed")) {
@@ -93,23 +106,30 @@ export function ImportView() {
         });
         if (IMPORT_BUSY.includes(j.status)) timer = setTimeout(tick, 1500);
         else loadJobs();
-      }).catch(() => {});
+      }).catch(error => {
+        if (cancel) return;
+        setJobError(error.message || "Could not load this import.");
+        timer = setTimeout(tick, 5000);
+      });
     };
     tick();
     return () => { cancel = true; if (timer) clearTimeout(timer); };
-  }, [sel, loadJobs]);
+  }, [sel, loadJobs, refreshKey]);
 
   async function onUploaded(jobId, duplicateOf) {
     setDupWarn(duplicateOf && duplicateOf.length ? duplicateOf : null);
     loadJobs(); setSel(jobId);
   }
 
+  const reviewReady = job?.id === sel && plan?._forJob === sel && metadata?._forJob === sel;
+  const seriesBlocked = !!seriesSel[sel] && !reviewReady;
+
   async function commitSeriesNow() {
     const ids = Object.keys(seriesSel).filter(k => seriesSel[k]).map(Number);
-    if (ids.length < 2) return;
+    if (busy || ids.length < 2 || seriesBlocked) return;
     setBusy(true);
     try {
-      if (plan && metadata && ids.includes(sel)) {
+      if (reviewReady && ids.includes(sel)) {
         await acquisitionApi.updateImportPlan(
           sel,
           { version: plan.version || 1, segments: plan.segments },
@@ -133,7 +153,7 @@ export function ImportView() {
   const seriesCount = Object.values(seriesSel).filter(Boolean).length;
 
   async function saveReview() {
-    if (!plan || !metadata) return;
+    if (busy || !reviewReady) return;
     setBusy(true);
     try {
       await acquisitionApi.updateImportPlan(
@@ -148,6 +168,7 @@ export function ImportView() {
   }
 
   async function commit(body) {
+    if (busy || !reviewReady) return;
     setBusy(true);
     try {
       if (plan && metadata) {
@@ -158,91 +179,62 @@ export function ImportView() {
         );
       }
       await acquisitionApi.commitImport(sel, body);
-      toast("Commit started…", { tone: "ok" });
+      setJob(previous => previous && ({ ...previous, status: "committing" }));
+      setRefreshKey(key => key + 1);
+      toast("Adding the book to your library…", { tone: "ok" });
     } catch (e) { toast(e.message || "Commit failed.", { tone: "danger" }); }
     finally { setBusy(false); }
   }
 
   async function confirmOcr(body) {
     setBusy(true);
-    try { await acquisitionApi.confirmOcr(sel, body); toast("OCR started…", { tone: "ok" }); }
+    try {
+      await acquisitionApi.confirmOcr(sel, body);
+      setJob(previous => previous && ({ ...previous, status: "ocr_pending" }));
+      setRefreshKey(key => key + 1);
+      toast("OCR started…", { tone: "ok" });
+    }
     catch (e) { toast(e.message || "Could not start OCR.", { tone: "danger" }); }
     finally { setBusy(false); }
   }
 
   async function removeJob(jid) {
-    await acquisitionApi.deleteImport(jid).catch(() => {});
-    if (sel === jid) { setSel(null); }
-    loadJobs();
+    setBusy(true);
+    try {
+      await acquisitionApi.deleteImport(jid);
+      if (sel === jid) setSel(null);
+      setDeleteTarget(null);
+      loadJobs();
+    } catch (error) { toast(error.message || "Could not delete this import. Try again.", { tone: "danger" }); }
+    finally { setBusy(false); }
   }
 
-  const meta = metadata || (job && job.detected_meta) || {};
+  const meta = { ...(job?.detected_meta || {}), ...(metadata || {}) };
   const committedNovel = job && job.status === "committed" && job.novel_id;
 
   return (
     <div className="page page-enter">
       <PageHeader title="Import a book"
-        subtitle="Bring an EPUB or PDF into your library — chapters, cover and illustrations. Scanned PDFs are OCR'd." />
+        subtitle="Bring your EPUBs and PDFs into the reading room. Review chapters and book details before adding them to your library." />
 
       <UploadDrop onUploaded={onUploaded} />
       {user && user.role === "admin" && <FolderImport onQueued={loadJobs} />}
       {dupWarn && <DuplicateWarning dups={dupWarn} onOpenNovel={openNovel} />}
 
       <div className="import-cols">
-        {/* Jobs list */}
-        <div>
-          <p className="section-eyebrow">Recent imports</p>
-          {seriesCount >= 2 && (
-            <div className="card" style={{ padding: "8px 10px", marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <span className="grow" style={{ fontSize: "var(--text-sm)" }}>{seriesCount} selected</span>
-              <select className="input" style={{ width: "auto", minWidth: 150 }} value={seriesTarget}
-                      onChange={e => setSeriesTarget(e.target.value)}>
-                <option value="">Create new novel</option>
-                {novelChoices.map(novel => (
-                  <option key={novel.id} value={novel.id}>Append to {novel.title}</option>
-                ))}
-              </select>
-              <Button variant="primary" size="sm" icon="layers" loading={busy} onClick={commitSeriesNow}>
-                {seriesTarget ? "Append volumes" : "Commit as series"}
-              </Button>
-            </div>
-          )}
-          {jobs == null ? (
-            <Loading label="Loading…" />
-          ) : jobs.length === 0 ? (
-            <div className="muted" style={{ fontSize: "var(--text-sm)", padding: 8 }}>No imports yet.</div>
-          ) : (
-            <div className="card" style={{ padding: 6 }}>
-              {jobs.map(j => (
-                <div key={j.id} className={"import-job-row" + (sel === j.id ? " active" : "")} onClick={() => setSel(j.id)}>
-                  {j.status === "awaiting_review" && (
-                    <input type="checkbox" title="Select for a series commit"
-                           checked={!!seriesSel[j.id]}
-                           onClick={e => e.stopPropagation()}
-                           onChange={e => setSeriesSel(prev => ({ ...prev, [j.id]: e.target.checked }))} />
-                  )}
-                  <div className="grow" style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: "var(--text-sm)" }} className="truncate">
-                      {(j.detected_meta && j.detected_meta.title) || j.filename || `Job ${j.id}`}
-                    </div>
-                    <div className="muted" style={{ fontSize: "var(--text-xs)" }}>
-                      {(IMPORT_STATUS_LABEL[j.status] || j.status)
-                        + ((j.detected_meta && j.detected_meta.series) ? " · " + j.detected_meta.series : "")}
-                    </div>
-                  </div>
-                  <button className="icon-btn plain" title="Delete" aria-label="Delete import"
-                          onClick={e => { e.stopPropagation(); removeJob(j.id); }}>
-                    <Icon name="x" size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <ImportHistory jobs={jobs} jobsError={jobsError} loadJobs={loadJobs}
+          sel={sel} setSel={setSel} seriesCount={seriesCount}
+          seriesSel={seriesSel} setSeriesSel={setSeriesSel}
+          seriesTarget={seriesTarget} setSeriesTarget={setSeriesTarget}
+          novelChoices={novelChoices} busy={busy} seriesBlocked={seriesBlocked} commitSeriesNow={commitSeriesNow}
+          setDeleteTarget={setDeleteTarget} />
 
         {/* Selected job detail */}
         <div>
-          {job == null ? (
+          {jobError && <div role="alert" className="acct-err">{jobError} Retrying automatically…</div>}
+          {sel != null && (!job || job.id !== sel) ? (
+            <Loading label="Opening import…" />
+          ) : job == null ? (
             <EmptyState icon="book" title="Select an import" body="Upload an EPUB or pick a recent import to review it." />
           ) : (
             <>
@@ -283,7 +275,7 @@ export function ImportView() {
                 ? <OcrConfirm job={job} onConfirm={confirmOcr} busy={busy} />
                 : ["ocr_pending", "ocr_running", "ocr_paused"].includes(job.status)
                   ? <OcrProgress job={job} />
-                  : job.status === "awaiting_review" && plan && metadata
+                  : job.status === "awaiting_review" && reviewReady
                     ? <PlanEditor key={job.id} job={{ ...job, _novels: novelChoices }}
                                   plan={plan} setPlan={setPlan}
                                   metadata={metadata} setMetadata={setMetadata}
@@ -295,6 +287,10 @@ export function ImportView() {
           )}
         </div>
       </div>
+      {deleteTarget && <ConfirmDialog title="Delete this import?"
+        body={`Remove ${deleteTarget.detected_meta?.title || deleteTarget.filename || "this import"} and its review data. Books already in your library are kept.`}
+        confirmLabel="Delete import" busy={busy}
+        onCancel={() => setDeleteTarget(null)} onConfirm={() => removeJob(deleteTarget.id)} />}
     </div>
   );
 }

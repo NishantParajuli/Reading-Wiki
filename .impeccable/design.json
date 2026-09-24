@@ -1,0 +1,528 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-22T14:39:57.722386+00:00",
+  "title": "Design System: Tideglass",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Accent",
+        "tonalRamp": [
+          "oklch(0.150 0.0650 165.00)",
+          "oklch(0.264 0.0650 165.00)",
+          "oklch(0.379 0.0650 165.00)",
+          "oklch(0.493 0.0650 165.00)",
+          "oklch(0.607 0.0650 165.00)",
+          "oklch(0.721 0.0650 165.00)",
+          "oklch(0.836 0.0650 165.00)",
+          "oklch(0.950 0.0650 165.00)"
+        ]
+      },
+      "accent-soft": {
+        "role": "primary",
+        "displayName": "Accent soft",
+        "tonalRamp": [
+          "oklch(0.150 0.0750 165.00)",
+          "oklch(0.264 0.0750 165.00)",
+          "oklch(0.379 0.0750 165.00)",
+          "oklch(0.493 0.0750 165.00)",
+          "oklch(0.607 0.0750 165.00)",
+          "oklch(0.721 0.0750 165.00)",
+          "oklch(0.836 0.0750 165.00)",
+          "oklch(0.950 0.0750 165.00)"
+        ]
+      },
+      "on-accent": {
+        "role": "neutral",
+        "displayName": "On accent",
+        "tonalRamp": [
+          "oklch(0.150 0.0100 90.00)",
+          "oklch(0.264 0.0100 90.00)",
+          "oklch(0.379 0.0100 90.00)",
+          "oklch(0.493 0.0100 90.00)",
+          "oklch(0.607 0.0100 90.00)",
+          "oklch(0.721 0.0100 90.00)",
+          "oklch(0.836 0.0100 90.00)",
+          "oklch(0.950 0.0100 90.00)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "tonalRamp": [
+          "oklch(0.150 0.0080 90.00)",
+          "oklch(0.264 0.0080 90.00)",
+          "oklch(0.379 0.0080 90.00)",
+          "oklch(0.493 0.0080 90.00)",
+          "oklch(0.607 0.0080 90.00)",
+          "oklch(0.721 0.0080 90.00)",
+          "oklch(0.836 0.0080 90.00)",
+          "oklch(0.950 0.0080 90.00)"
+        ]
+      },
+      "desk": {
+        "role": "neutral",
+        "displayName": "Desk",
+        "tonalRamp": [
+          "oklch(0.150 0.0120 90.00)",
+          "oklch(0.264 0.0120 90.00)",
+          "oklch(0.379 0.0120 90.00)",
+          "oklch(0.493 0.0120 90.00)",
+          "oklch(0.607 0.0120 90.00)",
+          "oklch(0.721 0.0120 90.00)",
+          "oklch(0.836 0.0120 90.00)",
+          "oklch(0.950 0.0120 90.00)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface",
+        "tonalRamp": [
+          "oklch(0.150 0.0060 86.00)",
+          "oklch(0.264 0.0060 86.00)",
+          "oklch(0.379 0.0060 86.00)",
+          "oklch(0.493 0.0060 86.00)",
+          "oklch(0.607 0.0060 86.00)",
+          "oklch(0.721 0.0060 86.00)",
+          "oklch(0.836 0.0060 86.00)",
+          "oklch(0.950 0.0060 86.00)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "tonalRamp": [
+          "oklch(0.150 0.0150 155.00)",
+          "oklch(0.264 0.0150 155.00)",
+          "oklch(0.379 0.0150 155.00)",
+          "oklch(0.493 0.0150 155.00)",
+          "oklch(0.607 0.0150 155.00)",
+          "oklch(0.721 0.0150 155.00)",
+          "oklch(0.836 0.0150 155.00)",
+          "oklch(0.950 0.0150 155.00)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "tonalRamp": [
+          "oklch(0.150 0.0180 85.00)",
+          "oklch(0.264 0.0180 85.00)",
+          "oklch(0.379 0.0180 85.00)",
+          "oklch(0.493 0.0180 85.00)",
+          "oklch(0.607 0.0180 85.00)",
+          "oklch(0.721 0.0180 85.00)",
+          "oklch(0.836 0.0180 85.00)",
+          "oklch(0.950 0.0180 85.00)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Border",
+        "tonalRamp": [
+          "oklch(0.150 0.0150 80.00)",
+          "oklch(0.264 0.0150 80.00)",
+          "oklch(0.379 0.0150 80.00)",
+          "oklch(0.493 0.0150 80.00)",
+          "oklch(0.607 0.0150 80.00)",
+          "oklch(0.721 0.0150 80.00)",
+          "oklch(0.836 0.0150 80.00)",
+          "oklch(0.950 0.0150 80.00)"
+        ]
+      },
+      "directory": {
+        "role": "neutral",
+        "displayName": "Directory",
+        "tonalRamp": [
+          "oklch(0.150 0.0450 177.18)",
+          "oklch(0.264 0.0450 177.18)",
+          "oklch(0.379 0.0450 177.18)",
+          "oklch(0.493 0.0450 177.18)",
+          "oklch(0.607 0.0450 177.18)",
+          "oklch(0.721 0.0450 177.18)",
+          "oklch(0.836 0.0450 177.18)",
+          "oklch(0.950 0.0450 177.18)"
+        ]
+      },
+      "directory-ink": {
+        "role": "neutral",
+        "displayName": "Directory ink",
+        "tonalRamp": [
+          "oklch(0.150 0.0150 94.20)",
+          "oklch(0.264 0.0150 94.20)",
+          "oklch(0.379 0.0150 94.20)",
+          "oklch(0.493 0.0150 94.20)",
+          "oklch(0.607 0.0150 94.20)",
+          "oklch(0.721 0.0150 94.20)",
+          "oklch(0.836 0.0150 94.20)",
+          "oklch(0.950 0.0150 94.20)"
+        ]
+      },
+      "directory-muted": {
+        "role": "neutral",
+        "displayName": "Directory muted",
+        "tonalRamp": [
+          "oklch(0.150 0.0222 162.95)",
+          "oklch(0.264 0.0222 162.95)",
+          "oklch(0.379 0.0222 162.95)",
+          "oklch(0.493 0.0222 162.95)",
+          "oklch(0.607 0.0222 162.95)",
+          "oklch(0.721 0.0222 162.95)",
+          "oklch(0.836 0.0222 162.95)",
+          "oklch(0.950 0.0222 162.95)"
+        ]
+      },
+      "directory-active": {
+        "role": "neutral",
+        "displayName": "Directory active",
+        "tonalRamp": [
+          "oklch(0.150 0.0477 173.11)",
+          "oklch(0.264 0.0477 173.11)",
+          "oklch(0.379 0.0477 173.11)",
+          "oklch(0.493 0.0477 173.11)",
+          "oklch(0.607 0.0477 173.11)",
+          "oklch(0.721 0.0477 173.11)",
+          "oklch(0.836 0.0477 173.11)",
+          "oklch(0.950 0.0477 173.11)"
+        ]
+      },
+      "success": {
+        "role": "semantic",
+        "displayName": "Success",
+        "tonalRamp": [
+          "oklch(0.150 0.1100 155.00)",
+          "oklch(0.264 0.1100 155.00)",
+          "oklch(0.379 0.1100 155.00)",
+          "oklch(0.493 0.1100 155.00)",
+          "oklch(0.607 0.1100 155.00)",
+          "oklch(0.721 0.1100 155.00)",
+          "oklch(0.836 0.1100 155.00)",
+          "oklch(0.950 0.1100 155.00)"
+        ]
+      },
+      "warning": {
+        "role": "semantic",
+        "displayName": "Warning",
+        "tonalRamp": [
+          "oklch(0.150 0.1300 75.00)",
+          "oklch(0.264 0.1300 75.00)",
+          "oklch(0.379 0.1300 75.00)",
+          "oklch(0.493 0.1300 75.00)",
+          "oklch(0.607 0.1300 75.00)",
+          "oklch(0.721 0.1300 75.00)",
+          "oklch(0.836 0.1300 75.00)",
+          "oklch(0.950 0.1300 75.00)"
+        ]
+      },
+      "danger": {
+        "role": "semantic",
+        "displayName": "Danger",
+        "tonalRamp": [
+          "oklch(0.150 0.1600 25.00)",
+          "oklch(0.264 0.1600 25.00)",
+          "oklch(0.379 0.1600 25.00)",
+          "oklch(0.493 0.1600 25.00)",
+          "oklch(0.607 0.1600 25.00)",
+          "oklch(0.721 0.1600 25.00)",
+          "oklch(0.836 0.1600 25.00)",
+          "oklch(0.950 0.1600 25.00)"
+        ]
+      },
+      "info": {
+        "role": "semantic",
+        "displayName": "Info",
+        "tonalRamp": [
+          "oklch(0.150 0.1000 250.00)",
+          "oklch(0.264 0.1000 250.00)",
+          "oklch(0.379 0.1000 250.00)",
+          "oklch(0.493 0.1000 250.00)",
+          "oklch(0.607 0.1000 250.00)",
+          "oklch(0.721 0.1000 250.00)",
+          "oklch(0.836 0.1000 250.00)",
+          "oklch(0.950 0.1000 250.00)"
+        ]
+      },
+      "dark-paper": {
+        "role": "neutral",
+        "displayName": "Dark paper",
+        "tonalRamp": [
+          "oklch(0.150 0.0120 62.00)",
+          "oklch(0.264 0.0120 62.00)",
+          "oklch(0.379 0.0120 62.00)",
+          "oklch(0.493 0.0120 62.00)",
+          "oklch(0.607 0.0120 62.00)",
+          "oklch(0.721 0.0120 62.00)",
+          "oklch(0.836 0.0120 62.00)",
+          "oklch(0.950 0.0120 62.00)"
+        ]
+      },
+      "dark-surface": {
+        "role": "neutral",
+        "displayName": "Dark surface",
+        "tonalRamp": [
+          "oklch(0.150 0.0140 62.00)",
+          "oklch(0.264 0.0140 62.00)",
+          "oklch(0.379 0.0140 62.00)",
+          "oklch(0.493 0.0140 62.00)",
+          "oklch(0.607 0.0140 62.00)",
+          "oklch(0.721 0.0140 62.00)",
+          "oklch(0.836 0.0140 62.00)",
+          "oklch(0.950 0.0140 62.00)"
+        ]
+      },
+      "dark-ink": {
+        "role": "neutral",
+        "displayName": "Dark ink",
+        "tonalRamp": [
+          "oklch(0.150 0.0120 84.00)",
+          "oklch(0.264 0.0120 84.00)",
+          "oklch(0.379 0.0120 84.00)",
+          "oklch(0.493 0.0120 84.00)",
+          "oklch(0.607 0.0120 84.00)",
+          "oklch(0.721 0.0120 84.00)",
+          "oklch(0.836 0.0120 84.00)",
+          "oklch(0.950 0.0120 84.00)"
+        ]
+      },
+      "dark-muted": {
+        "role": "neutral",
+        "displayName": "Dark muted",
+        "tonalRamp": [
+          "oklch(0.150 0.0160 76.00)",
+          "oklch(0.264 0.0160 76.00)",
+          "oklch(0.379 0.0160 76.00)",
+          "oklch(0.493 0.0160 76.00)",
+          "oklch(0.607 0.0160 76.00)",
+          "oklch(0.721 0.0160 76.00)",
+          "oklch(0.836 0.0160 76.00)",
+          "oklch(0.950 0.0160 76.00)"
+        ]
+      },
+      "dark-border": {
+        "role": "neutral",
+        "displayName": "Dark border",
+        "tonalRamp": [
+          "oklch(0.150 0.0150 66.00)",
+          "oklch(0.264 0.0150 66.00)",
+          "oklch(0.379 0.0150 66.00)",
+          "oklch(0.493 0.0150 66.00)",
+          "oklch(0.607 0.0150 66.00)",
+          "oklch(0.721 0.0150 66.00)",
+          "oklch(0.836 0.0150 66.00)",
+          "oklch(0.950 0.0150 66.00)"
+        ]
+      },
+      "dark-accent": {
+        "role": "primary",
+        "displayName": "Dark accent",
+        "tonalRamp": [
+          "oklch(0.150 0.1200 165.00)",
+          "oklch(0.264 0.1200 165.00)",
+          "oklch(0.379 0.1200 165.00)",
+          "oklch(0.493 0.1200 165.00)",
+          "oklch(0.607 0.1200 165.00)",
+          "oklch(0.721 0.1200 165.00)",
+          "oklch(0.836 0.1200 165.00)",
+          "oklch(0.950 0.1200 165.00)"
+        ]
+      },
+      "dark-on-accent": {
+        "role": "neutral",
+        "displayName": "Dark on accent",
+        "tonalRamp": [
+          "oklch(0.150 0.0200 70.00)",
+          "oklch(0.264 0.0200 70.00)",
+          "oklch(0.379 0.0200 70.00)",
+          "oklch(0.493 0.0200 70.00)",
+          "oklch(0.607 0.0200 70.00)",
+          "oklch(0.721 0.0200 70.00)",
+          "oklch(0.836 0.0200 70.00)",
+          "oklch(0.950 0.0200 70.00)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Literary display",
+        "purpose": "Home greeting and prominent headings."
+      },
+      "prose": {
+        "displayName": "Reading prose",
+        "purpose": "Default reader text; user settings remain authoritative."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-1",
+        "value": "0 1px 2px oklch(0.3 0.03 70 / 0.06), 0 2px 8px oklch(0.3 0.03 70 / 0.05)",
+        "purpose": "Small ambient depth for covers and selected controls."
+      },
+      {
+        "name": "shadow-2",
+        "value": "0 4px 14px oklch(0.3 0.03 70 / 0.09), 0 12px 36px oklch(0.3 0.03 70 / 0.08)",
+        "purpose": "Book-cover lift and interactive-card emphasis."
+      },
+      {
+        "name": "shadow-pop",
+        "value": "0 12px 40px oklch(0.25 0.03 70 / 0.18)",
+        "purpose": "Floating dialogs, popovers, and citation panels."
+      },
+      {
+        "name": "shadow-inset",
+        "value": "inset 0 1px 3px oklch(0.3 0.03 70 / 0.12)",
+        "purpose": "Inset surfaces where explicitly used."
+      },
+      {
+        "name": "dark-shadow-1",
+        "value": "0 1px 2px oklch(0 0 0 / 0.2), 0 2px 10px oklch(0 0 0 / 0.22)",
+        "purpose": "Dark-theme counterpart; inherited automatically through CSS variables."
+      },
+      {
+        "name": "dark-shadow-2",
+        "value": "0 6px 20px oklch(0 0 0 / 0.3), 0 18px 48px oklch(0 0 0 / 0.32)",
+        "purpose": "Dark-theme counterpart; inherited automatically through CSS variables."
+      },
+      {
+        "name": "dark-shadow-pop",
+        "value": "0 16px 50px oklch(0 0 0 / 0.5)",
+        "purpose": "Dark-theme counterpart; inherited automatically through CSS variables."
+      },
+      {
+        "name": "dark-shadow-inset",
+        "value": "inset 0 1px 3px oklch(0 0 0 / 0.35)",
+        "purpose": "Dark-theme counterpart; inherited automatically through CSS variables."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.22, 0.8, 0.3, 1)",
+        "purpose": "Shared easing or transition duration from tokens.css."
+      },
+      {
+        "name": "dur-1",
+        "value": "120ms",
+        "purpose": "Shared easing or transition duration from tokens.css."
+      },
+      {
+        "name": "dur-2",
+        "value": "200ms",
+        "purpose": "Shared easing or transition duration from tokens.css."
+      },
+      {
+        "name": "dur-3",
+        "value": "320ms",
+        "purpose": "Shared easing or transition duration from tokens.css."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "home-stack",
+        "value": "1150px"
+      },
+      {
+        "name": "mobile-navigation",
+        "value": "767px"
+      },
+      {
+        "name": "compact-collection",
+        "value": "640px"
+      },
+      {
+        "name": "compact-reader",
+        "value": "540px"
+      }
+    ],
+    "focus": [
+      {
+        "name": "ring",
+        "value": "0 0 0 2px var(--bg), 0 0 0 4px var(--accent)",
+        "purpose": "Shared keyboard focus; directory uses a light outline."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The principal action uses the chosen accent without a shadow.",
+      "html": "<button type=\"button\" class=\"ds-btn\">Continue reading</button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 18px;border:1px solid transparent;border-radius:var(--radius-sm,6px);font:600 .9375rem var(--sans,\"Hanken Grotesk\",sans-serif);cursor:pointer;transition:background 120ms ease,color 120ms ease,filter 120ms ease}.ds-btn:focus-visible{outline:2px solid var(--accent,oklch(.40 .065 165));outline-offset:3px}.ds-btn:disabled{opacity:.55;cursor:not-allowed}.ds-btn{background:var(--accent,oklch(.40 .065 165));color:var(--on-accent,oklch(.99 .01 90))}.ds-btn:hover:not(:disabled){filter:brightness(1.05)}"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A quieter accent action.",
+      "html": "<button type=\"button\" class=\"ds-btn\">Choose a book</button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 18px;border:1px solid transparent;border-radius:var(--radius-sm,6px);font:600 .9375rem var(--sans,\"Hanken Grotesk\",sans-serif);cursor:pointer;transition:background 120ms ease,color 120ms ease,filter 120ms ease}.ds-btn:focus-visible{outline:2px solid var(--accent,oklch(.40 .065 165));outline-offset:3px}.ds-btn:disabled{opacity:.55;cursor:not-allowed}.ds-btn{background:var(--accent-soft,oklch(.46 .075 165 / .10));color:var(--accent-ink,oklch(.36 .07 165))}.ds-btn:hover:not(:disabled){background:color-mix(in oklch,var(--accent,oklch(.40 .065 165)) 24%,transparent)}"
+    },
+    {
+      "name": "Ghost button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "A bordered surface action.",
+      "html": "<button type=\"button\" class=\"ds-btn\">Import a book</button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 18px;border:1px solid transparent;border-radius:var(--radius-sm,6px);font:600 .9375rem var(--sans,\"Hanken Grotesk\",sans-serif);cursor:pointer;transition:background 120ms ease,color 120ms ease,filter 120ms ease}.ds-btn:focus-visible{outline:2px solid var(--accent,oklch(.40 .065 165));outline-offset:3px}.ds-btn:disabled{opacity:.55;cursor:not-allowed}.ds-btn{background:var(--surface,oklch(.995 .006 86));color:var(--ink,oklch(.27 .015 155));border-color:var(--border,oklch(.9 .015 80))}.ds-btn:hover:not(:disabled){background:var(--surface-2,oklch(.978 .009 84));border-color:var(--border-2,oklch(.85 .018 78))}"
+    },
+    {
+      "name": "Labeled field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Normal-case labels, visible outline, and soft accent focus.",
+      "html": "<label class=\"ds-field\"><span>Book title</span><input placeholder=\"Enter a title\" /></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:6px;font:700 .8125rem var(--sans,\"Hanken Grotesk\",sans-serif);color:var(--muted,oklch(.49 .018 85))}.ds-field input{width:100%;border:1px solid var(--border,oklch(.9 .015 80));background:var(--surface,oklch(.995 .006 86));color:var(--ink,oklch(.27 .015 155));border-radius:10px;padding:10px 12px;font:400 .9375rem var(--sans,\"Hanken Grotesk\",sans-serif)}.ds-field input:focus-visible{outline:none;border-color:var(--accent,oklch(.40 .065 165));box-shadow:0 0 0 3px var(--accent-soft,oklch(.46 .075 165 / .10))}"
+    },
+    {
+      "name": "Directory navigation",
+      "kind": "nav",
+      "refersTo": "directory-item",
+      "description": "Forest directory with a lighter active surface and visible focus.",
+      "html": "<nav class=\"ds-directory\" aria-label=\"Example navigation\"><a href=\"#home\" aria-current=\"page\">Home</a><a href=\"#library\">Library</a></nav>",
+      "css": ".ds-directory{padding:14px;background:var(--nav-bg,#183d35);display:flex;flex-direction:column;gap:6px;max-width:224px}.ds-directory a{position:relative;display:flex;align-items:center;min-height:46px;padding:0 16px;border-radius:5px;text-decoration:none;font:500 .9375rem var(--sans,\"Hanken Grotesk\",sans-serif);color:var(--nav-muted,#becfc6)}.ds-directory a:hover,.ds-directory a[aria-current]{background:var(--nav-active,#2b5146);color:var(--nav-ink,#f1eee3)}.ds-directory a[aria-current]::after{content:\"\";position:absolute;right:13px;width:5px;height:5px;border-radius:50%;background:#d9c79b}.ds-directory a:focus-visible{outline:2px solid var(--nav-ink,#f1eee3);outline-offset:2px}"
+    },
+    {
+      "name": "Metadata chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Compact supporting metadata; retain a text label.",
+      "html": "<span class=\"ds-chip\">Chapter 24</span>",
+      "css": ".ds-chip{display:inline-flex;align-items:center;gap:6px;font:500 .75rem var(--sans,\"Hanken Grotesk\",sans-serif);padding:3px 10px;border-radius:999px;border:1px solid var(--border,oklch(.9 .015 80));background:var(--surface-2,oklch(.978 .009 84));color:var(--muted,oklch(.49 .018 85))}"
+    },
+    {
+      "name": "Quiet card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A flat container groups working content with a fine border.",
+      "html": "<article class=\"ds-card\"><h2>Reading preferences</h2><p>Adjust the page to make yourself comfortable.</p></article>",
+      "css": ".ds-card{padding:16px;background:var(--surface,oklch(.995 .006 86));color:var(--ink,oklch(.27 .015 155));border:1px solid var(--border,oklch(.9 .015 80));border-radius:12px}.ds-card h2{font:500 1.5rem var(--serif,\"Newsreader\",Georgia,serif);margin:0 0 12px}.ds-card p{font:400 .9375rem var(--sans,\"Hanken Grotesk\",sans-serif);line-height:1.5;color:var(--muted,oklch(.49 .018 85));margin:0}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Personal Reading Room",
+    "overview": "Tideglass pairs a forest-ink directory with a generous paper desk. Book covers,\nliterary headings, and comfortable prose establish the identity; navigation and\nworking controls stay compact and legible. The result is calm, tactile, and useful\nfor both returning to a story and managing a collection.",
+    "keyCharacteristics": [
+      "Warm paper backgrounds with a distinct forest navigation area.",
+      "Serif titles and prose, clear sans-serif controls, restrained monospaced metadata.",
+      "Consistent book-cover proportions and slim reading-progress indicators.",
+      "Flat everyday surfaces, visible focus, and limited depth for covers and overlays.",
+      "Full light/dark themes with preserved reader appearance choices."
+    ],
+    "rules": [],
+    "dos": [
+      "**Do** use shared theme tokens and preserve stored accent and reader preferences.",
+      "**Do** let book titles, real covers, and comfortable prose carry visual character.",
+      "**Do** preserve clear focus, keyboard actions, touch access, and reduced-motion behavior.",
+      "**Do** show loading, empty, and failed states distinctly, with a useful recovery action.",
+      "**Do** verify desktop, narrow screens, and dark theme after shared visual changes."
+    ],
+    "donts": [
+      "**Don't** nest a shelf button or resume link inside another book link.",
+      "**Don't** hide essential cover actions from keyboard or touch users.",
+      "**Don't** replace semantic status labels with color alone.",
+      "**Don't** invent statistics, processing stages, or verification claims as decoration.",
+      "**Don't** apply fixed light-theme colors to theme-aware reading surfaces."
+    ]
+  }
+}

@@ -45,6 +45,10 @@ refused while codex artifacts exist on the old numbering).
 (resume position — client-driven, low trust) and `max_chapter_read` (**monotonic**,
 advanced when an authenticated chapter snapshot is served — the spoiler ceiling).
 `PUT /progress` never writes `max_chapter_read`.
+Resume updates require a finite, existing chapter number and a finite `scroll_pct`
+between 0 and 1 inclusive. Invalid numeric values return 422; a missing chapter returns
+404. Bookmark creation applies the same finite/existing-chapter requirement instead of
+persisting a bookmark that cannot be opened.
 `PostgresReadingRepository.trusted_ceiling()` is
 what Codex's `CeilingPort` resolves through: a reader's requested ceiling is clamped to
 what the server has seen them read. Full model:
@@ -88,7 +92,8 @@ schedules prefetch of the next `TRANSLATE_PREFETCH` chapters as background work)
 ## Application & outbound
 
 - `application/services.py::ReadingService` — resume-progress/bookmark use cases guarded
-  by Catalog access; progress PUT chapter-exists validation. The chapter snapshot query
+  by Catalog access; finite-number/range validation and chapter existence checks for
+  both progress updates and bookmark creation. The chapter snapshot query
   in the outbound repository performs the monotonic `max_chapter_read` advance.
 - `application/migration.py` — the route-facing façade for chapter/overlay/contribution
   flows (composed by Bootstrap's `build_reading_migration_service`), including on-demand
@@ -105,6 +110,8 @@ schedules prefetch of the next `TRANSLATE_PREFETCH` chapters as background work)
   regress overlay anchors, sets `kind`/`part_label` for non-chapter sections),
   source-chapter deletion, overlay-conflict marking, cross-source number sets.
 - `adapters/outbound/codex.py`, `narration.py` — the gateways Codex/Narration consume.
+  Narration's `prose_chapters` currently selects `chapter` and legacy null-kind rows
+  only, excluding interludes from whole-book narration and coverage projections.
 
 ## Collaboration notes
 

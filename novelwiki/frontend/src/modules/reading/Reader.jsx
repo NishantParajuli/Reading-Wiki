@@ -1,7 +1,7 @@
 /* ============================================================
    Reader v2 (§6.7) — calm chrome (4 targets), top progress rail, auto-hiding
    bars, ch-based measure, sepia + true-black night tones, end-of-chapter card,
-   next-chapter prefetch, translation tools, TOC drawer, audio player with
+   translation tools, TOC drawer, audio player with
    ±15s skips. Progress (chapter + scroll fraction) still lives server-side.
    ============================================================ */
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -9,34 +9,33 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { identityApi } from "../../modules/identity/api.js";
-import { narrationApi } from "../../modules/narration/api.js";
 import { readingApi } from "../../modules/reading/api.js";
 import { useAuth } from "../../App.jsx";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, Chip, EmptyState, Loading, SegmentedControl } from "../../components/ui.jsx";
+import { Button, Chip, EmptyState, Loading } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
-import { Drawer, Popover } from "../../components/overlay.jsx";
+import { Drawer } from "../../components/overlay.jsx";
 import { ProvenanceBadges } from "../../components/ProvenanceBadges.jsx";
-import { DiffView } from "../../lib/diff.jsx";
 import { VolumeTOC } from "./toc.jsx";
 import { NarratedProse } from "./NarratedProse.jsx";
-import { VoicePicker, readTtsPrefs } from "../narration/index.js";
+import { readTtsPrefs } from "../narration/index.js";
 import { useNovelQuery } from "../../modules/catalog/queries.js";
 import { useAudioCoverageQuery, useVoicesQuery } from "../../modules/narration/queries.js";
 import { useTitle } from "../../lib/hooks.js";
 import { fmtChapter, minutesLeft, clamp } from "../../lib/utils.js";
 
 import {
-  AUTOSCROLL_PX_PER_SEC, AudioPlayer, EndOfChapterCard, ReaderSettings,
-  RichContent, TranslationTools, loadReaderPrefs,
+  AUTOSCROLL_PX_PER_SEC, AudioPlayer, EndOfChapterCard,
+  RichContent, loadReaderPrefs,
 } from "../../modules/reading/ReaderParts.jsx";
+import { ReaderToolbar } from "./ReaderToolbar.jsx";
 import { useNarrationGuide } from "./useNarrationGuide.js";
 
 export function Reader() {
   const { novelId: novelIdParam, number: numberParam } = useParams();
   const novelId = Number(novelIdParam);
   const number = Number(numberParam);
-  const [sp, setSp] = useSearchParams();
+  const [sp] = useSearchParams();
   const navigate = useNavigate();
   const { user, onUserUpdate } = useAuth();
   const { toast } = useToast();
@@ -57,10 +56,13 @@ export function Reader() {
   const [chrome, setChrome] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
   const [readPct, setReadPct] = useState(0);
-  const [coach, setCoach] = useState(() => !localStorage.getItem("nw-reader-coached"));
+  const [coach, setCoach] = useState(() => {
+    try { return !localStorage.getItem("nw-reader-coached"); } catch { return true; }
+  });
+  const [bookmarkBusy, setBookmarkBusy] = useState(false);
+  const [tocError, setTocError] = useState(null);
   const scrollSaved = useRef(0);
   const lastScrollY = useRef(0);
-  const prefetched = useRef(null);
 
   const listen = sp.get("listen") === "1";
   const {
@@ -75,7 +77,7 @@ export function Reader() {
 
   // Persist prefs locally + sync to the account (debounced).
   useEffect(() => {
-    localStorage.setItem("nw-reader", JSON.stringify(prefs));
+    try { localStorage.setItem("nw-reader", JSON.stringify(prefs)); } catch { /* Storage may be unavailable. */ }
     if (!user) return;
     const t = setTimeout(() => {
       identityApi.updateMe({ prefs: { reader: prefs } })
@@ -89,6 +91,8 @@ export function Reader() {
   useEffect(() => {
     let cancel = false;
     setStatus("loading"); setCh(null); setReadPct(0);
+    setChrome(true); setShowSettings(false); setShowTools(false);
+    lastScrollY.current = 0;
     window.scrollTo({ top: 0 });
     Promise.all([
       readingApi.chapter(novelId, number),
@@ -136,14 +140,17 @@ export function Reader() {
     readingApi.bookmarks(novelId).then(setBookmarks).catch(() => setBookmarks([]));
   }, [novelId]);
   useEffect(() => { loadBookmarks(); }, [loadBookmarks]);
+  useEffect(() => { setToc(null); setTocError(null); }, [novelId]);
 
-  // Scroll: throttled progress save, position rail, chrome auto-hide,
-  // and next-chapter prefetch past 80%.
+  // Scroll saves this chapter only. Fetching another chapter advances the trusted
+  // spoiler boundary, so chapter requests must wait for actual navigation.
   useEffect(() => {
+    if (status !== "ok" || !ch || Number(ch.number) !== number) return;
+    let saveTimer;
     const onScroll = () => {
       const h = document.documentElement;
       const denom = h.scrollHeight - h.clientHeight;
-      const pct = denom > 0 ? h.scrollTop / denom : 0;
+      const pct = denom > 0 ? clamp(h.scrollTop / denom, 0, 1) : 0;
       setReadPct(pct);
 
       const now = Date.now();
@@ -151,34 +158,31 @@ export function Reader() {
         scrollSaved.current = now;
         readingApi.setProgress(novelId, { last_chapter: number, scroll_pct: pct }).catch(() => {});
       }
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        readingApi.setProgress(novelId, { last_chapter: number, scroll_pct: pct }).catch(() => {});
+      }, 500);
 
       // Auto-hide on scroll down, reveal on scroll up.
       const y = h.scrollTop;
       const dy = y - lastScrollY.current;
       if (Math.abs(dy) > 12) {
-        if (dy > 0 && y > 160) setChrome(false);
+        if (dy > 0 && y > 160 && !showSettings && !showTools && !showToc
+          && !document.activeElement?.closest(".reader-bar, .audio-bar")) setChrome(false);
         else if (dy < 0) setChrome(true);
         lastScrollY.current = y;
       }
 
-      // Prefetch the next chapter's JSON once the reader crosses 80%.
-      if (pct > 0.8 && ch && ch.next != null && prefetched.current !== ch.next) {
-        prefetched.current = ch.next;
-        qc.prefetchQuery({
-          queryKey: ["chapter-prefetch", novelId, ch.next],
-          queryFn: () => readingApi.chapter(novelId, ch.next),
-          staleTime: 5 * 60_000,
-        });
-      }
+
     };
     window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, [novelId, number, ch, qc]);
+    return () => { window.removeEventListener("scroll", onScroll); clearTimeout(saveTimer); };
+  }, [novelId, number, ch, qc, status, showSettings, showTools, showToc]);
 
   // Auto-scroll engine.
   useEffect(() => {
     if (
-      !prefs.autoScroll || narrationGuide.engaged
+      !prefs.autoScroll || narrationGuide.engaged || showSettings || showTools || showToc
       || status !== "ok" || !ch || (!ch.content && !ch.rich_html)
     ) return;
     let raf, last = performance.now(), acc = 0;
@@ -198,36 +202,49 @@ export function Reader() {
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [prefs.autoScroll, prefs.autoSpeed, narrationGuide.engaged, status, ch, openReader]);
+  }, [prefs.autoScroll, prefs.autoSpeed, narrationGuide.engaged, status, ch, openReader, showSettings, showTools, showToc]);
 
   // Keyboard prev/next.
   useEffect(() => {
     const onKey = (e) => {
-      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-      if (e.key === "ArrowLeft" && ch && ch.prev != null) openReader(ch.prev);
-      if (e.key === "ArrowRight" && ch && ch.next != null) openReader(ch.next);
+      if (e.key === "Escape") { setShowSettings(false); setShowTools(false); setChrome(true); return; }
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || showSettings || showTools || showToc) return;
+      if (e.target.closest?.("input, textarea, select, button, a, [contenteditable], [role='dialog']")) return;
+      if (e.key === "ArrowLeft" && ch && ch.prev != null) { e.preventDefault(); openReader(ch.prev); }
+      if (e.key === "ArrowRight" && ch && ch.next != null) { e.preventDefault(); openReader(ch.next); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ch, openReader]);
+  }, [ch, openReader, showSettings, showTools, showToc]);
 
   // One-time coach mark.
   useEffect(() => {
     if (!coach) return;
-    const t = setTimeout(() => { setCoach(false); localStorage.setItem("nw-reader-coached", "1"); }, 5000);
+    const t = setTimeout(() => {
+      setCoach(false);
+      try { localStorage.setItem("nw-reader-coached", "1"); } catch { /* Storage may be unavailable. */ }
+    }, 5000);
     return () => clearTimeout(t);
   }, [coach]);
 
   function openTocDrawer() {
-    if (toc == null) readingApi.chapters(novelId).then(setToc).catch(() => setToc([]));
+    if (toc == null) {
+      setTocError(null);
+      readingApi.chapters(novelId).then(setToc).catch(error => setTocError(error.message || "Could not load the contents."));
+    }
     setShowToc(true);
   }
 
   const bookmark = bookmarks.find(b => b.chapter === Number(number));
   async function toggleBookmark() {
-    if (bookmark) { await readingApi.delBookmark(novelId, bookmark.id); toast("Bookmark removed.", { tone: "ok" }); }
-    else { await readingApi.addBookmark(novelId, { chapter: Number(number) }); toast("Bookmarked.", { tone: "ok" }); }
-    loadBookmarks();
+    if (bookmarkBusy) return;
+    setBookmarkBusy(true);
+    try {
+      if (bookmark) { await readingApi.delBookmark(novelId, bookmark.id); toast("Bookmark removed.", { tone: "ok" }); }
+      else { await readingApi.addBookmark(novelId, { chapter: Number(number) }); toast("Bookmarked.", { tone: "ok" }); }
+      loadBookmarks();
+    } catch (error) { toast(error.message || "Could not update your bookmark. Try again.", { tone: "danger" }); }
+    finally { setBookmarkBusy(false); }
   }
 
   const fontFamily = prefs.font === "serif" ? "var(--serif)" : "var(--sans)";
@@ -250,52 +267,14 @@ export function Reader() {
   };
 
   return (
-    <div ref={readerRef} className={"reader tone-" + prefs.tone + (chrome ? "" : " chrome-hidden")} onClick={tapToggle}>
-      <div className="reader-rail" aria-hidden><div style={{ width: (readPct * 100) + "%" }} /></div>
+    <div ref={readerRef} className={"reader tone-" + prefs.tone + (chrome ? "" : " chrome-hidden")} onClick={tapToggle} onFocusCapture={() => setChrome(true)}>
+      <div className="reader-rail" aria-hidden><div style={{ width: "100%", transform: `scaleX(${readPct})` }} /></div>
 
-      {/* top chrome */}
-      <div className={"reader-bar" + (chrome ? "" : " hidden")}>
-        <button className="icon-btn plain" aria-label="Back to novel" title="Back to novel"
-                onClick={() => navigate(`/n/${novelId}`)}>
-          <Icon name="arrowLeft" size={18} />
-        </button>
-        <button className="icon-btn plain" aria-label="Table of contents" title="Contents" onClick={openTocDrawer}>
-          <Icon name="list" size={18} />
-        </button>
-        <div className="reader-bar-title">
-          <span className="rt-novel">{novel ? novel.title : ""}</span>
-          <span className="rt-chapter">{ch ? (ch.title || `Chapter ${fmtChapter(ch.number)}`) : "…"}</span>
-        </div>
-        <span className="reader-bar-pos">{fmtChapter(number)}{total ? ` / ${total}` : ""}</span>
-        <button className={"icon-btn plain" + (bookmark ? " active" : "")} onClick={toggleBookmark}
-                aria-label={bookmark ? "Remove bookmark" : "Bookmark"} title={bookmark ? "Remove bookmark" : "Bookmark"}>
-          <Icon name="bookmark" size={17} />
-        </button>
-        <div style={{ position: "relative" }}>
-          <button className="icon-btn plain" onClick={e => { e.stopPropagation(); setShowSettings(s => !s); setShowTools(false); }}
-                  aria-label="Reading settings" aria-expanded={showSettings} title="Reading settings">
-            <span style={{ fontWeight: 700, fontSize: 15 }}>Aa</span>
-          </button>
-          {showSettings && <ReaderSettings prefs={prefs} setPrefs={setPrefs} />}
-        </div>
-        {status === "ok" && ch && (ch.content != null || ch.has_original) && (
-          <div style={{ position: "relative" }}>
-            <button className={"icon-btn plain" + (ch.overlay ? " active" : "")}
-                    style={ch.overlay_conflict ? { color: "var(--danger)" } : undefined}
-                    onClick={e => { e.stopPropagation(); setShowTools(s => !s); setShowSettings(false); }}
-                    aria-label={ch.overlay_conflict ? "Translation update available" : (ch.overlay ? "Your translation edit" : "Edit translation")}
-                    title={ch.overlay_conflict ? "Translation update available" : (ch.overlay ? "Your translation edit" : "Edit translation")}>
-              <Icon name="edit" size={16} />
-              {ch.overlay_conflict && <span className="ib-badge">1</span>}
-            </button>
-            {showTools && (
-              <TranslationTools novelId={novelId} ch={ch}
-                onClose={() => setShowTools(false)}
-                onChanged={() => { setShowTools(false); setReloadKey(k => k + 1); }} />
-            )}
-          </div>
-        )}
-      </div>
+      <ReaderToolbar chrome={chrome} setChrome={setChrome} novel={novel} novelId={novelId}
+        number={number} total={total} ch={ch} status={status} bookmark={bookmark}
+        bookmarkBusy={bookmarkBusy} toggleBookmark={toggleBookmark} prefs={prefs} setPrefs={setPrefs}
+        showSettings={showSettings} setShowSettings={setShowSettings} showTools={showTools} setShowTools={setShowTools}
+        onBack={() => navigate(`/n/${novelId}`)} onOpenContents={openTocDrawer} onReload={() => setReloadKey(k => k + 1)} />
 
       {/* audio player */}
       {status === "ok" && ch && (ch.content || ch.rich_html) && (
@@ -366,9 +345,16 @@ export function Reader() {
 
       {/* footer position line */}
       {status === "ok" && ch && (
-        <div className={"reader-foot" + (chrome ? "" : " hidden")}>
-          <span>{Math.round(readPct * 100)}%</span>
-          {minsLeft != null && <span>~{minsLeft} min left</span>}
+        <div className={"reader-foot" + (chrome ? "" : " hidden")} onFocusCapture={() => setChrome(true)}>
+          <button className="reader-chapter-nav" disabled={ch.prev == null} onClick={() => openReader(ch.prev, { listen })} aria-label="Previous chapter">
+            <Icon name="arrowLeft" size={16} /><span>Previous</span>
+          </button>
+          <div className="reader-position"><span>{Math.round(readPct * 100)}% read</span>
+            {minsLeft != null && <span>About {minsLeft} min left</span>}
+          </div>
+          <button className="reader-chapter-nav" disabled={ch.next == null} onClick={markDoneAndNext} aria-label="Next chapter">
+            <span>Next chapter</span><Icon name="arrowRight" size={16} />
+          </button>
         </div>
       )}
 
@@ -381,7 +367,8 @@ export function Reader() {
       {/* TOC drawer */}
       {showToc && (
         <Drawer title="Contents" onClose={() => setShowToc(false)}>
-          {toc == null
+          {tocError ? <EmptyState icon="alert" title="Contents couldn't load" body={tocError}
+            primaryAction={<Button variant="ghost" onClick={openTocDrawer}>Try again</Button>} /> : toc == null
             ? <Loading label="Loading…" />
             : <VolumeTOC toc={toc} currentNumber={Number(number)}
                          maxRead={novel && novel.progress ? novel.progress.max_chapter_read : null}

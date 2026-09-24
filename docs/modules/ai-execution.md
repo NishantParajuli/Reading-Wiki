@@ -48,7 +48,7 @@ ids remain on OpenRouter. Embeddings (`EMBED_MODEL`, `EMBED_DIM`,
 `EMBED_REQUEST_DIMENSIONS`) and reranking (`RERANK_MODEL`) always use OpenRouter. Gemini
 vision uses its OpenAI-compatible endpoint with the persistent **daily budget**
 (`provider_budget` rows per (provider, day), `GEMINI_DAILY_BUDGET`, `GEMINI_RPM`) so a
-multi-day OCR run can't blow the free tier after a restart.
+multi-day OCR run retains its configured daily request accounting across a restart.
 
 ### `limits.py` — read-side cost controls
 

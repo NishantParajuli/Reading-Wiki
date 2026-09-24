@@ -1,12 +1,14 @@
 from contextlib import asynccontextmanager
 import asyncio
 import ipaddress
+import json
 from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from curl_cffi.requests import AsyncSession
 from fastapi import HTTPException
+from httpx import ASGITransport, AsyncClient
 
 import novelwiki.db.connection as db_connection
 from novelwiki.api import routes
@@ -14,6 +16,8 @@ from novelwiki.db.connection import close_db_pool, get_db_pool
 from novelwiki.db.schema import init_database
 from novelwiki.scraper import safe_fetch
 from novelwiki.scraper.runner import scrape_source
+from novelwiki.modules.identity.adapters.outbound.postgres_auth import PostgresAuthPersistence
+from novelwiki.platform.config import settings
 
 
 async def _reset_pool():
@@ -339,3 +343,244 @@ async def test_worker_expected_novel_mismatch_aborts_without_writing(scraper_db)
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT COUNT(*) FROM chapters WHERE source_id = $1;", scraper_db["source_b"]) == 0
+
+
+@asynccontextmanager
+async def _source_client(user):
+    """Real cookie authentication and HTTP validation; no lifespan/providers."""
+    from novelwiki.api.app import app
+
+    pool = await get_db_pool()
+    token = await PostgresAuthPersistence(pool).create_user_session(user["id"], "source-regression")
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://testserver",
+        cookies={settings.SESSION_COOKIE: token, settings.CSRF_COOKIE: "source-regression-csrf"},
+        headers={"X-Tideglass-Request": "1", "X-Tideglass-CSRF": "source-regression-csrf"},
+    ) as client:
+        yield client
+
+
+async def _source_state(source_id):
+    pool = await get_db_pool()
+    async with pool.acquire() as connection:
+        row = await connection.fetchrow("SELECT * FROM sources WHERE id=$1", source_id)
+        chapters = await connection.fetch(
+            "SELECT number,title,content FROM chapters WHERE source_id=$1 ORDER BY number", source_id,
+        )
+    source = dict(row)
+    if isinstance(source["config"], str):
+        source["config"] = json.loads(source["config"])
+    return source, [dict(chapter) for chapter in chapters]
+
+
+async def _seed_source_configuration(scraper_db):
+    initial = {
+        "archive_password": "fixture-old-secret", "content_selector": ".reader",
+        "allowed_hosts": ["assets.example.test"], "options": {"retry": 3},
+    }
+    pool = await get_db_pool()
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE sources SET config=$1::jsonb WHERE id=$2", json.dumps(initial), scraper_db["source_a"],
+        )
+        await connection.execute(
+            "INSERT INTO chapters (novel_id,source_id,number,title,content) VALUES ($1,$2,1,'Chapter 1','Synthetic prose.')",
+            scraper_db["novel_a"], scraper_db["source_a"],
+        )
+    return initial
+
+
+@pytest.mark.asyncio
+async def test_source_config_patch_merges_and_password_is_not_in_novel_details(scraper_db):
+    initial = await _seed_source_configuration(scraper_db)
+    path = f'/api/novels/{scraper_db["novel_a"]}/sources/{scraper_db["source_a"]}'
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.patch(path, json={"config": {"archive_password": "fixture-new-secret"}, "label": "Updated label"})
+        assert response.status_code == 200
+        assert "fixture-new-secret" not in response.text
+    source, chapters = await _source_state(scraper_db["source_a"])
+    assert source["config"] == {**initial, "archive_password": "fixture-new-secret"}
+    assert source["label"] == "Updated label"
+    assert float(chapters[0]["number"]) == 1
+
+    pool = await get_db_pool()
+    async with pool.acquire() as connection:
+        await connection.execute("UPDATE novels SET visibility='public' WHERE id=$1", scraper_db["novel_a"])
+    for viewer in (scraper_db["owner_a"], scraper_db["owner_b"]):
+        async with _source_client(viewer) as client:
+            response = await client.get(f'/api/novels/{scraper_db["novel_a"]}')
+        assert response.status_code == 200
+        assert response.json()["sources"]
+        assert all("config" not in source for source in response.json()["sources"])
+        assert "fixture-new-secret" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_source_empty_config_patch_preserves_keys_and_empty_password_clears_only_password(scraper_db):
+    initial = await _seed_source_configuration(scraper_db)
+    path = f'/api/novels/{scraper_db["novel_a"]}/sources/{scraper_db["source_a"]}'
+    async with _source_client(scraper_db["owner_a"]) as client:
+        assert (await client.patch(path, json={"config": {}})).status_code == 200
+        assert (await _source_state(scraper_db["source_a"]))[0]["config"] == initial
+        assert (await client.patch(path, json={"config": {"archive_password": ""}})).status_code == 200
+    assert (await _source_state(scraper_db["source_a"]))[0]["config"] == {**initial, "archive_password": ""}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target,public,status", [("foreign_source", False, 404), ("foreign_novel", False, 404), ("foreign_novel", True, 403)])
+async def test_source_config_patch_respects_source_novel_and_owner(scraper_db, target, public, status):
+    novel = scraper_db["novel_a"] if target == "foreign_source" else scraper_db["novel_b"]
+    if public:
+        pool = await get_db_pool()
+        async with pool.acquire() as connection:
+            await connection.execute("UPDATE novels SET visibility='public' WHERE id=$1", novel)
+    before = await _source_state(scraper_db["source_b"])
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.patch(
+            f'/api/novels/{novel}/sources/{scraper_db["source_b"]}',
+            json={"config": {"archive_password": "fixture-attacker-change"}, "chapter_offset": 10},
+        )
+    assert response.status_code == status
+    assert await _source_state(scraper_db["source_b"]) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config", [
+    None, [], "invalid", {"retry": float("nan")}, {"retry": float("inf")},
+    {"archive_password": 123}, {"archive_password": None},
+    {"nested": ["bad\x00value"]}, {"bad\x00key": "value"}, {"nested": {"value": "\ud800"}},
+])
+async def test_invalid_source_config_does_not_renumber_or_write_other_fields(scraper_db, config):
+    await _seed_source_configuration(scraper_db)
+    before = await _source_state(scraper_db["source_a"])
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.patch(
+            f'/api/novels/{scraper_db["novel_a"]}/sources/{scraper_db["source_a"]}',
+            content=json.dumps({"config": config, "chapter_offset": 10, "label": "Must not persist"}),
+            headers={"Content-Type": "application/json"},
+        )
+    assert await _source_state(scraper_db["source_a"]) == before
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [None, "NaN", "Infinity", float("nan"), float("inf"), -float("inf")])
+async def test_invalid_source_offset_does_not_change_config_or_chapters(scraper_db, offset):
+    await _seed_source_configuration(scraper_db)
+    before = await _source_state(scraper_db["source_a"])
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.patch(
+            f'/api/novels/{scraper_db["novel_a"]}/sources/{scraper_db["source_a"]}',
+            content=json.dumps({"chapter_offset": offset, "config": {"archive_password": "Must not persist"}}),
+            headers={"Content-Type": "application/json"},
+        )
+    assert response.status_code == 422
+    assert await _source_state(scraper_db["source_a"]) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("maximum", [0, -1, 1.5, "NaN"])
+async def test_invalid_scrape_maximum_does_not_create_job(scraper_db, maximum):
+    pool = await get_db_pool()
+    before = await pool.fetchval("SELECT COUNT(*) FROM jobs")
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.post(
+            f'/api/novels/{scraper_db["novel_a"]}/scrape',
+            json={"source_id": scraper_db["source_a"], "max_chapters": maximum},
+        )
+    assert response.status_code == 422
+    assert await pool.fetchval("SELECT COUNT(*) FROM jobs") == before
+
+
+@pytest.mark.asyncio
+async def test_source_config_and_finite_offset_can_be_updated_together(scraper_db):
+    initial = await _seed_source_configuration(scraper_db)
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.patch(
+            f'/api/novels/{scraper_db["novel_a"]}/sources/{scraper_db["source_a"]}',
+            json={"chapter_offset": 0.5, "config": {"archive_password": "fixture-new-secret"}},
+        )
+    assert response.status_code == 200 and response.json()["renumbered"] == 1
+    source, chapters = await _source_state(scraper_db["source_a"])
+    assert source["config"] == {**initial, "archive_password": "fixture-new-secret"}
+    assert float(source["chapter_offset"]) == 0.5
+    assert float(chapters[0]["number"]) == 1.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [
+    {"chapter_offset": "NaN"}, {"chapter_offset": float("inf")},
+    {"config": {"retry": float("nan")}}, {"config": {"archive_password": []}},
+])
+async def test_source_create_rejects_invalid_offset_or_config_without_insert(scraper_db, extra):
+    pool = await get_db_pool()
+    before = await pool.fetchval("SELECT COUNT(*) FROM sources")
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.post(
+            f'/api/novels/{scraper_db["novel_a"]}/sources',
+            content=json.dumps({"adapter": "raw-fucknovelpia", "start_url": "https://public.example/novel/synthetic", **extra}),
+            headers={"Content-Type": "application/json"},
+        )
+    assert response.status_code == 422
+    assert await pool.fetchval("SELECT COUNT(*) FROM sources") == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("label", "bad\x00label"), ("label", "bad\ud800label"),
+    ("language", "en\x00"), ("language", "en\ud800"),
+    ("start_url", "https://public.example/bad\x00path"),
+    ("start_url", "https://public.example/bad\ud800path"),
+])
+async def test_invalid_source_text_does_not_renumber_or_update_config(scraper_db, field, value):
+    await _seed_source_configuration(scraper_db)
+    before = await _source_state(scraper_db["source_a"])
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.patch(
+            f'/api/novels/{scraper_db["novel_a"]}/sources/{scraper_db["source_a"]}',
+            content=json.dumps({field: value, "chapter_offset": 10, "config": {"archive_password": "Must not persist"}}),
+            headers={"Content-Type": "application/json"},
+        )
+    assert response.status_code == 422
+    assert await _source_state(scraper_db["source_a"]) == before
+
+
+@pytest.mark.asyncio
+async def test_existing_nullable_source_fields_remain_nullable(scraper_db):
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.patch(
+            f'/api/novels/{scraper_db["novel_a"]}/sources/{scraper_db["source_a"]}',
+            json={"start_url": None, "label": None, "language": None, "is_raw": None},
+        )
+    assert response.status_code == 200
+    source, _ = await _source_state(scraper_db["source_a"])
+    assert all(source[field] is None for field in ("start_url", "label", "language", "is_raw"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_fields", [
+    {"config": {"archive_password": 123}}, {"config": {"retry": float("nan")}},
+    {"config": {"nested": ["bad\x00value"]}}, {"label": "bad\ud800label"},
+])
+async def test_new_novel_with_invalid_source_rolls_back_every_created_row(scraper_db, monkeypatch, source_fields):
+    async def public_dns(_host, _port):
+        return [ipaddress.ip_address("8.8.8.8")]
+
+    monkeypatch.setattr(safe_fetch, "_resolve_host", public_dns)
+    pool = await get_db_pool()
+
+    async def counts():
+        return tuple([await pool.fetchval(f"SELECT COUNT(*) FROM {table}") for table in ("novels", "sources", "library_entries")])
+
+    before = await counts()
+    async with _source_client(scraper_db["owner_a"]) as client:
+        response = await client.post(
+            "/api/novels",
+            content=json.dumps({
+                "title": "Must not leave a novel behind",
+                "source": {"adapter": "raw-fucknovelpia", "start_url": "https://public.example/novel/synthetic", **source_fields},
+            }),
+            headers={"Content-Type": "application/json"},
+        )
+    assert response.status_code == 422
+    assert await counts() == before

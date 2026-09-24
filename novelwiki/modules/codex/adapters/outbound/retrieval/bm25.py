@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import logging
+import hashlib
 from collections import OrderedDict
 import numpy as np
 import bm25s
@@ -19,8 +20,8 @@ class BM25Manager:
     rebuilt only when that novel's chunk set changes (see staleness signature),
     never on every query.
 
-    Spoiler-safety (Invariant 7): the chapter ceiling is enforced per query with a
-    0/1 ``weight_mask`` so chunks from chapters > ceiling score 0, plus a
+    Spoiler-safety (Invariant 7): each reader ceiling uses an index containing
+    only visible chapters, including its document-frequency statistics, plus a
     defensive post-filter on the returned hits.
     """
 
@@ -29,7 +30,7 @@ class BM25Manager:
         self.corpus: list[dict] = []          # [{"id", "chapter", "text"}], aligned to index order
         self.chapter_arr = np.array([])        # vectorized chapters, aligned to corpus
         self.retriever: bm25s.BM25 | None = None
-        self._prefix_retrievers: OrderedDict[int, tuple[bm25s.BM25, np.ndarray]] = OrderedDict()
+        self._prefix_retrievers: OrderedDict[int, tuple[bm25s.BM25 | None, np.ndarray]] = OrderedDict()
         self._loaded = False
         # Serializes build/load so two coroutines can't race a rebuild of this novel's index.
         self._lock = asyncio.Lock()
@@ -40,7 +41,23 @@ class BM25Manager:
         """Run a blocking (CPU/disk) BM25 op off the event loop when offload is enabled,
         so tokenization/indexing/search can't stall unrelated requests."""
         if settings.BM25_THREAD_OFFLOAD:
-            return await asyncio.to_thread(fn, *args)
+            work = asyncio.create_task(asyncio.to_thread(fn, *args))
+            try:
+                return await asyncio.shield(work)
+            except asyncio.CancelledError as cancelled:
+                # A cancelled await does not stop its worker thread. Drain it
+                # before callers release the corpus/index lock, including when
+                # a request is cancelled again while that thread winds down.
+                while not work.done():
+                    try:
+                        await asyncio.shield(work)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not work.cancelled():
+                    work.exception()
+                raise cancelled
         return fn(*args)
 
     # ── Corpus / metadata ──────────────────────────────────────────────────
@@ -56,22 +73,28 @@ class BM25Manager:
             for r in rows
         ]
         self.chapter_arr = np.array([c["chapter"] for c in self.corpus], dtype=float)
+        self._prefix_retrievers.clear()
         logger.info(f"Loaded {len(self.corpus)} chunks into BM25 corpus for novel {self.novel_id}.")
 
     def _db_signature(self) -> dict:
-        """Cheap fingerprint of the indexed chunk set, used to detect staleness.
+        """Fingerprint source text, chapter boundaries, and index row order.
 
-        Chunks are immutable (a re-chunk deletes + reinserts them with fresh BIGSERIAL
-        ids), so count + max_id already move whenever content changes; `total_chars` is a
-        belt-and-suspenders guard against a coincidental count/max_id match after an edit.
-        A codex rebuild additionally calls `rebuild()` explicitly, so the on-disk index is
-        never trusted stale.
+        Force re-chunking preserves row ids, including for equal-length text
+        edits. Counts and id/length aggregates cannot identify those changes.
         """
+        content_hash = hashlib.sha256()
+        for chunk in self.corpus:
+            content_hash.update(json.dumps(
+                [chunk["id"], chunk["chapter"], chunk["text"]],
+                ensure_ascii=False, separators=(",", ":"),
+            ).encode("utf-8"))
+            content_hash.update(b"\n")
         return {
             "novel_id": self.novel_id,
             "count": len(self.corpus),
             "max_id": max((c["id"] for c in self.corpus), default=0),
             "total_chars": sum(len(c["text"]) for c in self.corpus),
+            "content_sha256": content_hash.hexdigest(),
             "dim": settings.EMBED_DIM,  # not used by BM25 but ties the cache to a build config
         }
 
@@ -82,6 +105,10 @@ class BM25Manager:
             return
         texts = [c["text"] for c in self.corpus]
         tokens = bm25s.tokenize(texts, stopwords="english", show_progress=False)
+        if not tokens.vocab:
+            self.retriever = None
+            self._prefix_retrievers.clear()
+            return
         retriever = bm25s.BM25()
         retriever.index(tokens, show_progress=False)
         self.retriever = retriever
@@ -105,8 +132,10 @@ class BM25Manager:
             return cached
         texts = [self.corpus[int(index)]["text"] for index in eligible]
         tokens = bm25s.tokenize(texts, stopwords="english", show_progress=False)
-        retriever = bm25s.BM25()
-        retriever.index(tokens, show_progress=False)
+        retriever = None
+        if tokens.vocab:
+            retriever = bm25s.BM25()
+            retriever.index(tokens, show_progress=False)
         value = (retriever, eligible)
         self._prefix_retrievers[key] = value
         while len(self._prefix_retrievers) > settings.BM25_PREFIX_CACHE_SIZE:
@@ -147,18 +176,21 @@ class BM25Manager:
         The tokenize/index/save and disk-load steps are synchronous, so they run off the
         event loop (see `_offload`). Callers hold `self._lock`.
         """
+        self._loaded = False
         await self._load_corpus_rows()
-        self._loaded = True
         if not self.corpus:
             self.retriever = None
+            self._loaded = True
             logger.info(f"No chunks present for novel {self.novel_id}; BM25 index is empty.")
             return
         if await self._offload(self._try_load_from_disk):
+            self._loaded = True
             logger.info(f"Loaded persisted BM25 index ({len(self.corpus)} docs) for novel {self.novel_id}.")
             return
         logger.info(f"Building BM25 index over {len(self.corpus)} chunks for novel {self.novel_id}...")
         await self._offload(self._build_retriever)
         await self._offload(self._save)
+        self._loaded = True
 
     async def ensure_loaded(self):
         """Lazy entry point for query paths: build/load the index on first use.
@@ -172,14 +204,16 @@ class BM25Manager:
     async def rebuild(self):
         """Force a fresh build + persist (used by `rebuild-bm25` after ingestion)."""
         async with self._lock:
+            self._loaded = False
             await self._load_corpus_rows()
-            self._loaded = True
             if not self.corpus:
                 self.retriever = None
+                self._loaded = True
                 logger.info(f"No chunks present for novel {self.novel_id}; nothing to index.")
                 return
             await self._offload(self._build_retriever)
             await self._offload(self._save)
+            self._loaded = True
         logger.info(f"BM25 index rebuilt for novel {self.novel_id}.")
 
     # ── Query ──────────────────────────────────────────────────────────────
@@ -228,7 +262,10 @@ class BM25Manager:
     async def asearch(self, query: str, chapter_ceiling: float, k: int = 50) -> list[dict]:
         """Async wrapper around `search` that runs the blocking tokenize/retrieve off the
         event loop (when offload is enabled). Query paths should call this, not `search`."""
-        return await self._offload(self.search, query, chapter_ceiling, k)
+        # Rebuild replaces the corpus and its positional index together. Keep
+        # that mapping stable until an offloaded search has collected its hits.
+        async with self._lock:
+            return await self._offload(self.search, query, chapter_ceiling, k)
 
 
 # ── Per-novel manager registry ───────────────────────────────────────────

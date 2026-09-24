@@ -86,15 +86,23 @@ cross-page paragraph rejoining).
 
 ### Outbound adapters
 
-- **`scraper/`** — `adapters.py` (the site-adapter registry: `fenrirealm`, `readhive`,
-  `boti-translations`, `69shuba`, `wetriedtls`; new sites subclass `BaseAdapter` or
-  `_PagedHtmlAdapter` and register in `ADAPTERS`), `runner.py` (incremental scrape loop:
+- **`scraper/`** — `base.py` (shared crawl context, chapter contract, parsing helpers,
+  and error types), `adapters.py` (the registry and original site
+  adapters, including Novel543), `translation_sites.py` (Dreamy Translations, Penguin
+  Squad, Azure Chronicles), `novelpia.py` (current FuckNovelpia PHP reader), and
+  `raw_archive.py` (Raw FuckNovelpia catalogue downloads, bounded ZIP/EPUB/TXT/HTML text
+  extraction, archive password and ordered-section checkpoints). See
+  [supported sites](../pipelines/supported-sites.md) for keys, URL formats, and limits.
+  New sites subclass `BaseAdapter` or `_PagedHtmlAdapter` and register in `ADAPTERS`.
+  `runner.py` owns the incremental scrape loop:
   resume URL from Reading, fetch → parse → `upsert_ingested_chapter`, premium-wall
-  detection, `touch_novel`), `safe_fetch.py` (the SSRF boundary: HTTP(S)-only, public-IP
+  detection and source timestamps. `safe_fetch.py` provides the SSRF boundary: HTTP(S)-only, public-IP
   DNS pinning, redirect re-validation, response size caps, same-host binding with
-  adapter-declared `allowed_hosts` exceptions).
-- **`importer/`** — `parsers/epub.py` (ebooklib; spine + XHTML + images),
-  `parsers/pdf_text.py` (pymupdf digital-PDF spans, release-filename volume metadata,
+  adapter-declared `allowed_hosts` exceptions.
+- **`importer/`** — `parsers/epub.py` (ZIP + lxml; spine + XHTML + images, with external
+  XML resources and document entities disabled).
+  Missing EPUB headings fall back to NCX/EPUB3 navigation titles; scraper text mode skips
+  image staging. `parsers/pdf_text.py` (pymupdf digital-PDF spans, release-filename volume metadata,
   safe bare-`Vol N` detection, cover/illustration anchoring, tiny-decoration filtering),
   `parsers/pdf_ocr.py` (rasterize →
   PaddleOCR sidecar → Gemini-vision escalation for pages under
@@ -102,7 +110,10 @@ cross-page paragraph rejoining).
   optional LLM refinement of kinds/titles/numbers), `storage.py` (job directories,
   block-stream persistence, `ensure_dirs`), `commit.py` (applies saved user metadata,
   then prepares the operation handed to the `commit_import` workflow), `ocr_client.py`
-  (sidecar HTTP with the shared service token + provider budget).
+  (sidecar HTTP with the shared service token + provider budget). Both OCR transports validate
+  complete page counts and block shapes before checkpointing; malformed Gemini output fails
+  instead of silently dropping pages. Completed OCR checkpoints assemble without contacting
+  a provider, and PDF handles close even when work pauses or fails.
 - **`postgres.py`** — the owned-tables repository (import jobs, sources, assets).
 - **`catalog_workflows.py`** — `PostgresAcquisitionTransactionService` (the
   `AcquisitionTransactionApi` implementation), including the per-target-novel

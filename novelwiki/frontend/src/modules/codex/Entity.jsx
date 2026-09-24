@@ -36,7 +36,11 @@ export function EntityPage() {
   const [tl, setTl] = useState([]);
   const [idl, setIdl] = useState([]);
   const [errMsg, setErrMsg] = useState("");
-  useTitle(profile ? profile.canonical_name : "Codex", novel.title);
+  const [loadedKey, setLoadedKey] = useState(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const requestKey = JSON.stringify([novelId, id, debCeiling]);
+  const isCurrent = loadedKey === requestKey && ceiling === debCeiling;
+  useTitle(isCurrent && profile ? profile.canonical_name : "Codex", novel.title);
 
   useEffect(() => {
     let cancel = false;
@@ -53,21 +57,23 @@ export function EntityPage() {
         ]);
         if (cancel) return;
         setRels(r || []); setTl(t || []); setIdl(i || []);
+        setLoadedKey(requestKey);
         setStatus("ok");
       } catch (e) {
         if (cancel) return;
+        setLoadedKey(requestKey);
         if (e.status === 404) setStatus("notfound");
         else { setErrMsg(e.message || "Failed to load."); setStatus("error"); }
       }
     })();
     return () => { cancel = true; };
-  }, [novelId, id, debCeiling]);
+  }, [novelId, id, debCeiling, retryKey]);
 
   const back = (
     <Button variant="ghost" size="sm" icon="arrowLeft" onClick={() => navigate(`/n/${novelId}/codex`)}>Codex</Button>
   );
 
-  if (status === "loading") {
+  if (status === "loading" || !isCurrent) {
     return <div className="page page-enter">{back}<Loading label="Synthesizing the codex entry…" /></div>;
   }
   if (status === "notfound") {
@@ -85,7 +91,8 @@ export function EntityPage() {
     return (
       <div className="page page-enter">
         {back}
-        <div style={{ marginTop: 16 }}><EmptyState icon="x" title="Couldn't load this entry" body={errMsg} /></div>
+        <div style={{ marginTop: 16 }}><EmptyState icon="x" title="Couldn't load this entry" body={errMsg}
+          primaryAction={<Button variant="secondary" onClick={() => setRetryKey(key => key + 1)}>Try again</Button>} /></div>
       </div>
     );
   }

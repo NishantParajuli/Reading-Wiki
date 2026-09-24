@@ -59,21 +59,43 @@ def _localname(tag) -> str:
     return tag.rsplit("}", 1)[-1].lower()
 
 
+def _parse_xml(data: bytes):
+    """Parse package XML without fetching DTDs or expanding document entities."""
+    parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
+    root = etree.fromstring(data, parser=parser)
+    dtd = root.getroottree().docinfo.internalDTD
+    if (dtd is not None and dtd.entities()) or any(
+        isinstance(node, etree._Entity) for node in root.iter()
+    ):
+        raise ValueError("EPUB XML entity declarations and references are not supported.")
+    return root
+
+
 class _Epub:
     """Thin reader over the EPUB zip: resolves the OPF, manifest, and spine."""
 
     def __init__(self, path: str):
         self.zip = zipfile.ZipFile(path, "r")
-        self._guard_bomb()
-        if any(n.lower().endswith("encryption.xml") for n in self.zip.namelist()):
-            raise ValueError("This EPUB is encrypted/DRM-protected and cannot be imported.")
-        self.opf_path = self._find_opf()
-        self.opf_dir = posixpath.dirname(self.opf_path)
-        self.opf = etree.fromstring(self.zip.read(self.opf_path))
-        self.manifest: dict[str, dict] = {}     # id → {href, media_type, properties}
-        self.href_to_id: dict[str, str] = {}
-        self.spine: list[str] = []              # ordered manifest ids
-        self._parse_opf()
+        try:
+            self._guard_bomb()
+            if any(n.lower().endswith("encryption.xml") for n in self.zip.namelist()):
+                raise ValueError("This EPUB is encrypted/DRM-protected and cannot be imported.")
+            self.opf_path = self._find_opf()
+            self.opf_dir = posixpath.dirname(self.opf_path)
+            self.opf = _parse_xml(self.zip.read(self.opf_path))
+            self.manifest: dict[str, dict] = {}     # id → {href, media_type, properties}
+            self.href_to_id: dict[str, str] = {}
+            self.spine: list[str] = []              # ordered manifest ids
+            self._parse_opf()
+        except BaseException:
+            self.zip.close()
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.zip.close()
 
     def _guard_bomb(self):
         infos = self.zip.infolist()
@@ -85,7 +107,7 @@ class _Epub:
 
     def _find_opf(self) -> str:
         try:
-            container = etree.fromstring(self.zip.read("META-INF/container.xml"))
+            container = _parse_xml(self.zip.read("META-INF/container.xml"))
             rootfile = container.find(".//container:rootfile", _NS)
             if rootfile is not None and rootfile.get("full-path"):
                 return rootfile.get("full-path")
@@ -156,6 +178,44 @@ class _Epub:
                 return iid
         return None
 
+    def toc_titles(self) -> dict[str, str]:
+        """Fallback labels for books whose chapter headings are plain paragraphs."""
+        titles: dict[str, str] = {}
+        for item in self.manifest.values():
+            is_ncx = item["media_type"] == "application/x-dtbncx+xml"
+            is_nav = "nav" in item.get("properties", "").split()
+            if not (is_ncx or is_nav):
+                continue
+            path = self._norm(item["href"])
+            try:
+                root = _parse_xml(self.zip.read(path))
+            except (KeyError, etree.XMLSyntaxError):
+                continue
+            if is_ncx:
+                entries = []
+                for point in root.findall(".//ncx:navPoint", _NS):
+                    label = point.find("ncx:navLabel/ncx:text", _NS)
+                    target = point.find("ncx:content", _NS)
+                    if label is not None and target is not None:
+                        entries.append((target.get("src", ""), "".join(label.itertext())))
+            else:
+                entries = []
+                for nav in root.iter():
+                    if _localname(nav.tag) != "nav" or "toc" not in nav.get(
+                        "{http://www.idpf.org/2007/ops}type", ""
+                    ).split():
+                        continue
+                    entries.extend((a.get("href", ""), "".join(a.itertext()))
+                                   for a in nav.iter() if _localname(a.tag) == "a")
+            for href, label in entries:
+                title = re.sub(r"\s+", " ", label).strip()
+                if href and title:
+                    target = posixpath.normpath(posixpath.join(
+                        posixpath.dirname(path), unquote(href.split("#", 1)[0])
+                    ))
+                    titles.setdefault(target, title)
+        return titles
+
 
 # ── XHTML → blocks ───────────────────────────────────────────────────────────
 
@@ -208,6 +268,8 @@ def _img_src(el) -> str | None:
 def _emit_images(el, epub: _Epub, base_dir: str, blocks: list[Block], meta: dict,
                  job_id: int, spine_idx: int):
     """Extract every <img>/<image> under `el` into IMAGE blocks (in document order)."""
+    if job_id is None:
+        return
     for img in el.iter():
         if _localname(img.tag) not in ("img", "image"):
             continue
@@ -363,9 +425,13 @@ def _parse_spine_doc(data: bytes, epub: _Epub, zip_path: str, blocks: list[Block
     return None
 
 
-def parse_epub(path: str, job_id: int) -> Document:
-    """Parse an EPUB file into a normalized Document. `job_id` keys the asset staging dir."""
-    epub = _Epub(path)
+def parse_epub(path, job_id: int | None) -> Document:
+    """Parse a path/file object; job_id=None extracts text without staging images."""
+    with _Epub(path) as epub:
+        return _parse_open_epub(epub, job_id)
+
+
+def _parse_open_epub(epub: _Epub, job_id: int | None) -> Document:
     meta: dict = {
         "title": epub.meta_text("title"),
         "author": epub.meta_text("creator"),
@@ -377,7 +443,7 @@ def parse_epub(path: str, job_id: int) -> Document:
 
     # Cover first, so meta['cover_sha'] is set before the spine walk.
     cid = epub.cover_id()
-    if cid:
+    if cid and job_id is not None:
         try:
             cover_sha = _register_asset(epub.read_item_by_id(cid), meta, job_id, kind="cover")
             if cover_sha:
@@ -387,6 +453,7 @@ def parse_epub(path: str, job_id: int) -> Document:
 
     blocks: list[Block] = []
     spine_titles: list[dict] = []
+    toc_titles = epub.toc_titles()
     for spine_idx, iid in enumerate(epub.spine):
         item = epub.manifest[iid]
         mt = item.get("media_type", "")
@@ -398,7 +465,8 @@ def parse_epub(path: str, job_id: int) -> Document:
         except KeyError:
             logger.warning(f"Spine item missing from zip: {zip_path}")
             continue
-        title = _parse_spine_doc(data, epub, zip_path, blocks, meta, job_id, spine_idx)
+        title = (_parse_spine_doc(data, epub, zip_path, blocks, meta, job_id, spine_idx)
+                 or toc_titles.get(zip_path))
         spine_titles.append({"spine_idx": spine_idx, "title": title, "href": item["href"]})
 
     meta["spine"] = spine_titles

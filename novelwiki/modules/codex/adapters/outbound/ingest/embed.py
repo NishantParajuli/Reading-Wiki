@@ -1,8 +1,7 @@
 import logging
-import asyncio
 from collections.abc import Awaitable, Callable
 
-from novelwiki.platform.database import get_db_pool, close_db_pool
+from novelwiki.platform.database import get_db_pool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -70,16 +69,20 @@ async def embed_missing_chunks(
             continue
 
         try:
+            batch_embedded_count = 0
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    for chunk_id, vector in zip(batch_ids, vectors):
+                    for chunk_id, chunk_text, vector in zip(batch_ids, batch_texts, vectors):
                         vector_str = "[" + ",".join(map(str, vector)) + "]"
-                        await conn.execute(
-                            "UPDATE chunks SET embedding = $1::vector WHERE id = $2;",
-                            vector_str, chunk_id
+                        result = await conn.execute(
+                            "UPDATE chunks SET embedding = $1::vector "
+                            "WHERE id = $2 AND novel_id = $3 AND text = $4 "
+                            "AND embedding IS NULL;",
+                            vector_str, chunk_id, novel_id, chunk_text,
                         )
+                        batch_embedded_count += int(result.rsplit(" ", 1)[-1])
 
-            embedded_count += len(batch)
+            embedded_count += batch_embedded_count
             logger.info(f"Successfully embedded {embedded_count}/{len(rows)} chunks.")
         except Exception as e:
             logger.error(f"Failed to embed batch starting with ID {batch_ids[0]}: {e}")
@@ -87,11 +90,7 @@ async def embed_missing_chunks(
     return embedded_count
 
 if __name__ == "__main__":
-    import sys
-    async def main():
-        novel_id = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
-        cnt = await embed_missing_chunks(novel_id)
-        logger.info(f"Completed batch embedding run. {cnt} chunks processed.")
-        await close_db_pool()
-
-    asyncio.run(main())
+    raise SystemExit(
+        "This internal adapter requires the application runtime. "
+        "Use: uv run python -m novelwiki.cli embed NOVEL_ID"
+    )

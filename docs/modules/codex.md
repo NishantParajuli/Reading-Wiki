@@ -66,8 +66,13 @@ handler (or individually from the CLI):
    into `chunks` keyed `(novel_id, chapter, chunk_index)`. Force mode upserts by that
    stable identity, preserving row ids and embeddings for unchanged text; changed text
    clears its embedding and is rejected while a dependent extraction checkpoint exists.
+   Overlap yields enough space for each next passage, and oversized sentences are emitted
+   once on their own, preventing overlap from stalling chapter processing.
+   Literal tokenizer special-token markers in the source are counted as ordinary text.
 2. **`embed.py`** — batch-embeds every chunk with `embedding IS NULL`
    (`EMBED_MODEL`, `EMBED_DIM`-sized pgvector column; HNSW index when dim ≤ 2000).
+   Writes compare the original source text and require the embedding to remain missing,
+   preserving concurrent text edits and another worker's completed embedding.
 3. **`context.py` + `extract.py`** — **forward-only** v2.1 extraction, strictly ascending.
    The shared direct/subscription context builder scores exact names/aliases, recent activity,
    unresolved threads, graph neighbors, trigram spans, and exact vector matches; packs
@@ -102,10 +107,14 @@ handler (or individually from the CLI):
    activity, folding descriptions/aliases/identity links, preserving the dropped canonical
    name as an alias at its original reveal ceiling, and clearing caches).
 5. **BM25 index** — `retrieval/bm25.py::BM25Manager`: per-novel bm25s index persisted
-   under `data/bm25_index/`, staleness-checked against a cheap DB signature, lazily
+   under `data/bm25_index/`, staleness-checked against a digest of the loaded chunk ids,
+   chapter boundaries, and text (including equal-length edits), lazily
    loaded, rebuilt by the job/CLI; blocking tokenize/search offloaded to a thread
    (`BM25_THREAD_OFFLOAD`). Reader ceilings use bounded cached prefix indexes so future
-   documents are absent from both results and IDF.
+   documents are absent from both results and IDF. Failed loads/builds remain retryable;
+   refreshing the corpus also clears its cached prefix indexes. Search and rebuild share
+   a lock so corpus rows remain aligned with their index. A corpus containing only
+   stopwords or punctuation produces no lexical matches.
 
 ## Retrieval & the agent (outbound `retrieval/`, `agent.py`)
 

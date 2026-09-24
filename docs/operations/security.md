@@ -10,13 +10,21 @@
 - Argon2id password hashing (`argon2-cffi`); OAuth-only accounts have no hash at all.
 - **Server-side opaque sessions**: the `tg_session` cookie (httpOnly, `Secure` per
   `COOKIE_SECURE`) carries a random token; the DB stores only its hash; deletion =
-  instant revocation (logout, ban, admin "revoke sessions"). TTL 30 days.
-  `SESSION_SECRET` peppers/signs derived tokens — rotate to invalidate everything.
+  instant revocation (logout, ban, admin "revoke sessions"). Expiry is fixed at creation
+  using `SESSION_TTL_DAYS` (30 by default); reads update `last_seen_at`, not expiry.
+  `SESSION_SECRET` signs OAuth state only. Rotating it invalidates in-flight OAuth
+  handshakes; sessions and email tokens use unkeyed SHA-256 hashes and remain valid.
+  Revoke the relevant session rows when existing logins must be invalidated.
 - Email verification and password reset use single-use, expiring, hashed tokens.
+- Registration, password changes/resets, and email verification use database transactions
+  across their account, token, and session writes. Failures cannot consume a token without
+  completing its action or commit a password change without its session revocation.
 - **Durable rate limits** (`auth_rate_limits`, fixed windows, scoped hashes — never raw
   IPs/emails at rest): login per-IP/per-account, register per-IP, reset request per-IP/
   per-email, reset submit per-IP/per-token. Survive restarts; shared across workers.
 - Suspended/banned status is enforced in the session dependency itself.
+- The shared spending policy also rejects inactive accounts, including admins, when a
+  background worker checks eligibility or reserves quota without an HTTP session.
 - Eval: `auth_security_tests.py`.
 
 ## CSRF & browser-facing headers (Platform Web)
@@ -32,11 +40,14 @@
 ## Authorization
 
 - Router-level `Depends(current_user)` on all `/api` (except `/api/auth`);
-  `require_admin` on `/api/admin`; `require_verified` + quota checks on every spend
-  surface.
+  `require_admin` on `/api/admin`. Spending routes and workers use Identity's spending
+  policy and the relevant monthly or read-side limits; explicitly verification-gated
+  endpoints also use `require_verified`.
 - Novel access is centralized in Catalog (`require_readable`/`require_editable` —
-  ownership + visibility + admin); jobs/imports/TTS are ownership-scoped in their
-  services (non-admins can only ever see/cancel their own).
+  ownership + visibility + admin). Generic/import jobs are ownership-scoped. Narration
+  also lets readers with current novel access observe shared base-audio/book jobs;
+  another reader's overlay job remains private. A missing/deleted requester does not
+  bypass the novel check. Non-admin cancellation remains restricted to the requester.
 - Assets: only avatars and the SPA are public static; novel images, import previews,
   and audio stream through permission-checked routes. Experience rewrites historical
   public URLs onto those routes. Eval: `asset_security_tests.py`.
@@ -45,24 +56,41 @@
 
 `safe_fetch.py`: HTTP(S)-only, DNS results and every redirect hop must resolve to
 **public** addresses, response size/time caps, same-host binding by default with
-explicit adapter allowlists. Eval: `scraper_security_tests.py`. Details:
+explicit adapter allowlists. Curl connects to the validated DNS addresses using fresh
+direct connections while preserving hostname/TLS checks; environment and session proxies
+are bypassed to prevent an unchecked proxy-side lookup. Temporary session options are
+serialized and restored. Eval: `scraper_security_tests.py`; provider-free transport
+regressions: `tests/unit/modules/acquisition/test_scraper_dns_pinning.py`. Details:
 [../pipelines/scraping.md](../pipelines/scraping.md).
+
+Raw archive acquisition follows the same checked download boundary, including its explicit
+asset host. Archive members are read in memory, with entry-count, expanded-size, member-size,
+path, and symlink checks; the scraper does not extract files or stage images. The supplied
+ZIP password is stored in `sources.config` JSONB and omitted from reader-facing novel source
+metadata. It is not built into the application or included in chapter text/checkpoint URLs.
+Supported formats and limits: [supported sites](../pipelines/supported-sites.md).
 
 ## Upload hardening (Acquisition)
 
 Single-shot size caps; chunked uploads are bounded at init, append-only/contiguous (no
 gaps, no sparse forgery, no disk exhaustion), streamed hashing (never whole-file in
-memory), abandoned-session GC. Rendered import HTML is sanitized (nh3). Eval:
+memory), abandoned-session GC. EPUB container/package XML disables network access, external
+DTD loading, and entity expansion, and rejects document-defined entities. Rendered import
+HTML is sanitized (nh3). Eval:
 `upload_security_tests.py`, `import_pdf_tests.py`.
 
 ## Cost abuse (denial-of-wallet)
 
-- Everything expensive is quota-metered per user per month with admin-adjustable caps,
-  and requires a verified email.
-- Read-side AI (Ask/profile synthesis): hourly uncached cap, per-user concurrency slots
+- Monthly quotas cover translated chapters, OCR pages, Codex builds, and generated
+  narration chapters. Non-admin spending requires a verified, active account; active
+  admins bypass monthly caps but usage is recorded.
+- Read-side AI (Ask/profile synthesis/recap) has separate per-user, per-kind hourly
+  uncached caps and concurrency slots
   (self-expiring), question-length bounds, and hard clamps on model-planned tool
   arguments so a prompt-injected planner can't fan out retrieval
-  (`ASK_TOOL_MAX_*`). Cache hits bypass gates because they cost nothing.
+  (`ASK_TOOL_MAX_*`). Cache hits bypass gates because they cost nothing; admins bypass
+  the hourly and concurrency limits. Read-side verification requirements are configurable
+  through `ASK_REQUIRE_VERIFIED` and `ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED`.
 - Provider budgets: persistent Gemini daily counter; jobs pause (`ocr_paused`,
   `waiting_provider`) instead of hammering providers.
 - Estimates before spend (`/cost-estimate`), explicit reserve/refund accounting with

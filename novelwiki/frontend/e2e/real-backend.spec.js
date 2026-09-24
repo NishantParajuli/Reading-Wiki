@@ -4,7 +4,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
 test.describe("real browser-to-backend contract", () => {
-  test.skip(!process.env.REAL_BACKEND, "requires disposable PostgreSQL and FastAPI on :8001");
+  test.skip(!process.env.REAL_BACKEND, "requires disposable PostgreSQL and FastAPI on :8011");
   test.describe.configure({ mode: "serial", timeout: 120_000 });
 
   const password = "browser-pass-123";
@@ -95,14 +95,15 @@ test.describe("real browser-to-backend contract", () => {
       expect(chapter.status).toBe(200);
       expect(chapter.body.content).toContain("real backend boundary");
       expect((await api(ownerPage, `/api/novels/${fixture.novel_id}/progress`, {
-        method: "PUT", body: { last_chapter: 1, scroll_pct: 47.5 },
+        method: "PUT", body: { last_chapter: 1, scroll_pct: 0.475 },
       })).status).toBe(200);
       const bookmark = await api(ownerPage, `/api/novels/${fixture.novel_id}/bookmarks`, {
         method: "POST", body: { chapter: 1, note: "real browser bookmark" },
       });
       expect(bookmark.status).toBe(200);
       const progress = await api(ownerPage, `/api/novels/${fixture.novel_id}/progress`);
-      expect(progress.body).toMatchObject({ last_chapter: 1, max_chapter_read: 1, scroll_pct: 47.5 });
+      expect(progress.body).toMatchObject({ last_chapter: 1, max_chapter_read: 1 });
+      expect(progress.body.scroll_pct).toBeCloseTo(0.475, 6);
       expect((await api(ownerPage, `/api/novels/${fixture.novel_id}/bookmarks`)).body)
         .toEqual(expect.arrayContaining([expect.objectContaining({ note: "real browser bookmark" })]));
     });

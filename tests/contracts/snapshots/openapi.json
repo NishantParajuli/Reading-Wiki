@@ -1058,6 +1058,8 @@
           },
           "scroll_pct": {
             "default": 0,
+            "maximum": 1.0,
+            "minimum": 0.0,
             "title": "Scroll Pct",
             "type": "number"
           }
@@ -1177,6 +1179,7 @@
           "max_chapters": {
             "anyOf": [
               {
+                "minimum": 1.0,
                 "type": "integer"
               },
               {
@@ -1268,6 +1271,18 @@
               }
             ],
             "title": "Chapter Offset"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
           },
           "is_raw": {
             "anyOf": [

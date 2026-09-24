@@ -7,18 +7,18 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { codexApi } from "../modules/codex/api.js";
-import { experienceApi } from "../modules/experience/api.js";
 import { identityApi } from "../modules/identity/api.js";
 import { useAuth, useTheme } from "../App.jsx";
 import { Icon } from "../components/Icon.jsx";
-import { Cover, ProgressBar, UserAvatar } from "../components/ui.jsx";
+import { ProgressBar, UserAvatar } from "../components/ui.jsx";
 import { MenuItem, Popover } from "../components/overlay.jsx";
 import { useToast } from "../components/toast.jsx";
-import { useNovelQuery, useNovelsQuery } from "../modules/catalog/queries.js";
+import { useNovelQuery } from "../modules/catalog/queries.js";
 import { isActiveJob, useActivityQuery } from "../modules/experience/queries.js";
-import { useDebounce, useLocalStorage, useOnline } from "../lib/hooks.js";
+import { useLocalStorage, useOnline } from "../lib/hooks.js";
 import { ACT_KIND_LABEL } from "../lib/constants.js";
+
+import { CommandPalette } from "./CommandPalette.jsx";
 
 const NAV = [
   { to: "/", icon: "home", label: "Home", end: true },
@@ -110,93 +110,6 @@ function UserMenu() {
   );
 }
 
-/* Cmd/Ctrl+K palette: your library instantly, the shared library remotely,
-   and (inside a novel) codex entities. */
-function CommandPalette({ onClose, novelId, ceiling }) {
-  const navigate = useNavigate();
-  const [q, setQ] = useState("");
-  const [focus, setFocus] = useState(0);
-  const debQ = useDebounce(q, 200);
-  const { data: novels } = useNovelsQuery();
-  const [remote, setRemote] = useState([]);
-  const [entities, setEntities] = useState([]);
-  const inputRef = useRef(null);
-
-  useEffect(() => { inputRef.current && inputRef.current.focus(); }, []);
-
-  useEffect(() => {
-    if (!debQ.trim()) { setRemote([]); setEntities([]); return; }
-    let cancel = false;
-    experienceApi.discover({ q: debQ.trim(), limit: 6 })
-      .then(r => { if (!cancel) setRemote(Array.isArray(r) ? r : (r.items || [])); })
-      .catch(() => {});
-    if (novelId != null && ceiling != null) {
-      codexApi.listEntities(novelId, ceiling, { q: debQ.trim() })
-        .then(rows => { if (!cancel) setEntities(rows.slice(0, 6)); })
-        .catch(() => {});
-    }
-    return () => { cancel = true; };
-  }, [debQ, novelId, ceiling]);
-
-  const lib = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return (novels || []).slice(0, 6);
-    return (novels || []).filter(n =>
-      n.title.toLowerCase().includes(needle) || (n.author || "").toLowerCase().includes(needle)
-    ).slice(0, 6);
-  }, [novels, q]);
-
-  const items = useMemo(() => {
-    const out = [];
-    lib.forEach(n => out.push({ group: "Your library", label: n.title, meta: n.author, run: () => navigate(`/n/${n.id}`) }));
-    entities.forEach(e => out.push({ group: "Codex", label: e.name, meta: e.type, run: () => navigate(`/n/${novelId}/codex/e/${e.id}`) }));
-    remote.forEach(n => out.push({ group: "Shared library", label: n.title, meta: n.owner_username ? "@" + n.owner_username : n.author, run: () => navigate(`/n/${n.id}`) }));
-    return out;
-  }, [lib, remote, entities, navigate, novelId]);
-
-  useEffect(() => { setFocus(0); }, [items.length, q]);
-
-  const onKey = (e) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); setFocus(f => Math.min(items.length - 1, f + 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setFocus(f => Math.max(0, f - 1)); }
-    else if (e.key === "Enter" && items[focus]) { items[focus].run(); onClose(); }
-    else if (e.key === "Escape") onClose();
-  };
-
-  let lastGroup = null;
-  return (
-    <div className="palette-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="palette" role="dialog" aria-modal="true" aria-label="Search">
-        <div className="palette-input">
-          <Icon name="search" size={17} className="muted" />
-          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onKey}
-                 placeholder="Search your library, the shared library…" />
-          <kbd style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--muted)" }}>esc</kbd>
-        </div>
-        <div className="palette-list">
-          {items.length === 0 && <div className="palette-empty">{q.trim() ? "No matches." : "Type to search."}</div>}
-          {items.map((it, i) => {
-            const showGroup = it.group !== lastGroup;
-            lastGroup = it.group;
-            return (
-              <React.Fragment key={i}>
-                {showGroup && <div className="palette-group">{it.group}</div>}
-                <button className={"palette-item" + (i === focus ? " focused" : "")}
-                        onMouseEnter={() => setFocus(i)}
-                        onClick={() => { it.run(); onClose(); }}>
-                  <Icon name={it.group === "Codex" ? "spark" : "book"} size={15} className="muted" />
-                  <span className="truncate">{it.label}</span>
-                  {it.meta && <span className="pi-meta">{it.meta}</span>}
-                </button>
-              </React.Fragment>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function Shell() {
   const { user } = useAuth();
   const { theme, setTheme } = useTheme();
@@ -262,6 +175,7 @@ export function Shell() {
 
   return (
     <div className="shell">
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <nav className={"sidebar" + (sbOpen ? " open" : "")} aria-label="Primary">
         <Link className="sb-brand" to="/" aria-label="Tideglass home">
           <span className="brand-mark">T</span>
@@ -297,6 +211,7 @@ export function Shell() {
           </>
         )}
         <div className="sb-spacer" />
+        <NavLink to="/account" className={({ isActive }) => "sb-item" + (isActive ? " active" : "")}><span className="sb-ic"><Icon name="gear" size={18} /></span><span className="sb-label">Settings</span></NavLink>
         <button className="sb-item" onClick={() => setTheme(theme === "light" ? "dark" : "light")}
                 aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}>
           <span className="sb-ic"><Icon name={theme === "light" ? "moon" : "sun"} size={18} /></span>
@@ -307,6 +222,7 @@ export function Shell() {
           <span className="sb-ic"><Icon name={sbOpen ? "chevronLeft" : "chevronRight"} size={18} /></span>
           <span className="sb-label">Collapse</span>
         </button>
+        <p className="sb-footer-note">One chapter at a time.</p>
       </nav>
 
       <div className="shell-main">
@@ -323,8 +239,8 @@ export function Shell() {
           <div className="topbar-right">
             <button className="topbar-search" onClick={() => setPalette(true)} aria-label="Search (Ctrl+K)">
               <Icon name="search" size={14} />
-              Search
-              <kbd>⌘K</kbd>
+              <span>Find a story</span>
+              <kbd>{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+"}K</kbd>
             </button>
             <UserMenu />
           </div>
@@ -341,7 +257,7 @@ export function Shell() {
           </div>
         )}
 
-        <main className="grow">
+        <main className="grow" id="main-content" tabIndex={-1}>
           <Outlet />
         </main>
       </div>
@@ -363,7 +279,7 @@ export function Shell() {
 
       {palette && (
         <CommandPalette onClose={() => setPalette(false)} novelId={novelId}
-                        ceiling={novelId != null ? (qc.getQueryData(["ceiling", novelId]) || null) : null} />
+                        ceiling={novelId != null ? (qc.getQueryData(["ceiling", novelId]) ?? novel?.progress?.max_chapter_read ?? 0) : null} />
       )}
     </div>
   );

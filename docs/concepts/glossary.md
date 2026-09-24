@@ -6,8 +6,9 @@ Project-specific terms, A–Z. General CS concepts are in [primer.md](primer.md)
 application layer. *Inbound*: HTTP/CLI/worker transports. *Outbound*: Postgres,
 providers, filesystem, bridges. See [module anatomy](../architecture/module-anatomy.md).
 
-**Adapter (scraper)** — a per-site scraping strategy class (`fenrirealm`, `readhive`,
-`boti-translations`, `69shuba`, `wetriedtls`) registered in `ADAPTERS`.
+**Adapter (scraper)** — a per-site scraping strategy class registered in `ADAPTERS`.
+The [supported-sites reference](../pipelines/supported-sites.md) lists its exact key,
+accepted URLs, default language, and limits.
 
 **AGY / Antigravity** — the external CLI used as an alternative AI execution backend
 (subscription capacity instead of metered API). Dormant unless globally enabled *and*

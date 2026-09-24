@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
 
-    # Presentation metadata for the UI hero/home surface. These are display-only
-    # and never gate content — purely the title/blurb the reader sees.
+    # Legacy presentation metadata retained for configuration compatibility.
+    # No current frontend consumer uses these values.
     NOVEL_TITLE: str = "The Codex"
     NOVEL_BLURB: str = "A spoiler-safe wiki for the novel you're reading — every fact bounded to where you are."
 
@@ -360,7 +360,7 @@ class Settings(BaseSettings):
 
     # ── Multi-user / auth ──────────────────────────────────────────────────
     # Server-side opaque sessions backed by a DB table; the browser only holds an
-    # httpOnly+Secure cookie. SESSION_SECRET signs/peppers tokens — set a long random
+    # httpOnly+Secure cookie. SESSION_SECRET signs OAuth state — set a long random
     # value in prod (a changed secret invalidates all sessions).
     SESSION_SECRET: str = "dev-insecure-change-me"
     SESSION_COOKIE: str = "tg_session"
@@ -394,7 +394,7 @@ class Settings(BaseSettings):
     MULTIUSER_MIGRATION_BACKUP_CONFIRMED: bool = False
 
     # Transactional email (verification + password reset). Without an SMTP host the app
-    # still runs but logs the verification link instead of sending it (handy in dev).
+    # still runs, but logs redact link tokens; configure SMTP to complete email flows.
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USER: str = ""

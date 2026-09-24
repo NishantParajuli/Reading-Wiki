@@ -2,7 +2,7 @@ from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, FiniteFloat
 
 from novelwiki.platform.auth import current_user, require_admin
 from novelwiki.platform.config import settings
@@ -41,22 +41,23 @@ class SourceCreate(BaseModel):
     start_url: str
     language: str = "en"
     is_raw: bool = False
-    chapter_offset: float = 0
+    chapter_offset: FiniteFloat = 0
     label: str | None = None
     config: dict | None = None
 
 
 class SourceUpdate(BaseModel):
-    chapter_offset: float | None = None
+    chapter_offset: FiniteFloat | None = None
     start_url: str | None = None
     label: str | None = None
     language: str | None = None
     is_raw: bool | None = None
+    config: dict | None = None
 
 
 class ScrapeTrigger(BaseModel):
     force: bool = False
-    max_chapters: int | None = None
+    max_chapters: int | None = Field(default=None, ge=1)
     source_id: int | None = None
 
 

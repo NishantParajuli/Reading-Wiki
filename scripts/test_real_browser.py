@@ -47,13 +47,13 @@ def _quote(name: str) -> str:
 
 
 async def _create(superuser_url: str, database_url: str, name: str) -> None:
-    admin = await asyncpg.connect(superuser_url)
+    admin = await asyncpg.connect(superuser_url, timeout=5)
     try:
         await admin.execute(f"CREATE DATABASE {_quote(name)}")
     finally:
         await admin.close()
     from novelwiki.db.schema import DDL_QUERIES
-    connection = await asyncpg.connect(database_url)
+    connection = await asyncpg.connect(database_url, timeout=5)
     try:
         for query in DDL_QUERIES:
             await connection.execute(query)
@@ -71,7 +71,7 @@ async def _create(superuser_url: str, database_url: str, name: str) -> None:
 
 
 async def _drop(superuser_url: str, name: str) -> None:
-    admin = await asyncpg.connect(superuser_url)
+    admin = await asyncpg.connect(superuser_url, timeout=5)
     try:
         await admin.execute(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -97,8 +97,12 @@ def _wait_for_server(process: subprocess.Popen) -> None:
 
 
 def main() -> int:
-    superuser_url = _host_url(os.environ.get("TEST_DB_SUPERUSER_URL", settings.DB_SUPERUSER_URL))
-    base_url = _host_url(os.environ.get("TEST_DATABASE_URL", settings.DATABASE_URL))
+    missing = [name for name in ("TEST_DATABASE_URL", "TEST_DB_SUPERUSER_URL") if not os.environ.get(name)]
+    if missing:
+        print("Set TEST_DATABASE_URL and TEST_DB_SUPERUSER_URL to explicit test-only PostgreSQL URLs.", file=sys.stderr)
+        return 2
+    superuser_url = _host_url(os.environ["TEST_DB_SUPERUSER_URL"])
+    base_url = _host_url(os.environ["TEST_DATABASE_URL"])
     base = re.sub(r"[^a-z0-9_]+", "_", urlparse(base_url).path.lstrip("/").lower())[:18]
     name = f"tg_playwright_{base}_{os.getpid()}_{uuid.uuid4().hex[:8]}"[:63]
     database_url = _with_database(base_url, name)
@@ -118,6 +122,14 @@ def main() -> int:
             "ASSET_DIR": str(data_root / "assets"),
             "AUDIO_DIR": str(data_root / "audio"),
             "BM25_INDEX_PATH": str(data_root / "bm25"),
+            # Browser qualification uses cached/provider-free fixtures only.
+            "OPENROUTER_API_KEY": "",
+            "DEEPSEEK_API_KEY": "",
+            "GEMINI_API_KEY": "",
+            "AGY_ENABLED": "false",
+            "OPENAI_CODEX_ENABLED": "false",
+            "TTS_ENABLED": "false",
+            "SMTP_HOST": "",
             "REAL_BACKEND": "1",
             "VITE_API_PROXY": "http://127.0.0.1:8011",
         }

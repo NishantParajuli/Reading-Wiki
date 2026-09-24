@@ -38,14 +38,16 @@ unlock future codex data. Full model:
   password (Argon2) with server-side sessions, email verification, password reset, and
   optional Google/Discord OAuth; public profiles (`/u/<username>`); private/public/global
   sharing with a **Discover** browser; an admin dashboard (users, platform spend,
-  moderation); and **monthly quotas** on everything that costs API money.
-- **🏠 Operational home** — continue reading / continue listening, a **unified job
-  center** over all three durable-job systems, **cost estimates before you spend**,
+  moderation); **monthly quotas** for translation, OCR, Codex builds, and narration,
+  plus hourly and concurrency limits for uncached AI answers and profiles.
+- **🏠 Reading room** — a featured book to resume, a listening shortcut, current reads,
+  fresh chapters, and background work beside your library. A **unified job center**
+  covers all three durable-job systems, with **cost estimates before you spend**,
   Discover filters + provenance badges, and a per-novel pipeline **health panel**.
 - **🕸 Scraping** — a novel stitched from several sources (each with a `chapter_offset`
   mapping onto one **global** chapter sequence); incremental, stops cleanly at
-  paywalls; per-site adapters (`fenrirealm`, `readhive`, `boti-translations`,
-  `69shuba`, `wetriedtls` — new sites are a small subclass); SSRF-hardened fetching.
+  paywalls; per-site adapters with [documented URL formats and limits](docs/pipelines/supported-sites.md);
+  SSRF-hardened fetching.
 - **📥 File import** — EPUB and digital/scanned PDF as **durable, resumable jobs**:
   multi-file + chunked uploads, local PaddleOCR + Gemini-vision escalation (with a
   cost-confirm gate), PDF paragraph reflow and illustration cleanup, fully editable
@@ -135,7 +137,7 @@ evidence: [docs/architecture/](docs/README.md#architecture).
 and other generation; Gemini vision for OCR escalation; optional AGY CLI and OpenAI
 Codex App Server subscription backends ·
 **Scraping** curl-cffi + selectolax/lxml, json-repair ·
-**Import** ebooklib, pymupdf, nh3, pillow, ftfy ·
+**Import** ZIP/lxml EPUB parsing, pymupdf, nh3, pillow, ftfy ·
 **TTS** OmniVoice sidecar, ffmpeg → Opus ·
 **Frontend** React 18 + TanStack Query, Vite 6, served same-origin by FastAPI ·
 **Packaging** uv (`pyproject.toml` + `uv.lock`)
@@ -147,16 +149,17 @@ Codex App Server subscription backends ·
 Full guide: [docs/getting-started/local-setup.md](docs/getting-started/local-setup.md).
 
 ```bash
-uv sync
+uv sync --frozen
 cp .env.example .env    # set DATABASE_URL, DB_SUPERUSER_URL, OPENROUTER_API_KEY,
                         # optionally DEEPSEEK_API_KEY for native V4 generation;
-                        # SESSION_SECRET, ADMIN_EMAIL/ADMIN_PASSWORD; COOKIE_SECURE=false for dev
+                        # SESSION_SECRET, ADMIN_EMAIL/ADMIN_PASSWORD;
+                        # COOKIE_SECURE=false and PUBLIC_BASE_URL=http://localhost:8000 for dev
 cd novelwiki/frontend && npm ci && npm run build && cd ../..
-uvicorn novelwiki.api.app:app --reload --port 8000     # or: python main.py
+uv run uvicorn novelwiki.api.app:app --reload --port 8000  # or: uv run python main.py
 ```
 
 Schema is **auto-created** on startup (the app creates the DB via `DB_SUPERUSER_URL` if
-missing, then applies idempotent DDL; explicitly: `python -m novelwiki.db.schema`). The
+missing, then applies idempotent DDL; explicitly: `uv run python -m novelwiki.db.schema`). The
 first boot bootstraps the admin and — on a legacy single-user DB — runs a guarded
 multi-user migration (**pg_dump first**; see the setup guide). Every setting is
 documented in [docs/operations/configuration.md](docs/operations/configuration.md).
@@ -164,7 +167,7 @@ documented in [docs/operations/configuration.md](docs/operations/configuration.m
 ### CLI
 
 ```bash
-python -m novelwiki.cli --help
+uv run python -m novelwiki.cli --help
 # add-novel · scrape · chunk · embed · extract · translate · import · import-batch
 # · import-series · import-worker · rebuild-bm25 · merge · reset-codex · reset-db
 ```
@@ -182,7 +185,10 @@ uv run pytest -q tests                       # unit + architecture + contract sn
 TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/novelwiki \
 TEST_DB_SUPERUSER_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres \
   uv run python scripts/test_backend.py      # creates/drops a random tg_pytest_* DB
-cd novelwiki/frontend && npm test && npm run build && npm run test:e2e
+cd novelwiki/frontend
+npm ci
+npx playwright install chromium     # first browser-test run; --with-deps on Linux CI
+npm test && npm run build && npm run test:e2e
 ```
 
 The suites never touch your real database. Contract snapshots freeze routes/OpenAPI/
@@ -220,12 +226,12 @@ Full topology + first boot + release/rollback:
 |---|---|
 | **Start** | [docs/README.md](docs/README.md) (hub with reading paths) |
 | AI-assisted changes | [AGENTS.md](AGENTS.md) (documentation-impact and review policy) |
-| Product & setup | [what-is-tideglass](docs/getting-started/what-is-tideglass.md) · [local-setup](docs/getting-started/local-setup.md) · [repo-tour](docs/getting-started/repo-tour.md) |
+| Product & setup | [product principles](PRODUCT.md) · [what-is-tideglass](docs/getting-started/what-is-tideglass.md) · [local-setup](docs/getting-started/local-setup.md) · [repo-tour](docs/getting-started/repo-tour.md) |
 | Concepts | [primer](docs/concepts/primer.md) · [spoiler-safety](docs/concepts/spoiler-safety.md) · [glossary](docs/concepts/glossary.md) |
 | Architecture | [overview](docs/architecture/overview.md) · [ADRs](docs/README.md#architecture) · [module-anatomy](docs/architecture/module-anatomy.md) · [composition-root](docs/architecture/composition-root.md) · [workflows](docs/architecture/workflows-and-transactions.md) · [platform](docs/architecture/platform.md) · [enforcement](docs/architecture/enforcement.md) |
 | Future implementation | [PostgreSQL-centered platform evolution plan](implementation-plan/postgres-platform-evolution-plan.md) *(proposal, not current behavior)* |
 | Modules | [map](docs/modules/README.md) + one doc per module |
-| Pipelines | [jobs & quota](docs/pipelines/background-jobs-and-quota.md) · [scraping](docs/pipelines/scraping.md) · [import](docs/pipelines/file-import.md) · [translation](docs/pipelines/translation.md) · [codex](docs/pipelines/codex-build-and-ask.md) · [narration](docs/pipelines/narration.md) · [AI backends](docs/pipelines/ai-backends.md) |
+| Pipelines | [jobs & quota](docs/pipelines/background-jobs-and-quota.md) · [scraping](docs/pipelines/scraping.md) · [supported sites](docs/pipelines/supported-sites.md) · [import](docs/pipelines/file-import.md) · [translation](docs/pipelines/translation.md) · [codex](docs/pipelines/codex-build-and-ask.md) · [narration](docs/pipelines/narration.md) · [AI backends](docs/pipelines/ai-backends.md) |
 | Reference | [DB schema](docs/data/database-schema.md) · [filesystem](docs/data/filesystem-layout.md) · [HTTP behavior](docs/api/http-api.md) · [exact route inventory](docs/api/http-route-inventory.md) · [CLI](docs/api/cli.md) · [configuration](docs/operations/configuration.md) |
-| Operating | [deployment](docs/operations/deployment.md) · [configuration](docs/operations/configuration.md) · [structured logging](docs/operations/logging.md) · [security](docs/operations/security.md) · [testing](docs/testing.md) · [release runbook](docs/release-runbook.md) · [AGY runbook](docs/agy-operator-runbook.md) · [OpenAI Codex runbook](docs/openai-codex-operator-runbook.md) |
-| Frontend | [overview](docs/frontend/overview.md) |
+| Operating | [deployment](docs/operations/deployment.md) · [configuration](docs/operations/configuration.md) · [structured logging](docs/operations/logging.md) · [security](docs/operations/security.md) · [testing](docs/testing.md) · [qualification history](docs/testing-codex-qualification-history.md) *(historical)* · [release runbook](docs/release-runbook.md) · [AGY runbook](docs/agy-operator-runbook.md) · [OpenAI Codex runbook](docs/openai-codex-operator-runbook.md) |
+| Frontend | [overview](docs/frontend/overview.md) · [design system](DESIGN.md) |

@@ -27,9 +27,9 @@ from novelwiki.platform.database import get_db_pool
 
 def require_ask_spend_allowed(user: dict) -> None:
     """403 unless the account may trigger costed AI work (verified email, or admin)."""
-    if user.get("role") != "admin" and (
-        user.get("status", "active") != "active" or not user.get("email_verified")
-    ):
+    if user.get("status", "active") != "active":
+        raise Forbidden("Your account is not active.")
+    if user.get("role") != "admin" and not user.get("email_verified"):
         raise Forbidden(
             "Verify your email to use scrape, translation, OCR, codex, or import features."
         )

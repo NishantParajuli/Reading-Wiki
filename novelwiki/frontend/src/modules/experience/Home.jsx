@@ -1,281 +1,132 @@
-/* ============================================================
-   Home — "Continue" (§6.3, the flagship redesign).
-   Hero continue card with ambient cover backdrop → jump-back-in rail →
-   new-chapters rows → slim activity strip → discover shelf.
-   First run gets a full welcome screen.
-   ============================================================ */
-import React from "react";
+/* The reading room: resume a story, find the next one, and see background work. */
+import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-
 import { useAuth } from "../../App.jsx";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, Cover, ProgressBar, Skeleton, RelativeTime } from "../../components/ui.jsx";
+import { Button, Cover, EmptyState, ProgressBar, Skeleton, RelativeTime } from "../../components/ui.jsx";
 import { AddNovelDialog } from "../catalog/index.js";
-import { isActiveJob, useActivityQuery, useHomeQuery } from "../../modules/experience/queries.js";
+import { useNovelsQuery } from "../catalog/queries.js";
+import { isActiveJob, useActivityQuery, useHomeQuery } from "./queries.js";
 import { activityProgress, activityFraction, ACT_KIND_LABEL } from "../../lib/constants.js";
-import { timeGreeting, fmtChapter, relativeTime } from "../../lib/utils.js";
+import { timeGreeting, fmtChapter } from "../../lib/utils.js";
 import { useTitle } from "../../lib/hooks.js";
 
-function heroMeta(n) {
-  const bits = [];
-  if (n.last_read_at) bits.push(`last read ${relativeTime(n.last_read_at)}`);
-  if (n.pct_read != null && n.pct_read > 0) bits.push(`${n.pct_read}% through`);
-  if (n.new_chapters > 0) bits.push(`${n.new_chapters} new chapter${n.new_chapters === 1 ? "" : "s"}`);
-  return bits.join(" · ");
-}
+const resumeChapter = n => n.last_chapter ?? n.min_chapter ?? 1;
 
-function HeroContinueCard({ n }) {
-  const navigate = useNavigate();
-  const resumeCh = n.last_chapter != null ? n.last_chapter : 1;
+function ContinueReading({ novel: n }) {
+  const chapter = resumeChapter(n);
   return (
-    <div className="card hero-cont">
-      {n.cover_url && <div className="hero-cont-backdrop" style={{ backgroundImage: `url(${JSON.stringify(n.cover_url)})` }} aria-hidden />}
-      <div className="hero-cont-scrim" aria-hidden />
-      <Cover src={n.cover_url} title={n.title} />
-      <div className="hero-cont-body">
-        <span className="hero-cont-eyebrow"><Icon name="book" size={13} /> Continue reading</span>
-        <h2 className="hero-cont-title">
-          <Link to={`/n/${n.id}`} style={{ textDecoration: "none", color: "inherit" }}>{n.title}</Link>
-        </h2>
-        <div className="hero-cont-chapter">
-          Chapter {fmtChapter(resumeCh)}
-          {n.resume_chapter_title ? <> — <em>{n.resume_chapter_title}</em></> : null}
-        </div>
-        <ProgressBar value={n.pct_read || 0} label="Reading progress" style={{ maxWidth: 420 }} />
-        <div className="hero-cont-meta">{heroMeta(n)}</div>
-        <div className="hero-cont-actions">
-          <Button variant="primary" size="lg" icon="book" onClick={() => navigate(`/n/${n.id}/read/${resumeCh}`)}>
-            Continue reading
-          </Button>
-          {n.audio_chapters > 0 && (
-            <Button variant="ghost" icon="headphones" onClick={() => navigate(`/n/${n.id}/read/${resumeCh}?listen=1`)}>
-              Listen
-            </Button>
-          )}
+    <section className="reading-feature" aria-label="Continue reading">
+      <div className="reading-feature-main">
+        <Link className="reading-feature-cover" to={`/n/${n.id}`} aria-label={`About ${n.title}`}>
+          <Cover src={n.cover_url} title={n.title} />
+        </Link>
+        <div className="reading-feature-copy">
+          <h2><Link to={`/n/${n.id}`}>{n.title}</Link></h2>
+          {n.author && <p className="reading-feature-author">{n.author}</p>}
+          <p className="reading-feature-chapter">Chapter {fmtChapter(chapter)}{n.resume_chapter_title && <> · {n.resume_chapter_title}</>}</p>
+          <div className="reading-feature-actions">
+            <Link className="btn btn-primary lg" to={`/n/${n.id}/read/${chapter}`}>Continue reading <Icon name="arrowRight" size={18} /></Link>
+            {n.audio_chapters > 0 && <Link className="btn btn-ghost" to={`/n/${n.id}/read/${chapter}?listen=1`}><Icon name="headphones" size={17} /> Listen</Link>}
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function RailCard({ n, sub, showProgress, listenable }) {
-  const navigate = useNavigate();
-  const resumeCh = n.last_chapter != null ? n.last_chapter : 1;
-  return (
-    <Link className="rail-card" to={`/n/${n.id}`}>
-      <span style={{ position: "relative", display: "block" }}>
-        <Cover src={n.cover_url} title={n.title} />
-        <button
-          className="rail-play"
-          aria-label={listenable ? `Listen to ${n.title}` : `Resume ${n.title}`}
-          onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/n/${n.id}/read/${resumeCh}${listenable ? "?listen=1" : ""}`); }}
-        >
-          <Icon name={listenable ? "headphones" : "play"} size={15} />
-        </button>
-      </span>
-      <span className="rail-title">{n.title}</span>
-      {showProgress && <ProgressBar size="xs" value={n.pct_read || 0} />}
-      {sub && <span className="rail-sub">{sub}</span>}
-    </Link>
-  );
-}
-
-function Section({ title, right, children }) {
-  return (
-    <section style={{ marginTop: 30 }}>
-      <div className="row" style={{ alignItems: "baseline", marginBottom: 12 }}>
-        <h2 className="section-title" style={{ margin: 0 }}>{title}</h2>
-        {right && <div style={{ marginLeft: "auto" }}>{right}</div>}
+      <div className="reading-feature-foot">
+        <span>{n.pct_read != null ? `${n.pct_read}% through your story` : "Your place is saved"}</span>
+        {n.last_read_at && <RelativeTime iso={n.last_read_at} prefix="Last read " />}
+        <ProgressBar value={n.pct_read || 0} size="xs" label={`Reading progress for ${n.title}`} />
       </div>
-      {children}
     </section>
   );
 }
 
-function ActivityStrip({ jobs }) {
-  const active = (jobs || []).filter(isActiveJob).slice(0, 4);
-  if (active.length === 0) return null;
+function Book({ novel: n, progress = false }) {
   return (
-    <Section title="In progress" right={<Link className="linkish" to="/jobs">View all <Icon name="arrowRight" size={13} /></Link>}>
-      <div className="card activity-strip">
-        {active.map(j => {
-          const frac = activityFraction(j);
-          return (
-            <div key={`${j.source}:${j.id}`} className="activity-strip-row">
-              <span className="spinner" aria-hidden />
-              <span className="grow truncate">
-                <b>{ACT_KIND_LABEL[j.kind] || j.kind}</b>
-                {" — "}{activityProgress(j) || j.status}
-              </span>
-              {frac != null && <ProgressBar size="xs" value={frac * 100} />}
-            </div>
-          );
-        })}
+    <article className="rail-card">
+      <div className="book-cover-wrap">
+        <Link to={`/n/${n.id}`} aria-label={`About ${n.title}`}><Cover src={n.cover_url} title={n.title} /></Link>
+        {n.chapter_count > 0 && <Link className="rail-play" aria-label={`Read ${n.title}`} to={`/n/${n.id}/read/${resumeChapter(n)}`}><Icon name="arrowRight" size={17} /></Link>}
       </div>
-    </Section>
+      <Link className="rail-title" to={`/n/${n.id}`}>{n.title}</Link>
+      {n.author && <span className="rail-sub">{n.author}</span>}
+      {progress ? <><ProgressBar size="xs" value={n.pct_read || 0} label={`Reading progress for ${n.title}`} /><span className="rail-sub">Chapter {fmtChapter(resumeChapter(n))}</span></> : <span className="rail-sub">{n.chapter_count || 0} chapters</span>}
+    </article>
   );
 }
 
-function Welcome({ newest, onAdd }) {
+function Section({ title, action, children }) {
+  return <section className="home-section"><div className="home-section-head"><h2>{title}</h2>{action}</div>{children}</section>;
+}
+
+function Welcome({ onAdd, newest }) {
   return (
-    <div className="page page-enter welcome">
-      <span className="brand-mark" style={{ width: 64, height: 64, fontSize: 36, borderRadius: 18, display: "inline-grid" }}>T</span>
-      <h1>Your reading life, in one place</h1>
-      <p>Add a novel from the web, import an EPUB or PDF, or browse the shared library — Tideglass keeps your place, translates raws, narrates chapters, and never spoils you.</p>
-      <div className="welcome-cards">
-        <button className="welcome-card" onClick={onAdd}>
-          <span className="wc-icon"><Icon name="sparkles" size={21} /></span>
-          <b>Add from the web</b>
-          <span>Point it at a first chapter and it keeps up with new releases.</span>
-        </button>
-        <Link className="welcome-card" to="/import">
-          <span className="wc-icon"><Icon name="upload" size={21} /></span>
-          <b>Import EPUB or PDF</b>
-          <span>Chapters, covers and illustrations — scanned PDFs are OCR'd.</span>
-        </Link>
-        <Link className="welcome-card" to="/discover">
-          <span className="wc-icon"><Icon name="compass" size={21} /></span>
-          <b>Browse the shared library</b>
-          <span>Read what others published, with your own progress.</span>
-        </Link>
+    <div className="page welcome reading-welcome">
+      <div className="welcome-intro">
+        <h1>A place for your<br /><em>next chapter.</em></h1>
+        <p>Bring your stories together. Pick up where you left off, listen along, and explore the world of a novel at your own pace.</p>
       </div>
-      {newest && newest.length > 0 && (
-        <div style={{ maxWidth: 780, margin: "44px auto 0", textAlign: "left" }}>
-          <p className="section-eyebrow">From the shared library</p>
-          <div className="rail">
-            {newest.map(n => (
-              <RailCard key={n.id} n={n} sub={`${n.chapter_count} ch.${n.owner_username ? ` · @${n.owner_username}` : ""}`} />
-            ))}
-          </div>
-        </div>
-      )}
+      <div className="welcome-options">
+        <button onClick={onAdd}><Icon name="link" size={24} /><span><b>Add a webnovel</b><span>Start with a link to its first chapter.</span></span><Icon name="arrowRight" size={20} /></button>
+        <Link to="/import"><Icon name="upload" size={24} /><span><b>Bring a book</b><span>Import an EPUB or PDF from your device.</span></span><Icon name="arrowRight" size={20} /></Link>
+        <Link to="/discover"><Icon name="compass" size={24} /><span><b>Find your next read</b><span>Explore books in the shared library.</span></span><Icon name="arrowRight" size={20} /></Link>
+      </div>
+      {newest.length > 0 && <Section title="From the shared library"><div className="rail">{newest.map(n => <Book key={n.id} novel={n} />)}</div></Section>}
     </div>
-  );
-}
-
-function HomeSkeleton() {
-  return (
-    <>
-      <div className="card hero-cont" aria-hidden>
-        <Skeleton variant="cover" style={{ width: 130 }} />
-        <div className="hero-cont-body" style={{ gap: 12 }}>
-          <Skeleton variant="text" width={120} />
-          <Skeleton variant="text" width="55%" height={22} />
-          <Skeleton variant="text" width="40%" />
-          <Skeleton variant="text" width="70%" height={8} />
-        </div>
-      </div>
-      <div className="rail" aria-hidden>
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="rail-card"><Skeleton variant="cover" /><Skeleton variant="text" width="80%" /></div>
-        ))}
-      </div>
-    </>
   );
 }
 
 export function Home() {
   const { user } = useAuth();
-  const { data, isLoading } = useHomeQuery();
-  const { data: jobs } = useActivityQuery();
-  const [adding, setAdding] = React.useState(false);
+  const { data, isLoading, isError, refetch } = useHomeQuery();
+  const { data: novels, isLoading: libraryLoading, isError: libraryError } = useNovelsQuery();
+  const { data: jobs, isLoading: activityLoading, isError: activityError, refetch: retryActivity } = useActivityQuery();
+  const [adding, setAdding] = useState(false);
   const navigate = useNavigate();
   const qc = useQueryClient();
   useTitle();
-
-  const name = (user && (user.display_name || user.username)) || "reader";
-  const cr = (data && data.continue_reading) || [];
-  const updated = (data && data.updated_in_library) || [];
-  const newest = (data && data.newest) || [];
-  const activeCount = (jobs || []).filter(isActiveJob).length;
-
-  const firstRun = !isLoading && data && cr.length === 0 && (data.recent_imports || []).length === 0
-    && activeCount === 0 && updated.length === 0;
-
-  if (firstRun) {
-    return (
-      <>
-        <Welcome newest={newest} onAdd={() => setAdding(true)} />
-        {adding && (
-          <AddNovelDialog onClose={() => setAdding(false)}
-                          onCreated={(id) => { setAdding(false); qc.invalidateQueries({ queryKey: ["novels"] }); navigate(`/n/${id}`); }} />
-        )}
-      </>
-    );
-  }
-
-  const tidbits = [];
-  if (updated.length > 0) tidbits.push(`${updated.length} novel${updated.length === 1 ? "" : "s"} with new chapters`);
-  if (activeCount > 0) tidbits.push(`${activeCount} job${activeCount === 1 ? "" : "s"} running`);
+  const reading = data?.continue_reading || [];
+  const updated = data?.updated_in_library || [];
+  const newest = data?.newest || [];
+  const active = (jobs || []).filter(isActiveJob);
+  const name = user?.display_name || user?.username || "reader";
+  const firstRun = !isLoading && !libraryLoading && !libraryError && !isError && !activityLoading && !activityError && data && !novels?.length && !reading.length && !updated.length && !active.length && !data.recent_imports?.length;
+  const addDialog = adding && <AddNovelDialog onClose={() => setAdding(false)} onCreated={id => {
+    setAdding(false);
+    qc.invalidateQueries({ queryKey: ["novels"] });
+    qc.invalidateQueries({ queryKey: ["home"] });
+    navigate(`/n/${id}`);
+  }} />;
+  if (firstRun) return <><Welcome onAdd={() => setAdding(true)} newest={newest} />{addDialog}</>;
 
   return (
-    <div className="page page-enter">
+    <div className="page page-enter reading-home">
       <div className="page-head">
-        <div className="grow">
-          <h1 className="home-greeting">{timeGreeting(name)}</h1>
-          <p className="home-tidbit">{tidbits.length ? tidbits.join(" · ") : "All caught up. Pick a story."}</p>
-        </div>
-        <div className="page-head-actions">
-          <Button variant="ghost" icon="upload" onClick={() => navigate("/import")}>Import</Button>
-          <Button variant="primary" icon="sparkles" onClick={() => setAdding(true)}>Add novel</Button>
-        </div>
+        <div className="grow"><h1 className="home-greeting">{timeGreeting(name)}</h1><p className="home-tidbit">A little time. Another chapter.</p></div>
+        <div className="page-head-actions"><Link className="btn btn-ghost" to="/import"><Icon name="upload" size={16} /> Import a book</Link><Button icon="plus" onClick={() => setAdding(true)}>Add novel</Button></div>
       </div>
-
-      {isLoading && <HomeSkeleton />}
-
-      {!isLoading && cr.length > 0 && <HeroContinueCard n={cr[0]} />}
-
-      {!isLoading && cr.length > 1 && (
-        <Section title="Jump back in">
-          <div className="rail">
-            {cr.slice(1).map(n => (
-              <RailCard key={n.id} n={n} showProgress
-                        listenable={n.audio_chapters > 0}
-                        sub={`Ch. ${fmtChapter(n.last_chapter != null ? n.last_chapter : 1)}${n.max_chapter ? ` / ${fmtChapter(n.max_chapter)}` : ""}`} />
-            ))}
+      {isLoading ? <div className="reading-feature loading-feature" role="status" aria-label="Loading your reading room"><Skeleton variant="cover" /><div className="grow"><Skeleton variant="text" width="65%" height={32} /><Skeleton variant="text" width="40%" /><Skeleton variant="text" width="80%" /></div></div>
+        : isError ? <EmptyState icon="alert" title="Your reading room couldn't load" body="Your books and progress are still saved. Try loading them again." primaryAction={<Button icon="refresh" onClick={() => refetch()}>Try again</Button>} />
+        : <>
+          <div className="reading-desk">
+            <div className="reading-desk-main">
+              <div className="home-section-head"><h2>Continue reading</h2><Link className="linkish" to="/library">Your library <Icon name="arrowRight" size={14} /></Link></div>
+              {reading.length ? <ContinueReading novel={reading[0]} /> : <div className="reading-feature start-reading"><Icon name="book" size={32} /><h2>Your next story is waiting</h2><p>Choose a book from your library and make yourself at home.</p><Link className="btn btn-primary" to="/library">Open your library <Icon name="arrowRight" size={16} /></Link></div>}
+            </div>
+            <aside className="reading-desk-aside" aria-label="Reading room activity">
+              <h2>On your horizon</h2>
+              <Link className="horizon-link" to="/library"><Icon name="library" size={19} /><span><b>Your collection</b><span>{libraryLoading ? "Loading your books…" : libraryError ? "Open your saved library" : `${novels?.length || 0} ${(novels?.length || 0) === 1 ? "book" : "books"}, ready when you are`}</span></span><Icon name="chevronRight" size={16} /></Link>
+              <Link className="horizon-link" to="/discover"><Icon name="compass" size={19} /><span><b>Something new</b><span>Explore the shared library</span></span><Icon name="chevronRight" size={16} /></Link>
+              <div className="home-work"><div className="home-work-head"><h3>Background work</h3><Link className="linkish" to="/jobs">View all</Link></div>
+                {activityLoading ? <p role="status">Checking background work…</p> : activityError ? <div role="alert"><p>Background work couldn't load.</p><Button size="sm" variant="ghost" onClick={() => retryActivity()}>Try again</Button></div> : active.length ? active.slice(0, 3).map(j => <Link className="home-work-row" key={`${j.source}:${j.id}`} to="/jobs"><span><span className="spinner" aria-hidden /><b>{ACT_KIND_LABEL[j.kind] || j.kind}</b></span><small>{activityProgress(j) || j.status}</small>{activityFraction(j) != null && <ProgressBar size="xs" value={activityFraction(j) * 100} label={`${ACT_KIND_LABEL[j.kind] || j.kind} progress`} />}</Link>) : <p><Icon name="check" size={16} /> All quiet. You're ready to read.</p>}
+              </div>
+            </aside>
           </div>
-        </Section>
-      )}
-
-      {!isLoading && updated.length > 0 && (
-        <Section title="New for you">
-          <div className="card" style={{ padding: 8 }}>
-            {updated.map(n => (
-              <Link key={n.id} className="newrow" to={`/n/${n.id}/read/${fmtChapter((n.max_chapter_read || 0) + 1)}`}>
-                <Cover src={n.cover_url} title={n.title} />
-                <span className="grow">
-                  <span className="newrow-title">{n.title}</span>
-                  <span className="newrow-sub" style={{ display: "block" }}>
-                    +{n.new_chapters} new chapter{n.new_chapters === 1 ? "" : "s"}
-                    {n.source_updated_at ? <> · updated <RelativeTime iso={n.source_updated_at} /></> : null}
-                  </span>
-                </span>
-                <span className="linkish">Read Ch. {fmtChapter((n.max_chapter_read || 0) + 1)} <Icon name="arrowRight" size={13} /></span>
-              </Link>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      <ActivityStrip jobs={jobs} />
-
-      {!isLoading && newest.length > 0 && (
-        <Section title="New in the shared library"
-                 right={<Link className="linkish" to="/discover">Browse all <Icon name="arrowRight" size={13} /></Link>}>
-          <div className="rail">
-            {newest.map(n => (
-              <RailCard key={n.id} n={n}
-                        sub={`${n.chapter_count} ch.${n.owner_username ? ` · @${n.owner_username}` : ""}`} />
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {adding && (
-        <AddNovelDialog onClose={() => setAdding(false)}
-                        onCreated={(id) => { setAdding(false); qc.invalidateQueries({ queryKey: ["novels"] }); navigate(`/n/${id}`); }} />
-      )}
+          {reading.length > 1 && <Section title="Also on your nightstand"><div className="rail">{reading.slice(1).map(n => <Book key={n.id} novel={n} progress />)}</div></Section>}
+          {updated.length > 0 && <Section title="Fresh chapters"><div className="new-chapters-list">{updated.map(n => <Link className="newrow" key={n.id} to={`/n/${n.id}/chapters`}><Cover src={n.cover_url} title={n.title} /><span className="grow"><span className="newrow-title">{n.title}</span><span className="newrow-sub">{n.new_chapters} new {n.new_chapters === 1 ? "chapter" : "chapters"}{n.source_updated_at && <> · <RelativeTime iso={n.source_updated_at} /></>}</span></span><Icon name="arrowRight" size={18} /></Link>)}</div></Section>}
+          {newest.length > 0 && <Section title="New in the shared library" action={<Link className="linkish" to="/discover">Browse all <Icon name="arrowRight" size={14} /></Link>}><div className="rail">{newest.map(n => <Book key={n.id} novel={n} />)}</div></Section>}
+        </>}
+      {addDialog}
     </div>
   );
 }
