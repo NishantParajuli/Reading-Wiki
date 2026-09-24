@@ -8,7 +8,11 @@ wiki/
 ├── pyproject.toml + uv.lock   # Python project + locked deps (uv)
 ├── Dockerfile                 # 3-stage web image (SPA build → uv venv → slim runtime)
 ├── docker-compose.yml         # web + optional GPU sidecars on a private bridge
-├── try_adapter.py             # scratch harness for developing scraper adapters
+├── AGENTS.md                  # change/review policy, including documentation requirements
+├── PRODUCT.md                 # readers, workflows, constraints, and product principles
+├── DESIGN.md                  # implemented visual system and shared component guidance
+├── .impeccable/               # design-system sidecar, surface briefs, and review artifacts
+├── try_adapter.py             # bounded website diagnostic; no database/chapter writes
 │
 ├── novelwiki/                 # ═══ THE BACKEND PACKAGE ═══
 │   ├── modules/               # the 10 business modules (vertical slices)
@@ -57,7 +61,8 @@ wiki/
 ├── scripts/                   # contracts.py (regen snapshots) · test_backend.py
 │                              # (disposable-DB integration launcher) ·
 │                              # rehearse-backup-restore.sh · real-browser fixtures
-├── deploy/                    # AGY + OpenAI Codex systemd --user workers
+├── deploy/                    # AGY + OpenAI Codex systemd --user workers;
+│                              # CI-gated local deployment agent and timer
 ├── implementation-plan/       # dated future/historical plans (not living authority)
 ├── data/                      # runtime data (gitignored)                → docs/data/filesystem-layout.md
 └── docs/                      # ← you are here                          → docs/README.md

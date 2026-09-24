@@ -52,7 +52,7 @@ class PostgresAcquisitionRepository:
     async def update_source(
         self, source_id: int, fields: dict[str, object]
     ) -> int:
-        allowed = {"start_url", "label", "language", "is_raw"}
+        allowed = {"start_url", "label", "language", "is_raw", "config"}
         if not set(fields) <= allowed:
             raise ValueError("unsupported source field")
         mutable = dict(fields)
@@ -62,8 +62,14 @@ class PostgresAcquisitionRepository:
                     sets: list[str] = []
                     arguments: list[object] = []
                     for key, value in mutable.items():
-                        arguments.append(value)
-                        sets.append(f"{key} = ${len(arguments)}")
+                        if key == "config":
+                            if not isinstance(value, dict):
+                                raise ValueError("source config must be an object")
+                            arguments.append(json.dumps(value))
+                            sets.append(f"config = COALESCE(config, '{{}}'::jsonb) || ${len(arguments)}::jsonb")
+                        else:
+                            arguments.append(value)
+                            sets.append(f"{key} = ${len(arguments)}")
                     arguments.append(source_id)
                     await connection.execute(
                         f"UPDATE sources SET {', '.join(sets)} "

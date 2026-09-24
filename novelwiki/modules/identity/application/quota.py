@@ -34,6 +34,8 @@ class QuotaService:
 
     @staticmethod
     def require_spend_allowed(principal: Principal) -> None:
+        if principal.status != "active":
+            raise Forbidden("This account is not active.")
         if not spend_allowed(principal):
             raise Forbidden(SPEND_FORBIDDEN_DETAIL)
 
@@ -86,13 +88,13 @@ class QuotaService:
         self.validate_kind(kind)
         if units <= 0:
             return True
+        if not spend_allowed(principal):
+            return False
         if principal.is_admin:
             await self._repository.bump(
                 principal.user_id, current_period(), kind, units
             )
             return True
-        if not spend_allowed(principal):
-            return False
         return await self._repository.try_reserve(
             principal.user_id,
             current_period(),

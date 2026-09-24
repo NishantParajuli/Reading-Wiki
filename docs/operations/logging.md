@@ -143,6 +143,10 @@ cookies, or provider keys. Common bearer tokens, secret assignments, and URL pas
 redacted as defense in depth. Avoid adding raw `options`, request bodies, query strings, or
 provider payloads to future events.
 
+The same token redaction applies to attempted verification/reset emails logged when
+`SMTP_HOST` is blank. Their URLs are not usable for completing those flows; configure
+SMTP or a local development mail-capture service instead of disabling redaction.
+
 Subscription stdout/stderr byte counts and metadata counters may be logged, but content is
 never placed in structured logs. AGY's retained private runner logs remain under
 `AGY_WORK_DIR`; OpenAI Codex retains only validated artifacts/metrics under

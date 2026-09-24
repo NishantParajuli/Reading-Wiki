@@ -1,7 +1,4 @@
-/* Ask (§6.8) — grounded, cited, chapter-bounded Q&A. The old fake
-   "DeepSeek Pro/Flash" 4-step theater is replaced by an honest 3-stage
-   thinking shimmer with no model branding; completion is tied to the real
-   /ask response. Recap lives beside the suggestions. */
+/* Grounded Q&A and recaps are cleared whenever the chapter boundary changes. */
 import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -15,12 +12,6 @@ import { AnswerBody } from "../../lib/markdown.jsx";
 import { CeilingControl } from "./CeilingControl.jsx";
 import { useTitle } from "../../lib/hooks.js";
 import { fmtChapter } from "../../lib/utils.js";
-
-const STAGES = [
-  { key: "search", label: "Searching your chapters", sub: "Only text at or below your ceiling", icon: "search" },
-  { key: "read", label: "Reading the evidence", sub: "Weighing retrieved passages", icon: "layers" },
-  { key: "write", label: "Writing the answer", sub: "Every claim cited back to a chapter", icon: "edit" },
-];
 
 const SUGGESTIONS = [
   "Who is the most important character so far?",
@@ -50,7 +41,7 @@ function Answer({ result, ceiling }) {
       <AnswerBody answer={answer} citeMap={citeMap} />
       <div className="answer-foot">
         {nSources > 0
-          ? <span className="verified"><Icon name="shield" size={15} sw={2.2} /> Verified · grounded in cited evidence</span>
+          ? <span className="verified"><Icon name="book" size={15} sw={2.2} /> Includes chapter references</span>
           : <span className="muted" style={{ fontSize: "var(--text-sm)" }}>No direct citations resolved</span>}
         <Chip>bounded to ch. ≤ {fmtChapter(ceiling)}</Chip>
         {nSources > 0 && <Chip className="mono">{nSources} source{nSources === 1 ? "" : "s"}</Chip>}
@@ -61,13 +52,18 @@ function Answer({ result, ceiling }) {
 
 function RecapCard({ novelId, ceiling }) {
   const [state, setState] = useState({ status: "idle" });
+  const activeRequest = useRef(0);
+  useEffect(() => () => { activeRequest.current += 1; }, []);
 
   async function run() {
+    const request = ++activeRequest.current;
     setState({ status: "loading" });
     try {
       const r = await experienceApi.recap(novelId, ceiling);
+      if (request !== activeRequest.current) return;
       setState({ status: "ready", data: r });
     } catch (e) {
+      if (request !== activeRequest.current) return;
       setState({ status: "error", message: e.message || "Recap failed." });
     }
   }
@@ -118,34 +114,33 @@ export function Ask() {
   const [input, setInput] = useState(initial);
   const [active, setActive] = useState(null);
   const [phase, setPhase] = useState("idle");    // idle | running | done | error
-  const [stageIdx, setStageIdx] = useState(0);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  const timers = useRef([]);
+  const requestId = useRef(0);
+  const [activeScope, setActiveScope] = useState(null);
+  const scope = `${novelId}:${ceiling}`;
   const didInitial = useRef(false);
   useTitle("Ask", novel.title);
 
-  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
-  useEffect(() => clearTimers, []);
+  useEffect(() => {
+    requestId.current += 1;
+    setPhase("idle"); setActive(null); setResult(null); setError(null);
+    return () => { requestId.current += 1; };
+  }, [scope]);
 
   async function run(question) {
-    clearTimers();
+    const request = ++requestId.current;
+    setActiveScope(scope);
     setActive(question);
     setResult(null); setError(null);
     setPhase("running");
-    setStageIdx(0);
-    // The first two stages advance on a gentle timer; the last holds until
-    // the real response lands — no fabricated sub-steps, no model names.
-    timers.current.push(setTimeout(() => setStageIdx(1), 1100));
-    timers.current.push(setTimeout(() => setStageIdx(2), 2600));
     try {
       const res = await codexApi.ask(novelId, question, ceiling);
-      clearTimers();
-      setStageIdx(STAGES.length);
+      if (request !== requestId.current) return;
       setResult(res);
       setPhase("done");
     } catch (e) {
-      clearTimers();
+      if (request !== requestId.current) return;
       setError(e.message || "Something went wrong while answering.");
       setPhase("error");
     }
@@ -166,6 +161,8 @@ export function Ask() {
     }
   }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const visiblePhase = activeScope === scope ? phase : "idle";
+
   return (
     <div className="page page-narrow page-enter">
       <div className="row" style={{ justifyContent: "flex-end", marginBottom: 10 }}>
@@ -180,46 +177,39 @@ export function Ask() {
         <Icon name="sparkles" size={20} style={{ color: "var(--accent-ink)" }} />
         <input value={input} onChange={e => setInput(e.target.value)}
                placeholder="Ask anything about what you've read so far…" aria-label="Your question" />
-        <Button type="submit" variant="primary" icon="send" disabled={phase === "running"}>Ask</Button>
+        <Button type="submit" variant="primary" icon="send" disabled={visiblePhase === "running" || !input.trim()}>Ask</Button>
       </form>
 
-      {phase === "idle" && (
+      {visiblePhase === "idle" && (
         <>
           <div className="suggestions">
             {SUGGESTIONS.map((qText, i) => (
               <button key={i} className="suggestion" onClick={() => pick(qText)}>{qText}</button>
             ))}
           </div>
-          <RecapCard novelId={novelId} ceiling={ceiling} />
+          <RecapCard key={scope} novelId={novelId} ceiling={ceiling} />
         </>
       )}
 
-      {active && (
+      {active && activeScope === scope && (
         <div style={{ marginTop: 28 }}>
+          <h2 className="section-title">{active}</h2>
           {phase === "running" && (
-            <div className="card thinking">
-              {STAGES.map((s, i) => {
-                const state = i < stageIdx ? "done" : i === stageIdx ? "active" : "";
-                return (
-                  <div key={s.key} className={`think-step ${state}`}>
-                    <div className="think-icon">
-                      {state === "active" ? <Spinner />
-                        : state === "done" ? <Icon name="check" size={16} sw={2.4} />
-                        : <Icon name={s.icon} size={16} />}
-                    </div>
-                    <div className="grow">
-                      <div className="think-label">{s.label}</div>
-                      <div className="think-sub">{s.sub}</div>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="card thinking" role="status">
+              <div className="think-step active">
+                <div className="think-icon"><Spinner /></div>
+                <div className="grow">
+                  <div className="think-label">Looking through your story…</div>
+                  <div className="think-sub">Using evidence through chapter {fmtChapter(ceiling)}. This can take a few minutes.</div>
+                </div>
+              </div>
             </div>
           )}
           {phase === "done" && <Answer result={result} ceiling={ceiling} />}
           {phase === "error" && (
             <div className="answer-card card answer-enter">
-              <EmptyState icon="x" title="Couldn't answer that" body={error} />
+              <EmptyState icon="x" title="Couldn't answer that" body={error}
+                primaryAction={<Button variant="secondary" onClick={() => run(active)}>Try again</Button>} />
             </div>
           )}
         </div>

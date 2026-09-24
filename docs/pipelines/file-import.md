@@ -3,7 +3,7 @@
 > How an uploaded book becomes chapters: upload → parse → (OCR) → segment → review →
 > commit. Everything is a **durable, resumable job** (`import_jobs` + on-disk artifacts)
 > because a deploy kills in-process work and a scanned-PDF OCR run can span days under
-> the Gemini free tier. Module reference:
+> the configured Gemini request budget. Module reference:
 > [../modules/acquisition.md](../modules/acquisition.md).
 
 ## State machine
@@ -66,8 +66,14 @@ The worker claims `uploaded → parsing` and produces a normalized **block-strea
 (`domain/document.py`: headings, paragraphs, images, page markers — persisted on disk,
 not in the DB):
 
-- **EPUB** (`parsers/epub.py`, ebooklib) — spine order, XHTML → blocks, images extracted
-  as content-addressed assets, metadata (title/author/language/series) detected.
+- **EPUB** (`parsers/epub.py`, ZIP + lxml) — spine order, XHTML → blocks, images extracted
+  as content-addressed assets, metadata (title/author/language/series) detected. When a
+  spine document has no usable heading, its NCX or EPUB3 table-of-contents label supplies
+  the chapter title. Container
+  and package XML disable entity expansion, external DTD loading, and network access;
+  declared document entities are rejected. ZIP handles close on success and parse failure.
+  The scraper's RAW archive adapter reuses `parse_epub(..., job_id=None)` for text-only
+  extraction; that mode follows the same spine/XML rules without staging image assets.
 - **Digital PDF** (`parsers/pdf_text.py`, pymupdf) — text spans → blocks with heading
   heuristics from font geometry. Cleanup rejoins a paragraph split only by a physical
   page, dehyphenates/reflows hard-wrapped lines, and strips running page chrome. The
@@ -86,6 +92,12 @@ not in the DB):
   `awaiting_ocr_confirm` with a `cost_estimate`; owner consent via
   `POST …/confirm-ocr` moves it to the claimable `ocr_pending` state (`ocr_pages` quota
   metered). Text detected as CJK marks the import raw → flows into translation later.
+  OCR responses must contain one structurally valid page per submitted image. Malformed
+  sidecar output escalates; malformed or incomplete Gemini output fails the run instead of
+  checkpointing missing pages as blank. Explicit empty block lists still represent real blank
+  pages. Checkpoints are replaced atomically, malformed checkpoints are retried, and a fully
+  checkpointed book can finish assembly without an available OCR backend. PDF handles close
+  on completion, cancellation, and budget pauses.
 
 The in-process worker serializes OCR with a process-local `asyncio.Lock`. Claim leases
 prevent two workers from processing the same import job, but the lock does not coordinate
@@ -107,9 +119,11 @@ looks off". Status: `awaiting_review`.
 
 Explicit prologues, epilogues, interludes, and side stories are narrative. An unnumbered
 epilogue/interlude is assigned a fractional reading index after the preceding chapter and
-kept as `interlude`, so translation, Codex extraction, narration, and retrieval cannot
-silently skip it. The optional refinement pass is not allowed to demote those explicit
-narrative titles to front/back matter.
+kept as `interlude`, so translation, Codex extraction, and retrieval include it. The
+optional refinement pass is not allowed to demote those explicit narrative titles to
+front/back matter. Whole-book narration currently selects only `chapter` or legacy
+null-kind rows; an interlude with readable text can be narrated individually through
+the chapter audio endpoint, but is not included in batch candidates or coverage counts.
 
 ## 4. Review
 
@@ -152,7 +166,8 @@ schedules a codex build.)
 
 ## Operating notes
 
-- One OCR at a time (an `asyncio.Lock` — a single GPU behind the sidecar), and the
+- One OCR job at a time per worker process (an `asyncio.Lock`; standalone workers have
+  independent locks), and the
   worker re-checks the owner may still spend before each paid stage.
 - `DELETE /api/import/jobs/{id}` removes a terminal job + artifacts; `cancel` stops an
   active one cooperatively.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, FiniteFloat
 
 from novelwiki.platform.auth import current_user
 from novelwiki.kernel.errors import Conflict, Forbidden, NotFound, ValidationFailed
@@ -36,7 +36,7 @@ class SourceCreate(BaseModel):
     start_url: str
     language: str = "en"
     is_raw: bool = False
-    chapter_offset: float = 0
+    chapter_offset: FiniteFloat = 0
     label: str | None = None
     config: dict | None = None
 

@@ -34,23 +34,24 @@ class PostgresAuthPersistence:
         expires_at, user_agent: str | None,
     ) -> tuple[dict, str]:
         async with self._pool.acquire() as connection:
-            try:
-                row = await connection.fetchrow(
-                    """
-                    INSERT INTO users (email, username, password_hash, display_name)
-                    VALUES ($1, $2, $3, $4) RETURNING *;
-                    """,
-                    email, username, password_hash, username,
+            async with connection.transaction():
+                try:
+                    row = await connection.fetchrow(
+                        """
+                        INSERT INTO users (email, username, password_hash, display_name)
+                        VALUES ($1, $2, $3, $4) RETURNING *;
+                        """,
+                        email, username, password_hash, username,
+                    )
+                except asyncpg.UniqueViolationError as exc:
+                    field = "email" if "email" in str(exc).lower() else "username"
+                    raise DuplicateRegistration(field) from exc
+                await connection.execute(
+                    "INSERT INTO email_tokens (user_id, kind, token_hash, expires_at) "
+                    "VALUES ($1, 'verify', $2, $3);",
+                    row["id"], hash_token(token), expires_at,
                 )
-            except asyncpg.UniqueViolationError as exc:
-                field = "email" if "email" in str(exc).lower() else "username"
-                raise DuplicateRegistration(field) from exc
-            await connection.execute(
-                "INSERT INTO email_tokens (user_id, kind, token_hash, expires_at) "
-                "VALUES ($1, 'verify', $2, $3);",
-                row["id"], hash_token(token), expires_at,
-            )
-            session = await create_session(connection, row["id"], user_agent)
+                session = await create_session(connection, row["id"], user_agent)
         return dict(row), session
 
     async def find_login_user(self, identifier: str) -> dict | None:
@@ -81,12 +82,13 @@ class PostgresAuthPersistence:
         self, user_id: int, password_hash: str, user_agent: str | None,
     ) -> str:
         async with self._pool.acquire() as connection:
-            await connection.execute(
-                "UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2;",
-                password_hash, user_id,
-            )
-            await revoke_user_sessions(connection, user_id)
-            return await create_session(connection, user_id, user_agent)
+            async with connection.transaction():
+                await connection.execute(
+                    "UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2;",
+                    password_hash, user_id,
+                )
+                await revoke_user_sessions(connection, user_id)
+                return await create_session(connection, user_id, user_agent)
 
     async def verification_token_valid(self, token_hash: str) -> bool:
         async with self._pool.acquire() as connection:
@@ -113,41 +115,43 @@ class PostgresAuthPersistence:
 
     async def reset_password(self, token_hash: str, password_hash: str) -> bool:
         async with self._pool.acquire() as connection:
-            row = await connection.fetchrow(
-                """
-                UPDATE email_tokens SET used_at = now()
-                WHERE token_hash = $1 AND kind = 'reset'
-                  AND used_at IS NULL AND expires_at > now()
-                RETURNING user_id;
-                """,
-                token_hash,
-            )
-            if row is None:
-                return False
-            await connection.execute(
-                "UPDATE users SET password_hash = $1 WHERE id = $2;",
-                password_hash, row["user_id"],
-            )
-            await revoke_user_sessions(connection, row["user_id"])
-            return True
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    UPDATE email_tokens SET used_at = now()
+                    WHERE token_hash = $1 AND kind = 'reset'
+                      AND used_at IS NULL AND expires_at > now()
+                    RETURNING user_id;
+                    """,
+                    token_hash,
+                )
+                if row is None:
+                    return False
+                await connection.execute(
+                    "UPDATE users SET password_hash = $1 WHERE id = $2;",
+                    password_hash, row["user_id"],
+                )
+                await revoke_user_sessions(connection, row["user_id"])
+                return True
 
     async def confirm_verification(self, token_hash: str) -> bool:
         async with self._pool.acquire() as connection:
-            row = await connection.fetchrow(
-                """
-                UPDATE email_tokens SET used_at = now()
-                WHERE token_hash = $1 AND kind = 'verify'
-                  AND used_at IS NULL AND expires_at > now()
-                RETURNING user_id;
-                """,
-                token_hash,
-            )
-            if row is None:
-                return False
-            await connection.execute(
-                "UPDATE users SET email_verified = TRUE WHERE id = $1;", row["user_id"],
-            )
-            return True
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    UPDATE email_tokens SET used_at = now()
+                    WHERE token_hash = $1 AND kind = 'verify'
+                      AND used_at IS NULL AND expires_at > now()
+                    RETURNING user_id;
+                    """,
+                    token_hash,
+                )
+                if row is None:
+                    return False
+                await connection.execute(
+                    "UPDATE users SET email_verified = TRUE WHERE id = $1;", row["user_id"],
+                )
+                return True
 
     async def oauth_login(
         self, provider: str, identity: dict, user_agent: str | None,

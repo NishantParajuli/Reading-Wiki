@@ -1,44 +1,35 @@
-/* Add-novel dialog (form logic preserved from the old AddNovelForm). */
-import React, { useEffect, useState } from "react";
-import { acquisitionApi } from "../acquisition/api.js";
+/* New web source, with defaults and URL guidance from the adapter registry. */
+import React, { useId, useState } from "react";
 import { catalogApi } from "./api.js";
+import { useSourceAdapter } from "./useSourceAdapter.js";
 import { Dialog } from "../../components/overlay.jsx";
 import { Button } from "../../components/ui.jsx";
 
 export function AddNovelDialog({ onCreated, onClose }) {
-  const [adapters, setAdapters] = useState([]);
+  const source = useSourceAdapter();
+  const hintId = useId();
   const [title, setTitle] = useState("");
-  const [adapter, setAdapter] = useState("");
   const [startUrl, setStartUrl] = useState("");
-  const [language, setLanguage] = useState("en");
-  const [isRaw, setIsRaw] = useState(false);
+  const [archivePassword, setArchivePassword] = useState("");
   const [codex, setCodex] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
-  useEffect(() => {
-    acquisitionApi.adapters().then(list => {
-      setAdapters(list);
-      if (list[0]) setAdapter(a => a || list[0].name);
-    }).catch(() => setAdapters([]));
-  }, []);
-
-  // Default the language to the chosen adapter's default.
-  useEffect(() => {
-    const a = adapters.find(x => x.name === adapter);
-    if (a && a.default_language) setLanguage(a.default_language);
-  }, [adapter, adapters]);
-
   async function submit(e) {
     e.preventDefault();
-    if (!title.trim() || !startUrl.trim() || busy) return;
+    if (!title.trim() || !startUrl.trim() || !source.language.trim() || !source.ready || busy) return;
+    if (source.adapter === "raw-fucknovelpia" && !archivePassword) return;
     setBusy(true); setErr(null);
     try {
       const res = await catalogApi.createNovel({
         title: title.trim(),
         codex_enabled: codex,
-        original_language: language,
-        source: { adapter, start_url: startUrl.trim(), language, is_raw: isRaw },
+        original_language: source.language.trim(),
+        source: {
+          adapter: source.adapter, start_url: startUrl.trim(), language: source.language.trim(),
+          is_raw: source.isRaw,
+          config: source.adapter === "raw-fucknovelpia" ? { archive_password: archivePassword } : null,
+        },
       });
       onCreated(res.id);
     } catch (e2) {
@@ -52,36 +43,44 @@ export function AddNovelDialog({ onCreated, onClose }) {
       <form className="col" style={{ gap: 14 }} onSubmit={submit}>
         <label className="field">
           <span>Title</span>
-          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. I Was Trapped in a Bad Ending…" autoFocus />
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. I Was Trapped in a Bad Ending…" autoFocus required disabled={busy} />
         </label>
         <label className="field">
-          <span>Scraping technique</span>
-          <select value={adapter} onChange={e => setAdapter(e.target.value)}>
-            {adapters.map(a => <option key={a.name} value={a.name}>{a.label}</option>)}
+          <span>Website</span>
+          <select value={source.adapter} onChange={e => source.chooseAdapter(e.target.value)} disabled={!source.ready || busy}>
+            {!source.ready && <option value="">Choose a website</option>}
+            {source.adapters.map(a => <option key={a.name} value={a.name}>{a.label}</option>)}
           </select>
         </label>
+        {source.loading && <p className="muted" role="status">Loading website sources…</p>}
+        {source.error && <div role="alert" className="acct-err">{source.error} <Button variant="ghost" onClick={source.retry}>Try again</Button></div>}
         <label className="field">
-          <span>First chapter URL</span>
-          <input value={startUrl} onChange={e => setStartUrl(e.target.value)} placeholder="https://…/series/<slug>/1" />
+          <span>Novel or chapter URL</span>
+          <input type="url" value={startUrl} onChange={e => setStartUrl(e.target.value)} placeholder="https://…" aria-describedby={hintId} required disabled={busy} />
         </label>
+        <p id={hintId} className="muted" style={{ margin: 0, fontSize: "var(--text-xs)" }}>{source.selected?.start_url_hint || "Use a supported novel or chapter URL for this website."}</p>
+        {source.adapter === "raw-fucknovelpia" && <label className="field">
+          <span>ZIP password</span>
+          <input type="password" autoComplete="off" value={archivePassword} onChange={e => setArchivePassword(e.target.value)} required disabled={busy} />
+        </label>}
         <div className="row wrap" style={{ gap: 16 }}>
           <label className="field" style={{ flex: "0 0 110px" }}>
             <span>Language</span>
-            <input value={language} onChange={e => setLanguage(e.target.value)} placeholder="en" />
+            <input value={source.language} onChange={e => source.setLanguage(e.target.value)} placeholder="en" required disabled={busy} />
           </label>
           <label className="check">
-            <input type="checkbox" checked={isRaw} onChange={e => setIsRaw(e.target.checked)} />
+            <input type="checkbox" checked={source.isRaw} onChange={e => source.setIsRaw(e.target.checked)} disabled={busy} />
             Raw (needs translation)
           </label>
           <label className="check">
-            <input type="checkbox" checked={codex} onChange={e => setCodex(e.target.checked)} />
+            <input type="checkbox" checked={codex} onChange={e => setCodex(e.target.checked)} disabled={busy} />
             Enable codex
           </label>
         </div>
-        {err && <div className="acct-err">{err}</div>}
+        {err && <div className="acct-err" role="alert">{err}</div>}
         <div className="row" style={{ gap: 10, justifyContent: "flex-end" }}>
           <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button type="submit" variant="primary" icon="check" loading={busy}>Add to library</Button>
+          <Button type="submit" variant="primary" icon="check" loading={busy} disabled={!source.ready}>Add to library</Button>
         </div>
       </form>
     </Dialog>

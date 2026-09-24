@@ -1,6 +1,5 @@
 import json
 import logging
-import asyncio
 import asyncpg
 import hashlib
 import math
@@ -13,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from pydantic import ValidationError
 
 from novelwiki.platform.config import settings
-from novelwiki.platform.database import get_db_pool, close_db_pool
+from novelwiki.platform.database import get_db_pool
 from novelwiki.modules.codex.adapters.outbound.cache import clear_caches
 from novelwiki.modules.codex.adapters.outbound.context import build_chapter_context, count_tokens
 from novelwiki.modules.codex.adapters.outbound.ingest.link import (
@@ -2188,12 +2187,7 @@ async def extract_all_chapters(
 
 
 if __name__ == "__main__":
-    import sys
-    force = "--force" in sys.argv
-
-    async def main():
-        novel_id = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
-        await extract_all_chapters(novel_id, force=force)
-        await close_db_pool()
-
-    asyncio.run(main())
+    raise SystemExit(
+        "This internal adapter requires the application runtime. "
+        "Use: uv run python -m novelwiki.cli extract NOVEL_ID"
+    )

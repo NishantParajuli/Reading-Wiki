@@ -64,14 +64,15 @@ key, so `OPENROUTER_API_KEY` remains required.
 ## Display
 
 `NOVEL_TITLE` (`The Codex`), `NOVEL_BLURB` (`A spoiler-safe wiki for the novel you're
-reading — every fact bounded to where you are.`) — hero/home display strings only;
-never gate content.
+reading — every fact bounded to where you are.`) — retained legacy settings. The current
+multi-novel API and SPA do not consume them; changing them does not customize the Home
+screen or novel metadata.
 
 ## Retrieval & agent
 
 | Setting | Default | Notes |
 |---|---|---|
-| `CHUNK_TARGET_TOKENS` / `CHUNK_OVERLAP` | 500 / 80 | chunking geometry |
+| `CHUNK_TARGET_TOKENS` / `CHUNK_OVERLAP` | 500 / 80 | target must be positive and overlap nonnegative; checked when chunking. Retained overlap is reduced when necessary to fit the next source piece |
 | `RRF_K` / `RRF_SOURCE_QUOTA_RATIO` | 60 / 0.4 | reciprocal-rank-fusion constant and the candidate share reserved for each sparse/dense source before reranking |
 | `RETRIEVE_K` | 50 | candidates per retriever before fusion |
 | `RERANK_TOP_N` | 8 | passages surviving rerank |
@@ -126,7 +127,7 @@ never gate content.
 | Setting | Default | Notes |
 |---|---|---|
 | `SCRAPER_ADAPTER` / `SCRAPER_BASE_URL` | `fenrirealm` / `https://fenrirealm.com` | legacy defaults for single-source flows |
-| `SCRAPER_DELAY` | 1.0 s | politeness delay between fetches |
+| `SCRAPER_DELAY` | 1.0 s | runner delay after each yielded chapter; one archive download can yield many chapters |
 | `SCRAPER_TIMEOUT_SECONDS` / `SCRAPER_MAX_RESPONSE_MB` | 30 / 8 | network guardrails |
 | `SCRAPER_REQUIRE_SAME_HOST` | `true` | binds crawls (incl. redirects/CDN hops) to the source host; adapters declare known extra hosts via `allowed_hosts` |
 | `SCRAPER_ALLOWED_HOST_OVERRIDES` | `""` | comma-separated deployment-level extra hosts (prefer adapter-local lists) |
@@ -154,13 +155,13 @@ never gate content.
 | `OCR_SIDECAR_URL` / `OCR_ENABLED` | `http://localhost:8077` / `true` | PaddleOCR PP-StructureV3 sidecar (compose overrides URL to `http://ocr:8077`) |
 | `OCR_CONFIDENCE_ESCALATE` | 0.80 | page mean confidence below this → Gemini vision |
 | `GEMINI_API_KEY` / `GEMINI_BASE_URL` / `GEMINI_VISION_MODEL` | `""` / `https://generativelanguage.googleapis.com/v1beta/openai/` / `gemini-2.5-flash` | escalation provider |
-| `GEMINI_DAILY_BUDGET` / `GEMINI_RPM` / `GEMINI_PAGES_PER_REQUEST` | 2000 / 10 / 3 | free-tier guards (budget persisted in `provider_budget`) |
+| `GEMINI_DAILY_BUDGET` / `GEMINI_RPM` / `GEMINI_PAGES_PER_REQUEST` | 2000 / 10 / 3 | configured request budgets (daily counter persisted in `provider_budget`); these do not determine provider billing |
 
 ## Audiobook TTS
 
 | Setting | Default | Notes |
 |---|---|---|
-| `TTS_SIDECAR_URL` / `TTS_ENABLED` | `http://localhost:8078` / `true` | OmniVoice sidecar (compose: `http://tts:8078`) |
+| `TTS_SIDECAR_URL` / `TTS_ENABLED` | `http://localhost:8078` / `true` | OmniVoice sidecar (compose: `http://tts:8078`); disabling generation returns 503 for new work while retaining cached playback and active-job lookup |
 | `AUDIO_DIR` | `./data/audio` | outside ASSET_DIR on purpose (access-controlled only) |
 | `TTS_NUM_STEP` | 32 | diffusion steps (16 = faster/rougher) |
 | `TTS_SPEED` / `TTS_PARA_SILENCE_MS` | 1.0 / 350 | pacing |
@@ -181,7 +182,7 @@ never gate content.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `SESSION_SECRET` | `dev-insecure-change-me` | signs/peppers tokens — long random value in prod; rotation invalidates all sessions |
+| `SESSION_SECRET` | `dev-insecure-change-me` | HMAC-signs OAuth state; use a long random value in prod. Rotation invalidates in-flight OAuth state, not stored sessions or email tokens; revoke session rows to sign users out |
 | `SESSION_COOKIE` / `CSRF_COOKIE` | `tg_session` / `tg_csrf` | |
 | `SESSION_TTL_DAYS` | 30 | |
 | `ALLOWED_ORIGINS` | `http://localhost:8001,http://localhost:8000` | explicit CORS list (credentialed requests forbid `*`) |
@@ -208,9 +209,14 @@ confirmation.
 
 ## Email (transactional)
 
-`SMTP_HOST` (`""`; blank ⇒ log links instead of sending — dev mode), `SMTP_PORT` 587,
+`SMTP_HOST` (`""`; blank ⇒ log the attempted message instead of sending), `SMTP_PORT` 587,
 `SMTP_USER`/`SMTP_PASSWORD` (`""`), `SMTP_FROM`
 (`Tideglass <no-reply@tideglass.local>`), `SMTP_STARTTLS` `true`.
+
+The shared log formatter redacts verification/reset tokens, including those in logged
+URLs. With SMTP disabled these flows have no usable delivery channel. Use a configured
+SMTP server or local development mail-capture service to test them; a local server
+without TLS also needs `SMTP_STARTTLS=false`.
 
 ## OAuth
 

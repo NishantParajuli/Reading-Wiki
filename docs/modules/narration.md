@@ -24,14 +24,17 @@ projections). Everything else is internal.
   ports plus config (`default_voice`, `enabled`, `max_batch_chapters`):
   - `generate_chapter` — Catalog readable-check → overlay-aware cache lookup (exact
     `(novel, chapter, voice, content_version, user-or-base)` match returns immediately,
-    **no charge**) → quota `check_available` (`tts_chapters`) → dedupe onto an active
-    identical job → create a `scope='chapter'` job.
-  - `generate_book` — bounded batch: candidate prose chapters (skipping ones already
-    narrated in that voice), capped at `TTS_MAX_BATCH_CHAPTERS` (100), one active book
+    **no charge**) → dedupe onto an active identical job → check `TTS_ENABLED` and
+    quota availability (`tts_chapters`) → create a `scope='chapter'` job.
+  - `generate_book` — bounded batch: candidate prose chapters (`kind='chapter'` or
+    legacy null kind, skipping ones already narrated in that voice), capped at
+    `TTS_MAX_BATCH_CHAPTERS` (100), one active book
     job per (novel, voice) via `find_active_book_job`, explicit chapter list stored in
     `options.chapters`.
+    Interludes are excluded from batch candidates and coverage; readable interludes can
+    still use the single-chapter generation endpoint.
   - `voices`, `book_status`, `audio_chapters`, `coverage`, `job`/`cancel_job`
-    (ownership-scoped), `chapter_status`, `chapter_audio` (path + `AudioFileGone` when
+    (job visibility and cancellation authorization), `chapter_status`, `chapter_audio` (path + `AudioFileGone` when
     the row exists but the file vanished).
 - **`worker.py::NarrationWorkerService`** — the durable-job orchestration for one claimed
   job, with all effects behind `NarrationWorkerOperations` (load user, spend check,
@@ -70,6 +73,8 @@ configured with an injected runtime of quota/chapter-text/sidecar/state capabili
   progress `{done,total,current_chapter}`, `stopped_reason` recorded when the sidecar
   disappears or spend is exhausted; a cancel keeps completed chapters.
 - **States:** `queued → generating → done | failed | canceled`.
+  Worker updates only advance active jobs; a late success/failure write cannot overwrite
+  a canceled or completed state. Cancellation can retain its final progress.
 
 ## Sidecar client (`adapters/outbound/sidecar.py`)
 
@@ -96,6 +101,16 @@ audio and `timing: null` for legacy cached audio. A forced regeneration atomical
 that cache while work is active, so status also returns the active `job_id` and
 `job_status` alongside `cached: true`; this makes the durable job recoverable after a
 reader reload or an ambiguous mutation-response failure.
+
+New generation returns **503** when `TTS_ENABLED=false` and **429** when the monthly
+narration quota is exhausted. Exact cache hits and existing active jobs are checked
+before the generation switch; disabling generation preserves playback and job tracking.
+A missing cached audio file returns **410** so clients can offer regeneration.
+
+Non-admin job reads require current read access to the job's novel, including jobs whose
+original requester has been deleted. Requesters can read their own jobs; other readers
+can observe shared base-audio and whole-book jobs, but not another reader's overlay
+audio. Admins can inspect all jobs. Cancellation requires the requester or an admin.
 
 ## Collaboration notes
 

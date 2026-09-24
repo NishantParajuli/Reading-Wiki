@@ -19,8 +19,9 @@
 
 Key properties:
 
-- **Source is baked into the image** — deploying a change means `docker compose build web
-  && docker compose up -d web`. There is no bind-mounted code.
+- **Web source is baked into the image** — deploying a web change means
+  `docker compose build web && docker compose up -d --no-deps web`. The web service has
+  no bind-mounted code; the TTS sidecar separately mounts its server and voice clips.
 - The web port binds **loopback only** (`127.0.0.1:8001`); the tunnel fronts it. Sidecar
   ports are **never published to the host** — only the web service reaches them over the
   private bridge `novelwiki_net`, so tunnel/Access rules can't be bypassed.
@@ -124,8 +125,7 @@ two minutes; after diagnosing the failure, remove
 `tideglass-deploy.service` manually to retry it. The agent never recreates the OCR or TTS
 sidecars.
 
-Install the agent once when provisioning a production laptop (it is already installed on
-the current host):
+Install the agent once when provisioning a production laptop:
 
 ```bash
 ./deploy/install-tideglass-deploy-agent.sh
@@ -157,11 +157,18 @@ release-candidate rigor (contract gates, backup rehearsal, image-digest rollback
 ## Running without Docker (dev)
 
 ```bash
-uv sync
+uv sync --frozen
 cp .env.example .env           # fill in; COOKIE_SECURE=false for plain-HTTP localhost
 (cd novelwiki/frontend && npm ci && npm run build)   # or `npm run dev` for HMR
-uvicorn novelwiki.api.app:app --reload --port 8000   # or: python main.py
+uv run uvicorn novelwiki.api.app:app --reload --port 8000  # or: uv run python main.py
 ```
 
-Sidecars are optional in dev; without them, scanned-PDF OCR and narration are the only
-features that degrade.
+Set `PUBLIC_BASE_URL=http://localhost:8000` to match the command above. For Vite hot
+reload, run `VITE_API_PROXY=http://localhost:8000 npm run dev` from
+`novelwiki/frontend` in a second terminal; it otherwise proxies to port 8001.
+
+Sidecars are optional in dev. Without them, scanned-PDF OCR needs the configured Gemini
+fallback and new narration cannot be generated. The Compose sidecars expose no host
+ports, so a host-run web process cannot reach them through `localhost:8077`/`:8078`;
+run the web service in Compose to use its private service network, or configure separately
+reachable local services and matching sidecar tokens.

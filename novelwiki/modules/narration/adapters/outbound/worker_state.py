@@ -87,6 +87,9 @@ class PostgresNarrationWorkerRepository:
     async def update_job(self, job_id: int, fields: dict) -> None:
         if not fields:
             return
+        allowed = {"status", "stage", "progress", "error", "options"}
+        if unknown := fields.keys() - allowed:
+            raise ValueError(f"Unsupported narration job fields: {sorted(unknown)}")
         sets, arguments = [], []
         for key, value in fields.items():
             arguments.append(
@@ -95,10 +98,13 @@ class PostgresNarrationWorkerRepository:
             )
             sets.append(f"{key} = ${len(arguments)}")
         arguments.append(job_id)
+        # A late generation/failure write must not resurrect a canceled or completed job.
+        # The worker may enrich cancellation progress without changing its terminal state.
+        statuses = "('queued','generating','canceled')" if fields.get("status") == "canceled" else "('queued','generating')"
         async with self._pool.acquire() as connection:
             await connection.execute(
                 f"UPDATE tts_jobs SET {', '.join(sets)}, updated_at=now() "
-                f"WHERE id=${len(arguments)};",
+                f"WHERE id=${len(arguments)} AND status IN {statuses};",
                 *arguments,
             )
 

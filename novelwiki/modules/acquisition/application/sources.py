@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import math
 
-from novelwiki.kernel.errors import Conflict, NotFound
+from novelwiki.kernel.errors import Conflict, NotFound, ValidationFailed
 from novelwiki.modules.identity.public import Principal
 
 from ..public import SourceDraft
@@ -23,6 +25,60 @@ class ScheduleScrape:
     source_id: int | None = None
     force: bool = False
     max_chapters: int | None = None
+
+
+def _validate_source_config(config: object) -> None:
+    if not isinstance(config, dict):
+        raise ValidationFailed("Source config must be an object.")
+    if "archive_password" in config and not isinstance(config["archive_password"], str):
+        raise ValidationFailed("The RAW ZIP password must be text; use an empty string to clear it.")
+    try:
+        # JSONB rejects non-finite numbers, NULs and unpaired Unicode surrogates.
+        # Check before the separately composed offset workflow can renumber data.
+        json.dumps(config, allow_nan=False, ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError):
+        raise ValidationFailed("Source config must contain valid JSON values.") from None
+    pending = [config]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str) and "\x00" in value:
+            raise ValidationFailed("Source config cannot contain null characters.")
+        if isinstance(value, dict):
+            pending.extend(value.keys())
+            pending.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            pending.extend(value)
+
+
+def _validate_source_offset(offset: object) -> None:
+    try:
+        valid_offset = math.isfinite(float(offset))
+    except (TypeError, ValueError, OverflowError):
+        valid_offset = False
+    if not valid_offset:
+        raise ValidationFailed("Chapter offset must be a finite number.")
+
+
+def _validate_source_text(value: object, field: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise ValidationFailed(f"Source {field} must be text or null.")
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        raise ValidationFailed(f"Source {field} must contain valid Unicode text.") from None
+    if "\x00" in value:
+        raise ValidationFailed(f"Source {field} cannot contain null characters.")
+
+
+def validate_source_draft(draft: SourceDraft) -> None:
+    """Shared validation for standalone and transactional source creation."""
+    _validate_source_offset(draft.chapter_offset)
+    if draft.config is not None:
+        _validate_source_config(draft.config)
+    for field in ("start_url", "label", "language"):
+        _validate_source_text(getattr(draft, field), field)
 
 
 class AcquisitionService:
@@ -50,6 +106,7 @@ class AcquisitionService:
         self, novel_id: int, principal: Principal, draft: SourceDraft
     ) -> int:
         await self._catalog.require_editable(novel_id, principal)
+        validate_source_draft(draft)
         start_url = await self._source_urls.validate(draft.start_url)
         return await self._repository.create_source(
             novel_id,
@@ -75,6 +132,18 @@ class AcquisitionService:
         fields = dict(requested_fields)
         if not fields:
             return "noop", 0
+        # Validate the full update before offset renumbering can write anything.
+        if not set(fields) <= {"chapter_offset", "start_url", "label", "language", "is_raw", "config"}:
+            raise ValidationFailed("Unsupported source fields.")
+        if "config" in fields:
+            _validate_source_config(fields["config"])
+        if "chapter_offset" in fields:
+            _validate_source_offset(fields["chapter_offset"])
+        for field in ("start_url", "label", "language"):
+            if field in fields:
+                _validate_source_text(fields[field], field)
+        if "is_raw" in fields and fields["is_raw"] is not None and not isinstance(fields["is_raw"], bool):
+            raise ValidationFailed("Source is_raw must be a boolean or null.")
         if "start_url" in fields and fields["start_url"] is not None:
             fields["start_url"] = await self._source_urls.validate(str(fields["start_url"]))
         if not await self._repository.source_exists(novel_id, source_id):
@@ -98,6 +167,8 @@ class AcquisitionService:
     ) -> dict:
         await self._catalog.require_editable(novel_id, principal)
         self._spend_policy.ensure_allowed(principal)
+        if command.max_chapters is not None and command.max_chapters < 1:
+            raise ValidationFailed("Maximum chapters must be a positive integer.")
         if command.source_id is not None:
             if not await self._repository.source_exists(novel_id, command.source_id):
                 raise NotFound("Source not found.")

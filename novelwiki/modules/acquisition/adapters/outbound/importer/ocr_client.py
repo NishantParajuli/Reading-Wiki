@@ -16,12 +16,37 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 
 import httpx
 
 from novelwiki.platform.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def validate_page_results(pages, expected_pages: int) -> list[dict]:
+    """Reject incomplete OCR output before it can become a durable blank page."""
+    if not isinstance(pages, list) or len(pages) != expected_pages:
+        raise ValueError("OCR response must contain exactly one page per input image.")
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(page.get("blocks"), list):
+            raise ValueError("OCR page must contain a blocks list.")
+        for block in page["blocks"]:
+            if not isinstance(block, dict) or not isinstance(block.get("text"), str):
+                raise ValueError("OCR blocks must contain text strings.")
+        for item, key in [(page, "mean_confidence"), *(
+            (block, "confidence") for block in page["blocks"]
+        )]:
+            confidence = item.get(key)
+            if (confidence is not None or (key == "mean_confidence" and key in item)) and (
+                isinstance(confidence, bool)
+                or not isinstance(confidence, (int, float))
+                or not math.isfinite(confidence)
+                or not 0 <= confidence <= 1
+            ):
+                raise ValueError("OCR confidence must be a finite number between zero and one.")
+    return pages
 
 
 def _data_url(image: bytes, mime: str = "image/png") -> str:
@@ -46,6 +71,8 @@ async def sidecar_available() -> bool:
 async def sidecar_ocr(images: list[bytes], lang: str = "en") -> list[dict]:
     """Run a batch of page images through the PaddleOCR sidecar. Returns one page-result per
     image (same order). Raises on transport/HTTP failure so the caller can fall back."""
+    if not images:
+        return []
     payload = {"images": [base64.b64encode(im).decode("ascii") for im in images], "lang": lang}
     url = f"{settings.OCR_SIDECAR_URL.rstrip('/')}/ocr"
     async with httpx.AsyncClient(timeout=180.0) as client:
@@ -57,7 +84,7 @@ async def sidecar_ocr(images: list[bytes], lang: str = "en") -> list[dict]:
             )
         r.raise_for_status()
         data = r.json()
-    return data.get("pages", [])
+    return validate_page_results(data.get("pages") if isinstance(data, dict) else None, len(images))
 
 
 _GEMINI_OCR_PROMPT = (
@@ -75,20 +102,20 @@ async def gemini_ocr(
     BudgetExhausted, which the worker treats as a pause). Returns one page-result per image."""
     from json_repair import repair_json
 
+    if not images:
+        return []
     content = [{"type": "text", "text": _GEMINI_OCR_PROMPT}]
     for im in images:
         content.append({"type": "image_url", "image_url": {"url": _data_url(im)}})
     raw = await runtime.call_vision([{"role": "user", "content": content}])
     try:
         data = json.loads(repair_json(raw))
-        pages = data.get("pages", [])
-    except Exception as e:
-        logger.warning(f"Gemini OCR returned unparseable JSON: {e}")
-        pages = []
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Gemini OCR returned invalid JSON; no pages were checkpointed.") from exc
+    pages = validate_page_results(data.get("pages") if isinstance(data, dict) else None, len(images))
     # Normalize: Gemini reads cleanly, so stamp a high confidence on every block.
     out = []
-    for i in range(len(images)):
-        page = pages[i] if i < len(pages) else {"blocks": []}
+    for page in pages:
         for b in page.get("blocks", []):
             b.setdefault("kind", "paragraph")
             b["confidence"] = 0.97

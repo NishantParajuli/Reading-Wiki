@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import hmac
 import logging
+import math
 import time
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -67,6 +70,16 @@ def create_web_app(*, lifespan, seed_csrf_cookie) -> FastAPI:
         version="2.0.0",
         lifespan=lifespan,
     )
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_request, exc):
+        # Python's JSON decoder accepts NaN/Infinity. Pydantic rejects them, but
+        # their echoed input would otherwise make JSONResponse fail with a 500.
+        detail = jsonable_encoder(
+            exc.errors(),
+            custom_encoder={float: lambda value: value if math.isfinite(value) else str(value)},
+        )
+        return JSONResponse({"detail": detail}, status_code=422)
+
     origins = [item.strip() for item in settings.ALLOWED_ORIGINS.split(",") if item.strip()]
     app.add_middleware(
         CORSMiddleware, allow_origins=origins, allow_credentials=True,

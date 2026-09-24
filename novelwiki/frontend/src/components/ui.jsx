@@ -3,7 +3,7 @@
    Skeleton, EmptyState, PageHeader, StatTile, RelativeTime,
    SegmentedControl, Cover, avatars, Reveal, Tabs.
    ============================================================ */
-import React from "react";
+import React, { useState } from "react";
 import { Icon } from "./Icon.jsx";
 import { TYPE_ICON, TYPE_LABEL } from "../lib/constants.js";
 import { coverHues, relativeTime } from "../lib/utils.js";
@@ -40,12 +40,12 @@ export function Chip({ tone = "neutral", icon, className = "", children, ...rest
 }
 
 export function ProgressBar({ value = 0, size = "md", tone, label, className = "", style }) {
-  const pct = Math.max(0, Math.min(100, value));
+  const pct = Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Number(value))) : 0;
   return (
     <div className={["progress-track", size !== "md" ? size : "", className].filter(Boolean).join(" ")}
          role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}
-         aria-label={label} style={style}>
-      <div className={["progress-fill", tone || ""].filter(Boolean).join(" ")} style={{ width: pct + "%" }} />
+         aria-label={label || "Progress"} style={style}>
+      <div className={["progress-fill", tone || ""].filter(Boolean).join(" ")} style={{ width: "100%", transform: `scaleX(${pct / 100})` }} />
     </div>
   );
 }
@@ -114,6 +114,7 @@ export function SegmentedControl({ value, onChange, options, fit, className = ""
                 className={value === o.value ? "active" : ""}
                 aria-pressed={value === o.value}
                 title={o.title}
+                aria-label={o.title || (typeof o.label === "string" ? o.label : undefined)}
                 onClick={() => onChange(o.value)}>
           {o.icon && <Icon name={o.icon} size={14} sw={2} />}
           {o.label}
@@ -124,13 +125,14 @@ export function SegmentedControl({ value, onChange, options, fit, className = ""
 }
 
 /* Cover with fixed 2:3 ratio, lazy loading, and a deterministic per-title
-   gradient placeholder with the title typeset in serif. */
+   book-jacket placeholder with the title typeset in serif. Broken image URLs use the same fallback. */
 export function Cover({ src, title, className = "", style }) {
   const [h1, h2] = coverHues(title);
+  const [failedSrc, setFailedSrc] = useState(null);
   return (
     <div className={["cover", className].filter(Boolean).join(" ")} style={style}>
-      {src
-        ? <img src={src} alt="" loading="lazy" decoding="async" />
+      {src && failedSrc !== src
+        ? <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailedSrc(src)} />
         : <div className="cover-ph" style={{ "--cov-h1": h1, "--cov-h2": h2 }}><span>{title || ""}</span></div>}
     </div>
   );

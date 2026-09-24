@@ -12,7 +12,10 @@ function readCookie(name) {
   const parts = (document.cookie || "").split(";").map((part) => part.trim());
   const prefix = `${name}=`;
   for (const part of parts) {
-    if (part.startsWith(prefix)) return decodeURIComponent(part.slice(prefix.length));
+    if (part.startsWith(prefix)) {
+      try { return decodeURIComponent(part.slice(prefix.length)); }
+      catch { return ""; }
+    }
   }
   return "";
 }
@@ -28,7 +31,15 @@ async function parseError(res) {
   let detail = `${res.status} ${res.statusText}`;
   try {
     const payload = await res.json();
-    if (payload?.detail) detail = payload.detail;
+    if (typeof payload?.detail === "string") detail = payload.detail;
+    else if (Array.isArray(payload?.detail)) {
+      const messages = payload.detail.map(item => {
+        if (typeof item === "string") return item;
+        const field = Array.isArray(item?.loc) ? item.loc.filter(part => part !== "body").join(".") : "";
+        return typeof item?.msg === "string" ? `${field ? `${field}: ` : ""}${item.msg}` : "";
+      }).filter(Boolean);
+      if (messages.length) detail = messages.join("; ");
+    }
   } catch (error) {
     // Non-JSON error bodies retain the HTTP status text.
   }
@@ -132,7 +143,12 @@ export async function postMultipart(url, formData) {
     headers: mutationHeaders(),
     body: formData,
   });
-  if (!res.ok) throw await parseError(res);
+  if (!res.ok) {
+    if (res.status === 401 && !url.includes("/auth/") && onUnauthorized) {
+      try { onUnauthorized(); } catch { /* re-gating is best-effort */ }
+    }
+    throw await parseError(res);
+  }
   return res.json();
 }
 

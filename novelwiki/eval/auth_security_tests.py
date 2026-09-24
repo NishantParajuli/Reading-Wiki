@@ -1,4 +1,5 @@
 import datetime as dt
+from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
@@ -11,6 +12,7 @@ from novelwiki.auth.tokens import hash_token
 from novelwiki.config.settings import settings
 from novelwiki.db.connection import close_db_pool, get_db_pool
 from novelwiki.db.schema import init_database
+from novelwiki.modules.identity.adapters.outbound.postgres_auth import PostgresAuthPersistence
 
 
 REQUEST_HEADERS = {"X-Tideglass-Request": "1"}
@@ -56,6 +58,103 @@ async def _create_user(email: str, username: str, password: str, verified: bool 
             hash_password(password),
             verified,
         )
+
+
+class _FailAfterWritePool:
+    """Inject a failure after a real SQL write, keeping real PostgreSQL transactions."""
+
+    def __init__(self, pool, fragment):
+        self.pool = pool
+        self.fragment = fragment
+
+    @asynccontextmanager
+    async def acquire(self):
+        async with self.pool.acquire() as connection:
+            fragment = self.fragment
+
+            class Connection:
+                def __getattr__(self, name):
+                    return getattr(connection, name)
+
+                async def execute(self, query, *args):
+                    result = await connection.execute(query, *args)
+                    if fragment in query:
+                        raise RuntimeError("injected identity write failure")
+                    return result
+
+            yield Connection()
+
+
+@pytest.mark.parametrize(
+    "operation,failing_write",
+    [
+        ("register", "INSERT INTO sessions"),
+        ("change", "INSERT INTO sessions"),
+        ("reset", "DELETE FROM sessions"),
+        ("verify", "UPDATE users SET email_verified"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_identity_mutations_roll_back_all_writes_and_remain_retryable(
+    auth_db, operation, failing_write,
+):
+    pool = await get_db_pool()
+    persistence = PostgresAuthPersistence(pool)
+    token = "atomic-identity-token"
+    token_hash = hash_token(token)
+    expires = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
+    user_id = None
+    if operation != "register":
+        user_id = await _create_user(
+            "atomic@example.test", "atomicuser", "OriginalPassword123", verified=False,
+        )
+        await persistence.create_user_session(user_id, "original device")
+        async with pool.acquire() as connection:
+            await connection.execute(
+                "INSERT INTO email_tokens (user_id,kind,token_hash,expires_at) "
+                "VALUES ($1,$2,$3,$4);",
+                user_id, "verify" if operation == "verify" else "reset", token_hash, expires,
+            )
+
+    async def snapshot():
+        async with pool.acquire() as connection:
+            return {
+                "users": [dict(row) for row in await connection.fetch("SELECT * FROM users ORDER BY id")],
+                "tokens": [dict(row) for row in await connection.fetch("SELECT * FROM email_tokens ORDER BY id")],
+                "sessions": [dict(row) for row in await connection.fetch("SELECT * FROM sessions ORDER BY token_hash")],
+            }
+
+    async def mutate(adapter):
+        if operation == "register":
+            return await adapter.register_user(
+                "atomic@example.test", "atomicuser", "new-password-hash", token,
+                expires, "new device",
+            )
+        if operation == "change":
+            return await adapter.change_password(user_id, "new-password-hash", "new device")
+        if operation == "reset":
+            return await adapter.reset_password(token_hash, "new-password-hash")
+        return await adapter.confirm_verification(token_hash)
+
+    before = await snapshot()
+    with pytest.raises(RuntimeError, match="injected identity write failure"):
+        await mutate(PostgresAuthPersistence(_FailAfterWritePool(pool, failing_write)))
+    assert await snapshot() == before
+
+    # A failed request leaves its account/token/session state usable for a retry.
+    assert await mutate(persistence)
+    after = await snapshot()
+    if operation == "verify":
+        assert after["users"][0]["email_verified"] is True
+        assert after["tokens"][0]["used_at"] is not None
+        assert after["sessions"] == before["sessions"]
+    else:
+        assert after["users"][0]["password_hash"] == "new-password-hash"
+        assert len(after["sessions"]) == (0 if operation == "reset" else 1)
+        if operation == "change":
+            assert after["sessions"][0]["token_hash"] != before["sessions"][0]["token_hash"]
+        if operation == "reset":
+            assert after["tokens"][0]["used_at"] is not None
 
 
 @pytest.mark.asyncio

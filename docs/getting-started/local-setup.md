@@ -21,7 +21,7 @@ From zero to a running instance with one novel in it. (Production deployment is
 
 ```bash
 git clone <repo> wiki && cd wiki
-uv sync                      # creates .venv from uv.lock
+uv sync --frozen             # creates .venv from uv.lock
 # — or —
 python -m venv .venv && source .venv/bin/activate && pip install -e .
 ```
@@ -41,49 +41,75 @@ OPENROUTER_API_KEY=sk-or-...
 DEEPSEEK_API_KEY=sk-...                # optional native V4 generation
 SESSION_SECRET=any-long-random-string
 COOKIE_SECURE=false                  # plain-HTTP localhost
+PUBLIC_BASE_URL=http://localhost:8000 # match the backend port below for email/OAuth links
 ADMIN_EMAIL=you@example.com
 ADMIN_PASSWORD=choose-one            # first admin, created on first boot
-# SMTP_HOST left blank ⇒ verification/reset links are logged, not emailed (dev mode)
+# SMTP_HOST left blank ⇒ no mail is sent; token values are redacted in server logs
 ```
 
 You do **not** create the database or run migrations by hand: on startup the app
 connects with `DB_SUPERUSER_URL`, creates the `novelwiki` DB if missing, and applies the
-idempotent schema (explicitly: `python -m novelwiki.db.schema`).
+idempotent schema (explicitly: `uv run python -m novelwiki.db.schema`).
+
+The commands below use `uv run` to select the installed project environment; `uv sync`
+does not activate it in your shell. If you chose the pip installation above, keep
+`.venv` activated and omit the `uv run` prefix.
 
 ## 4. Build the frontend, run the server
 
 ```bash
 cd novelwiki/frontend && npm ci && npm run build && cd ../..
-uvicorn novelwiki.api.app:app --reload --host 0.0.0.0 --port 8000
-# or: python main.py
+uv run uvicorn novelwiki.api.app:app --reload --host 127.0.0.1 --port 8000
+# or: uv run python main.py
 ```
 
 Open http://localhost:8000 — register, or log in with the bootstrapped admin. The SPA is
 served by FastAPI itself; there is no separate frontend server. For frontend work, Vite
-defaults its proxy to backend port 8001. With the port-8000 command above, run
-`VITE_API_PROXY=http://localhost:8000 npm run dev` instead of rebuilding.
+defaults its proxy to backend port 8001. With the port-8000 command above, open a
+second terminal and run:
+
+```bash
+cd novelwiki/frontend
+VITE_API_PROXY=http://127.0.0.1:8000 npm run dev
+```
+
+Use the Vite URL (`http://localhost:5173`) for hot-reloaded frontend work. The backend
+must still be running. OAuth callbacks and emailed links use `PUBLIC_BASE_URL`.
+
+The bootstrapped admin is already email-verified. To exercise registration verification
+or password reset, configure SMTP; a local mail-capture service can receive development
+mail (`SMTP_HOST`, `SMTP_PORT`, and `SMTP_STARTTLS=false` when that local service has no
+TLS). Leaving SMTP blank records the attempted mail, but the shared logger redacts the
+token in its link, so the log is not a usable verification/reset inbox.
 
 Startup also launches the three background workers (import, TTS, generic jobs) inside
 the server process — no extra processes needed in dev.
 
 ## 5. Add your first novel
 
-**Via UI:** Library → Add novel → paste a chapter-1 URL and pick an adapter, or drop an
-EPUB on the Import screen.
+**Via UI:** Library → Add novel → choose a website and paste its supported novel or
+chapter URL, or drop an EPUB on the Import screen. The website choice sets language and
+raw-translation defaults; check them before saving. Raw FuckNovelpia also asks for the
+downloaded archive's ZIP password. The [supported-sites guide](../pipelines/supported-sites.md)
+lists URL formats and source-specific limits.
 
 **Via CLI:**
 
 ```bash
-python -m novelwiki.cli add-novel "Example Novel" \
-  "https://fenrirealm.com/novel/example/chapter-1" --adapter fenrirealm
-python -m novelwiki.cli scrape 1 --max 25
+uv run python -m novelwiki.cli add-novel "Example Novel" \
+  "https://fenrirealm.com/series/example/1" --adapter fenrirealm
+uv run python -m novelwiki.cli scrape NOVEL_ID --max 25
 ```
 
-Then (optionally) build the codex from the novel's Manage tab, or:
+Replace the example URL with a real chapter URL and `NOVEL_ID` with the ID printed by `add-novel`. CLI-created novels are
+system-owned; use an admin account to manage them. To create a novel owned by your
+reader account, use the UI. Then (optionally) build the codex from Manage, or:
 
 ```bash
-python -m novelwiki.cli chunk 1 && python -m novelwiki.cli embed 1 && \
-python -m novelwiki.cli extract 1 && python -m novelwiki.cli rebuild-bm25 1
+uv run python -m novelwiki.cli chunk NOVEL_ID
+uv run python -m novelwiki.cli embed NOVEL_ID
+uv run python -m novelwiki.cli extract NOVEL_ID
+uv run python -m novelwiki.cli rebuild-bm25 NOVEL_ID
 ```
 
 All 14 commands: [../api/cli.md](../api/cli.md).
@@ -124,4 +150,4 @@ Details: [../testing.md](../testing.md).
 | Login cookie not set on localhost | `COOKIE_SECURE=true` on plain HTTP — set `false` in dev |
 | Frontend 404s / blank page | `novelwiki/frontend/dist` missing — run `npm run build` |
 | `vector` extension error at startup | install pgvector for your PostgreSQL version |
-| Verification email "not arriving" | no `SMTP_HOST` in dev — the link is in the server log |
+| Verification email "not arriving" | configure SMTP or a local mail-capture service; blank `SMTP_HOST` sends nothing and logged tokens are redacted |

@@ -13,92 +13,30 @@ import { DiffView } from "../../lib/diff.jsx";
 import { useToast } from "../../components/toast.jsx";
 import { ttsVoiceLabel } from "../reading/index.js";
 
-export function AddSourceForm({ novelId, adapters, onAdded, onCancel }) {
-  const [adapter, setAdapter] = useState(adapters[0] ? adapters[0].name : "fenrirealm");
-  const [startUrl, setStartUrl] = useState("");
-  const [language, setLanguage] = useState("en");
-  const [isRaw, setIsRaw] = useState(false);
-  const [continuesFrom, setContinuesFrom] = useState("");
-  const [localStart, setLocalStart] = useState("");
-  const [busy, setBusy] = useState(false);
-  const { toast } = useToast();
-
-  async function submit(e) {
-    e.preventDefault();
-    if (!startUrl.trim() || busy) return;
-    setBusy(true);
-    // Custom offset: global_number = local_number + offset ⇒ offset = global_start - local_start
-    let offset = 0;
-    if (continuesFrom.trim()) {
-      const glob = parseFloat(continuesFrom);
-      const loc = localStart.trim() ? parseFloat(localStart) : 1.0;
-      offset = glob - loc;
-    }
-    try {
-      await acquisitionApi.addSource(novelId, {
-        adapter, start_url: startUrl.trim(), language, is_raw: isRaw,
-        chapter_offset: offset, config: null,
-      });
-      onAdded();
-    } catch (e2) {
-      toast(e2.message || "Couldn't add the source.", { tone: "danger" });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form className="col" style={{ gap: 12, marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }} onSubmit={submit}>
-      <div className="row wrap" style={{ gap: 12 }}>
-        <label className="field" style={{ flex: "1 1 180px" }}>
-          <span>Technique</span>
-          <select value={adapter} onChange={e => setAdapter(e.target.value)}>
-            {adapters.map(a => <option key={a.name} value={a.name}>{a.label}</option>)}
-          </select>
-        </label>
-        <label className="field" style={{ flex: "0 0 100px" }}>
-          <span>Language</span>
-          <input value={language} onChange={e => setLanguage(e.target.value)} />
-        </label>
-      </div>
-      <label className="field">
-        <span>First chapter URL</span>
-        <input value={startUrl} onChange={e => setStartUrl(e.target.value)} placeholder="https://…/1" />
-      </label>
-      <div className="row wrap" style={{ gap: 14 }}>
-        <label className="field" style={{ flex: "1 1 170px" }}>
-          <span>Continues from global chapter</span>
-          <input value={continuesFrom} onChange={e => setContinuesFrom(e.target.value)} placeholder="e.g. 125" inputMode="decimal" />
-        </label>
-        {continuesFrom.trim() && (
-          <label className="field" style={{ flex: "1 1 170px" }}>
-            <span>Source-local starting chapter</span>
-            <input value={localStart} onChange={e => setLocalStart(e.target.value)} placeholder="defaults to 1" inputMode="decimal" />
-          </label>
-        )}
-        <label className="check">
-          <input type="checkbox" checked={isRaw} onChange={e => setIsRaw(e.target.checked)} />
-          Raw (needs translation)
-        </label>
-      </div>
-      <div className="row" style={{ gap: 10 }}>
-        <Button type="submit" variant="primary" loading={busy}>Add source</Button>
-        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
-      </div>
-    </form>
-  );
-}
-
 export function EditSourceForm({ novelId, source, onSaved, onCancel }) {
   const [offset, setOffset] = useState(String(source.chapter_offset || 0));
+  const [archivePassword, setArchivePassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const archiveSource = source.adapter === "raw-fucknovelpia";
+  const changed = offset !== String(source.chapter_offset || 0) || (archiveSource && !!archivePassword);
 
   async function save() {
-    if (busy) return;
-    setBusy(true); setErr(null);
+    if (busy || !changed) return;
+    setErr(null);
+    const parsedOffset = Number(offset);
+    if (!offset.trim() || !Number.isFinite(parsedOffset)) {
+      setErr("Enter a valid chapter offset, such as -1 or 0.5.");
+      return;
+    }
+    const fields = {};
+    if (parsedOffset !== Number(source.chapter_offset || 0)) fields.chapter_offset = parsedOffset;
+    if (archiveSource && archivePassword) fields.config = { archive_password: archivePassword };
+    if (!Object.keys(fields).length) { onSaved({ status: "noop", renumbered: 0 }); return; }
+    setBusy(true);
     try {
-      const r = await acquisitionApi.updateSource(novelId, source.id, { chapter_offset: parseFloat(offset) || 0 });
+      const r = await acquisitionApi.updateSource(novelId, source.id, fields);
+      setArchivePassword("");
       onSaved(r);
     } catch (e) {
       setErr(e.message || "Could not save");
@@ -111,15 +49,20 @@ export function EditSourceForm({ novelId, source, onSaved, onCancel }) {
     <div style={{ padding: 12, marginTop: 8, background: "var(--bg-2)", borderRadius: "var(--radius-sm)" }}>
       <label className="field">
         <span>Chapter offset (added to this source's own numbers)</span>
-        <input value={offset} onChange={e => setOffset(e.target.value)} placeholder="e.g. -1" inputMode="decimal" />
+        <input value={offset} onChange={e => setOffset(e.target.value)} placeholder="e.g. -1" inputMode="decimal" disabled={busy} />
       </label>
       <p className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 6 }}>
         Use -1 if this raw source is one chapter ahead of the translation. Existing chapters are renumbered immediately.
       </p>
-      {err && <p className="acct-err" style={{ marginTop: 4 }}>{err}</p>}
+      {archiveSource && <label className="field" style={{ marginTop: 12 }}>
+        <span>New ZIP password</span>
+        <input type="password" autoComplete="off" value={archivePassword} onChange={e => setArchivePassword(e.target.value)}
+               placeholder="Leave blank to keep the current password" disabled={busy} />
+      </label>}
+      {err && <p className="acct-err" style={{ marginTop: 4 }} role="alert">{err}</p>}
       <div className="row" style={{ gap: 10, marginTop: 8 }}>
-        <Button variant="primary" loading={busy} onClick={save}>Save</Button>
-        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+        <Button variant="primary" loading={busy} disabled={!changed} onClick={save}>Save</Button>
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
       </div>
     </div>
   );

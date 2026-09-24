@@ -98,7 +98,7 @@ request can't hold a slot forever).
 
 ### `provider_budget`
 
-Daily provider call counter that survives restarts (Gemini free-tier guard). PK
+Daily provider call counter that survives restarts (configured Gemini request budget). PK
 `(provider, day)`, `used`.
 
 ### `ai_execution_runs`
@@ -149,12 +149,16 @@ Reader-proposed status tags for shared novels: `novel_id`, `from_user_id`,
 
 ### `sources`
 
-A novel's ingestion sources. `novel_id`, `adapter` (registry key: `fenrirealm`,
-`readhive`, `boti-translations`, `69shuba`, `wetriedtls`, or the import adapter),
+A novel's ingestion sources. `novel_id`, `adapter` (a
+[scraper registry key](../pipelines/supported-sites.md), or the import adapter),
 `start_url` (or file path for imports), `config JSONB` (per-source knobs),
 `language`, `is_raw` (needs translation), **`chapter_offset NUMERIC`** (source-local
 number + offset = the novel's GLOBAL chapter number — the mechanism that stitches
 multiple sites into one sequence), `label`, `last_scraped_at`.
+
+For an encrypted Raw FuckNovelpia archive, `config.archive_password` stores the supplied
+ZIP password. Source configuration is stored as JSONB; the novel-detail source projection
+omits `config`, so it does not expose that password in reader-facing source metadata.
 
 ### `import_jobs`
 

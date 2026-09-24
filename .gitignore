@@ -22,3 +22,6 @@ implementation-plan/*
 node_modules/
 test-results/
 playwright-report/
+
+# Local interface review captures
+.impeccable/review/

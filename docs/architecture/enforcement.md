@@ -70,7 +70,13 @@ Full instructions in [../testing.md](../testing.md); summary of who tests what:
 | Contracts | `uv run pytest -q tests/contracts` | no | §2 snapshots |
 | Backend integration (eval) | `TEST_DATABASE_URL=… TEST_DB_SUPERUSER_URL=… uv run python scripts/test_backend.py` | yes (creates a disposable `tg_pytest_*` DB, needs pgvector) | end-to-end suites in `novelwiki/eval/`: auth/CSRF security, spoiler boundaries, durable jobs, import (incl. chunked upload attack cases), scraper SSRF, sidecar auth, quota/cost controls, AGY policy/runner/workload contracts, product smoke |
 | Frontend | `cd novelwiki/frontend && npm test && npm run build && npm run test:e2e` | – | component/API-contract unit tests, production build, Playwright critical paths |
-| Query performance | `uv run python tools/benchmark_queries.py --database-url "$TEST_DATABASE_URL" --check` | yes | hot-path query plans/latencies vs. `docs/architecture/performance-baseline.json` |
+| Query performance | `uv run python tools/benchmark_queries.py --database-url "$TEST_DATABASE_URL" --check` | yes, initialized test-only DB | query plans, worker claims, HTTP 200 health and authenticated Discover latency against a temporary one-book fixture; existing budgets in `docs/architecture/performance-baseline.json` |
+
+The benchmark binds its own pool to the explicit database URL and runs real session
+authentication and Discover SQL. It validates response data and removes its temporary
+reader/session/book/chapter on success or failure. Application lifespan, workers, and
+providers are not started. This small-fixture gate does not establish production-scale
+throughput; historical baseline observations are not rewritten by benchmark fixes.
 
 The blocking local release-candidate sequence (also in [../testing.md](../testing.md)):
 checker → full pytest with a test DB → query benchmark → frontend test/build/e2e.

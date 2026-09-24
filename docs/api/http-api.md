@@ -44,7 +44,7 @@ apply their own durable rate limits.
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/auth/register` | create account (username/email/password); sends verification mail (or logs the link without SMTP) |
+| `POST /api/auth/register` | create account (username/email/password); sends verification mail when SMTP is configured. Without SMTP, attempted mail is logged with its token redacted |
 | `POST /api/auth/login` | password login → session cookie. Per-IP and per-account windows |
 | `POST /api/auth/logout` | delete the session row |
 | `GET  /api/auth/me` | current user: profile, prefs, quota limits, capabilities (including AGY/OpenAI Codex availability) |
@@ -95,8 +95,11 @@ TOC/content: `GET /api/novels/{id}/chapters` · `GET /api/novels/{id}/chapter/{n
 the next few) · `PUT …/chapter/{number}/content` (owner/admin base edit; bumps
 `content_version`).
 Progress: `GET|PUT /api/novels/{id}/progress` (`last_chapter`, `scroll_pct`;
-`max_chapter_read` only ever rises).
-Bookmarks: `GET|POST /api/novels/{id}/bookmarks` · `DELETE …/bookmarks/{bid}`.
+`max_chapter_read` advances on served chapter reads, never from this PUT). The resume
+chapter must be finite and exist; `scroll_pct` must be finite and within `[0, 1]`.
+Invalid numbers/ranges return 422; missing chapters return 404.
+Bookmarks: `GET|POST /api/novels/{id}/bookmarks` · `DELETE …/bookmarks/{bid}`. Creation
+requires a finite chapter number (422 otherwise) that exists in this novel (404 otherwise).
 Overlays & contribute-back: `PUT|DELETE …/chapter/{n}/overlay` ·
 `POST …/chapter/{n}/self-translate` (metered to caller) ·
 `POST …/chapter/{n}/resolve` (base-vs-mine conflict) ·
@@ -107,8 +110,24 @@ Overlays & contribute-back: `PUT|DELETE …/chapter/{n}/overlay` ·
 
 Sources & scraping: `GET /api/adapters` · `POST /api/novels/{id}/sources` ·
 `PATCH …/sources/{sid}` (offset change runs the renumbering workflow; refused while
-codex artifacts exist) · `POST /api/novels/{id}/scrape` (durable job; `409` dedupe onto
-the active one).
+codex artifacts exist) · `POST /api/novels/{id}/scrape` (durable job; repeated requests
+with the same target/options return `200` with the active `job_id` and `deduped=true`).
+The adapter registry exposes `name`, `label`, `requires`, `default_language`, and
+`start_url_hint`; [supported sites](../pipelines/supported-sites.md) lists accepted URLs
+and per-site limits. Source creation supports a `config` object; Raw FuckNovelpia uses
+`config.archive_password` for encrypted ZIPs. Source PATCH merges supplied `config` keys
+into the existing object, preserving unrelated settings; use it to replace an archive
+password. Source config is stored but omitted from
+the novel-detail source projection. The HTTP source defaults are `language="en"` and
+`is_raw=false`, so API clients must explicitly select raw-language behavior.
+Chapter offsets must be finite numbers, and an HTTP scrape limit must be at least 1.
+Source config must contain valid JSON values: non-finite numbers, null characters, and
+invalid Unicode are rejected with `422`. `archive_password`, when supplied, must be a
+string; an empty string clears it. Source text fields also reject null characters and
+invalid Unicode, while their existing nullable fields remain nullable. Updates validate
+all supplied fields before renumbering chapters. Creating a novel with an invalid nested
+source returns `422` and leaves no novel, source, or library entry behind.
+
 Upload: `POST /api/import/upload` (≤ `MAX_UPLOAD_MB`) · chunked:
 `POST /api/import/upload/init` → `PUT /api/import/upload/{job}/chunk` (contiguous,
 capped) → `POST …/complete` (streamed hash verify) · `GET …/status` ·
@@ -167,6 +186,14 @@ clients must keep playback available and disable synchronized highlighting. Duri
 regeneration, the previous cache remains playable and the same response also includes the
 active `job_id` and `job_status`; clients must follow that job rather than treating the
 cached row as the completed regeneration.
+
+New audio generation returns 503 when `TTS_ENABLED=false`, and 429 for exhausted
+narration quota; existing cache hits and active jobs are returned before those generation
+checks. Cached audio remains playable when generation is disabled. An audio cache row
+whose file is missing returns 410. Non-admin job reads require current access to the
+novel and either ownership of the job or a shared base-audio/book target; orphaned jobs
+do not bypass this check. Only the requester or an admin can cancel a job, and late
+worker completion cannot overwrite its canceled status.
 
 ## Work (`/api`, auth)
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from novelwiki.kernel.errors import Conflict, Forbidden, InvalidOperation, NotFound
+from novelwiki.kernel.errors import Conflict, Forbidden, InvalidOperation, NotFound, ProviderUnavailable
 from novelwiki.modules.identity.public import Principal
 
 from .dto import AudioFile, BookAudioCommand, ChapterAudioCommand
@@ -86,6 +86,8 @@ class NarrationService:
                 "status": "queued", "cached": False,
                 "job_id": int(active["id"]), "voice_id": voice,
             }
+        if not self._enabled:
+            raise ProviderUnavailable("Audiobook generation is disabled. Existing audio is still playable.")
         await self._quota.check_available(principal, 1)
         options = self._jobs.chapter_options(
             novel_id, number, voice, info["content_version"], user_id,
@@ -133,6 +135,8 @@ class NarrationService:
                 "already_cached": already_cached, "capped": False,
                 "message": "Every selected chapter is already narrated in this voice.",
             }
+        if not self._enabled:
+            raise ProviderUnavailable("Audiobook generation is disabled. Existing audio is still playable.")
         await self._quota.check_available(principal, 1)
         options = {"chapters": selected, "dedupe_key": f"book:{novel_id}:{voice}"}
         job_id = await self._jobs.create_job(
@@ -176,17 +180,18 @@ class NarrationService:
         job = await self._jobs.get_job(job_id)
         if job is None:
             raise NotFound("Job not found.")
-        if job.get("user_id") not in (None, principal.user_id) and not principal.is_admin:
+        if not principal.is_admin:
+            try:
+                await self._access.require_readable(int(job["novel_id"]), principal)
+            except (NotFound, Forbidden):
+                raise NotFound("Job not found.") from None
+        if job.get("user_id") != principal.user_id and not principal.is_admin:
             options = job.get("options") or {}
             shared = (
                 options.get("target_kind") == "chapter_audio"
                 and options.get("target_user_id") is None
             ) or job.get("scope") == "book"
             if not shared:
-                raise NotFound("Job not found.")
-            try:
-                await self._access.require_readable(int(job["novel_id"]), principal)
-            except (NotFound, Forbidden):
                 raise NotFound("Job not found.")
         return self._job_view(job)
 

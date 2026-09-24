@@ -35,12 +35,14 @@ management primitives.
 
 ### Application (`application/`)
 
-- `sessions.py::IdentitySessionService` — token hash lookup → user row; sliding
-  `last_seen_at`; revocation by deletion.
+- `sessions.py::IdentitySessionService` — token hash lookup → active user row;
+  updates `last_seen_at` while retaining the fixed creation-time expiry; revocation by deletion.
 - `accounts.py::AccountService` — profile updates (username uniqueness, display name,
   bio, synced reader `prefs`), avatar path bookkeeping.
 - `quota.py::QuotaService` — month-bucketed (`period = first of month`) counters in
-  `quota_usage`; reserve/consume/refund with per-user overrides; exemption for admins.
+  `quota_usage`; reserve/consume/refund with per-user overrides; exemption for active
+  admins. Suspended/banned accounts cannot reserve or start spending, including from
+  worker paths that load users without an HTTP session dependency.
 - `rate_limits.py` — fixed-window counters keyed by *scoped hashes* (never raw
   emails/IPs/tokens) in `auth_rate_limits`, so abuse control survives restarts without
   storing identifiers.
@@ -74,17 +76,24 @@ management primitives.
 
 - `postgres_users/sessions/auth/accounts/admin/quota/directory.py` — the only SQL
   writers for the six owned tables (auth persistence bundles registration/login/token
-  flows; sessions/quota/etc. are split per concern).
+  flows; sessions/quota/etc. are split per concern). Registration commits the user,
+  verification token, and session in one transaction. Password changes atomically replace
+  the password and all sessions; reset atomically consumes its token, replaces the
+  password, and revokes sessions; verification atomically consumes its token and verifies
+  the account. A failed write rolls back the entire operation so a retry remains possible.
 - `passwords.py` — Argon2id hash/verify (+ `needs_rehash`); OAuth-only accounts have
   `password_hash NULL` and `verify_password` returns False rather than erroring.
 - `tokens.py` — opaque random tokens; only **hashes** are stored (`sessions.token_hash`,
   `email_tokens.token_hash`); `sign`/`unsign`/`stamped` HMAC helpers use
-  `SESSION_SECRET` (rotating it invalidates all sessions).
+  `SESSION_SECRET` for OAuth state. Rotating it invalidates in-flight OAuth handshakes;
+  session/email-token SHA-256 hashes do not depend on this secret, so existing sessions
+  require explicit revocation.
 - `oauth.py` — hand-rolled Google/Discord authorization-code flow on httpx: `authorize_url`
   (with signed `state`), `exchange_code` → normalized `(provider_account_id, email,
   username hint)`; providers appear in the UI only when client credentials are configured.
-- `email.py` — aiosmtplib transactional mail; with no `SMTP_HOST` the link is logged
-  instead of sent (dev mode).
+- `email.py` — aiosmtplib transactional mail; with no `SMTP_HOST` the attempted message
+  is logged instead of sent. The shared formatter redacts the link's token, so local
+  verification/reset testing needs SMTP or a local mail-capture service.
 - `avatars.py::AvatarFilesystem` — stores under `ASSET_DIR/_users/<id>/` (the one
   deliberately public asset mount).
 - `maintenance.py::cleanup_expired_identity_state` — startup sweep of expired sessions,

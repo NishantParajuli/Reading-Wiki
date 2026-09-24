@@ -41,14 +41,18 @@ def _page_path(job_id: int, idx: int):
 
 
 def _save_page(job_id: int, idx: int, result: dict) -> None:
-    _page_path(job_id, idx).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    path = _page_path(job_id, idx)
+    pending = path.with_suffix(".json.tmp")
+    pending.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    pending.replace(path)
 
 
 def _load_page(job_id: int, idx: int) -> dict | None:
     p = _page_path(job_id, idx)
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            page = json.loads(p.read_text(encoding="utf-8"))
+            return ocr_client.validate_page_results([page], 1)[0]
         except Exception:
             return None
     return None
@@ -90,17 +94,20 @@ async def parse_pdf_ocr(
     """OCR a scanned PDF into a Document. Resumes from on-disk page checkpoints; may raise
     BudgetExhausted (the worker pauses the job and retries when the daily budget rolls over)."""
     import fitz
-    doc = fitz.open(path)
+    with fitz.open(path) as doc:
+        return await _parse_open_pdf_ocr(doc, job_id, options, progress_cb, runtime=runtime)
+
+
+async def _parse_open_pdf_ocr(doc, job_id: int, options: dict, progress_cb, *, runtime) -> Document:
     total = doc.page_count
     gemini_first = bool(options.get("gemini_first"))
     lang = options.get("lang") or "en"
 
-    have_sidecar = False if gemini_first else await ocr_client.sidecar_available()
-    if not have_sidecar and not settings.GEMINI_API_KEY:
-        doc.close()
+    remaining = [i for i in range(total) if _load_page(job_id, i) is None]
+    have_sidecar = False if gemini_first or not remaining else await ocr_client.sidecar_available()
+    if remaining and not have_sidecar and not settings.GEMINI_API_KEY:
         raise RuntimeError("No OCR backend available: PaddleOCR sidecar is unreachable and GEMINI_API_KEY is unset.")
 
-    remaining = [i for i in range(total) if _load_page(job_id, i) is None]
     done = total - len(remaining)
     if progress_cb:
         await progress_cb(done, total)
@@ -112,6 +119,7 @@ async def parse_pdf_ocr(
         if have_sidecar:
             try:
                 sres = await ocr_client.sidecar_ocr(images, lang)
+                ocr_client.validate_page_results(sres, len(images))
             except Exception as e:
                 logger.warning(f"Sidecar OCR failed for pages {window}: {e}; escalating to Gemini.")
                 sres = []
@@ -138,15 +146,16 @@ async def parse_pdf_ocr(
                 gres = await ocr_client.gemini_ocr(
                     imgs, lang, runtime=runtime
                 )
+            ocr_client.validate_page_results(gres, len(sub))
             for k, i in enumerate(sub):
-                results[i] = gres[k] if k < len(gres) else {"blocks": [], "mean_confidence": 0.0}
+                results[i] = gres[k]
                 _save_page(job_id, i, results[i])
                 done += 1
 
         if progress_cb:
             await progress_cb(done, total)
 
-    doc_meta = doc.metadata or {}     # `doc` is still open here; closed after assembly below
+    doc_meta = doc.metadata or {}
     blocks: list[Block] = []
     escalations = 0
     conf_sum = conf_n = 0.0
@@ -170,8 +179,6 @@ async def parse_pdf_ocr(
             else:
                 blocks.append(Block(kind=PARAGRAPH, text=text, page=i,
                                     confidence=b.get("confidence"), loc=loc))
-    doc.close()
-
     meta = {
         "title": (doc_meta.get("title") or "").strip() or "Imported PDF",
         "author": (doc_meta.get("author") or "").strip() or None,

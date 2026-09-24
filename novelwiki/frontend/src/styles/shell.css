@@ -10,7 +10,7 @@
   width: var(--sidebar-w); display: flex; flex-direction: column; gap: 4px;
   padding: 14px 12px calc(14px + env(safe-area-inset-bottom));
   background: var(--bg-2); border-right: 1px solid var(--border);
-  transition: width var(--dur-3) var(--ease-out);
+
   overflow: hidden;
 }
 .sidebar.open { width: var(--sidebar-w-open); }
@@ -151,4 +151,36 @@
   position: sticky; top: 0; z-index: 45; display: flex; align-items: center; justify-content: center; gap: 8px;
   background: var(--warn-soft); color: var(--warn); font-size: var(--text-sm); font-weight: 600;
   padding: 7px 16px; border-bottom: 1px solid color-mix(in oklch, var(--warn) 30%, transparent);
+}
+
+/* Reading room directory. The navigation stays visually separate from the desk. */
+.sidebar {
+  background: var(--nav-bg); color: var(--nav-ink); border-right: none;
+  padding: 28px 14px 20px; gap: 6px; overflow-y: auto; scrollbar-width: thin;
+  scrollbar-color: var(--nav-line) var(--nav-bg);
+}
+.sb-brand { color: var(--nav-ink); margin-bottom: 32px; gap: 10px; }
+.brand-mark { background: transparent; color: inherit; box-shadow: none; border: 1px solid currentColor; border-radius: 50%; font-style: italic; font-size: 26px; }
+.sb-brand-name { font-size: 25px; font-weight: 500; }
+.sb-item { color: var(--nav-muted); font-size: var(--text-md); font-weight: 500; border-radius: 5px; min-height: 46px; }
+.sb-item:hover, .sb-novel-head:hover { background: var(--nav-active); color: var(--nav-ink); }
+.sb-item.active { background: var(--nav-active); color: var(--nav-ink); }
+.sb-item.active::after { content: ""; position: absolute; right: 13px; width: 5px; height: 5px; border-radius: 50%; background: #d9c79b; }
+.sb-sep { background: var(--nav-line); margin: 20px 6px 12px; }
+.sb-novel-head { color: var(--nav-ink); }
+.sb-footer-note { margin: 18px 12px 0; font-family: var(--serif); color: var(--nav-muted); font-size: var(--text-md); line-height: 1.45; white-space: nowrap; display: none; }
+.sidebar.open .sb-footer-note { display: block; }
+.sidebar :focus-visible { outline: 2px solid var(--nav-ink); outline-offset: 2px; box-shadow: none; }
+.topbar { min-height: 72px; background: var(--bg); backdrop-filter: none; padding-inline: clamp(20px, 3.5vw, 56px); }
+.topbar-search { min-height: 38px; border-radius: 5px; background: transparent; min-width: 210px; }
+.topbar-search kbd { font-size: 11px; }
+.tabbar { background: var(--surface); backdrop-filter: none; }
+.tb-item { font-size: 11px; min-height: 52px; }
+.tb-item.active { background: var(--accent-soft); border-radius: 6px; }
+@media (max-width: 767px) {
+  .topbar { min-height: 60px; }
+  .topbar-search { display: flex; min-width: 40px; width: 40px; height: 40px; justify-content: center; padding: 0; }
+  .topbar-search span, .topbar-search kbd { display: none; }
+  .topbar-search svg { width: 18px; height: 18px; }
+  .page { padding-bottom: calc(100px + env(safe-area-inset-bottom)); }
 }

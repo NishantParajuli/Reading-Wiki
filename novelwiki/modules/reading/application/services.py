@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from novelwiki.kernel.errors import NotFound
+import math
+
+from novelwiki.kernel.errors import NotFound, ValidationFailed
 from novelwiki.modules.identity.public import Principal
 
 from .dto import Bookmark, EffectiveCeiling, Progress
@@ -20,6 +22,10 @@ class ReadingService:
         self, novel_id: int, principal: Principal, chapter: float, scroll_pct: float
     ) -> None:
         await self._catalog_access.require_readable(novel_id, principal)
+        if not math.isfinite(chapter):
+            raise ValidationFailed("Chapter number must be finite.")
+        if not math.isfinite(scroll_pct) or not 0 <= scroll_pct <= 1:
+            raise ValidationFailed("Scroll position must be between zero and one.")
         if not await self._repository.chapter_exists(novel_id, chapter):
             raise NotFound("Chapter not found.")
         await self._repository.set_progress(novel_id, principal.user_id, chapter, scroll_pct)
@@ -32,6 +38,10 @@ class ReadingService:
         self, novel_id: int, principal: Principal, chapter: float, note: str | None
     ) -> int:
         await self._catalog_access.require_readable(novel_id, principal)
+        if not math.isfinite(chapter):
+            raise ValidationFailed("Chapter number must be finite.")
+        if not await self._repository.chapter_exists(novel_id, chapter):
+            raise NotFound("Chapter not found.")
         return await self._repository.add_bookmark(novel_id, principal.user_id, chapter, note)
 
     async def delete_bookmark(

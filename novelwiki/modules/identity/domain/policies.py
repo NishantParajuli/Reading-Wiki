@@ -17,7 +17,9 @@ def valid_username(name: str) -> bool:
 
 
 def spend_allowed(principal: Principal) -> bool:
-    return principal.is_admin or principal.email_verified
+    return principal.status == "active" and (
+        principal.is_admin or principal.email_verified
+    )
 
 
 def is_admin(principal: Principal) -> bool:

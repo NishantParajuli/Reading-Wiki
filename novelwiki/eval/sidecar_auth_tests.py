@@ -278,7 +278,10 @@ async def test_ocr_client_sends_token(monkeypatch):
     monkeypatch.setattr(settings, "OCR_SIDECAR_TOKEN", "")
     monkeypatch.setattr(settings, "SIDECAR_AUTH_TOKEN", TOKEN)
     cap: list = []
-    monkeypatch.setattr(ocr_client.httpx, "AsyncClient", _fake_async_client(200, cap, {"pages": []}))
+    monkeypatch.setattr(
+        ocr_client.httpx, "AsyncClient",
+        _fake_async_client(200, cap, {"pages": [{"blocks": [], "mean_confidence": 0.0}]}),
+    )
     await ocr_client.sidecar_ocr([b"img"], "en")
     assert cap and cap[-1][2].get(_HDR) == TOKEN
 

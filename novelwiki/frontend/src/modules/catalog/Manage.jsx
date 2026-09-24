@@ -33,9 +33,11 @@ import { TRANSLATION_TYPE_LABELS } from "../../lib/constants.js";
 
 /* ── Sources ── */
 import {
-  AddSourceForm, ContributionsInbox, EditSourceForm, GlossaryCard, HealthPanel,
+  ContributionsInbox, EditSourceForm, GlossaryCard, HealthPanel,
   MetadataCard, NovelJobs, TagSuggestionsInbox,
 } from "../../modules/catalog/ManagePanels.jsx";
+
+import { AddSourceForm } from "./AddSourceForm.jsx";
 
 export function Manage() {
   const { novel, novelId, reloadNovel } = useNovel();
@@ -47,7 +49,6 @@ export function Manage() {
   const { data: voicesData } = useVoicesQuery();
   useTitle("Manage", novel.title);
 
-  const [adapters, setAdapters] = useState([]);
   const [addingSource, setAddingSource] = useState(false);
   const [editSourceId, setEditSourceId] = useState(null);
   const [maxCh, setMaxCh] = useState("");
@@ -79,7 +80,6 @@ export function Manage() {
     setCodexBackend(codexAllowed ? preferred : "auto");
   }, [user && user.id, agyCapability && agyCapability.default_backend, openaiCodexCapability && openaiCodexCapability.default_backend, canAgyTranslate, canAgyCodex, canOpenAiTranslate, canOpenAiCodex]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { acquisitionApi.adapters().then(setAdapters).catch(() => setAdapters([])); }, []);
 
   if (!novel.can_edit) {
     return (
@@ -209,7 +209,7 @@ export function Manage() {
                   <div className="muted" style={{ fontSize: "var(--text-xs)", wordBreak: "break-all" }}>{s.start_url}</div>
                 </div>
                 {s.chapter_offset ? <Chip className="mono">{s.chapter_offset > 0 ? "+" : ""}{s.chapter_offset}</Chip> : null}
-                <button className="icon-btn plain" title="Edit offset" aria-label="Edit offset"
+                <button className="icon-btn plain" title="Edit source" aria-label="Edit source"
                         onClick={() => setEditSourceId(editSourceId === s.id ? null : s.id)}>
                   <Icon name="edit" size={15} />
                 </button>
@@ -228,7 +228,7 @@ export function Manage() {
           {(novel.sources || []).length === 0 && <div className="muted" style={{ padding: 8 }}>No sources yet.</div>}
           {!addingSource
             ? <div><Button variant="ghost" size="sm" icon="plus" onClick={() => setAddingSource(true)}>Add source</Button></div>
-            : <AddSourceForm novelId={novelId} adapters={adapters}
+            : <AddSourceForm novelId={novelId}
                 onCancel={() => setAddingSource(false)}
                 onAdded={() => { setAddingSource(false); reloadNovel(); }} />}
         </div>

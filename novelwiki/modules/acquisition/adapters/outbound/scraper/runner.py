@@ -1,11 +1,13 @@
 import asyncio
 import json
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from curl_cffi.requests import AsyncSession
 from novelwiki.platform.config import settings
-from novelwiki.platform.database import get_db_pool, close_db_pool
+from novelwiki.platform.database import get_db_pool
 from novelwiki.modules.acquisition.adapters.outbound.scraper.adapters import get_adapter, ScrapeContext, PremiumReached, HEADERS
+from novelwiki.modules.acquisition.adapters.outbound.scraper.base import ScrapeError
 from novelwiki.modules.acquisition.adapters.outbound.scraper.safe_fetch import SafeFetchError, host_from_url, parse_allowed_hosts
 
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +52,8 @@ async def scrape_source(
 
     On a re-run we resume from the last chapter already scraped (rather than re-fetching
     every prior page just to skip it), unless `force` re-scrapes from the start."""
+    if max_chapters is not None and max_chapters < 1:
+        raise ValueError("Maximum chapters must be a positive integer.")
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         source = await conn.fetchrow(
@@ -75,37 +79,44 @@ async def scrape_source(
     if isinstance(cfg, str):
         try:
             cfg = json.loads(cfg)
-        except Exception:
-            cfg = {}
+        except (ValueError, TypeError) as exc:
+            raise ScrapeError("Source configuration is not valid JSON.") from exc
+    if cfg is not None and not isinstance(cfg, dict):
+        raise ScrapeError("Source configuration must be an object.")
     source["config"] = cfg or {}
     offset = float(source["chapter_offset"] or 0)
+    if not math.isfinite(offset):
+        raise ScrapeError("Source chapter offset must be finite.")
 
     adapter = get_adapter(source["adapter"])
     try:
         source_host = host_from_url(source["start_url"])
     except SafeFetchError as e:
-        logger.error("Source %s has an unsafe start URL: %s", source_id, e)
-        return 0
+        raise ScrapeError("Source has an unsafe start URL.") from e
     allowed_hosts = parse_allowed_hosts(settings.SCRAPER_ALLOWED_HOST_OVERRIDES)
     allowed_hosts.update(parse_allowed_hosts(getattr(adapter, "allowed_hosts", [])))
     allowed_hosts.update(parse_allowed_hosts(source["config"].get("allowed_hosts")))
 
     start_url = source["start_url"]
+    resume = None
     if not force:
         resume = await _resume_url(pool, source_id, runtime=runtime)
         if resume:
             start_url = resume
-            logger.info(f"Resuming source {source_id} from last scraped chapter: {start_url}")
-    logger.info(f"Scraping source {source_id} (novel {source['novel_id']}, adapter '{source['adapter']}') from {start_url}")
+            logger.info("Resuming source %s from its last saved chapter.", source_id)
+    logger.info("Scraping source %s (novel %s, adapter '%s').", source_id, source["novel_id"], source["adapter"])
 
     scraped_count = 0
-    fallback_local = 0  # used only when an adapter can't determine a chapter number
+    previous_number = None
     async with AsyncSession(headers=HEADERS) as session:
         ctx = ScrapeContext(
             start_url=start_url,
             session=session,
             config=source["config"],
-            max_chapters=max_chapters,
+            # The saved checkpoint is inclusive: let the adapter also reach the
+            # first unread chapter when the requested limit is one.
+            max_chapters=(max_chapters + int(bool(resume))
+                          if max_chapters is not None else None),
             stop_on_premium=True,
             source_host=source_host,
             allowed_hosts=allowed_hosts,
@@ -117,9 +128,18 @@ async def scrape_source(
             async for ch in adapter.crawl(ctx):
                 if cancel_check is not None:
                     await cancel_check()
-                fallback_local += 1
-                local_number = ch.number if ch.number is not None else float(fallback_local)
+                if not ch.content or not ch.content.strip():
+                    raise ScrapeError("Extractor returned an empty chapter; nothing was saved for it.")
+                if ch.number is None and resume:
+                    raise ScrapeError("Cannot safely resume a chapter without a source number. Check the adapter before retrying.")
+                local_number = (float(ch.number) if ch.number is not None
+                                else (previous_number + 1 if previous_number is not None else 1.0))
                 global_number = local_number + offset
+                if not math.isfinite(local_number) or not math.isfinite(global_number):
+                    raise ScrapeError("Extractor returned an invalid chapter number.")
+                if previous_number is not None and local_number <= previous_number:
+                    raise ScrapeError("Extractor returned a repeated or backwards chapter number.")
+                previous_number = local_number
 
                 async with pool.acquire() as conn:
                     wrote = await _persist_chapter(
@@ -130,6 +150,8 @@ async def scrape_source(
 
                 if cancel_check is not None:
                     await cancel_check()
+                if max_chapters is not None and scraped_count >= max_chapters:
+                    break
                 await asyncio.sleep(settings.SCRAPER_DELAY)
         except PremiumReached as p:
             logger.info(f"Stopped at premium boundary (local chapter {p.number}). Scraped {scraped_count} this run.")
@@ -171,24 +193,7 @@ async def scrape_novel(
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: python -m novelwiki.modules.acquisition.adapters.outbound.scraper.runner <source_id> [--force] [--max <max_chapters>]")
-        sys.exit(1)
-
-    source_id = int(sys.argv[1])
-    force = "--force" in sys.argv
-    max_ch = None
-    if "--max" in sys.argv:
-        try:
-            idx = sys.argv.index("--max")
-            max_ch = int(sys.argv[idx + 1])
-        except Exception:
-            pass
-
-    async def main():
-        count = await scrape_source(source_id, force=force, max_chapters=max_ch)
-        logger.info(f"Successfully scraped {count} chapters.")
-        await close_db_pool()
-
-    asyncio.run(main())
+    raise SystemExit(
+        "This internal adapter requires the application runtime. "
+        "Use: uv run python -m novelwiki.cli scrape --help"
+    )

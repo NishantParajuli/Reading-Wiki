@@ -97,7 +97,14 @@ export function UploadDrop({ onUploaded }) {
 
   return (
     <div>
-      <div className={"import-drop" + (drag ? " drag" : "")}
+      <div className={"import-drop" + (drag ? " drag" : "")} role="button" tabIndex={busy ? -1 : 0}
+           aria-label="Choose EPUB or PDF books" aria-disabled={busy}
+           onKeyDown={e => {
+             if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+               e.preventDefault();
+               if (!busy) inputRef.current?.click();
+             }
+           }}
            onClick={() => !busy && inputRef.current && inputRef.current.click()}
            onDragOver={e => { e.preventDefault(); setDrag(true); }}
            onDragLeave={() => setDrag(false)}
@@ -106,7 +113,7 @@ export function UploadDrop({ onUploaded }) {
         <div className="import-drop-text">
           <b>{busy
             ? (progress > 0 && progress < 1 ? `Uploading… ${Math.round(progress * 100)}%` : "Uploading…")
-            : "Drop one or more EPUB/PDF books here, or click to choose"}</b>
+            : "Drop your books here, or choose files"}</b>
           <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
             Upload several volumes together, review them, then commit or append them as one series.
           </span>
@@ -176,7 +183,7 @@ export function DuplicateWarning({ dups, onOpenNovel }) {
   if (!committed.length) return null;
   const d = committed[0];
   return (
-    <div className="card" style={{ padding: "10px 14px", margin: "12px 0", display: "flex", gap: 10, alignItems: "center", borderLeft: "3px solid var(--warn)" }}>
+      <div className="card" style={{ padding: "10px 14px", margin: "12px 0", display: "flex", gap: 10, alignItems: "center" }}>
       <Icon name="alert" size={16} className="muted" />
       <div className="grow" style={{ fontSize: "var(--text-sm)" }}>
         You already imported this file{d.novel_title ? <> into <b>{d.novel_title}</b></> : null}. Committing again makes a separate copy.
@@ -199,18 +206,18 @@ export function SegmentRow({ seg, onPatch, onMerge, onSplit, canMerge }) {
   return (
     <div className={"seg-row" + (seg.include ? "" : " excluded")}>
       <label className="seg-include" title={seg.include ? "Included" : "Excluded"}>
-        <input type="checkbox" checked={!!seg.include} onChange={e => onPatch({ include: e.target.checked })} />
+        <input type="checkbox" aria-label={`Include ${seg.title || "untitled segment"}`} checked={!!seg.include} onChange={e => onPatch({ include: e.target.checked })} />
       </label>
       <div className="seg-main">
         <div className="seg-line1">
-          <input className="seg-title" value={seg.title || ""}
+          <input className="seg-title" value={seg.title || ""} aria-label="Segment title"
                  onChange={e => onPatch({ title: e.target.value })} placeholder="Untitled" />
-          <select className="seg-kind" value={seg.kind} onChange={e => onPatch({ kind: e.target.value })}>
+          <select className="seg-kind" aria-label={`Type of ${seg.title || "untitled segment"}`} value={seg.kind} onChange={e => onPatch({ kind: e.target.value })}>
             {IMPORT_KINDS.map(k => <option key={k} value={k}>{k}</option>)}
           </select>
           <input className="seg-num" value={seg.number == null ? "" : seg.number} placeholder="#"
-                 title="Chapter number" inputMode="decimal"
-                 onChange={e => { const v = e.target.value.trim(); onPatch({ number: v === "" ? null : parseFloat(v) }); }} />
+                 title="Chapter number" aria-label={`Chapter number for ${seg.title || "untitled segment"}`} type="number" step="any" inputMode="decimal"
+                 onChange={e => { const v = e.target.value.trim(); onPatch({ number: v === "" ? null : Number(v) }); }} />
         </div>
         <div className="seg-line2 muted">
           <input className="input" value={seg.part_label || ""}
@@ -245,6 +252,7 @@ export function PlanEditor({
   const [offset, setOffset] = useState("0");
   const [sourceId, setSourceId] = useState("");
   const [sources, setSources] = useState([]);
+  const [sourcesError, setSourcesError] = useState(null);
   const editableMeta = metadata || {};
   const detectedSeries = editableMeta.series || "";
   const detectedVolume = editableMeta.volume_label
@@ -272,7 +280,9 @@ export function PlanEditor({
   useEffect(() => {
     if (mode !== "replace" || !novelId) { setSources([]); return; }
     let cancel = false;
-    catalogApi.novel(parseInt(novelId)).then(n => { if (!cancel) setSources(n.sources || []); }).catch(() => {});
+    setSources([]); setSourcesError(null);
+    catalogApi.novel(parseInt(novelId)).then(n => { if (!cancel) setSources(n.sources || []); })
+      .catch(error => { if (!cancel) setSourcesError(error.message || "Could not load sources. Choose the novel again to retry."); });
     return () => { cancel = true; };
   }, [mode, novelId]);
 
@@ -291,7 +301,8 @@ export function PlanEditor({
   const warnings = segs.filter(s => s.include && s.kind === "chapter" && s.number == null).length;
   const commitDisabled = busy || includedCount === 0
     || (mode === "append" && !novelId)
-    || (mode === "replace" && !sourceId);
+    || (mode === "replace" && (!sourceId || !sources.some(source => source.id === Number(sourceId))))
+    || (((mode === "append" && !asVolume) || mode === "replace") && !Number.isFinite(Number(offset)));
 
   const patchSeg = (i, body) => setPlan(p => ({ ...p, segments: p.segments.map((s, j) => j === i ? { ...s, ...body } : s) }));
   const patchMeta = body => setMetadata(p => ({ ...p, ...body }));
@@ -319,7 +330,7 @@ export function PlanEditor({
   return (
     <div>
       <div className="card pad" style={{ marginBottom: 10 }}>
-        <p className="section-eyebrow" style={{ marginTop: 0 }}>Book details</p>
+        <h2 className="section-title" style={{ marginTop: 0 }}>Book details</h2>
         <p className="muted" style={{ margin: "0 0 10px", fontSize: "var(--text-xs)" }}>
           These saved values override PDF/EPUB metadata and filename guesses.
         </p>
@@ -403,32 +414,34 @@ export function PlanEditor({
       </label>
       <div className="card commit-bar">
         <div className="seg fit" role="group" aria-label="Commit target">
-          <button className={mode === "new" ? "active" : ""} onClick={() => setMode("new")}>New novel</button>
-          <button className={mode === "append" ? "active" : ""} onClick={() => setMode("append")}>Append to…</button>
-          <button className={mode === "replace" ? "active" : ""} title="Overwrite an existing source's chapters" onClick={() => setMode("replace")}>Replace…</button>
+          <button aria-pressed={mode === "new"} className={mode === "new" ? "active" : ""} onClick={() => setMode("new")}>New novel</button>
+          <button aria-pressed={mode === "append"} className={mode === "append" ? "active" : ""} onClick={() => setMode("append")}>Append to…</button>
+          <button aria-pressed={mode === "replace"} className={mode === "replace" ? "active" : ""} title="Overwrite an existing source's chapters" onClick={() => { setMode("replace"); setSourceId(""); }}>Replace…</button>
         </div>
         {(mode === "append" || mode === "replace") && (
           <select className="input" style={{ flex: "1 1 160px", width: "auto" }} value={novelId}
+                  aria-label="Destination novel"
                   onChange={e => { setNovelId(e.target.value); setSourceId(""); }}>
             <option value="">Choose a novel…</option>
             {novels.map(n => <option key={n.id} value={n.id}>{n.title}</option>)}
           </select>
         )}
         {mode === "replace" && novelId && (
-          <select className="input" style={{ flex: "1 1 160px", width: "auto" }} value={sourceId} onChange={e => setSourceId(e.target.value)}>
+          <select className="input" aria-label="Source to replace" style={{ flex: "1 1 160px", width: "auto" }} value={sourceId} onChange={e => setSourceId(e.target.value)}>
             <option value="">Choose a source…</option>
             {sources.map(s => <option key={s.id} value={s.id}>{(s.label || s.adapter) + ` (#${s.id})`}</option>)}
           </select>
         )}
         {((mode === "append" && !asVolume) || mode === "replace") && (
           <input className="input" style={{ flex: "0 0 110px", width: "auto" }} value={offset}
-                 onChange={e => setOffset(e.target.value)} placeholder="offset" inputMode="decimal" title="Chapter offset" />
+                 onChange={e => setOffset(e.target.value)} placeholder="offset" inputMode="decimal" title="Chapter offset" aria-label="Chapter offset" />
         )}
         <Button variant="primary" icon="check" disabled={commitDisabled} loading={busy}
                 onClick={() => onCommit(buildBody())}>
           {mode === "replace" ? "Replace chapters" : "Commit"}
         </Button>
       </div>
+      {mode === "replace" && sourcesError && <p role="alert" className="acct-err">{sourcesError}</p>}
       {mode === "replace" && (
         <p className="muted" style={{ fontSize: "var(--text-xs)", margin: "8px 2px 0" }}>
           Replacing deletes that source's current chapters and rebuilds its part of the codex.
@@ -444,7 +457,7 @@ export function OcrConfirm({ job, onConfirm, busy }) {
   const pages = est.scanned_pages != null ? est.scanned_pages : (job.stats && job.stats.page_count) || 0;
   return (
     <div className="card pad-lg">
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>Scanned PDF — needs OCR</p>
+      <h2 className="section-title" style={{ marginTop: 0 }}>Read the text in this scanned PDF</h2>
       <p style={{ margin: "0 0 8px", fontSize: "var(--text-md)" }}>
         {pages.toLocaleString()} pages look scanned. We'll read them with the local OCR engine and escalate hard pages to Gemini vision.
       </p>

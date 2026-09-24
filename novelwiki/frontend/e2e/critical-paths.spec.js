@@ -49,7 +49,7 @@ async function mockApi(page, { signedIn = true, chapterData = chapter } = {}) {
     } else if (path === "/api/auth/providers") body = { providers: [] };
     else if (path === "/api/auth/login" || path === "/api/auth/register") body = user;
     else if (path === "/api/home") body = { continue_reading: [novel], updated_in_library: [], newest: [], recent_imports: [] };
-    else if (path === "/api/activity") body = [];
+    else if (path === "/api/activity") body = { jobs: [] };
     else if (path === "/api/novels") body = [novel];
     else if (path === "/api/discover") body = { items: [novel], total: 1, offset: 0, limit: 60 };
     else if (path === "/api/novels/7") body = novel;
@@ -125,7 +125,7 @@ test("import upload and review surface is operational", async ({ page }) => {
   await mockApi(page);
   await page.goto("/import");
   await expect(page.getByRole("heading", { name: "Import a book" })).toBeVisible();
-  await expect(page.getByText(/Drop one or more EPUB\/PDF books/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose EPUB or PDF books" })).toBeVisible();
   await expect(page.locator('input[type="file"][accept=".epub,.pdf"]'))
     .toHaveAttribute("multiple", "");
   await expect(page.getByText("Recent imports")).toBeVisible();
@@ -203,4 +203,85 @@ test("owner manage panels remain composed and reachable", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "The Glass Tide" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Sources" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+});
+
+test("mobile search stays reachable and restores focus after closing", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page);
+  await page.goto("/library");
+  const search = page.getByRole("button", { name: "Search (Ctrl+K)" });
+  await search.click();
+  const dialog = page.getByRole("dialog", { name: "Search", exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("combobox").fill("Glass");
+  await expect(dialog.getByRole("option", { name: "The Glass Tide" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(search).toBeFocused();
+});
+
+test("library errors offer recovery instead of an empty bookshelf", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/novels", route => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "Temporarily unavailable" }) }));
+  await page.goto("/library");
+  await expect(page.getByText("Your library couldn't load")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  await page.unroute("**/api/novels");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.locator(".shelf-card-title")).toHaveText("The Glass Tide");
+  await expect(page.locator(".shelf-card a button, .shelf-card a a")).toHaveCount(0);
+});
+
+test("fresh chapters use the chapter list instead of inventing the next chapter number", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/home", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({ continue_reading: [], updated_in_library: [{ ...novel, max_chapter_read: 1.5, new_chapters: 1 }], newest: [], recent_imports: [] }) }));
+  await page.goto("/");
+  await expect(page.locator(".newrow")).toHaveAttribute("href", "/n/7/chapters");
+  await expect(page.getByRole("link", { name: "Open your library" })).toBeVisible();
+});
+
+test("scrolling never fetches an unread chapter or advances its spoiler boundary", async ({ page }) => {
+  const content = Array.from({ length: 35 }, (_, i) => `Passage ${i + 1}. The story continues along the shore, with enough words to fill this reading column.`).join("\n\n");
+  await mockApi(page, { chapterData: { ...chapter, content } });
+  const futureRequests = [];
+  page.on("request", request => { if (new URL(request.url()).pathname === "/api/novels/7/chapter/2") futureRequests.push(request.url()); });
+  await page.goto("/n/7/read/1");
+  await expect(page.getByRole("heading", { name: "Arrival" })).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect(page.getByRole("button", { name: "Next chapter", exact: true }).first()).toBeVisible();
+  await page.waitForTimeout(700);
+  expect(futureRequests).toHaveLength(0);
+  await expect(page).toHaveURL(/\/read\/1$/);
+});
+
+
+test("search keeps the active result and keyboard activation aligned", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/novels", route => route.fulfill({ json: [novel, { ...novel, id: 8, title: "A Second Shore" }] }));
+  await page.goto("/library");
+  await page.getByRole("button", { name: "Search (Ctrl+K)" }).click();
+  const input = page.getByRole("combobox", { name: "Find a story or Codex entry" });
+  const first = page.getByRole("option", { name: "The Glass Tide" });
+  const second = page.getByRole("option", { name: "A Second Shore" });
+  await expect(first).toBeVisible();
+  await input.press("ArrowDown");
+  await expect(input).toBeFocused();
+  await expect(second).toHaveAttribute("aria-selected", "true");
+  await expect(input).toHaveAttribute("aria-activedescendant", await second.getAttribute("id"));
+  await first.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(second).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/n\/8$/);
+});
+
+test("activity failures are visible and recoverable", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/activity?*", route => route.fulfill({ status: 500, json: { detail: "Unavailable" } }));
+  await page.goto("/");
+  await expect(page.getByText("Background work couldn't load.")).toBeVisible();
+  await expect(page.getByText("All quiet.", { exact: false })).toHaveCount(0);
+  await page.unroute("**/api/activity?*");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByText("All quiet. You're ready to read.")).toBeVisible();
 });

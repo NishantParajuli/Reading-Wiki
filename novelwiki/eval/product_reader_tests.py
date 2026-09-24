@@ -535,3 +535,27 @@ async def test_activity_active_import_not_hidden_by_newer_done_imports(db):
     assert len(feed["jobs"]) == 1
     assert feed["jobs"][0]["source"] == "import"
     assert feed["jobs"][0]["status"] == "uploaded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("late_status", ["generating", "done", "failed"])
+async def test_narration_cancellation_survives_late_worker_writes(db, late_status):
+    from novelwiki.modules.narration.adapters.outbound.worker_state import PostgresNarrationWorkerRepository
+
+    pool = db["pool"]
+    novel_id = await _mk_novel(pool, owner_id=db["reader"]["id"])
+    repository = PostgresNarrationWorkerRepository(pool)
+    job_id = await repository.create_job(
+        novel_id, db["reader"]["id"], "chapter", "test-voice",
+        {"chapters": [1]}, ["queued", "generating"],
+    )
+    await repository.cancel_job(job_id)
+    await repository.update_job(job_id, {"status": late_status, "stage": "late result"})
+    row = await repository.get_job(job_id)
+    assert row["status"] == "canceled"
+    assert row["stage"] == "canceled"
+    await repository.update_job(job_id, {"status": "canceled", "progress": {"done": 1}})
+    row = await repository.get_job(job_id)
+    assert row["status"] == "canceled"
+    import json
+    assert json.loads(row["progress"]) == {"done": 1}

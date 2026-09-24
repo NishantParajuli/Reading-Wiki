@@ -1,7 +1,7 @@
 """Transactional email (verification + password reset).
 
-If SMTP_HOST is unset the app still works — the message (and crucially the link) is
-logged instead of sent, which is exactly what you want in local dev.
+If SMTP_HOST is unset, delivery is logged instead of sent. Structured logging redacts
+link tokens; use a local SMTP capture service to exercise email flows in development.
 """
 import logging
 from email.message import EmailMessage

@@ -31,7 +31,7 @@ Full explanation: [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md)
 
 | You see | What it does | Owned by |
 |---|---|---|
-| **Home** | continue reading / continue listening, your running jobs, recent imports, newest shared novels | Experience |
+| **Home** | a featured book to resume, listening shortcut, other current reads, fresh chapters, running jobs, newest shared novels | Experience |
 | **Library / Discover** | your shelves (`to_read`/`reading`/`completed`); browse the shared (public/global) library with filters and provenance badges; "add to library" shares one text among many readers | Catalog + Experience |
 | **Accounts** | email+password (Argon2), optional Google/Discord sign-in, email verification, password reset, public profiles `/u/<name>`, avatars, synced reader prefs | Identity |
 | **Reader** | themes/width/auto-scroll, volume-grouped TOC, bookmarks, scroll recovery, translation editing, audiobook transport | Reading (+ Narration) |
@@ -41,7 +41,7 @@ Full explanation: [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md)
 | **Audiobooks** | per-chapter or whole-book narration jobs, cached Opus, streamed with scrubbing | Narration |
 | **Codex** | Browse entities, profiles, timelines, identity-reveal banners, **Ask** (cited Q&A), no-spoiler **recap** — all bounded by your chapter ceiling | Codex |
 | **Jobs** | one feed over every background job (scrape/import/codex/translate/narration) with progress and cancel | Work + Experience |
-| **Quotas & costs** | monthly per-user caps on everything that costs money, cost estimates *before* you spend, refunds on failure | Identity + Work |
+| **Quotas & costs** | monthly caps for translation/OCR/Codex builds/narration, separate read-side AI rate limits, cost estimates before durable work, refunds for unconsumed reservations | Identity + Work + AI Execution |
 | **Admin** | user management, platform spend, moderation, AI-backend grants | Experience (+ owners) |
 
 ## The cast of external services
@@ -52,8 +52,8 @@ Full explanation: [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md)
 - **OpenRouter** — embeddings and reranking always; also the generation fallback when
   native DeepSeek is not configured or a non-DeepSeek model id is selected ("Flash
   reads, Pro thinks" two-model split by default).
-- **Gemini** (optional) — vision OCR escalation for scanned PDFs, held inside its free
-  tier by persistent budget counters.
+- **Gemini** (optional) — vision OCR escalation for scanned PDFs, controlled by
+  configurable request limits and persistent daily budget counters.
 - **GPU sidecars** (optional) — PaddleOCR (`:8077`) and OmniVoice TTS (`:8078`), each a
   separate Docker service so the web image stays GPU-free.
 - **AGY / Antigravity CLI** (optional, admin-granted) — an alternative execution backend

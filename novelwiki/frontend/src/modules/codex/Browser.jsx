@@ -1,12 +1,11 @@
-/* Codex browser (§6.8) — search + type filters, reveal-flash entity grid,
-   decorative teaser row. Server only ever returns entities ≤ ceiling. */
+/* Searchable codex entries scoped to the current chapter boundary. */
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { codexApi } from "../../modules/codex/api.js";
 import { useNovel } from "../../layouts/NovelLayout.jsx";
 import { Icon } from "../../components/Icon.jsx";
-import { Chip, EmptyState, EntityAvatar, TypeBadge } from "../../components/ui.jsx";
+import { Button, Chip, EmptyState, EntityAvatar, Loading, TypeBadge } from "../../components/ui.jsx";
 import { CeilingControl } from "./CeilingControl.jsx";
 import { useDebounce, useTitle } from "../../lib/hooks.js";
 import { fmtChapter } from "../../lib/utils.js";
@@ -40,40 +39,6 @@ function EntityCard({ entity, justRevealed, onOpen }) {
   );
 }
 
-/* Decorative-only "to come" card: holds no real data beyond the ceiling. */
-function TeaserCard() {
-  return (
-    <div className="ecard locked t-concept" aria-hidden>
-      <div className="ecard-top">
-        <div className="avatar t-concept"><div className="ph" /></div>
-        <div className="grow">
-          <div className="redact" style={{ maxWidth: 130 }}><span style={{ width: "80%", height: 13 }} /></div>
-        </div>
-      </div>
-      <div className="redact"><span style={{ width: "100%" }} /><span style={{ width: "55%" }} /></div>
-      <div className="ecard-foot">
-        <span className="lock-pill"><Icon name="lock" size={12} className="lk" /> Revealed as you read on</span>
-      </div>
-    </div>
-  );
-}
-
-function SkeletonGrid({ count = 8 }) {
-  return (
-    <div className="grid grid-entities">
-      {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="ecard skeleton-card t-concept" aria-hidden>
-          <div className="ecard-top">
-            <div className="avatar t-concept"><div className="ph" /></div>
-            <div className="redact" style={{ maxWidth: 130 }}><span style={{ width: "80%", height: 13 }} /></div>
-          </div>
-          <div className="redact"><span style={{ width: "100%" }} /><span style={{ width: "55%" }} /></div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function CodexBrowser() {
   const { novel, novelId, ceiling, stats, codexMeta } = useNovel();
   const navigate = useNavigate();
@@ -81,16 +46,21 @@ export function CodexBrowser() {
   const [filter, setFilter] = useState("all");
   const [list, setList] = useState(null);
   const [revealed, setRevealed] = useState(() => new Set());
+  const [error, setError] = useState(null);
+  const [loadedKey, setLoadedKey] = useState(null);
+  const [retryKey, setRetryKey] = useState(0);
   useTitle("Codex", novel.title);
 
   const debQ = useDebounce(q, 300);
   const debCeiling = useDebounce(ceiling, 250);
+  const requestKey = JSON.stringify([novelId, debCeiling, debQ, filter]);
   const prevIds = useRef(new Set());
   const prevCeiling = useRef(debCeiling);
 
   useEffect(() => {
     let cancel = false;
     setList(null);
+    setError(null);
     const type = filter === "all" ? null : filter;
     codexApi.listEntities(novelId, debCeiling, { type, q: debQ.trim() || null })
       .then(rows => {
@@ -106,10 +76,17 @@ export function CodexBrowser() {
         prevCeiling.current = debCeiling;
         prevIds.current = newIds;
         setList(sorted);
+        setLoadedKey(requestKey);
       })
-      .catch(() => { if (!cancel) setList([]); });
+      .catch(error => {
+        if (!cancel) { setError(error.message || "Could not load the codex."); setLoadedKey(requestKey); }
+      });
     return () => { cancel = true; };
-  }, [novelId, debCeiling, debQ, filter]);
+  }, [novelId, debCeiling, debQ, filter, retryKey]);
+
+  const isCurrent = loadedKey === requestKey && ceiling === debCeiling;
+  const visibleList = isCurrent ? list : null;
+  const visibleError = isCurrent ? error : null;
 
   const bookMax = codexMeta && (codexMeta.bookMax == null ? codexMeta.max : codexMeta.bookMax);
   const showTeaser = !q.trim() && filter === "all" && (codexMeta && (bookMax == null || ceiling < bookMax));
@@ -129,8 +106,8 @@ export function CodexBrowser() {
     <div className="page page-enter">
       <div className="codex-head">
         <div>
-          <p className="section-eyebrow" style={{ margin: 0 }}>The Codex</p>
-          <h1 className="page-title">{novel.title}</h1>
+          <h1 className="page-title">The Codex</h1>
+          <p className="muted" style={{ margin: "6px 0 14px" }}>People, places, and discoveries from {novel.title}.</p>
           <Chip className="codex-build-coverage" tone={stats && builtThrough == null ? "warn" : "info"}
                 icon={builtThrough == null ? "clock" : "database"} role="status">
             {coverageLabel}
@@ -149,37 +126,37 @@ export function CodexBrowser() {
       </div>
       <div className="filters" style={{ marginBottom: 24 }}>
         {FILTERS.map(f => (
-          <button key={f.id} className={`filter ${filter === f.id ? "active" : ""}`} onClick={() => setFilter(f.id)}>
+          <button key={f.id} aria-pressed={filter === f.id} className={`filter ${filter === f.id ? "active" : ""}`} onClick={() => setFilter(f.id)}>
             <Icon name={f.icon} size={14} sw={2} /> {f.label}
           </button>
         ))}
       </div>
 
-      {list == null && <SkeletonGrid count={8} />}
+      {visibleError && <EmptyState icon="alert" title="The codex couldn't load" body={visibleError}
+        primaryAction={<Button variant="secondary" onClick={() => setRetryKey(key => key + 1)}>Try again</Button>} />}
+      {visibleList == null && !visibleError && <Loading label="Opening the codex…" />}
 
-      {list && list.length === 0 && !showTeaser && (
-        <EmptyState icon="search" title="No matches" body="Nothing in the chapters you've read matches that." />
+      {visibleList && visibleList.length === 0 && (
+        <EmptyState icon={q.trim() || filter !== "all" ? "search" : "book"}
+          title={q.trim() || filter !== "all" ? "No matches" : "Your story is still unfolding"}
+          body={q.trim() || filter !== "all" ? "Try another name or a different category within your chapter boundary." : "Entries appear here once your chapters have been added to the codex. Your chapter boundary keeps later discoveries hidden."}
+          primaryAction={q.trim() || filter !== "all" ? <Button variant="ghost" onClick={() => { setQ(""); setFilter("all"); }}>Clear filters</Button> : undefined} />
       )}
 
-      {list && list.length > 0 && (
+      {visibleList && visibleList.length > 0 && (
         <div className="grid grid-entities">
-          {list.map(e => (
+          {visibleList.map(e => (
             <EntityCard key={e.id} entity={e} justRevealed={revealed.has(e.id)}
                         onOpen={() => navigate(`/n/${novelId}/codex/e/${e.id}`)} />
           ))}
         </div>
       )}
 
-      {list && showTeaser && (
-        <>
-          <p className="section-eyebrow" style={{ marginTop: 38 }}>
-            <Icon name="lock" size={12} style={{ marginRight: 6, verticalAlign: "-1px" }} /> Not yet revealed
-          </p>
-          <div className="grid grid-entities"><TeaserCard /></div>
-          <p className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 12 }}>
-            Hidden by the spoiler boundary — these reveal themselves as you read further.
-          </p>
-        </>
+      {visibleList && visibleList.length > 0 && showTeaser && (
+        <p className="muted" style={{ fontSize: "var(--text-sm)", marginTop: 28 }}>
+          <Icon name="lock" size={14} style={{ marginRight: 6, verticalAlign: "-2px" }} />
+          Discoveries beyond chapter {fmtChapter(ceiling)} stay hidden until you read further.
+        </p>
       )}
     </div>
   );

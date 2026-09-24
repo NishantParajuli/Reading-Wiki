@@ -30,15 +30,28 @@ export function loadReaderPrefs(user) {
   const synced = user && user.prefs && user.prefs.reader && typeof user.prefs.reader === "object"
     ? user.prefs.reader : {};
   const merged = { ...READER_DEFAULTS, ...local, ...synced };
-  if (!["default", "sepia", "night"].includes(merged.tone)) merged.tone = "default";
+  for (const [key, options] of Object.entries({
+    tone: ["default", "sepia", "night"], font: ["serif", "sans"], width: ["narrow", "normal", "wide", "full"],
+  })) {
+    if (!options.includes(merged[key])) merged[key] = READER_DEFAULTS[key];
+  }
+  for (const [key, min, max] of [["size", 14, 28], ["line", 1.3, 2.2], ["autoSpeed", 1, 10]]) {
+    const value = Number(merged[key]);
+    merged[key] = merged[key] != null && Number.isFinite(value) ? clamp(value, min, max) : READER_DEFAULTS[key];
+  }
+  for (const key of ["justify", "indent", "autoScroll"]) merged[key] = merged[key] === true;
   return merged;
 }
 
 /* ---------- Settings (Aa) panel ---------- */
-export function ReaderSettings({ prefs, setPrefs }) {
+export function ReaderSettings({ prefs, setPrefs, onClose }) {
   const set = (k, v) => setPrefs(p => ({ ...p, [k]: v }));
   return (
-    <div className="reader-settings card" onClick={e => e.stopPropagation()}>
+    <div className="reader-settings card" role="region" aria-label="Reading settings" onClick={e => e.stopPropagation()}>
+      <div className="row">
+        <b className="grow">Make yourself comfortable</b>
+        <button className="icon-btn plain" aria-label="Close reading settings" onClick={onClose}><Icon name="x" size={16} /></button>
+      </div>
       <div className="rs-preview" style={{
         "--rs-font": prefs.font === "serif" ? "var(--serif)" : "var(--sans)",
         "--rs-size": prefs.size + "px",
@@ -156,7 +169,7 @@ export function TranslationTools({ novelId, ch, onClose, onChanged }) {
         </div>
       )}
 
-      <textarea className="tt-textarea" value={draft} disabled={busy}
+      <textarea className="tt-textarea" value={draft} disabled={busy} aria-label="Chapter translation"
                 onChange={e => setDraft(e.target.value)} rows={12} placeholder="Chapter translation…" />
 
       {msg && <div className={msg.ok ? "acct-ok" : "acct-err"} style={{ marginTop: 8 }}>{msg.text}</div>}
