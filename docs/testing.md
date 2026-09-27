@@ -135,6 +135,10 @@ cases remain a release qualification rather than something inferred from unit te
 
 ## Complete local release checks
 
+The real-backend browser launcher uses its own frontend on port 4174 and refuses to
+reuse an existing server. Mocked browser tests use port 4173. This prevents the real
+suite from inheriting a development proxy that targets a different database.
+
 Install Python dependencies with `uv sync --frozen`. Frontend and browser checks also
 need the locked npm dependencies and Chromium; the sequence below includes that setup.
 Use a test-only PostgreSQL/pgvector instance. In addition to the random databases used
