@@ -68,6 +68,17 @@ rate-limited model turn. Run it once during rollout, then qualify representative
 and extraction chapters before enabling either global switch for general use; see the
 [OpenAI Codex operator runbook](openai-codex-operator-runbook.md).
 
+Illustration regressions are also provider-free: `tests/unit/codex/test_illustrations.py`
+covers strict scene plans, source/reference boundaries, gallery selection, and resumable
+worker behavior; `tests/unit/ai_execution/test_openai_codex_images.py` covers bounded
+native-image results; `tests/unit/platform/test_illustration_routes.py` prevents the
+production SPA catch-all from shadowing the image APIs. Frontend component tests and
+`e2e/illustrations.spec.js` cover explicit generation, polling, and desktop/mobile controls.
+Real image qualification consumes subscription capacity and is separate from these tests.
+`novelwiki/eval/illustration_tests.py` adds disposable-database coverage for grant and
+chapter authorization, deduplicated scheduling, complete galleries, source/reference
+invalidation, and protected PNG responses.
+
 `agy_workload_tests.py::test_chapter_1200_context_stays_bounded_and_ignores_historical_fact_bloat`
 is the provider-free long-book qualification. It creates a synthetic LOTM-shaped chapter/volume
 layout, 500 entities, temporal state, threads, and more than 20,000 historical facts in the

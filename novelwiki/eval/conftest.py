@@ -123,7 +123,9 @@ async def _drop_test_db(test_name: str) -> None:
                 """,
                 test_name,
             )
-            await admin.execute(f"DROP DATABASE IF EXISTS {_quote_ident(test_name)};")
+            # A background worker can reconnect after the termination query.
+            # FORCE closes that race without ever targeting the application DB.
+            await admin.execute(f"DROP DATABASE IF EXISTS {_quote_ident(test_name)} WITH (FORCE);")
         finally:
             await admin.close()
     finally:

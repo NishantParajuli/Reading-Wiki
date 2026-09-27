@@ -51,6 +51,10 @@
 - Assets: only avatars and the SPA are public static; novel images, import previews,
   and audio stream through permission-checked routes. Experience rewrites historical
   public URLs onto those routes. Eval: `asset_security_tests.py`.
+- Codex-generated art is stored as bounded PostgreSQL bytes and served through its own
+  authenticated image route, with chapter-ceiling and source-validity checks and private
+  no-store caching. It never uses the public static asset mount. Generation additionally
+  requires owner/admin edit access and a granted, available OpenAI Codex backend.
 
 ## SSRF & scraping (Acquisition)
 
@@ -93,6 +97,10 @@ HTML is sanitized (nh3). Eval:
   through `ASK_REQUIRE_VERIFIED` and `ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED`.
 - Provider budgets: persistent Gemini daily counter; jobs pause (`ocr_paused`,
   `waiting_provider`) instead of hammering providers.
+- Illustration generation is explicitly requested, bounded to one to three scenes and
+  at most four new character sheets, and governed by subscription grants/concurrency and
+  provider capacity. It does not reserve a monthly Codex-build unit or permit metered API
+  fallback. Reading/listing art never starts a provider turn.
 - Estimates before spend (`/cost-estimate`), explicit reserve/refund accounting with
   exactly-once settlement. Eval: `ai_cost_controls_tests.py`,
   `durable_jobs_tests.py`.
@@ -131,7 +139,7 @@ a ChatGPT subscription account, and requires the configured models to appear in
 `model/list`. NovelWiki links that credential into a new private per-run `CODEX_HOME`
 without parsing it; persisted history, analytics, and web search are disabled.
 
-Each task uses a fresh ephemeral App Server thread over bounded stdio JSONL with
+Translation/extraction use fresh ephemeral App Server threads over bounded stdio JSONL with
 `approvalPolicy=never`, a read-only sandbox, network access disabled, and no
 MCP/apps/plugins/skills/subagents or external files. The model returns a strict
 Structured Outputs object; the host normalizes it, injects trusted source identity,
@@ -143,6 +151,14 @@ hashes. Eval: `tests/unit/ai_execution/test_openai_codex_app_server.py`,
 `tests/unit/ai_execution/test_openai_codex_smoke.py`,
 `tests/unit/platform/test_openai_codex_model_policy.py`. Ops:
 [../openai-codex-operator-runbook.md](../openai-codex-operator-runbook.md).
+
+Native illustration rendering is an explicit separate session, not a relaxation of
+those structured extraction/translation contracts. Shell/unified execution remain
+disabled; the session receives the art brief and private staged reference images,
+accepts the first completed native image event, and closes. Host checks enforce the
+PNG signature, decodability, 16 MiB limit, 24-million-pixel bound, and workspace-contained
+paths before storage. Temporary rendering workspaces and isolated account state are
+removed after the operation. [Illustration lifecycle](../pipelines/chapter-illustrations.md).
 
 ## The spoiler boundary (product security)
 

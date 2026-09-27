@@ -3,7 +3,7 @@
 > **Source of truth:** `novelwiki/db/schema.py` — a list of idempotent DDL statements
 > applied on every startup (and via `python -m novelwiki.db.schema`). The normalized DDL
 > is contract-frozen in `tests/contracts/snapshots/schema.json`. This page documents all
-> **47 tables**, grouped by owning module, with the reasoning behind the non-obvious
+> **49 tables**, grouped by owning module, with the reasoning behind the non-obvious
 > columns. Single-writer ownership is enforced by the architecture checker
 > ([../architecture/enforcement.md](../architecture/enforcement.md)).
 
@@ -232,7 +232,7 @@ Per-novel name/term consistency anchor. `UNIQUE (novel_id, source_term)`;
 `notes`, **`locked`** (user-pinned
 renderings the auto-glossary never overwrites).
 
-## Codex-owned (19 tables — every generated row is ceiling-safe)
+## Codex-owned (21 tables — story-derived rows carry their chapter boundary)
 
 ### `chunks`
 
@@ -357,6 +357,25 @@ Ask answers, cached per ceiling: `UNIQUE (novel_id, query_hash, chapter_ceiling)
 normalized question; `answer_md`, `evidence_ids`. Only answers whose citations are a
 subset of those evidence ids are written.
 
+### `codex_art`
+
+Generated character references and chapter scenes. `id UUID PK`, novel FK (cascade
+delete), `chapter NUMERIC`, `kind` (`reference`|`scene`), optional stable `character_key`,
+`title`, `caption`, and `style` (`luminous`|`celestial`|`ink`). `source_hash` identifies the
+source chapter title/text; `metadata JSONB` stores prompts, artistic design notes, scene
+evidence, exact reference IDs, model/effort, and batch/index information. `image BYTEA`
+stores a validated PNG capped at 16 MiB. `job_id` references Work (SET NULL on deletion);
+`UNIQUE(job_id, slot)` makes reference/scene checkpoints idempotent. Reads check chapter
+access and current source validity before returning metadata or bytes.
+
+### `codex_art_plans`
+
+Durable illustration plan keyed by `job_id` (FK to Work, cascade delete), with `plan
+JSONB` and `created_at`. The plan includes chosen scene briefs and prior reference IDs,
+so a retry resumes the same compositions and identities. These bytes and `codex_art`
+belong in PostgreSQL backups, not the imported-asset directory. See
+[chapter illustrations](../pipelines/chapter-illustrations.md).
+
 ## Narration-owned
 
 ### `tts_jobs`
@@ -381,7 +400,7 @@ per (novel, chapter, voice, version)) because `user_id` is nullable.
 
 ### `jobs`
 
-The generic durable-job queue (scrape / codex_build / translate / subscription smoke tests).
+The generic durable-job queue (scrape / codex_build / codex_illustrate / translate / subscription smoke tests).
 `backend_requested` accepts `auto`, `api`, `agy`, or `openai_codex`; `execution_backend` stores
 the immutable resolved provider. Fields in
 four groups:

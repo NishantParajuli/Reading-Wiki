@@ -29,6 +29,7 @@ _runtime = None
 _WORKLOAD_NAMES = {
     "translate": "translate_batch",
     "codex_build": "codex_extract",
+    "codex_illustrate": "codex_extract",
     "agy_smoke": "smoke_test",
     "openai_codex_smoke": "smoke_test",
 }
@@ -437,7 +438,8 @@ async def worker_loop(
             job = await _configured_runtime().claim_next(
                 execution_backend=_configured_runtime().backend,
                 worker_id=WORKER_ID,
-                kinds=("translate", "codex_build", _configured_runtime().smoke_kind),
+                kinds=("translate", "codex_build", _configured_runtime().smoke_kind)
+                + (("codex_illustrate",) if _configured_runtime().backend == "openai_codex" else ()),
             )
             if job is None:
                 try:

@@ -75,7 +75,7 @@ Read this file top to bottom and you know the entire runtime shape of the server
 
    Larger constructions are delegated to per-module builder files so `web.py` stays a
    table of contents: `bootstrap/{catalog,translation,narration,experience,work,
-   identity_admin,codex_migration,reading_migration,acquisition,acquisition_routes}.py`,
+   identity_admin,codex_migration,reading_migration,acquisition,acquisition_routes,illustrations}.py`,
    each exposing `build_…` functions.
 
 4. **Platform surfaces last** — `mount_platform_surfaces(app, ensure_owner_assets=…)`
@@ -129,6 +129,10 @@ Registering the same workload twice raises immediately (`ValueError`), so a typo
 silently shadow a handler. Each subscription worker builds a provider-specific registry
 variant (`bootstrap/ai_execution_worker.py`); Codex/Translation reuse their shared staged
 handlers with either the AGY CLI runtime or the OpenAI Codex App Server runtime injected.
+The OpenAI Codex registry additionally binds `codex_illustrate` to
+`bootstrap/illustrations.py::execute_illustration_job`, which injects Reading snapshots,
+Codex storage, Work progress/cancellation, and AI Execution's native renderer. The API
+and AGY registries have no illustration handler.
 
 ## 5. Runtime bundles (`bootstrap/*_runtime.py`, `*_worker.py`)
 

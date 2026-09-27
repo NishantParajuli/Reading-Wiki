@@ -21,7 +21,7 @@ curated into a **global** library everyone can read.
 ## THE ONE INVARIANT (the codex)
 
 > When you are reading at **chapter N**, no information from any chapter **> N** may
-> ever appear in a codex entry, a stat, a Q&A answer, or a recap.
+> ever appear in a codex entry, a stat, a Q&A answer, a recap, or a generated illustration.
 
 That boundary is enforced at the **database and retrieval layers** (`WHERE chapter <=
 ceiling` on every read) — never by trusting the LLM to hold back. The server computes
@@ -66,6 +66,10 @@ unlock future codex data. Full model:
   hybrid retrieval (BM25 ⊕ pgvector → RRF → rerank) → agentic **Ask** with inline
   citations; entity profiles, timelines, identity-reveal banners; one-click no-spoiler
   **recap** — all bounded by the same trusted ceiling and cached per ceiling.
+- **Chapter illustrations** *(opt-in)* — one to three scene images with reusable
+  character reference sheets, generated through the connected Codex subscription.
+  Choose Luminous, Celestial, or Ink styling; galleries follow chapter access and source
+  freshness. [Workflow and limits](docs/pipelines/chapter-illustrations.md).
 - **⚙️ Durable pipelines** — scrapes, imports, codex builds, translation batches, and
   narration survive restarts as database-backed jobs with dedupe and cooperative
   cancellation. Generic Work jobs and imports use claim leases and heartbeats; the TTS
@@ -81,7 +85,7 @@ unlock future codex data. Full model:
 **A modular monolith, organized as vertical slices, with Clean/Hexagonal boundaries
 inside each module.** One FastAPI process + one PostgreSQL database + one React SPA —
 but the code is partitioned into ten business modules that each own their tables (all
-47 have exactly one writer), expose a small `public.py` contract, and receive every
+49 have exactly one writer), expose a small `public.py` contract, and receive every
 cross-module capability by injection from a single composition root. Eight named
 workflows coordinate cross-module writes: seven use an opaque unit-of-work for one DB
 transaction; initial AI scheduling uses guarded compensation by explicit ADR. Boundaries are
@@ -172,7 +176,7 @@ uv run python -m novelwiki.cli --help
 # · import-series · import-worker · rebuild-bm25 · merge · reset-codex · reset-db
 ```
 
-Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (122 routes):
+Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (125 routes):
 [docs/api/http-api.md](docs/api/http-api.md), or `/docs` on a running instance.
 
 ---
@@ -231,7 +235,7 @@ Full topology + first boot + release/rollback:
 | Architecture | [overview](docs/architecture/overview.md) · [ADRs](docs/README.md#architecture) · [module-anatomy](docs/architecture/module-anatomy.md) · [composition-root](docs/architecture/composition-root.md) · [workflows](docs/architecture/workflows-and-transactions.md) · [platform](docs/architecture/platform.md) · [enforcement](docs/architecture/enforcement.md) |
 | Future implementation | [PostgreSQL-centered platform evolution plan](implementation-plan/postgres-platform-evolution-plan.md) *(proposal, not current behavior)* |
 | Modules | [map](docs/modules/README.md) + one doc per module |
-| Pipelines | [jobs & quota](docs/pipelines/background-jobs-and-quota.md) · [scraping](docs/pipelines/scraping.md) · [supported sites](docs/pipelines/supported-sites.md) · [import](docs/pipelines/file-import.md) · [translation](docs/pipelines/translation.md) · [codex](docs/pipelines/codex-build-and-ask.md) · [narration](docs/pipelines/narration.md) · [AI backends](docs/pipelines/ai-backends.md) |
+| Pipelines | [jobs & quota](docs/pipelines/background-jobs-and-quota.md) · [scraping](docs/pipelines/scraping.md) · [supported sites](docs/pipelines/supported-sites.md) · [import](docs/pipelines/file-import.md) · [translation](docs/pipelines/translation.md) · [codex](docs/pipelines/codex-build-and-ask.md) · [illustrations](docs/pipelines/chapter-illustrations.md) · [narration](docs/pipelines/narration.md) · [AI backends](docs/pipelines/ai-backends.md) |
 | Reference | [DB schema](docs/data/database-schema.md) · [filesystem](docs/data/filesystem-layout.md) · [HTTP behavior](docs/api/http-api.md) · [exact route inventory](docs/api/http-route-inventory.md) · [CLI](docs/api/cli.md) · [configuration](docs/operations/configuration.md) |
 | Operating | [deployment](docs/operations/deployment.md) · [configuration](docs/operations/configuration.md) · [structured logging](docs/operations/logging.md) · [security](docs/operations/security.md) · [testing](docs/testing.md) · [qualification history](docs/testing-codex-qualification-history.md) *(historical)* · [release runbook](docs/release-runbook.md) · [AGY runbook](docs/agy-operator-runbook.md) · [OpenAI Codex runbook](docs/openai-codex-operator-runbook.md) |
 | Frontend | [overview](docs/frontend/overview.md) · [design system](DESIGN.md) |

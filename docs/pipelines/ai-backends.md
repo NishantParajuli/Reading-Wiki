@@ -20,6 +20,11 @@
 | Default | available when keys are configured | dormant unless global switch + grant | dormant unless global switch + grant |
 | Workloads | all six policy workloads | `translate_batch`, `codex_extract` | `translate_batch`, `codex_extract` |
 
+Chapter illustration jobs (`codex_illustrate`) are an OpenAI-Codex-only feature within
+the existing `codex_extract` grant. They use `gpt-6-luna`/`max` planning and native image
+turns; they do not reserve monthly Codex-build quota or fall back to an API. See
+[chapter illustrations](chapter-illustrations.md) for the separate bounded pipeline.
+
 ### Codex equivalence and call topology
 
 For `codex_extract`, backend choice changes transport and provider-call shape, not the
@@ -50,7 +55,7 @@ onto the job (`execution_backend`, `backend_model`, `backend_policy_version`,
    the workload, the adapter implements it, and that provider's 1–4 active-job cap is not
    exceeded. Otherwise `auto` resolves to API; an explicit unavailable provider returns a typed
    error.
-3. The whole schedule runs inside the `schedule_ai_job` compensation shape:
+3. Metered translation/build scheduling runs inside the `schedule_ai_job` compensation shape:
    reserve quota → create/dedupe job → refund on failure or dedupe.
 
 The decision is *immutable* but execution is *re-authorized*: `reauthorize_job` re-checks
@@ -65,7 +70,7 @@ ChatGPT account through `account/read`, and confirms Terra/Luna in `model/list` 
 turn. Each run gets a sealed workspace plus isolated `CODEX_HOME`; only the official `auth.json`
 is linked. History and web search are disabled.
 
-The worker starts an ephemeral App Server thread with `approvalPolicy=never`, read-only sandbox,
+Translation/extraction start an ephemeral App Server thread with `approvalPolicy=never`, read-only sandbox,
 network disabled for the sandbox, no interactive client actions, and a workload-specific JSON
 Schema normalized to OpenAI's strict Structured Outputs subset (all properties required,
 `additionalProperties=false` for every object, nullable types preserved, defaults removed, and
@@ -83,6 +88,14 @@ Cancellation sends
 stored as run metrics; failed turns retain only an allowlisted App Server error tag/HTTP status,
 and request-level authentication/permission rejections are reduced to safe worker-health
 categories. Raw App Server messages and story/transcript content are not written to logs.
+
+Illustration planning keeps the tool-free structured-output path. Rendering uses a
+separate native-image session with shell/unified execution disabled, a never-approve
+policy, no inherited apps/MCP/skills, and only the bounded art brief plus staged reference
+images. The renderer accepts the first completed image event, validates PNG bytes, and
+closes the session to avoid unsolicited redraw turns. Images and saved plans are
+Codex-owned database records; temporary rendering workspaces are removed after each
+operation. Subscription capacity failures stay on the subscription path.
 
 ## AGY execution (the hardened path)
 

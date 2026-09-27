@@ -36,7 +36,7 @@ wiki/
 │   ├── bootstrap/             # THE composition root: web app assembly, DI wiring,
 │   │                          # lifecycle, worker registry, CLI composition
 │   │
-│   ├── db/                    # schema.py (47-table idempotent DDL — a stable explicit
+│   ├── db/                    # schema.py (49-table idempotent DDL — a stable explicit
 │   │                          # entrypoint), migrate_multiuser.py, legacy aliases
 │   ├── frontend/              # React SPA (Vite)                        → docs/frontend/overview.md
 │   ├── eval/                  # DB-backed integration test suites (*_tests.py)

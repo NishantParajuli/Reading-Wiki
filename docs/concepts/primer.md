@@ -11,7 +11,7 @@ a *method* (GET = read, POST = create/do, PUT/PATCH = update, DELETE), a *path*
 (`/api/novels/42/progress`), headers, and often a JSON body. Status codes carry the
 outcome: 2xx ok, 401 "who are you?", 403 "you may not", 404 "no such thing",
 409 "conflicts with current state", 422 "your input is malformed", 429 "slow down",
-5xx "we broke". Here: all 122 endpoints are listed in
+5xx "we broke". Here: all 125 endpoints are listed in
 [../api/http-api.md](../api/http-api.md); handlers live in each module's
 `adapters/inbound/http.py`.
 

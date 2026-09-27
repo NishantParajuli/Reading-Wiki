@@ -3,15 +3,17 @@
 **Responsibility:** the opt-in, spoiler-safe knowledge base for a novel: the build
 pipeline (chunk → embed → extract → link → index), hybrid retrieval, the agentic **Ask**
 Q&A, entity browsing/profiles/timelines/identity reveals, the no-spoiler **recap**, and
-the caches that make repeat reads free. Every read is bounded by the server-trusted
+the caches that make repeat reads free, and opt-in chapter illustrations with reusable
+character reference sheets. Every read is bounded by the server-trusted
 chapter ceiling — see [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md).
 Pipeline walkthrough: [../pipelines/codex-build-and-ask.md](../pipelines/codex-build-and-ask.md).
 
-**Owned tables (19):** `chunks`, `entities`, `entity_descriptions`, `entity_aliases`,
+**Owned tables (21):** `chunks`, `entities`, `entity_descriptions`, `entity_aliases`,
 `identity_links`, `entity_facts`, `relationships`, `events`, `chapter_summaries`,
 `memory_segments`, `entity_activity`, `entity_state_transitions`,
 `relationship_state_transitions`, `plot_threads`, `plot_thread_updates`,
-`extraction_contexts`, `extraction_state`, `wiki_cache`, `query_cache`.
+`extraction_contexts`, `extraction_state`, `wiki_cache`, `query_cache`, `codex_art`,
+`codex_art_plans`.
 **Owned filesystem root:** `BM25_INDEX_PATH` (`./data/bm25_index/<novel_id>/`).
 
 ---
@@ -34,9 +36,9 @@ Pipeline walkthrough: [../pipelines/codex-build-and-ask.md](../pipelines/codex-b
 ## Application layer
 
 - **`dto.py::CeilingContext`** — "the server-trusted reading boundary used by every
-  spoiler-sensitive use case": effective ceiling + what was requested + whether the
-  reader may see the full span (owners/admins can slide up to the last chapter; ordinary
-  readers are clamped to `max_chapter_read`).
+  spoiler-sensitive use case": effective ceiling, requested/allowed bounds, clamp status,
+  stored chapter span, and display metadata. All accounts, including owners/admins, use
+  `max_chapter_read`; the first stored chapter is the fallback when progress is missing.
 - **`ports.py`** — the widest port set in the codebase: `CeilingPort`, `CodexQueryPort`
   (all bounded reads + profile cache), `CodexAgentPort` (ask/citations/synthesis),
   `AiCostControlPort` (verified-email/rate/concurrency guards), `CatalogEditPort`,
@@ -149,13 +151,24 @@ handler (or individually from the CLI):
 
 ## Other adapters
 
+- **Chapter illustrations** — `application/illustrations.py` authorizes gallery/image
+  reads and explicit generation requests; `application/illustration_worker.py` persists
+  a bounded art plan and renders reusable character sheets before chapter scenes.
+  `domain/illustrations.py` defines styles, strict briefs, and source/evidence checks;
+  `adapters/outbound/illustration_store.py` owns the image/plan SQL. Bootstrap injects
+  Reading snapshots, access, Work scheduling, and AI Execution's native image renderer.
+  The `codex_illustrate` job runs only through OpenAI Codex, under its existing
+  `codex_extract` grant, with `gpt-6-luna`/`max` planning and no billed API fallback.
+  Authenticated `illustrations_http.py` serves PNG bytes from PostgreSQL, never a public
+  filesystem mount. Full lifecycle: [chapter illustrations](../pipelines/chapter-illustrations.md).
+
 - **Inbound `http.py`** (all under `/api`, auth required): meta, stats, entities list,
   entity resolve/profile/relationships/timeline/identities, `POST …/ask`,
   `POST …/codex/build`, `POST …/merge-entities`. (`POST …/recap` is mounted by
   Experience's product router but executes `CodexRecapApi` — recap execution is
   Codex-owned.)
 - **Inbound `cli.py`**: `chunk`, `embed`, `extract`, `rebuild-bm25`, `merge`,
-  `reset-codex` (derived structured data only; chunks/embeddings remain).
+  `reset-codex` (derived structured data, generated art, and art plans; chunks/embeddings remain).
 - **Inbound `jobs.py`**: `execute_codex_job` (API backend) and `execute_agy_codex_job`.
   Despite the compatibility-era function name, the latter is the provider-neutral
   subscription executor used by both AGY and OpenAI Codex. It repeats idempotent chunking

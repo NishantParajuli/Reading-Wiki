@@ -108,6 +108,14 @@ from novelwiki.modules.experience.adapters.inbound.dependencies import (
     operational_projection_dependency,
     quota_projection_dependency,
 )
+# Authenticated, spoiler-bounded illustration bytes are never public static assets.
+from novelwiki.modules.codex.adapters.inbound.illustrations_http import (
+    router as illustrations_router, illustration_service_dependency,
+)
+from novelwiki.bootstrap.illustrations import build_illustration_service
+app.include_router(illustrations_router, prefix="/api", dependencies=[Depends(current_user)])
+app.dependency_overrides[illustration_service_dependency] = build_illustration_service
+
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(reading_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(work_router, prefix="/api", dependencies=[Depends(current_user)])

@@ -39,7 +39,10 @@ from novelwiki.modules.codex.adapters.outbound.ingest.link import (
 from novelwiki.modules.codex.adapters.outbound.retrieval.tools import (
     get_entity_profile, get_timeline, list_entities,
 )
-from novelwiki.modules.reading.adapters.outbound.codex import PostgresReadingCodexGateway
+from novelwiki.modules.reading.adapters.outbound.codex import (
+    PostgresReadingCodexGateway,
+    PostgresReadingCodexTransactionService,
+)
 from novelwiki.platform.config import settings
 from novelwiki.modules.translation.adapters.outbound.agy import _translation_task_document
 from novelwiki.translate.translate import (
@@ -88,10 +91,13 @@ async def test_codex_chapter_range_excludes_blank_content(workload_db):
         await conn.execute(
             """
             INSERT INTO chapters
-              (novel_id,number,title,content,kind,language,translation_status,content_version)
-            VALUES ($1,2,'Blank','', 'chapter','en','none',1),
-                   ($1,3,'Whitespace','   ', 'chapter','en','none',1),
-                   ($1,4,'Narrative','Present text.', 'chapter','en','none',1);
+              (novel_id,number,title,content,kind,language,translation_status,content_version,part_label)
+            VALUES ($1,2,'Blank','', 'chapter','en','none',1,'Volume 1'),
+                   ($1,3,'Whitespace',E' \n\t\r ', 'chapter','en','none',1,'Volume 1'),
+                   ($1,4,'Narrative','Present text.', 'chapter','en','none',1,'Volume 1'),
+                   ($1,5,'Trailing whitespace','   ', 'chapter','en','none',1,'Volume 1'),
+                   ($1,6,'Missing text',NULL, 'chapter','en','none',1,'Volume 1'),
+                   ($1,7,'Credits','Not narrative.', 'backmatter','en','none',1,'Volume 1');
             """,
             novel,
         )
@@ -101,6 +107,23 @@ async def test_codex_chapter_range_excludes_blank_content(workload_db):
     )
 
     assert numbers == [4.0]
+
+    # Context assembly and its atomic commit must use the same chapter sequence
+    # as extraction. An empty gap cannot become an impossible summary prerequisite,
+    # and trailing blanks cannot prevent the final volume checkpoint from closing.
+    snapshot = await PostgresReadingCodexGateway(pool).chapter_snapshot(novel, 4.0)
+    assert snapshot["narrative_part_chapters"] == [4.0]
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            locked = await PostgresReadingCodexTransactionService(conn).locked_chapter_snapshot(
+                novel, 4.0,
+            )
+            assert locked["narrative_part_chapters"] == [4.0]
+            context = await build_chapter_context(
+                conn, novel, 4.0, snapshot["content"], snapshot,
+            )
+    assert [target["kind"] for target in context["memory_targets"]] == ["checkpoint", "volume"]
+    assert all(target["covered_chapters"] == [4.0] for target in context["memory_targets"])
 
 
 @pytest.mark.asyncio

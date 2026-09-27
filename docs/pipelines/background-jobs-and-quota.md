@@ -16,11 +16,11 @@ and explicit settlement fix all three.
 
 | System | Table | Worker | Kinds / scope |
 |---|---|---|---|
-| Generic (Work module) | `jobs` | in-process API worker or provider-specific dedicated worker | `scrape`, `codex_build`, `translate`, `agy_smoke`, `openai_codex_smoke` |
+| Generic (Work module) | `jobs` | in-process API worker or provider-specific dedicated worker | `scrape`, `codex_build`, `codex_illustrate`, `translate`, `agy_smoke`, `openai_codex_smoke` |
 | Import (Acquisition) | `import_jobs` | import worker (in-process; standalone via `import-worker` CLI; N safe) | EPUB/PDF pipeline stages |
 | Narration | `tts_jobs` | TTS worker (in-process, single-instance design) | `chapter` / `book` narration |
 | AGY executor | same `jobs` table, `execution_backend='agy'` | dedicated host worker (`python -m novelwiki.agy.worker`, systemd) | AGY-granted codex/translate (+ smoke) |
-| OpenAI Codex executor | same `jobs` table, `execution_backend='openai_codex'` | dedicated host worker (`python -m novelwiki.openai_codex.worker`, systemd) | explicitly granted codex/translate (+ smoke) |
+| OpenAI Codex executor | same `jobs` table, `execution_backend='openai_codex'` | dedicated host worker (`python -m novelwiki.openai_codex.worker`, systemd) | explicitly granted codex/translate/illustrations (+ smoke) |
 
 All are surfaced together in `GET /api/activity` (Experience) and individually via their
 own endpoints. States are contract-frozen in
@@ -90,6 +90,7 @@ another process's live job.
 | Kind | Reserve | Consume | On cancel/fail |
 |---|---|---|---|
 | `codex_build` | 1 up front | 1 on success | full refund |
+| `codex_illustrate` | none | subscription capacity only; no monthly Codex-build debit | completed image slots remain for retry; no API fallback |
 | `translate` (AGY/OpenAI Codex) | pending-chapter count up front | +1 per chapter **as it actually commits** (inside the `commit_translation` transaction) | refund of the unconsumed remainder — finished chapters stay charged |
 | `translate` (API) | availability-check only at scheduling; reserve 1 under each chapter lock | the reserved unit is the charge; failed provider/commit attempts refund it immediately | no batch reservation remains to settle |
 | TTS (`tts_jobs`) | none (checked, not reserved) | 1 per chapter **only on actual generation** (cache hits/skips free) | nothing to refund |

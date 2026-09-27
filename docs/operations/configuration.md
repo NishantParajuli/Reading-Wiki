@@ -264,19 +264,19 @@ authenticated real-CLI canary passes against the pinned binary. Validated at boo
 ## OpenAI Codex App Server backend
 
 Dormant unless `OPENAI_CODEX_ENABLED=true` and an admin grants a user one or more
-`openai_codex_workloads`. Extraction additionally requires
+`openai_codex_workloads`. Extraction and chapter illustrations additionally require
 `OPENAI_CODEX_CODEX_ENABLED=true`. Authentication is the official `codex login` ChatGPT session
 owned by the dedicated worker user, not an application API key. See the
 [operator runbook](../openai-codex-operator-runbook.md).
 
 | Setting | Default | Notes |
 |---|---|---|
-| `OPENAI_CODEX_ENABLED` / `OPENAI_CODEX_CODEX_ENABLED` | `false` / `false` | provider-wide and extraction-only kill switches |
+| `OPENAI_CODEX_ENABLED` / `OPENAI_CODEX_CODEX_ENABLED` | `false` / `false` | provider-wide and Codex extraction/illustration kill switches |
 | `OPENAI_CODEX_BINARY` / `OPENAI_CODEX_MIN_VERSION` / `OPENAI_CODEX_BINARY_SHA256` | `~/.local/bin/codex` / `0.146.0` / empty in code | official executable, minimum protocol version, optional integrity pin; `.env.example` pins the tested launcher, and `~` expands to the worker service user's home |
 | `OPENAI_CODEX_WORK_DIR` | `~/.local/share/novelwiki/openai-codex-jobs` | private story-bearing run workspaces outside checkout/public roots; `~` expands to the worker service user's home |
 | `OPENAI_CODEX_CREDENTIAL_DIR` | `~/.codex` | official auth source under the worker service user's home; only `auth.json` is linked into per-run state, never parsed by NovelWiki |
-| `OPENAI_CODEX_MODEL_TRANSLATE` / `OPENAI_CODEX_MODEL_CODEX` | `gpt-5.6-terra` / `gpt-5.6-luna` | Terra is reserved for translation while Luna is preferred for high-volume extraction, verification, disambiguation, and smoke tests; preflight requires both in App Server `model/list` |
-| `OPENAI_CODEX_REASONING_TRANSLATE` / `OPENAI_CODEX_REASONING_CODEX` | `xhigh` / `xhigh` | enforced model policy: Terra and Luna must use `xhigh`; other model families may use low, medium, high, xhigh, or max |
+| `OPENAI_CODEX_MODEL_TRANSLATE` / `OPENAI_CODEX_MODEL_CODEX` | `gpt-5.6-terra` / `gpt-6-luna` | Terra is reserved for translation while Luna is preferred for high-volume extraction, verification, disambiguation, and smoke tests; preflight requires both in App Server `model/list` |
+| `OPENAI_CODEX_REASONING_TRANSLATE` / `OPENAI_CODEX_REASONING_CODEX` | `xhigh` / `xhigh` | enforced model policy: GPT-6 Luna accepts `xhigh` or `max`; legacy Luna and Terra retain `xhigh`; other model families may use low, medium, high, xhigh, or max |
 | `OPENAI_CODEX_TURN_TIMEOUT_SECONDS` / `OPENAI_CODEX_KILL_GRACE_SECONDS` | 1200 / 10 | turn deadline and process-group termination grace |
 | `OPENAI_CODEX_STDOUT_MAX_BYTES` / `OPENAI_CODEX_STDERR_MAX_BYTES` / `OPENAI_CODEX_WORKSPACE_MAX_BYTES` | 16 MiB / 1 MiB / 128 MiB | JSONL, diagnostic-tail, and workspace caps |
 | `OPENAI_CODEX_TRANSLATE_BATCH_CHAPTERS` / `OPENAI_CODEX_TRANSLATE_BATCH_MAX_CHARS` | 3 / 120000 | per-turn translation bound |
@@ -285,6 +285,14 @@ owned by the dedicated worker user, not an application API key. See the
 | `OPENAI_CODEX_SUCCESS_RETENTION_HOURS` / `OPENAI_CODEX_FAILURE_RETENTION_HOURS` | 24 / 168 | private workspace retention |
 | `OPENAI_CODEX_CONTRACT_VERSION` | `1.3.10` | host prompt/schema contract recorded on every run and heartbeat; 1.3.10 emits artifact schema 2.2 with separate primary/verification context budgets, compact lossless draft transport, exact lexical evidence locality, verified-only bounded contiguous-anchor canonicalization, safe regular plural and possessive-number matching, semantic verifier repair, bounded evidence/claim-alignment/duplicate-thread recovery, one strongly connected verifier-reviewed thread-topic override, and durable retry progress while retaining pipeline-2.1 database rows and the Luna/xhigh policy |
 | `OPENAI_CODEX_WORKER_HEALTH_TTL_SECONDS` | 90 | heartbeat staleness for capabilities/admin health |
+
+Chapter illustrations share the `codex_extract` grant and these enable switches, but
+their planner/rendering model is fixed to `gpt-6-luna` with `max` effort. The ordinary
+translation/extraction model settings do not change it. The renderer checks the model's
+MAX capability before a turn; no alternate model or API fallback is selected. Each image
+is bounded to 16 MiB/24 million pixels and stored in PostgreSQL, while temporary image
+workspaces are removed immediately instead of waiting for the normal retention sweep.
+See [chapter illustrations](../pipelines/chapter-illustrations.md).
 
 ## Minimal production checklist
 

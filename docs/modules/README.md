@@ -13,7 +13,7 @@ rest of the system.
 | Reading | [reading.md](reading.md) | chapters, progress, bookmarks, overlays, contributions, the trusted spoiler ceiling |
 | Acquisition | [acquisition.md](acquisition.md) | scraping + EPUB/PDF import jobs + extracted assets |
 | Translation | [translation.md](translation.md) | on-demand/batch translation and the per-novel glossary |
-| Codex | [codex.md](codex.md) | the spoiler-safe knowledge base: build pipeline, retrieval, Ask, recap |
+| Codex | [codex.md](codex.md) | the spoiler-safe knowledge base, build/retrieval/Ask/recap, chapter art and character sheets |
 | Narration | [narration.md](narration.md) | audiobook TTS jobs and the chapter-audio cache |
 | Work | [work.md](work.md) | the generic durable-job system: schedule, dedupe, lease, retry, settle quota |
 | AI Execution | [ai-execution.md](ai-execution.md) | API/AGY/OpenAI Codex policy, provider gateways, cost controls, isolated runners |

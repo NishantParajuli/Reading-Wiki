@@ -1,0 +1,574 @@
+"""Provider-free illustration workflow regressions in a disposable PostgreSQL DB."""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+
+import novelwiki.db.connection as db_connection
+from novelwiki.bootstrap.illustrations import build_illustration_service
+from novelwiki.db.connection import close_db_pool, get_db_pool
+from novelwiki.db.schema import init_database
+from novelwiki.kernel.errors import Conflict, Forbidden, NotFound, QuotaExceeded
+from novelwiki.modules.ai_execution.public import AgyCanceled
+from novelwiki.modules.codex.adapters.outbound.artifacts import (
+    PostgresCodexTransactionService,
+)
+from novelwiki.modules.codex.adapters.outbound.illustration_store import (
+    IllustrationStore,
+)
+from novelwiki.modules.codex.adapters.outbound.maintenance import reset_structured_codex
+from novelwiki.modules.codex.application.illustration_worker import IllustrationWorker
+from novelwiki.modules.codex.domain.illustrations import source_hash
+from novelwiki.modules.identity.public import Principal
+from novelwiki.modules.reading.adapters.outbound.codex import (
+    PostgresReadingCodexGateway,
+)
+from novelwiki.modules.work.adapters.outbound import postgres as work
+from novelwiki.platform.config import settings
+
+QUOTE = "Mira lifted the bronze lantern."
+CONTENT = QUOTE + " Warm light revealed the old bridge and the quiet river below."
+
+
+@pytest_asyncio.fixture()
+async def art_db(monkeypatch):
+    try:
+        await close_db_pool()
+    except RuntimeError:
+        pass
+    db_connection._pool = None
+    monkeypatch.setattr(settings, "OPENAI_CODEX_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_CODEX_CODEX_ENABLED", True)
+    await init_database()
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM novels CASCADE; DELETE FROM users CASCADE;")
+        users = []
+        for name in ("artowner", "artreader"):
+            users.append(
+                dict(
+                    await conn.fetchrow(
+                        "INSERT INTO users(email,username,email_verified) VALUES($1,$2,TRUE) RETURNING *;",
+                        name + "@example.test",
+                        name,
+                    )
+                )
+            )
+        novel = await conn.fetchval(
+            "INSERT INTO novels(title,owner_id,visibility) VALUES('Art book',$1,'public') RETURNING id;",
+            users[0]["id"],
+        )
+        for chapter in (1, 2, 3):
+            await conn.execute(
+                "INSERT INTO chapters(novel_id,number,title,content,language,kind) "
+                "VALUES($1,$2,$3,$4,'en','chapter');",
+                novel,
+                chapter,
+                f"Chapter {chapter}",
+                CONTENT,
+            )
+        await conn.execute(
+            "INSERT INTO reading_progress(user_id,novel_id,last_chapter,max_chapter_read) "
+            "VALUES($1,$3,2,2),($2,$3,1,1);",
+            users[0]["id"],
+            users[1]["id"],
+            novel,
+        )
+        await conn.execute(
+            "INSERT INTO user_ai_backend_policies(user_id,openai_codex_enabled,openai_codex_workloads,"
+            "max_concurrent_openai_codex_jobs) VALUES($1,TRUE,ARRAY['codex_extract'],1);",
+            users[0]["id"],
+        )
+    fixture = SimpleNamespace(
+        pool=pool,
+        novel=novel,
+        owner=Principal.from_user(users[0]),
+        reader=Principal.from_user(users[1]),
+        owner_row=users[0],
+        reader_row=users[1],
+        store=IllustrationStore(pool),
+        snapshot=PostgresReadingCodexGateway(pool).chapter_snapshot,
+    )
+    fixture.service = await build_illustration_service()
+    yield fixture
+    await close_db_pool()
+    db_connection._pool = None
+
+
+class Renderer:
+    def __init__(
+        self, *, fail_image=None, after_image=None, after_plan=None, characters=True
+    ):
+        self.fail_image, self.after_image, self.after_plan = (
+            fail_image,
+            after_image,
+            after_plan,
+        )
+        self.characters = characters
+        self.plans, self.images = [], []
+
+    async def plan(self, instructions, data, schema):
+        self.plans.append(data)
+        result = {
+            "characters": []
+            if data["existing_characters"] or not self.characters
+            else [
+                {
+                    "key": "mira",
+                    "name": "Mira",
+                    "canon": "Carries a bronze lantern.",
+                    "design_notes": "A cobalt coat is an artistic choice.",
+                    "prompt": "A coherent character sheet with face study and a cobalt coat. "
+                    * 2,
+                }
+            ],
+            "scenes": [
+                {
+                    "title": f"Lantern {index + 1}",
+                    "caption": "Warm light on the bridge.",
+                    "evidence": QUOTE,
+                    "characters": ["mira"] if self.characters else [],
+                    "prompt": "Wide cinematic composition of a lantern lighting the old bridge. "
+                    * 2,
+                }
+                for index in range(data["scene_count"])
+            ],
+        }
+        if self.after_plan:
+            await self.after_plan()
+        return result
+
+    async def image(self, prompt, references):
+        self.images.append((prompt, references))
+        if self.fail_image == len(self.images):
+            raise RuntimeError("simulated transient rendering failure")
+        if self.after_image:
+            await self.after_image()
+        return b"image-" + str(len(self.images)).encode()
+
+
+async def enqueue(db, chapter=2.0, count=1, force=False):
+    result = await db.service.generate(
+        db.novel, chapter, db.owner, count=count, force=force
+    )
+    return await work.get_job(result["job_id"])
+
+
+async def execute(db, job, renderer, cancel=None):
+    worker = IllustrationWorker(
+        store=db.store,
+        snapshot=db.snapshot,
+        renderer=renderer,
+        progress=AsyncMock(),
+        cancel=cancel or AsyncMock(),
+    )
+    return await worker.execute(job)
+
+
+async def finish(job):
+    await work.update_job(job["id"], status="running")
+    assert await work.mark_done_if_running(
+        job["id"], {"images": job["options"]["count"]}
+    )
+
+
+@pytest.mark.asyncio
+async def test_requests_deduplicate_before_queue_limit_and_preserve_image_count(art_db):
+    db = art_db
+    first = await db.service.generate(db.novel, 2.0, db.owner)
+    second = await db.service.generate(db.novel, 2.0, db.owner)
+    assert first["created"] is True and second == {
+        "job_id": first["job_id"],
+        "created": False,
+    }
+    with pytest.raises(QuotaExceeded):
+        await db.service.generate(db.novel, 2.0, db.owner, count=3)
+    async with db.pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM jobs WHERE kind='codex_illustrate'"
+            )
+            == 1
+        )
+    job = await work.get_job(first["job_id"])
+    assert job["backend_model"] == "gpt-6-luna"
+    assert (
+        job["execution_backend"] == "openai_codex"
+        and job["backend_fallback_allowed"] is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_owner_read_ceiling_private_access_and_readonly_gallery(art_db):
+    db = art_db
+    with pytest.raises(Forbidden, match="Read this chapter"):
+        await db.service.generate(db.novel, 3.0, db.owner)
+    with pytest.raises(Forbidden):
+        await db.service.generate(db.novel, 1.0, db.reader)
+    view = await db.service.list(db.novel, 1.0, db.reader)
+    assert view["can_generate"] is False
+    job = await enqueue(db)
+    await execute(db, job, Renderer())
+    row = next(
+        row for row in await db.store.for_job(job["id"]) if row["kind"] == "scene"
+    )
+    with pytest.raises(Forbidden, match="Read this chapter"):
+        await db.service.image(db.novel, row["id"], db.reader)
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE novels SET visibility='private' WHERE id=$1", db.novel
+        )
+    with pytest.raises(NotFound):
+        await db.service.image(db.novel, row["id"], db.reader)
+    with pytest.raises(NotFound):
+        await db.service.image(db.novel + 1, row["id"], db.owner)
+
+
+@pytest.mark.asyncio
+async def test_retry_reuses_saved_plan_sheets_and_scenes_without_duplicate_charges(
+    art_db,
+):
+    db = art_db
+    job = await enqueue(db, count=2)
+    failed = Renderer(fail_image=3)
+    with pytest.raises(RuntimeError, match="transient"):
+        await execute(db, job, failed)
+    assert len(failed.plans) == 1 and len(failed.images) == 3
+    assert len(await db.store.for_job(job["id"])) == 2  # sheet and scene 1
+    resumed = Renderer()
+    await execute(db, job, resumed)
+    assert resumed.plans == [] and len(resumed.images) == 1
+    assert resumed.images[0][1] == [b"image-1"]
+    assert len(await db.store.for_job(job["id"])) == 3
+    await finish(job)
+    gallery = await db.service.list(db.novel, 2.0, db.owner)
+    assert [item["title"] for item in gallery["items"] if item["kind"] == "scene"] == [
+        "Lantern 1",
+        "Lantern 2",
+    ]
+    cached = await db.service.generate(db.novel, 2.0, db.owner, count=2)
+    assert cached == {"job_id": job["id"], "already_created": True}
+
+
+@pytest.mark.asyncio
+async def test_later_chapter_reuses_past_sheets_and_hides_art_when_reference_source_changes(
+    art_db,
+):
+    db = art_db
+    first = await enqueue(db, chapter=1.0)
+    await execute(db, first, Renderer())
+    await finish(first)
+    second = await enqueue(db, chapter=2.0)
+    renderer = Renderer()
+    await execute(db, second, renderer)
+    assert len(renderer.images) == 1 and renderer.images[0][1] == [b"image-1"]
+    assert renderer.plans[0]["existing_characters"][0]["key"] == "mira"
+    scene = (await db.store.for_job(second["id"]))[0]
+    assert await db.service.image(db.novel, scene["id"], db.owner) == b"image-1"
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE chapters SET content=content || ' Edited.' WHERE novel_id=$1 AND number=1",
+            db.novel,
+        )
+    assert (await db.service.list(db.novel, 2.0, db.owner))["items"] == []
+    with pytest.raises(NotFound, match="older chapter"):
+        await db.service.image(db.novel, scene["id"], db.owner)
+    with pytest.raises(Conflict, match="source changed"):
+        await execute(db, second, Renderer())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["cancel", "chapter", "invalidation"])
+async def test_changes_during_generation_never_publish_the_returned_image(
+    art_db, change
+):
+    db = art_db
+    job = await enqueue(db)
+    canceled = False
+
+    async def cancel(_job):
+        if canceled:
+            raise AgyCanceled()
+
+    async def change_during_render():
+        nonlocal canceled
+        if change == "cancel":
+            canceled = True
+        else:
+            async with db.pool.acquire() as conn:
+                if change == "chapter":
+                    await conn.execute(
+                        "UPDATE chapters SET content=content || ' Edited.' WHERE novel_id=$1 AND number=2",
+                        db.novel,
+                    )
+                else:
+                    async with conn.transaction():
+                        await PostgresCodexTransactionService(
+                            conn
+                        ).invalidate_chapter_range(db.novel, 1, 1)
+
+    with pytest.raises(AgyCanceled if change == "cancel" else Conflict):
+        await execute(db, job, Renderer(after_image=change_during_render), cancel)
+    assert await db.store.for_job(job["id"]) == []
+
+
+@pytest.mark.asyncio
+async def test_spoiler_context_and_reset_include_illustration_artifacts(art_db):
+    db = art_db
+    async with db.pool.acquire() as conn:
+        for chapter, summary in [(1, "Known bridge."), (3, "Future betrayal.")]:
+            await conn.execute(
+                "INSERT INTO chapter_summaries(novel_id,chapter,summary,source_sha256,pipeline_version) "
+                "VALUES($1,$2,$3,$4,$5)",
+                db.novel,
+                chapter,
+                summary,
+                "0" * 64,
+                settings.CODEX_PIPELINE_VERSION,
+            )
+        entity = await conn.fetchval(
+            "INSERT INTO entities(novel_id,canonical_name,type,first_seen_chapter) "
+            "VALUES($1,'Mira','character',1) RETURNING id",
+            db.novel,
+        )
+        await conn.execute(
+            "INSERT INTO entity_facts(novel_id,entity_id,chapter,content) "
+            "VALUES($1,$2,1,'Carries a lantern.'),($1,$2,3,'Future identity reveal.')",
+            db.novel,
+            entity,
+        )
+    job = await enqueue(db)
+    renderer = Renderer()
+    await execute(db, job, renderer)
+    assert "Future" not in json.dumps(renderer.plans[0]["knowledge"], default=str)
+    async with db.pool.acquire() as conn:
+        assert await PostgresCodexTransactionService(conn).has_chapter_artifacts(
+            db.novel, (2.0,)
+        )
+    await reset_structured_codex(db.novel)
+    assert await db.store.list(db.novel, 2.0) == []
+    assert await db.store.plan(job["id"]) is None
+
+
+@pytest.mark.asyncio
+async def test_real_app_serves_authenticated_private_image_routes_before_spa(
+    art_db, monkeypatch
+):
+    db = art_db
+    job = await enqueue(db)
+    await execute(db, job, Renderer())
+    row = next(
+        row for row in await db.store.for_job(job["id"]) if row["kind"] == "scene"
+    )
+    from novelwiki.api.app import app
+    from novelwiki.platform.auth import current_user
+    from novelwiki.modules.codex.adapters.inbound.illustrations_http import (
+        illustration_service_dependency,
+    )
+
+    monkeypatch.setitem(app.dependency_overrides, current_user, lambda: db.owner_row)
+    monkeypatch.setitem(
+        app.dependency_overrides, illustration_service_dependency, lambda: db.service
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        gallery = await client.get(f"/api/novels/{db.novel}/chapters/2/illustrations")
+        image = await client.get(
+            f"/api/novels/{db.novel}/illustrations/{row['id']}/image"
+        )
+    assert gallery.status_code == 200 and gallery.headers["content-type"].startswith(
+        "application/json"
+    )
+    assert image.status_code == 200 and image.headers["content-type"] == "image/png"
+    assert image.headers["cache-control"] == "private, no-store"
+    assert image.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_future_character_sheets_are_never_reused_for_earlier_chapters(art_db):
+    db = art_db
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE reading_progress SET max_chapter_read=3 WHERE user_id=$1",
+            db.owner.user_id,
+        )
+    future = await enqueue(db, chapter=3.0)
+    await execute(db, future, Renderer())
+    await finish(future)
+    earlier = await enqueue(db, chapter=2.0)
+    renderer = Renderer()
+    await execute(db, earlier, renderer)
+    assert renderer.plans[0]["existing_characters"] == []
+    assert len(renderer.images) == 2  # a new sheet, then the earlier scene
+    earlier_rows = await db.store.for_job(earlier["id"])
+    future_ids = {str(row["id"]) for row in await db.store.for_job(future["id"])}
+    earlier_scene = next(row for row in earlier_rows if row["kind"] == "scene")
+    assert not future_ids.intersection(
+        json.loads(earlier_scene["metadata"])["references"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_planning_does_not_persist_plan_or_start_image_generation(
+    art_db,
+):
+    db = art_db
+    job = await enqueue(db)
+    canceled = False
+
+    async def cancel(_job):
+        if canceled:
+            raise AgyCanceled()
+
+    async def canceled_after_plan():
+        nonlocal canceled
+        canceled = True
+
+    renderer = Renderer(after_plan=canceled_after_plan)
+    with pytest.raises(AgyCanceled):
+        await execute(db, job, renderer, cancel)
+    assert renderer.images == []
+    assert await db.store.plan(job["id"]) is None
+
+
+@pytest.mark.asyncio
+async def test_reference_edit_during_scene_render_discards_stale_result(art_db):
+    db = art_db
+    reference_job = await enqueue(db, chapter=1.0)
+    await execute(db, reference_job, Renderer())
+    await finish(reference_job)
+    job = await enqueue(db, chapter=2.0)
+
+    async def edit_reference_source():
+        async with db.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE chapters SET content=content || ' Edited.' WHERE novel_id=$1 AND number=1",
+                db.novel,
+            )
+
+    with pytest.raises(Conflict, match="sheet source changed"):
+        await execute(db, job, Renderer(after_image=edit_reference_source))
+    assert await db.store.for_job(job["id"]) == []
+
+
+@pytest.mark.asyncio
+async def test_changed_chapter_is_rejected_before_any_provider_call(art_db):
+    db = art_db
+    job = await enqueue(db)
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE chapters SET content=content || ' Edited.' WHERE novel_id=$1 AND number=2",
+            db.novel,
+        )
+    renderer = Renderer()
+    with pytest.raises(Conflict, match="Chapter changed"):
+        await execute(db, job, renderer)
+    assert renderer.plans == [] and renderer.images == []
+
+
+@pytest.mark.asyncio
+async def test_unverified_owner_cannot_generate_even_with_provider_grant(art_db):
+    db = art_db
+    owner = Principal(user_id=db.owner.user_id, role="user", email_verified=False)
+    with pytest.raises(Forbidden, match="Verify your email"):
+        await db.service.generate(db.novel, 2.0, owner)
+
+
+@pytest.mark.asyncio
+async def test_recurring_character_survives_large_reference_history_without_loading_images(
+    art_db,
+):
+    import uuid
+
+    db = art_db
+    first = await enqueue(db, chapter=1.0)
+    await execute(db, first, Renderer())
+    await finish(first)
+    digest = source_hash(await db.snapshot(db.novel, 1.0))
+    async with db.pool.acquire() as conn:
+        await conn.executemany(
+            "INSERT INTO codex_art(id,novel_id,chapter,kind,character_key,title,style,source_hash,metadata,image,slot) "
+            "VALUES($1,$2,1,'reference',$3,$4,'luminous',$5,'{}',$6,'seed')",
+            [
+                (
+                    uuid.uuid4(),
+                    db.novel,
+                    f"person-{index}",
+                    f"Person {index}",
+                    digest,
+                    b"large-reference",
+                )
+                for index in range(125)
+            ]
+            + [
+                (uuid.uuid4(), db.novel, "person-0", "Person 0", digest, b"revision")
+                for _ in range(20)
+            ],
+        )
+    references = await db.store.references(db.novel, 2.0, "luminous", CONTENT)
+    assert len(references) == len({row["character_key"] for row in references}) == 100
+    assert references[0]["character_key"] == "mira"
+    assert all("image" not in row for row in references)
+    assert "image" not in await db.store.get(
+        db.novel, references[0]["id"], images=False
+    )
+    job = await enqueue(db, chapter=2.0)
+    renderer = Renderer()
+    await execute(db, job, renderer)
+    assert len(renderer.images) == 1
+    assert renderer.images[0][1] == [b"image-1"]
+
+
+@pytest.mark.asyncio
+async def test_gallery_dependency_validation_fetches_reference_metadata_only(
+    art_db, monkeypatch
+):
+    db = art_db
+    job = await enqueue(db)
+    await execute(db, job, Renderer())
+    calls = []
+    original = db.service.store.get
+
+    async def get(novel_id, art_id, *, images=True):
+        calls.append(images)
+        return await original(novel_id, art_id, images=images)
+
+    monkeypatch.setattr(db.service.store, "get", get)
+    gallery = await db.service.list(db.novel, 2.0, db.owner)
+    assert len(gallery["items"]) == 2
+    assert calls and not any(calls)
+
+
+@pytest.mark.asyncio
+async def test_invalidated_plan_cannot_publish_a_late_provider_result(art_db):
+    db = art_db
+    job = await enqueue(db)
+    await execute(db, job, Renderer())
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            await PostgresCodexTransactionService(conn).invalidate_chapter_range(
+                db.novel, 2, 2
+            )
+    with pytest.raises(Conflict, match="invalidated"):
+        await db.store.save(
+            novel_id=db.novel,
+            chapter=2,
+            kind="scene",
+            key=None,
+            title="Late image",
+            caption="",
+            style="luminous",
+            source_hash=job["options"]["source_hash"],
+            metadata={},
+            image=b"late-result",
+            job_id=job["id"],
+            slot="scene:0",
+        )
+    assert await db.store.for_job(job["id"]) == []

@@ -37,10 +37,10 @@ src/
 │   ├── experience/          #    Home (continue reading/listening, activity), queries
 │   ├── catalog/             #    Library, Discover, Overview, Manage(+Panels),
 │   │                        #    AddNovelDialog, NovelHeader, tags
-│   ├── reading/             #    Reader(+Parts/Toolbar), Chapters, toc, queries
+│   ├── reading/             #    Reader(+Parts/Toolbar), TranslationTools, Chapters, toc, queries
 │   ├── acquisition/         #    ImportView(+Parts/History) — upload/plan-review/commit
 │   ├── translation/         #    glossary + translate API bindings
-│   ├── codex/               #    Browser, Entity, Ask, CeilingControl, presentation
+│   ├── codex/               #    Browser, Entity, Ask, CeilingControl, ChapterIllustrations
 │   ├── narration/           #    audio transport components + queries
 │   ├── work/                #    Jobs page, JobRow
 │   └── admin/               #    Admin dashboard (+Panels)
@@ -132,7 +132,7 @@ a status message.
   their query definitions in `queries.js`; invalidation goes through
   `shared/query/useInvalidate.js` so mutations refresh exactly the affected keys
   (e.g. a translate job start invalidates activity + chapter lists).
-- Job-progress surfaces (Jobs page, import view, audiobook status) poll their endpoints
+- Job-progress surfaces (Jobs page, import view, audiobook status, chapter illustrations) poll their endpoints
   while a job is active.
 - The Import screen accepts multi-file EPUB/PDF selection. Each file remains an
   independently reviewable job; ready jobs can be folded into a new series or appended
@@ -159,7 +159,7 @@ a status message.
 The Reader is the product's core surface: themes + accent hue (persisted, `data-theme`
 on the root, CSS token-driven), column width, auto-scroll, scroll-position recovery,
 volume-grouped TOC (`toc.jsx`), bookmarks, per-chapter translation editing (overlay
-editor + base-vs-mine diff via `lib/diff.jsx`), provenance badges, the audiobook
+and shared-text editing), provenance badges, the audiobook
 transport (narration slice), and codex citation popovers (`lib/markdown.jsx` renders
 answer markdown with `CiteProvider` so `[c:…]` markers open evidence popovers). Shared
 anchored popovers, including the narrator picker, preserve their preferred alignment when
@@ -183,6 +183,40 @@ Saved typography, width, spacing, and auto-scroll preferences are validated befo
 unavailable browser storage does not prevent the reader from opening. Bookmark mutation
 failures show a message, and failed table-of-contents requests offer retry.
 Auto-scroll pauses while reader settings, translation tools, or contents are open.
+
+**Translation workspace.** `reading/TranslationTools.jsx`, re-exported from
+`ReaderParts.jsx`, opens a portaled, focus-trapped dialog. Desktop shows the chapter
+editor beside a live plain-text reading preview; mobile switches between Edit and
+Preview. The chapter title, sharing scope, word count, unsaved state, and persistent
+save footer remain visible. Ctrl/Cmd+S saves. Closing through Escape, the close button,
+or the backdrop asks before discarding a changed draft; browser reload warns while a
+draft is dirty or a write is in progress. Failed saves preserve the draft. Closing
+restores focus and the reader's scroll position.
+
+Shared edits, personal overlays, conflict merge/keep/base choices, retranslation,
+contribution, and reverting a personal copy retain their existing endpoints.
+Contribution requires saved, conflict-free text; replacing a dirty draft through
+retranslation or conflict resolution is guarded. Reverting confirms deletion of the
+personal copy. The dedicated `TranslationTools.css` scopes this workspace's layout.
+
+**Chapter illustrations.** The after-prose `codex/ChapterIllustrations.jsx` panel starts
+collapsed and loads its gallery only when opened. Readers can browse available scene
+images and expand character reference sheets; full-size links use the authenticated
+image endpoint. Eligible owners/admins choose one to three scenes and Luminous,
+Celestial, or Ink styling, then explicitly generate. The default is one Luminous image.
+The style selector also switches the gallery, showing only that style's scene batch and
+character sheets; readers without generation access can still switch existing galleries.
+Generation is never started by opening the panel, reading, navigation, or retrying a
+failed gallery request. Generate again requests a fresh set while retaining the current
+gallery during processing.
+
+The panel polls every five seconds only while its job is queued, running, or waiting
+for the provider. It displays reported stages, links to the Jobs center, recovers after
+temporary polling errors, and stops polling on terminal state. Generation failures
+retain completed images and expose the failure; an unavailable account/chapter shows
+the backend's explanation. Navigation remounts the panel and discards late responses,
+so a previous chapter's art never flashes into a new chapter. The feature's source and
+permission boundaries are described in [chapter illustrations](../pipelines/chapter-illustrations.md).
 
 The reader fetches a chapter when the reader navigates to it. It does not prefetch the
 next chapter's authenticated content endpoint, because that endpoint records a trusted
@@ -226,6 +260,14 @@ completed build.
   reload recovery while cached audio and forced regeneration coexist.
 - `src/modules/codex/spoilerBoundary.test.jsx` — stale browse/profile/Ask results are
   hidden across ceiling changes, including delayed responses.
+- `src/modules/codex/ChapterIllustrations.test.jsx` — explicit generation, active-job
+  polling/recovery, unavailable access, preserved galleries, and discarded late responses
+  after chapter navigation. `e2e/illustrations.spec.js` exercises desktop/mobile controls
+  and verifies opening the panel does not generate images.
+- `src/modules/reading/TranslationTools.test.jsx` — shared/personal editing, conflict
+  actions, draft protection, keyboard save, failed-write recovery, and contribution/revert
+  controls. Editor browser scenarios in `e2e/critical-paths.spec.js` cover desktop/mobile
+  space, preview switching, and draft protection.
 - `src/modules/acquisition/ImportView.test.jsx` — commit/OCR polling resumes, previous
   reviews stay hidden while a selected job loads, and a series commit cannot save retained
   edits under a newly selected volume; `src/modules/reading/readerPrefs.test.js`

@@ -19,6 +19,7 @@ import { ProvenanceBadges } from "../../components/ProvenanceBadges.jsx";
 import { VolumeTOC } from "./toc.jsx";
 import { NarratedProse } from "./NarratedProse.jsx";
 import { readTtsPrefs } from "../narration/index.js";
+import { ChapterIllustrations } from "../codex/index.js";
 import { useNovelQuery } from "../../modules/catalog/queries.js";
 import { useAudioCoverageQuery, useVoicesQuery } from "../../modules/narration/queries.js";
 import { useTitle } from "../../lib/hooks.js";
@@ -209,7 +210,7 @@ export function Reader() {
     const onKey = (e) => {
       if (e.key === "Escape") { setShowSettings(false); setShowTools(false); setChrome(true); return; }
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || showSettings || showTools || showToc) return;
-      if (e.target.closest?.("input, textarea, select, button, a, [contenteditable], [role='dialog']")) return;
+      if (e.target.closest?.("input, textarea, select, button, a, summary, [contenteditable], [role='dialog']")) return;
       if (e.key === "ArrowLeft" && ch && ch.prev != null) { e.preventDefault(); openReader(ch.prev); }
       if (e.key === "ArrowRight" && ch && ch.next != null) { e.preventDefault(); openReader(ch.next); }
     };
@@ -252,7 +253,7 @@ export function Reader() {
   const widthCls = { narrow: "w-narrow", normal: "w-normal", wide: "w-wide", full: "w-full", ultra: "w-full" }[prefs.width] || "w-normal";
 
   const tapToggle = (e) => {
-    if (e.target.closest("button, a, input, select, textarea, .reader-settings, .translate-tools, .drawer, .audio-bar, .popover")) return;
+    if (e.target.closest("button, a, input, select, textarea, .chapter-illustrations, .reader-settings, .translate-tools, .drawer, .audio-bar, .popover")) return;
     if (showSettings) { setShowSettings(false); return; }
     if (showTools) { setShowTools(false); return; }
     setChrome(c => !c);
@@ -333,6 +334,10 @@ export function Reader() {
           ) : (
             <NarratedProse prepared={preparedNarration}
                            justify={prefs.justify} indent={prefs.indent} />
+          )}
+
+          {(ch.content || ch.rich_html) && (
+            <ChapterIllustrations novelId={novelId} chapter={number} />
           )}
 
           {(ch.content || ch.rich_html) && (

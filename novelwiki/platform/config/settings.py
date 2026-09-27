@@ -282,11 +282,11 @@ class Settings(BaseSettings):
         Path.home() / ".local" / "share" / "novelwiki" / "openai-codex-jobs"
     )
     OPENAI_CODEX_CREDENTIAL_DIR: str = str(Path.home() / ".codex")
-    # Current model roles: Luna/xhigh for high-volume Codex work, Terra/xhigh
-    # for translation.  The validator below keeps the deployment from silently
-    # weakening either role through an environment override.
+    # Current model roles: GPT-6 Luna/xhigh for Codex work, Terra/xhigh for
+    # translation. GPT-6 Luna also supports max for explicitly deeper work.
+    # The validator prevents either role from silently weakening below xhigh.
     OPENAI_CODEX_MODEL_TRANSLATE: str = "gpt-5.6-terra"
-    OPENAI_CODEX_MODEL_CODEX: str = "gpt-5.6-luna"
+    OPENAI_CODEX_MODEL_CODEX: str = "gpt-6-luna"
     OPENAI_CODEX_REASONING_TRANSLATE: str = "xhigh"
     OPENAI_CODEX_REASONING_CODEX: str = "xhigh"
     OPENAI_CODEX_TURN_TIMEOUT_SECONDS: int = 1200
@@ -538,14 +538,15 @@ class Settings(BaseSettings):
         for model_field, effort_field in model_effort_policy:
             model = getattr(self, model_field).strip().lower()
             effort = getattr(self, effort_field)
-            required_effort = (
-                "xhigh"
-                if model.endswith(("-luna", "-terra"))
-                else None
+            allowed_efforts = (
+                {"xhigh", "max"} if model == "gpt-6-luna"
+                else {"xhigh"} if model.endswith(("-luna", "-terra"))
+                else valid_efforts
             )
-            if required_effort is not None and effort != required_effort:
+            if effort not in allowed_efforts:
+                required = " or ".join(repr(value) for value in sorted(allowed_efforts))
                 raise ValueError(
-                    f"{effort_field} must be {required_effort!r} when "
+                    f"{effort_field} must be {required} when "
                     f"{model_field} selects {model!r}"
                 )
         return self

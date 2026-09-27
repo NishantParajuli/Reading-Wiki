@@ -395,6 +395,16 @@
     "path": "/api/novels/{novel_id}/chapters"
   },
   {
+    "method": "GET",
+    "name": "illustrations",
+    "path": "/api/novels/{novel_id}/chapters/{chapter}/illustrations"
+  },
+  {
+    "method": "POST",
+    "name": "generate_illustrations",
+    "path": "/api/novels/{novel_id}/chapters/{chapter}/illustrations"
+  },
+  {
     "method": "POST",
     "name": "api_codex_build",
     "path": "/api/novels/{novel_id}/codex/build"
@@ -478,6 +488,11 @@
     "method": "GET",
     "name": "api_novel_health",
     "path": "/api/novels/{novel_id}/health"
+  },
+  {
+    "method": "GET",
+    "name": "illustration_image",
+    "path": "/api/novels/{novel_id}/illustrations/{art_id}/image"
   },
   {
     "method": "DELETE",

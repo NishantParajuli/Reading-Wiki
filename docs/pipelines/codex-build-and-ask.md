@@ -24,7 +24,10 @@ cannot stall a build; the target must be positive and overlap nonnegative.
 Literal tokenizer special-token markers are treated as ordinary source text during token
 counting, so they do not prevent ingestion.
 Rows whose content is null, empty, or whitespace-only are excluded from every Codex stage;
-the range scheduler and chapter loader use the same nonblank-source contract.
+the range scheduler and chapter loader use the same nonblank-source contract. The
+narrative chapter list used by both context assembly and atomic extraction commits also
+excludes these rows, including tabs and line breaks. An empty gap therefore never becomes
+a required child summary, and trailing empty rows do not postpone the final volume checkpoint.
 
 Forced re-chunking upserts that identity instead of deleting/reinserting the chapter: an
 unchanged passage keeps its row id and embedding, while changed passages clear only their
@@ -254,7 +257,8 @@ without exposing any story content.
 
 Resolution first, always: `CeilingPort.resolve(novel_id, principal, requested)` clamps
 the *requested* ceiling (the UI slider) to the server-trusted `max_chapter_read`
-(owners/admins may range over the full span). The resulting `CeilingContext` is threaded
+(owners/admins use the same trusted boundary; missing progress falls back to the first
+stored chapter). The resulting `CeilingContext` is threaded
 into **every** query; all SQL filters by it (`first_seen_chapter`,
 `revealed_at_chapter`, fact/relationship/event `chapter`, chunk `chapter`).
 

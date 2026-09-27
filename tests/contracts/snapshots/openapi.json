@@ -507,6 +507,34 @@
         "title": "ContributionAccept",
         "type": "object"
       },
+      "GenerateIllustrations": {
+        "properties": {
+          "count": {
+            "default": 1,
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "style": {
+            "default": "luminous",
+            "enum": [
+              "luminous",
+              "celestial",
+              "ink"
+            ],
+            "title": "Style",
+            "type": "string"
+          }
+        },
+        "title": "GenerateIllustrations",
+        "type": "object"
+      },
       "GlossaryUpsert": {
         "properties": {
           "locked": {
@@ -4642,6 +4670,106 @@
         "summary": "Api List Chapters"
       }
     },
+    "/api/novels/{novel_id}/chapters/{chapter}/illustrations": {
+      "get": {
+        "operationId": "illustrations_api_novels__novel_id__chapters__chapter__illustrations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "novel_id",
+            "required": true,
+            "schema": {
+              "title": "Novel Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chapter",
+            "required": true,
+            "schema": {
+              "title": "Chapter",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Illustrations"
+      },
+      "post": {
+        "operationId": "generate_illustrations_api_novels__novel_id__chapters__chapter__illustrations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "novel_id",
+            "required": true,
+            "schema": {
+              "title": "Novel Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chapter",
+            "required": true,
+            "schema": {
+              "title": "Chapter",
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateIllustrations"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Illustrations"
+      }
+    },
     "/api/novels/{novel_id}/codex/build": {
       "post": {
         "description": "Schedule a durable codex build (chunk → embed → extract → rebuild BM25) that survives\nrestarts. Repeated clicks for the same range dedupe onto the active job so the expensive\nbuild runs once, and the reserved codex-build quota is refunded if the job ultimately fails\nor is cancelled (the durable worker finalizes it).",
@@ -5596,6 +5724,56 @@
           }
         },
         "summary": "Api Novel Health"
+      }
+    },
+    "/api/novels/{novel_id}/illustrations/{art_id}/image": {
+      "get": {
+        "operationId": "illustration_image_api_novels__novel_id__illustrations__art_id__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "novel_id",
+            "required": true,
+            "schema": {
+              "title": "Novel Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "art_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Art Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Illustration Image"
       }
     },
     "/api/novels/{novel_id}/library": {

@@ -154,7 +154,7 @@ Grafana/Loki operations.
 
 `cli_runtime.run_cli(coro)` gives every Typer command the same asyncio entry (loop setup,
 pool teardown, clean Ctrl-C). `platform/cli.py` contributes the one platform-owned
-command, `reset-db` (interactive confirm unless `--force`; drops the 46 tables in the
+command, `reset-db` (interactive confirm unless `--force`; drops the 48 tables in the
 historically frozen `ALL_TABLES` list, then re-applies all DDL). The omitted
 `auth_rate_limits` table survives reset by ADR-002 compatibility policy, so “reset” is
 not a literal empty-schema operation.

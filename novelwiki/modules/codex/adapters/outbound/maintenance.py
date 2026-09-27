@@ -43,8 +43,11 @@ async def reset_structured_codex(novel_id: int) -> None:
                 "SELECT pg_advisory_xact_lock($1::bigint);",
                 7_200_000_000_000_000 + int(novel_id),
             )
+            await connection.execute(
+                "DELETE FROM codex_art_plans WHERE (plan->>'novel_id')::bigint=$1;", novel_id,
+            )
             for table in (
-                "query_cache", "wiki_cache", "extraction_contexts", "plot_thread_updates",
+                "codex_art", "query_cache", "wiki_cache", "extraction_contexts", "plot_thread_updates",
                 "plot_threads", "relationship_state_transitions", "entity_state_transitions",
                 "entity_activity", "memory_segments", "chapter_summaries", "extraction_state",
                 "events", "relationships", "entity_facts", "identity_links",

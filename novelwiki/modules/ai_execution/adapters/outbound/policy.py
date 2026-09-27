@@ -430,6 +430,8 @@ async def cancel_revoked_jobs(
         kinds.append("translate")
     if removed_workloads is None or Workload.CODEX_EXTRACT.value in removed_workloads:
         kinds.append("codex_build")
+        if backend is ExecutionBackend.OPENAI_CODEX:
+            kinds.append("codex_illustrate")
     if not kinds:
         return 0
     rows = await _deps().revoked_job_ids(user_id, kinds, backend.value)
