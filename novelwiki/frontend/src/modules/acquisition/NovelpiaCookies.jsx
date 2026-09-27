@@ -129,7 +129,7 @@ export function NovelpiaCookies() {
               </Button>}
             </div>
           </form>
-          <p className="muted source-account-copy">Your Novelpia plan and ad requirements still apply.</p>
+          <p className="muted source-account-copy">Imports complete supported ad countdowns automatically when the browser helper is available. If an ad needs your attention, saved chapters are kept and a recovery link is shown.</p>
         </>
       )}
     </section>

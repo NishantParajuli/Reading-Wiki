@@ -10,6 +10,12 @@ from novelwiki.modules.acquisition.adapters.outbound.scraper.base import ScrapeC
 from novelwiki.modules.acquisition.adapters.outbound.scraper.safe_fetch import SafeFetchResponse
 
 
+@pytest.fixture(autouse=True)
+def isolate_browser_configuration(monkeypatch):
+    # A developer's enabled helper must never turn fixture tests into live RPCs.
+    monkeypatch.setattr(mod.settings, 'NOVELPIA_BROWSER_ENABLED', False)
+
+
 def ctx(url=mod.SITE + '/novel/4053', maximum=None):
     return ScrapeContext(start_url=url, session=object(), max_chapters=maximum,
                          account_cookies=[{'name': 'TKEY', 'value': 'synthetic-refresh', 'expires': None}])
@@ -180,3 +186,64 @@ async def test_saved_final_checkpoint_finishes_without_content_read(monkeypatch)
     context.resume_after_checkpoint = True
     assert await crawl(context) == []
     assert not api.responses
+
+
+@pytest.mark.asyncio
+async def test_ad_browser_completes_then_api_independently_verifies(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(mod.settings, 'NOVELPIA_BROWSER_ENABLED', True)
+    solver = AsyncMock(return_value='completed')
+    monkeypatch.setattr(mod, 'complete_ad', solver)
+    api = API(monkeypatch, [login(), ('novel/episode', (500, {'code': '0010', 'result': {'name': 'NOVEL_ERROR'}})),
+        login(), ('novel/episode', metadata()),
+        ('novel/episode/content', {'data': {'epi_content': '<p>Unlocked prose.</p>'}})])
+    context = ctx(mod.SITE + '/viewer/17', 1)
+    context.report_stage = AsyncMock()
+    rows = await crawl(context)
+    solver.assert_awaited_once_with(context, 17)
+    assert rows[0].content == 'Unlocked prose.'
+    context.report_stage.assert_awaited_once_with('scraping')
+    assert not api.responses
+
+
+@pytest.mark.asyncio
+async def test_false_browser_success_cannot_loop_or_save_locked_chapter(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(mod.settings, 'NOVELPIA_BROWSER_ENABLED', True)
+    solver = AsyncMock(return_value='completed')
+    monkeypatch.setattr(mod, 'complete_ad', solver)
+    locked = ('novel/episode', (500, {'code': '0010', 'result': {'name': 'NOVEL_ERROR'}}))
+    api = API(monkeypatch, [login(), locked, login(), locked])
+    with pytest.raises(ScrapeError, match='requires an ad'):
+        await crawl(ctx(mod.SITE + '/viewer/17', 1))
+    assert solver.await_count == 1 and not api.responses
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['timeout', 'busy', 'unavailable', 'login_required'])
+async def test_browser_failure_keeps_actionable_safe_error(monkeypatch, outcome):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(mod.settings, 'NOVELPIA_BROWSER_ENABLED', True)
+    monkeypatch.setattr(mod, 'complete_ad', AsyncMock(return_value=outcome))
+    API(monkeypatch, [login(), ('novel/episode', (500, {'code': '0010', 'result': {'name': 'NOVEL_ERROR'}}))])
+    with pytest.raises(ScrapeError) as error:
+        await crawl(ctx(mod.SITE + '/viewer/17', 1))
+    message = str(error.value)
+    if outcome == 'login_required':
+        assert 'Replace your cookies' in message
+    else:
+        assert 'could not finish automatically' in message
+        assert mod.SITE + '/viewer/17' in message
+    assert 'synthetic' not in message
+
+
+@pytest.mark.asyncio
+async def test_purchase_lock_never_uses_browser(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(mod.settings, 'NOVELPIA_BROWSER_ENABLED', True)
+    solver = AsyncMock()
+    monkeypatch.setattr(mod, 'complete_ad', solver)
+    API(monkeypatch, [login(), ('novel/episode', (500, {'code': '0009', 'result': {'name': 'NOVEL_ERROR'}}))])
+    with pytest.raises(ScrapeError, match='needs access'):
+        await crawl(ctx(mod.SITE + '/viewer/17', 1))
+    solver.assert_not_awaited()

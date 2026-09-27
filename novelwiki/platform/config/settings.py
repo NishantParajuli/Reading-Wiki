@@ -1,7 +1,7 @@
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -182,6 +182,11 @@ class Settings(BaseSettings):
     # Comma-separated hostnames adapters may fetch in addition to the source host.
     # Prefer adapter-local allowlists for known APIs; use this only for deployment overrides.
     SCRAPER_ALLOWED_HOST_OVERRIDES: str = ""
+    # Optional isolated browser for Novelpia's ordinary ad countdown/Continue flow.
+    NOVELPIA_BROWSER_ENABLED: bool = False
+    NOVELPIA_BROWSER_URL: str = "http://localhost:8079"
+    NOVELPIA_BROWSER_TOKEN: str = ""
+    NOVELPIA_BROWSER_TIMEOUT_SECONDS: int = Field(default=75, ge=15, le=90)
 
     # ── File import (EPUB/PDF ingestion) ──
     # Heavy artifacts live on disk; the DB holds pointers + the editable plan.

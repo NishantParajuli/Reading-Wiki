@@ -44,8 +44,9 @@
    **premium wall** detected (stops cleanly with the number of stored chapters). A later
    scrape can continue if the site makes more chapters publicly available. Scraping does
    not automatically inherit a reader's browser login. Novelpia Global uses explicitly
-   saved per-user cookies and reports login/ad/unlock requirements as failed jobs with
-   recovery instructions; already ingested chapters are retained. Fetch failures, missing
+   saved per-user cookies; when configured, its browser sidecar tries to complete a normal
+   ad gate once per episode. Unresolved login/ad/unlock requirements fail with recovery
+   instructions; already ingested chapters are retained. Fetch failures, missing
    expected content, and broken navigation fail the job rather than being reported as
    a premium boundary.
    A completed run updates the source's `last_scraped_at` timestamp.
@@ -64,7 +65,15 @@ returned by the official API, normalizes prose, and follows the published next e
 Only HTTPS numeric `/novel/{id}` and `/viewer/{id}` start URLs on
 `global.novelpia.com` are accepted. Authentication, ad, and chapter-unlock errors fail
 explicitly rather than silently ending a book or saving an error page as chapter text.
-The importer neither purchases content nor automates ad completion. See
+For episode-metadata ad gates (`NOVEL_ERROR` codes `0008`/`0010`), the optional browser
+client reports **Watching Novelpia ad**, sends the episode ID and requester cookies to
+the private sidecar, and waits for the site's normal countdown/Continue flow. One attempt
+is allowed per episode; the subsequent API retry refreshes the access token and must
+independently grant access. The browser never supplies prose for ingestion. Purchase
+locks are not sent to the browser. A busy sidecar gets a bounded wait of at most 30
+seconds; disabled/unavailable services, timeouts, rejected logins, and unresolved gates
+retain the manual recovery path. Cancellation closes the client request and the browser
+context rather than leaving a detached ad attempt. The importer does not buy chapters. See
 [supported sites](supported-sites.md#novelpia-global-account-access) for setup/recovery
 and [security](../operations/security.md) for credential storage.
 

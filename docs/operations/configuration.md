@@ -132,6 +132,23 @@ screen or novel metadata.
 | `SCRAPER_REQUIRE_SAME_HOST` | `true` | binds crawls (incl. redirects/CDN hops) to the source host; adapters declare known extra hosts via `allowed_hosts` |
 | `SCRAPER_ALLOWED_HOST_OVERRIDES` | `""` | comma-separated deployment-level extra hosts (prefer adapter-local lists) |
 
+### Novelpia ad browser
+
+| Setting | Default | Notes |
+|---|---|---|
+| `NOVELPIA_BROWSER_ENABLED` | `false` | permits one normal browser ad-completion attempt per gated episode; requires the optional sidecar |
+| `NOVELPIA_BROWSER_URL` | `http://localhost:8079` | private browser service; Compose sets `http://novelpia-browser:8079` |
+| `NOVELPIA_BROWSER_TOKEN` | `""` | service-specific auth token, falling back to `SIDECAR_AUTH_TOKEN`; sent as `X-Tideglass-Sidecar-Token` |
+| `NOVELPIA_BROWSER_TIMEOUT_SECONDS` | 75 | browser attempt deadline, validated between 15 and 90 seconds |
+
+The Compose web environment defaults the integration to enabled when the variable is
+unset, but `.env.example` explicitly sets it to `false`; change that to `true` to opt
+in after copying the template. The `novelpia-browser` profile must also be started. Setting `NOVELPIA_BROWSER_ENABLED=false`
+disables attempts without changing saved source cookies or existing chapters. Missing
+or unavailable browser infrastructure leaves the manual chapter/ad recovery path. See
+[deployment](deployment.md#novelpia-ad-browser-optional) for the private network and
+proxy topology.
+
 ## File import
 
 | Setting | Default | Notes |

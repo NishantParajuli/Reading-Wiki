@@ -19,6 +19,9 @@ services:
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       OCR_SIDECAR_TOKEN: ${OCR_SIDECAR_TOKEN:-}
       TTS_SIDECAR_TOKEN: ${TTS_SIDECAR_TOKEN:-}
+      NOVELPIA_BROWSER_URL: http://novelpia-browser:8079
+      NOVELPIA_BROWSER_ENABLED: ${NOVELPIA_BROWSER_ENABLED:-true}
+      NOVELPIA_BROWSER_TOKEN: ${NOVELPIA_BROWSER_TOKEN:-}
     extra_hosts:
       # We are OFF host networking, so `localhost` inside the container is the container itself.
       # Reach the host's PostgreSQL via the gateway: set DATABASE_URL / DB_SUPERUSER_URL host to
@@ -30,10 +33,63 @@ services:
       - "127.0.0.1:8001:8001"
     networks:
       - tideglass
+      - novelpia_browser
     volumes:
       # Persists the BM25 index, import scratch, extracted assets, and cached scrapings
       - wiki_data:/app/data
     restart: unless-stopped
+
+  # Optional Novelpia ad handling. Chromium has NO direct Internet/network route:
+  # all HTTPS traffic must cross the public-address-only CONNECT proxy below.
+  # Start both with: docker compose --profile novelpia-browser up -d
+  novelpia-browser:
+    build:
+      context: ./sidecar-novelpia
+      dockerfile: Dockerfile
+    container_name: novelwiki-novelpia-browser
+    environment:
+      PORT: 8079
+      HOME: /tmp/browser-home
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      NOVELPIA_BROWSER_TOKEN: ${NOVELPIA_BROWSER_TOKEN:-}
+      NOVELPIA_BROWSER_PROXY: http://novelpia-egress:8899
+      NOVELPIA_BROWSER_TIMEOUT_SECONDS: ${NOVELPIA_BROWSER_TIMEOUT_SECONDS:-75}
+    networks:
+      - novelpia_browser
+    depends_on:
+      novelpia-egress:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    shm_size: 256m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      # Docker's current default profile plus Chromium user namespaces.
+      - seccomp=./sidecar-novelpia/seccomp_profile.json
+    pids_limit: 256
+    mem_limit: 1g
+    restart: unless-stopped
+    profiles: ["novelpia-browser"]
+
+  novelpia-egress:
+    build:
+      context: ./sidecar-novelpia-egress
+      dockerfile: Dockerfile
+    container_name: novelwiki-novelpia-egress
+    networks:
+      - novelpia_browser
+      - novelpia_egress
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 128m
+    restart: unless-stopped
+    profiles: ["novelpia-browser"]
 
   # OCR sidecar (scanned-PDF import, S3). GPU-only and OPTIONAL — the web app runs fine
   # without it (digital PDFs + EPUB don't need it; scanned PDFs fall back to Gemini vision).
@@ -108,6 +164,13 @@ services:
 networks:
   tideglass:
     name: novelwiki_net
+    driver: bridge
+  novelpia_browser:
+    name: novelwiki_browser_net
+    driver: bridge
+    internal: true
+  novelpia_egress:
+    name: novelwiki_browser_egress_net
     driver: bridge
 
 volumes:

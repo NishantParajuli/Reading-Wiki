@@ -66,6 +66,23 @@ jobs:
       - working-directory: novelwiki/frontend
         run: npm run test:e2e
 
+  novelpia-browser:
+    name: Novelpia browser and egress
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: sidecar-novelpia/package-lock.json }
+      - working-directory: sidecar-novelpia
+        run: npm ci
+      - working-directory: sidecar-novelpia
+        run: npm test
+      - name: Build the Novelpia browser image
+        run: docker build --tag tideglass-novelpia-browser:ci ./sidecar-novelpia
+      - name: Build the Novelpia egress image
+        run: docker build --tag tideglass-novelpia-egress:ci ./sidecar-novelpia-egress
+
   container:
     name: Production image
     needs: [backend, frontend]
@@ -79,7 +96,7 @@ jobs:
   deployment-candidate:
     name: Deployment candidate
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [backend, frontend, container]
+    needs: [backend, frontend, novelpia-browser, container]
     runs-on: ubuntu-latest
     steps:
       - name: Mark the tested main commit as deployable

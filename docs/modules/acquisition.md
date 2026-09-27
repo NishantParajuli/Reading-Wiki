@@ -96,7 +96,8 @@ cross-page paragraph rejoining).
   and error types), `adapters.py` (the registry and original site
   adapters, including Novel543), `translation_sites.py` (Dreamy Translations, Penguin
   Squad, Azure Chronicles), `novelpia.py` (current FuckNovelpia PHP reader),
-  `global_novelpia.py` (official Novelpia Global account-backed API reader), and
+  `global_novelpia.py` (official Novelpia Global account-backed API reader),
+  `novelpia_browser.py` (optional cancellable ad-browser RPC), and
   `raw_archive.py` (Raw FuckNovelpia catalogue downloads, bounded ZIP/EPUB/TXT/HTML text
   extraction, archive password and ordered-section checkpoints). See
   [supported sites](../pipelines/supported-sites.md) for keys, URL formats, and limits.

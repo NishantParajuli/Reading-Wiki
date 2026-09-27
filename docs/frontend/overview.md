@@ -85,15 +85,16 @@ persisted in browser storage. The screen shows cookie names/expiry dates and the
 update, with loading/retry and save-error feedback. Replacement and removal remain
 available when saved status cannot be read, including after an encryption-key change.
 “Cookies saved” reports local storage status, not a live Novelpia login check; the page
-explains that the site's plan
-and ad requirements still apply. Expiry dates are storage deadlines, not guaranteed
+explains that the site's plan and ad requirements still apply. Expiry dates are storage deadlines, not guaranteed
 session lifetimes. The account API returns metadata only. Choosing Novelpia Global in
 Add novel or Add source also shows a Source accounts link; it opens in a new tab so the
-unfinished novel/source form is preserved.
+unfinished novel/source form is preserved. During automatic ad completion, Jobs shows
+**Watching Novelpia ad** or **Waiting for Novelpia browser**. Recognized Novelpia errors
+in expanded failed Jobs details and Manage health offer **Open chapter on Novelpia**
+for an official numeric viewer URL, or **Update Novelpia cookies** for login errors.
+These links open in a new tab, preserving the current screen. Arbitrary error URLs are
+not converted into links.
 
-Novelpia scrape failures offer recovery links in expanded Jobs errors and Manage health:
-**Open chapter on Novelpia** for an official numeric viewer URL, or **Update Novelpia
-cookies** for login/session errors. Both open another tab so the current screen is kept.
 
 ## Reading room and library
 

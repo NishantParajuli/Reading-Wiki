@@ -48,7 +48,8 @@ unlock future codex data. Full model:
   mapping onto one **global** chapter sequence); incremental, with clear access-boundary
   handling; per-site adapters with [documented URL formats and limits](docs/pipelines/supported-sites.md);
   SSRF-hardened fetching. Novelpia Global supports your saved account cookies through
-  **Settings → Source accounts**, with explicit recovery when login or an ad is required.
+  **Settings → Source accounts**. An optional browser service completes normal ad
+  countdowns, with explicit recovery when login or manual action is required.
 - **📥 File import** — EPUB and digital/scanned PDF as **durable, resumable jobs**:
   multi-file + chunked uploads, local PaddleOCR + Gemini-vision escalation (with a
   cost-confirm gate), PDF paragraph reflow and illustration cleanup, fully editable
@@ -130,6 +131,7 @@ evidence: [docs/architecture/](docs/README.md#architecture).
                                               (Pro plans · Flash distills)
    FastAPI ──► React SPA (Home · Library · Discover · Reader · Codex · Admin) ◄── cookie auth
    Optional GPU sidecars:  OCR :8077 (PaddleOCR) · TTS :8078 (OmniVoice)
+   Optional Novelpia ad browser :8079 → public-only egress proxy :8899
 ```
 
 ## 🧰 Tech stack
@@ -210,12 +212,16 @@ Details: [docs/testing.md](docs/testing.md) ·
 docker compose up -d --build     # web app on 127.0.0.1:8001 (front it with a tunnel/proxy)
 docker compose up -d ocr         # + OCR sidecar (GPU; scanned PDFs)
 docker compose up -d tts         # + TTS sidecar (GPU; audiobooks)
+# Optional CPU browser: first set NOVELPIA_BROWSER_ENABLED=true and its service token in .env
+docker compose --profile novelpia-browser up -d --build novelpia-browser novelpia-egress
+docker compose up -d --no-deps web  # apply changed web settings
 ```
 
 Source is **baked into the image** (deploy = rebuild); only `/app/data` persists.
-Sidecars sit on a private bridge with **unpublished ports** and require a shared service
-token (`SIDECAR_AUTH_TOKEN`) — they fail closed without it; both are optional and the
-app degrades gracefully. Host PostgreSQL is reached via `host.docker.internal`. The
+Sidecars have **unpublished ports** and require a private service token
+(`SIDECAR_AUTH_TOKEN`, or a per-service override). They are optional; unavailable services
+leave the documented fallback/recovery paths. The Novelpia browser uses a separate
+internal network and public-only egress proxy. Host PostgreSQL is reached via `host.docker.internal`. The
 optional AGY and OpenAI Codex subscription workers run on the host under systemd
 ([AGY runbook](docs/agy-operator-runbook.md) ·
 [OpenAI Codex runbook](docs/openai-codex-operator-runbook.md)).
@@ -237,6 +243,6 @@ Full topology + first boot + release/rollback:
 | Future implementation | [PostgreSQL-centered platform evolution plan](implementation-plan/postgres-platform-evolution-plan.md) *(proposal, not current behavior)* |
 | Modules | [map](docs/modules/README.md) + one doc per module |
 | Pipelines | [jobs & quota](docs/pipelines/background-jobs-and-quota.md) · [scraping](docs/pipelines/scraping.md) · [supported sites](docs/pipelines/supported-sites.md) · [import](docs/pipelines/file-import.md) · [translation](docs/pipelines/translation.md) · [codex](docs/pipelines/codex-build-and-ask.md) · [illustrations](docs/pipelines/chapter-illustrations.md) · [narration](docs/pipelines/narration.md) · [AI backends](docs/pipelines/ai-backends.md) |
-| Reference | [DB schema](docs/data/database-schema.md) · [filesystem](docs/data/filesystem-layout.md) · [HTTP behavior](docs/api/http-api.md) · [exact route inventory](docs/api/http-route-inventory.md) · [CLI](docs/api/cli.md) · [configuration](docs/operations/configuration.md) |
+| Reference | [DB schema](docs/data/database-schema.md) · [filesystem](docs/data/filesystem-layout.md) · [HTTP behavior](docs/api/http-api.md) · [exact route inventory](docs/api/http-route-inventory.md) · [private Novelpia browser API](docs/api/novelpia-browser.md) · [CLI](docs/api/cli.md) · [configuration](docs/operations/configuration.md) |
 | Operating | [deployment](docs/operations/deployment.md) · [configuration](docs/operations/configuration.md) · [structured logging](docs/operations/logging.md) · [security](docs/operations/security.md) · [testing](docs/testing.md) · [qualification history](docs/testing-codex-qualification-history.md) *(historical)* · [release runbook](docs/release-runbook.md) · [AGY runbook](docs/agy-operator-runbook.md) · [OpenAI Codex runbook](docs/openai-codex-operator-runbook.md) |
 | Frontend | [overview](docs/frontend/overview.md) · [design system](DESIGN.md) |

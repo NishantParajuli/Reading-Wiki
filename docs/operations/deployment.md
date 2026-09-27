@@ -1,7 +1,7 @@
 # Deployment
 
-> How Tideglass runs in production: one web container, an optional GPU sidecar pair, a
-> host PostgreSQL, and optional dedicated AGY/OpenAI Codex host workers. Release/rollback
+> How Tideglass runs in production: one web container, optional GPU and Novelpia browser
+> sidecars, a host PostgreSQL, and optional dedicated AGY/OpenAI Codex host workers. Release/rollback
 > procedure: [../release-runbook.md](../release-runbook.md). Configuration:
 > [configuration.md](configuration.md).
 
@@ -13,7 +13,10 @@
                                                              ├──▶ host PostgreSQL via
                                                              │    host.docker.internal:5432
                                                              ├──▶ ocr:8077   (private bridge)
-                                                             └──▶ tts:8078   (private bridge)
+                                                             ├──▶ tts:8078   (private bridge)
+                                                             └──▶ novelpia-browser:8079
+                                                                   │ internal network
+                                                                   └──▶ novelpia-egress:8899 → public HTTPS
  host systemd (--user) ──▶ AGY and/or OpenAI Codex subscription workers ─────────▶ same DB
 ```
 
@@ -23,8 +26,10 @@ Key properties:
   `docker compose build web && docker compose up -d --no-deps web`. The web service has
   no bind-mounted code; the TTS sidecar separately mounts its server and voice clips.
 - The web port binds **loopback only** (`127.0.0.1:8001`); the tunnel fronts it. Sidecar
-  ports are **never published to the host** — only the web service reaches them over the
-  private bridge `novelwiki_net`, so tunnel/Access rules can't be bypassed.
+  ports are **never published to the host**. OCR/TTS use the private bridge
+  `novelwiki_net`; the optional Novelpia browser uses a separate internal network and
+  controlled public HTTPS egress. Tunnel/Access rules cannot be bypassed through a
+  directly published sidecar port.
 - Persistent state: PostgreSQL (host) + the named volume `novelwiki_data` mounted at
   `/app/data` (BM25 indexes, assets, audio, import artifacts — see
   [../data/filesystem-layout.md](../data/filesystem-layout.md)).
@@ -49,9 +54,11 @@ Key properties:
 |---|---|---|---|
 | `web` | `127.0.0.1:8001` | default | `.env` + overrides: `OCR_SIDECAR_URL=http://ocr:8077`, `TTS_SIDECAR_URL=http://tts:8078`; `extra_hosts: host.docker.internal:host-gateway` for the host DB; volume `wiki_data:/app/data`; `restart: unless-stopped` |
 | `ocr` | 8077 (bridge-only) | `ocr` | PaddleOCR PP-StructureV3, NVIDIA GPU reservation; optional — digital PDFs/EPUBs don't need it and scanned pages can fall back to Gemini |
+| `novelpia-browser` | 8079 (internal network only) | `novelpia-browser` | Node/Playwright browser; fresh per-request context, authenticated RPC, no persistent profile; no GPU required |
+| `novelpia-egress` | 8899 (internal network only) | `novelpia-browser` | public-only HTTPS CONNECT proxy; only this service joins the separate browser egress network |
 | `tts` | 8078 (bridge-only) | `tts` | OmniVoice, NVIDIA GPU reservation; HF cache volume so the model isn't re-downloaded; `voices/` and `tts_server.py` bind-mounted read-only (clip/code tweaks = restart, no CUDA rebuild) |
 
-Both sidecars require the shared token (`SIDECAR_AUTH_TOKEN` → header
+The OCR and TTS sidecars require the shared token (`SIDECAR_AUTH_TOKEN` → header
 `X-Tideglass-Sidecar-Token`) and **fail closed** without it unless
 `SIDECAR_ALLOW_UNAUTHENTICATED=1` is set explicitly for local dev. On a single small GPU
 (~6 GB), run one heavy sidecar at a time.
@@ -67,6 +74,49 @@ docker compose up -d tts            # + narration (GPU)
 The dedicated host-worker units set `HOST_WORKER_DATABASE_HOST=127.0.0.1`, which replaces
 only the DSN hostname in those processes; credentials and the Docker-facing `.env` remain
 unchanged.
+
+## Novelpia ad browser (optional)
+
+The `novelpia-browser` Compose profile adds a CPU browser service and its egress proxy.
+It is independent of the GPU sidecars. Set a private `NOVELPIA_BROWSER_TOKEN` or the
+shared `SIDECAR_AUTH_TOKEN` of at least 24 characters in the deployment environment.
+Set `NOVELPIA_BROWSER_ENABLED=true` (`.env.example` starts it disabled), then build/start
+the profile:
+
+```bash
+docker compose --profile novelpia-browser up -d --build novelpia-browser novelpia-egress
+docker compose up -d --no-deps web
+```
+
+The web container uses `NOVELPIA_BROWSER_URL=http://novelpia-browser:8079` and enables
+browser attempts when the enable variable is true (or unset in Compose). `NOVELPIA_BROWSER_ENABLED=false` disables them.
+Starting ordinary `web` alone does not start this optional profile. The sidecar services
+publish no host ports and persist no cookies or browser profile volumes. The browser
+runs as the image's non-root user with Chromium's sandbox enabled; Compose applies
+`sidecar-novelpia/seccomp_profile.json` to permit the required sandbox namespaces while
+retaining syscall filtering. Keep this profile with the deployment checkout. The host
+kernel must support unprivileged user namespaces; see the pinned baseline and namespace
+exceptions in [SECCOMP.md](../../sidecar-novelpia/SECCOMP.md). The service still drops
+all capabilities and does not use `SYS_ADMIN` or an unconfined seccomp profile. Rebuild the
+browser/proxy images after changing their code; the automated web deploy does not update
+these services.
+
+The browser runs on an **internal** network shared with web and the proxy, with no direct
+Internet route. The proxy alone also joins the separate `novelwiki_browser_egress_net` network; the
+internal bridge is `novelwiki_browser_net`. Its CONNECT
+policy permits public HTTPS destinations and rejects private/reserved addresses,
+including host, metadata, and internal service addresses; the validated destination
+address is pinned for the connection. This separate network boundary is necessary
+because a page can contact advertising hosts and cannot use the scraper's ordinary
+same-host rule. No broad scraper host override is needed.
+
+An ad-gated scrape creates a fresh temporary browser context from the requesting user's
+cookies and waits through the normal page countdown/Continue flow. The web worker's
+job stage identifies the wait. Canceling closes the request and browser context.
+Unavailable/busy services, expired logins, or ads that cannot complete within the deadline
+fail with the chapter's manual recovery link; saved chapters stay available. Paid chapter
+purchases are never automated. See the [private API](../api/novelpia-browser.md) and
+[security boundary](security.md#novelpia-ad-browser).
 
 ## First boot
 
@@ -102,7 +152,8 @@ Codex CLI and a ChatGPT `codex login` session owned by the service user. Install
 ## Automated deployment after CI
 
 Every push and pull request runs the GitHub-hosted `quality` workflow. A push to `main`
-becomes deployable only after the backend, frontend, and production-image jobs all pass.
+becomes deployable only after the backend, frontend, production web image, and Novelpia
+browser/egress test-and-image jobs all pass.
 Because this is a public repository, the production laptop is deliberately **not** a
 GitHub Actions self-hosted runner. Instead, a local systemd user timer checks GitHub every
 two minutes and deploys only when the latest successful `quality.yml` push SHA exactly
@@ -122,7 +173,7 @@ or if `http://127.0.0.1:8001/health` does not become healthy, it recreates `web`
 image using the previous release's Compose configuration. A failed SHA is not retried every
 two minutes; after diagnosing the failure, remove
 `~/.local/share/tideglass-deploy/failed-deployment-sha` and start
-`tideglass-deploy.service` manually to retry it. The agent never recreates the OCR or TTS
+`tideglass-deploy.service` manually to retry it. The agent never recreates the OCR, TTS, or Novelpia browser/proxy
 sidecars.
 
 Install the agent once when provisioning a production laptop:
@@ -168,7 +219,9 @@ reload, run `VITE_API_PROXY=http://localhost:8000 npm run dev` from
 `novelwiki/frontend` in a second terminal; it otherwise proxies to port 8001.
 
 Sidecars are optional in dev. Without them, scanned-PDF OCR needs the configured Gemini
-fallback and new narration cannot be generated. The Compose sidecars expose no host
-ports, so a host-run web process cannot reach them through `localhost:8077`/`:8078`;
+fallback and new narration cannot be generated. Without the Novelpia browser service,
+ad gates require manual completion. The Compose sidecars expose no host
+ports, so a host-run web process cannot reach them through `localhost:8077`, `:8078`,
+or `:8079`;
 run the web service in Compose to use its private service network, or configure separately
 reachable local services and matching sidecar tokens.

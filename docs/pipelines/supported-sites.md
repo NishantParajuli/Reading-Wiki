@@ -23,7 +23,7 @@ start at the first chapter you want to collect.
 | `dreamy-translations` | `dreamy-translations.com` | `/novel/{slug}` or `/novel/{slug}/chapter/{number}` | `en` | Public server-rendered reader. |
 | `penguin-squad` | `penguin-squad.com` | `/novels/{slug}` or `/novels/{slug}/chapter-{number}-{title}` | `en` | Public server-rendered reader; use the complete chapter slug. |
 | `azurechronicles` | `azurechronicles.com` | `/novel/{slug}/` or `/novel/{slug}/chapter-{number}/` | `en` | Public server-rendered reader. |
-| `global-novelpia` | `global.novelpia.com` | HTTPS `/novel/{numeric-id}` or `/viewer/{numeric-episode-id}` | `en` | Official account-backed reader; save your cookies in Settings → Source accounts. Stops with an actionable error when login, an ad, or an unlock is required. |
+| `global-novelpia` | `global.novelpia.com` | HTTPS `/novel/{numeric-id}` or `/viewer/{numeric-episode-id}` | `en` | Official account-backed reader; save your cookies in Settings → Source accounts. Optional browser sidecar completes normal ad countdowns; actionable errors preserve progress when login, manual ad completion, or an unlock is required. |
 | `fucknovelpia` | `fucknovelpia.com` | `/novel/{slug}`, `/novel.php?slug=…`, or `/chapter.php?hash={40-character-hex}&ch={number}` | `en` | Current PHP catalogue/reader; follows the same book's published next link. Old WordPress URLs are not supported. |
 | `raw-fucknovelpia` | `raw-fucknovelpia.com` | `/novel/{slug}` or `/novel.php?slug=…` | `ko` | Catalogue ZIP download containing EPUB, TXT, or HTML; requires the archive password in the web form. |
 
@@ -68,12 +68,28 @@ One episode can contain several HTML parts, which are combined into a single pro
 chapter. The site's episode number determines local chapter numbering; its episode ID
 is an address, not a chapter number. Navigation follows the site's next episode.
 
-Ad and purchase requirements still apply. An ad gate fails the job with the affected
-viewer URL. Jobs details and Manage health show an **Open chapter on Novelpia** link:
-open it in your logged-in browser, complete the site's requirement, then
-retry the scrape. Saved chapters remain available. A purchase/plan lock similarly asks
-you to unlock the chapter on Novelpia; the importer does not purchase chapters or watch
-or bypass ads. Cookie failures provide an **Update Novelpia cookies** link to Source accounts for a fresh export.
+Ad and purchase requirements still apply. With the optional
+[Novelpia browser service](../operations/deployment.md#novelpia-ad-browser-optional)
+enabled, an ad gate opens the affected chapter in a temporary browser using the scrape
+requester's saved cookies. It waits through the site's countdown and clicks the normal
+Continue control when available. Jobs shows **Watching Novelpia ad** during the attempt.
+The scraper then refreshes its access token and independently retries the chapter API;
+a browser success response alone is not permission to save a chapter.
+
+Each episode gets at most one automatic browser attempt. If the service is disabled,
+unavailable, busy beyond its bounded wait, or unable to finish the ad, the job fails with
+the chapter URL and retains saved chapters. Open that URL in your logged-in browser,
+complete the requirement, and retry. Expanded failed Jobs details and Manage health
+errors offer **Open chapter on Novelpia** for recognized chapter links; login errors
+instead offer **Update Novelpia cookies**. A purchase/plan lock asks you to unlock the
+chapter on Novelpia and is not automated. Cookie failures require a fresh export in
+Source accounts. The browser does not skip countdowns or send fabricated ad rewards.
+
+On 2026-09-27, an integrated account-backed check against novel `4053`, chapter 101
+(episode `685020`), completed its normal ad gate through the isolated browser and
+independently retrieved 9,773 characters through the HTTP adapter in about 34 seconds.
+This confirms that flow on the tested account and chapter, not every possible ad provider.
+
 Saved viewer URLs include non-secret `tg_novel`, `tg_sort`, and `tg_chapter` navigation
 coordinates. A retry asks for the next episode directly, without spending another read
 on the saved chapter. A checkpoint missing these coordinates fails with instructions

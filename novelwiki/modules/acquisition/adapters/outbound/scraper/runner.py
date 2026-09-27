@@ -45,6 +45,7 @@ async def scrape_source(
     cancel_check: Callable[[], Awaitable[None]] | None = None,
     *,
     credential_user_id: int | None = None,
+    report_stage: Callable[[str], Awaitable[None]] | None = None,
     runtime,
 ) -> int:
     """Scrapes one source into its novel's global chapter sequence using the source's
@@ -131,6 +132,8 @@ async def scrape_source(
             require_same_host=settings.SCRAPER_REQUIRE_SAME_HOST,
             account_cookies=account_cookies,
             resume_after_checkpoint=resume_after_checkpoint,
+            cancel_check=cancel_check,
+            report_stage=report_stage,
         )
         try:
             if cancel_check is not None:
@@ -179,6 +182,7 @@ async def scrape_novel(
     cancel_check: Callable[[], Awaitable[None]] | None = None,
     *,
     credential_user_id: int | None = None,
+    report_stage: Callable[[str], Awaitable[None]] | None = None,
     runtime,
     scrape_source_operation=None,
 ) -> int:
@@ -200,6 +204,7 @@ async def scrape_novel(
             cancel_check=cancel_check,
             runtime=runtime,
             credential_user_id=credential_user_id,
+            report_stage=report_stage,
         )
     return total
 

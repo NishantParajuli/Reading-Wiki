@@ -15,6 +15,8 @@ from selectolax.parser import HTMLParser
 
 from .base import BaseAdapter, ChapterData, ScrapeContext, ScrapeError, _chapter_text
 from .safe_fetch import SafeFetchError, safe_fetch
+from .novelpia_browser import complete_ad
+from novelwiki.platform.config import settings
 
 SITE = "https://global.novelpia.com"
 API = "https://api-global.novelpia.com"
@@ -79,6 +81,7 @@ class _Reader:
         self.ctx = ctx
         self.token = ""
         self.cookies = []
+        self.ad_attempts: set[int] = set()
         now = time.time()
         for cookie in ctx.account_cookies:
             if cookie.get("name") not in {"TKEY", "LOGINKEY", "USERKEY"}:
@@ -145,6 +148,23 @@ class _Reader:
             link = f"{SITE}/viewer/{episode}" if isinstance(episode, int) and episode > 0 else SITE
             name, code = result.get("name"), str(payload.get("code"))
             if name == "NOVEL_ERROR" and code in {"0008", "0010"}:
+                if (settings.NOVELPIA_BROWSER_ENABLED and path == "/v1/novel/episode"
+                        and type(episode) is int and episode > 0 and episode not in self.ad_attempts):
+                    self.ad_attempts.add(episode)
+                    outcome = await complete_ad(self.ctx, episode)
+                    if outcome == "login_required":
+                        raise ScrapeError(AUTH_MESSAGE)
+                    if outcome == "completed":
+                        if self.ctx.report_stage is not None:
+                            await self.ctx.report_stage("scraping")
+                        # Do not accept browser status as proof of content access.
+                        # Refresh normal API auth and retry this exact chapter once.
+                        await self.login()
+                        return await self.request(path, params)
+                    raise ScrapeError(
+                        f"Novelpia's ad could not finish automatically. Open {link}, complete the ad, "
+                        "then retry the scrape. Saved chapters are retained."
+                    )
                 raise ScrapeError(f"Novelpia requires an ad for this chapter. Open {link}, complete the ad, then retry the scrape. Saved chapters are retained.")
             if name == "NOVEL_ERROR" and code == "0009":
                 raise ScrapeError(f"This chapter needs access on Novelpia. Open {link}, unlock it with your account, then retry. Saved chapters are retained.")

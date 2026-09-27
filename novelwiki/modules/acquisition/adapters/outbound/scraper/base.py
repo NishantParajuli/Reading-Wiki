@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from typing import AsyncIterator
+from collections.abc import Awaitable, Callable
 from urllib.parse import urldefrag, urljoin, urlsplit, urlunsplit
 import lxml.html
 from curl_cffi.requests import AsyncSession
@@ -200,6 +201,8 @@ class ScrapeContext:
     require_same_host: bool = True
     account_cookies: list[dict] = field(default_factory=list, repr=False)
     resume_after_checkpoint: bool = False
+    cancel_check: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
+    report_stage: Callable[[str], Awaitable[None]] | None = field(default=None, repr=False)
 
     def _fetch_kwargs(self, headers: dict | None = None) -> dict:
         return {

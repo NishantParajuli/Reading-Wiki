@@ -69,6 +69,7 @@ Outside the package:
 | `main.py` | Convenience launcher: `uvicorn novelwiki.api.app:app` on `:8000`. |
 | `novelwiki/frontend/` | React SPA (Vite). Built to `novelwiki/frontend/dist`, served same-origin by FastAPI. See [frontend/overview.md](../frontend/overview.md). |
 | `sidecar/`, `sidecar-tts/` | Optional GPU sidecar services (PaddleOCR on `:8077`, OmniVoice TTS on `:8078`) with their own Dockerfiles. |
+| `sidecar-novelpia/`, `sidecar-novelpia-egress/` | Optional CPU browser (`:8079`) for normal Novelpia ads, isolated behind a public-only CONNECT proxy (`:8899`); see [ADR 016](adr-016-isolated-novelpia-ad-browser.md). |
 | `tests/`, `novelwiki/eval/` | Unit/architecture/contract tests and DB-backed integration suites. See [../testing.md](../testing.md). |
 | `tools/` | `check_architecture.py` (boundary gate), `benchmark_queries.py`, `rehearsal_database.py`. |
 | `scripts/` | `contracts.py` (snapshot regeneration), `test_backend.py` (integration launcher), backup-restore rehearsal, real-browser fixture. |

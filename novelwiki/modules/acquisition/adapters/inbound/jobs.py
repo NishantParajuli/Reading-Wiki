@@ -9,17 +9,22 @@ async def execute_scrape_job(job: dict, context) -> dict:
     await context.bail_if_canceled(job_id)
     await context.update_job(job_id, stage="scraping")
     cancel = lambda: context.bail_if_canceled(job_id)
+    async def report_stage(stage):
+        await context.bail_if_canceled(job_id)
+        await context.update_job(job_id, stage=stage)
     if options.get("source_id") is not None:
         scraped = await context.scrape_source(
             int(options["source_id"]), force=bool(options.get("force")),
             max_chapters=options.get("max_chapters"), expected_novel_id=novel_id,
             cancel_check=cancel, credential_user_id=credential_user_id,
+            report_stage=report_stage,
         )
     else:
         scraped = await context.scrape_novel(
             novel_id, force=bool(options.get("force")),
             max_chapters=options.get("max_chapters"), cancel_check=cancel,
             credential_user_id=credential_user_id,
+            report_stage=report_stage,
         )
     await context.bail_if_canceled(job_id)
     return {"scraped": int(scraped)}

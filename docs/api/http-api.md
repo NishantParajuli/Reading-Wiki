@@ -146,8 +146,10 @@ the login or granted chapter access. No endpoint returns stored cookie values.
 
 The `global-novelpia` scrape adapter uses the requesting job user's saved cookies,
 including when an admin scrapes another owner's novel. Sources and jobs do not store
-cookie values. Login/ad/unlock requirements fail the scrape with a recovery instruction
-while retaining chapters already saved; completing the requirement on Novelpia and
+cookie values. With the optional browser service enabled, an ad gate gets one normal
+browser completion attempt per episode followed by an independent API access retry.
+Unresolved login/ad/unlock requirements fail with a recovery instruction while retaining
+chapters already saved; completing the requirement on Novelpia and
 retrying resumes ingestion. See [Novelpia setup](../pipelines/supported-sites.md#novelpia-global-account-access).
 
 Upload: `POST /api/import/upload` (≤ `MAX_UPLOAD_MB`) · chunked:

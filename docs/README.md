@@ -61,6 +61,7 @@ not promises about a later checkout.
 | ADRs [001](architecture/adr-001-modular-monolith.md) · [002](architecture/adr-002-baseline-defects.md) · [003](architecture/adr-003-ai-scheduling-consistency.md) · [004](architecture/adr-004-bounded-codex-memory.md) · [005](architecture/adr-005-codex-quality-contracts.md) · [006](architecture/adr-006-codex-xhigh-latency-policy.md) · [007](architecture/adr-007-codex-evidence-anchors.md) · [008](architecture/adr-008-lexical-evidence-locality.md) · [009](architecture/adr-009-bounded-claim-alignment-recovery.md) · [010](architecture/adr-010-possessive-number-alignment.md) · [011](architecture/adr-011-duplicate-thread-recovery.md) · [012](architecture/adr-012-semantic-thread-topic-verification.md) · [013](architecture/adr-013-verified-contiguous-evidence-repair.md) · [014](architecture/adr-014-separate-verifier-context-budget.md) | decisions: architecture, baseline defects, AI scheduling consistency, bounded Codex memory, trusted Codex quality contracts, xhigh Codex latency policy, evidence-anchor grounding, lexical evidence locality, bounded claim-alignment recovery, possessive-number alignment, duplicate-thread recovery, semantic thread-topic verification, verified contiguous evidence repair, separate verifier context budget |
 | [migration-completion](architecture/migration-completion.md) · [migration-equivalence-final](architecture/migration-equivalence-final.md) · [architecture-debt](architecture/architecture-debt.md) | dated migration evidence and debt burn-down *(historical)* |
 | [ADR 015](architecture/adr-015-authenticated-chapter-illustrations.md) | Codex ownership, authenticated image storage, persistent character designs, and a separate native-image execution path |
+| [ADR 016](architecture/adr-016-isolated-novelpia-ad-browser.md) | isolated browser ad completion, controlled egress, request-local account state, and independent API access verification |
 | [performance-baseline.json](architecture/performance-baseline.json) | executable query/endpoint/worker budgets consumed by `tools/benchmark_queries.py` |
 | [stable-compatibility-entrypoints](architecture/stable-compatibility-entrypoints.md) | the sanctioned legacy import paths |
 
@@ -99,10 +100,11 @@ against `HEAD` and the living references above before implementation.
 
 | Doc | Contents |
 |---|---|
-| [data/database-schema](data/database-schema.md) | all 50 created tables, table-by-table column semantics, including the intentional 49-table reset-list quirk |
+| [data/database-schema](data/database-schema.md) | all 51 created tables, table-by-table column semantics, including the intentional 50-table reset-list quirk |
 | [data/filesystem-layout](data/filesystem-layout.md) | on-disk roots, serving rules, cleanup, backup |
 | [api/http-api](api/http-api.md) | annotated route families + auth/CSRF/error conventions |
 | [api/http-route-inventory](api/http-route-inventory.md) | exact method/path/endpoint-name inventory for all 130 routes |
+| [api/novelpia-browser](api/novelpia-browser.md) | private browser sidecar authentication, request/status contract, limits, and cancellation |
 | [api/cli](api/cli.md) | all 14 commands + module entrypoints + recipes |
 
 ## Frontend

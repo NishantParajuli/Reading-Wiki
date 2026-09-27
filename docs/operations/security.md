@@ -98,6 +98,43 @@ Cookie expiry metadata is a local hint, not proof that Novelpia still accepts th
 session. Replacing/deleting cookies affects subsequent loads; it does not revoke an
 already-running request or the remote Novelpia login itself.
 
+### Novelpia ad browser
+
+The optional browser service receives only the scrape requester's normalized login
+cookies and a numeric episode ID, through a token-authenticated private endpoint.
+The web client disables redirects and ambient HTTP proxies for this RPC; it does not
+send credentials to a chapter-supplied service URL. The sidecar requires a private token
+of at least 24 characters and has no unauthenticated bypass. It caps bodies at 64 KiB,
+validates cookies and episode IDs, and allows only one active operation.
+
+Browser pages run in fresh, disposable contexts, without persistent cookie/profile
+volumes, request-body logging, screenshots, or tracing. The browser process receives a
+minimal environment without application/service secrets. Main-frame navigation is
+restricted to the requested official viewer; popups, downloads, and service workers
+are blocked. Chromium runs non-root with its sandbox enabled, all container capabilities
+dropped, and a checked-in seccomp profile permitting the sandbox namespace operations;
+it requires host support for unprivileged user namespaces. Cancellation, disconnection,
+and timeouts close the browser.
+
+Browser automation does not call Python `safe_fetch`, so Compose supplies a separate
+network boundary: the browser has only an internal network, and its public-only CONNECT
+proxy has the separate egress network. The proxy validates DNS results, rejects
+private/reserved destinations, and connects to the validated public address; it does not
+forward arbitrary plaintext HTTP requests. CONNECT permits port 443 only and rejects
+the whole DNS answer if any address is non-public, including IPv4-mapped/transition
+IPv6. Limits include 96 connections, 8 KiB headers, 5-second DNS resolution, 10-second
+connection setup, 30-second idle timeout, 120-second tunnel lifetime, and 64 MiB total
+bidirectional tunnel bytes. Sidecar/proxy ports are never published.
+Browser request interception is defense in depth, not the sole SSRF protection. Keep
+this network isolation when deploying outside Compose.
+
+The browser waits through the real countdown and clicks the site's normal Continue
+control. It does not skip timers, fabricate reward requests, or buy content. A browser
+`completed` response is only a retry signal: the HTTP adapter independently refreshes
+authentication and verifies chapter access before accepting any prose. See
+[ADR 016](../architecture/adr-016-isolated-novelpia-ad-browser.md) and the
+[private API](../api/novelpia-browser.md).
+
 ## Upload hardening (Acquisition)
 
 Single-shot size caps; chunked uploads are bounded at init, append-only/contiguous (no

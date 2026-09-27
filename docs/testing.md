@@ -38,6 +38,20 @@ PostgreSQL-backed `novelwiki/eval/novelpia_account_tests.py` verifies persistenc
 pool reload, authenticated session/CSRF isolation, encryption-key rotation recovery,
 and deletion with the owning user; run it through the disposable backend test launcher.
 
+Novelpia ad automation has separate provider-free tests. Run the Node sidecar suite with
+`npm ci --prefix sidecar-novelpia && npm test --prefix sidecar-novelpia` with Node 22+; its
+`browser.test.mjs` and `server.test.mjs` cover request validation, ordinary browser
+completion signals, request isolation, authentication, limits, and cancellation without
+using real account credentials. `tests/unit/acquisition/test_novelpia_egress.py` exercises
+CONNECT parsing, destination validation, DNS pinning, and transport limits. These tests
+belong alongside the scraper/client regression tests, not a real ad-viewing loop.
+`tests/unit/modules/acquisition/test_novelpia_browser_client.py` covers bounded busy
+retries, RPC validation, cookie forwarding, and cancellation; the Global adapter suite
+covers one automatic attempt followed by an independent API retry and manual fallback.
+The optional Compose profile also needs a real browser launch through its restricted
+proxy for deployment qualification; a healthy RPC listener alone does not prove that
+Chromium can launch or that a site's ad can finish.
+
 AGY contract/runner/workload suites use `novelwiki/eval/fake_agy.py` and do not consume
 subscription capacity. The authenticated CLI canary is opt-in because it makes real model
 requests:
@@ -185,6 +199,19 @@ connections have a five-second timeout. Its child app clears provider API keys a
 SMTP configuration and disables AGY, OpenAI Codex, and new TTS generation; the browser
 qualification uses cached/provider-free fixtures, including ordinary imports and cached
 audio, without using production provider credentials.
+
+## CI image gates
+
+`.github/workflows/quality.yml` runs backend and frontend checks plus a separate
+**Novelpia browser and egress** job. That job uses Node 22, installs the locked sidecar
+dependencies, runs the provider-free Node tests, and builds both new Docker images.
+The deployment-candidate job requires it alongside backend, frontend, and the production
+web image. CI does not use real Novelpia cookies or attempt live ads.
+
+A successful workflow remains a **web-only** automatic deployment candidate. The local
+deploy agent updates and rolls back only web; browser/proxy updates require their explicit
+Compose rebuild and separate qualification described in the
+[release runbook](release-runbook.md#optional-novelpia-browser-rollout).
 
 ## Backup and restore rehearsal
 
