@@ -3,7 +3,7 @@
 > **Source of truth:** `novelwiki/db/schema.py` — a list of idempotent DDL statements
 > applied on every startup (and via `python -m novelwiki.db.schema`). The normalized DDL
 > is contract-frozen in `tests/contracts/snapshots/schema.json`. This page documents all
-> **50 tables**, grouped by owning module, with the reasoning behind the non-obvious
+> **51 tables**, grouped by owning module, with the reasoning behind the non-obvious
 > columns. Single-writer ownership is enforced by the architecture checker
 > ([../architecture/enforcement.md](../architecture/enforcement.md)).
 
@@ -146,6 +146,19 @@ Reader-proposed status tags for shared novels: `novel_id`, `from_user_id`,
 (`pending`|`accepted`|`rejected`), `reviewed_by`, `reviewed_at`.
 
 ## Acquisition-owned
+
+### `acquisition_account_cookies`
+
+Per-user website authentication, currently `provider = 'novelpia-global'` only.
+Composite PK `(user_id, provider)`, `user_id` FK to `users` with cascade deletion,
+`ciphertext TEXT` (Fernet-encrypted normalized cookie list), `updated_at TIMESTAMPTZ`.
+The key derives from `SESSION_SECRET` and the owning user ID; ciphertext cannot be
+moved to another user or installation and remain usable. Values never live in source
+configuration or job options. A save atomically replaces the user's previous export;
+delete removes the row. Only `TKEY`, `LOGINKEY`, and `USERKEY` are retained from an
+export, alongside cookie domain/path/expiry. Settings responses contain metadata only.
+Rotating `SESSION_SECRET` requires replacing these saved cookies; preserve the secret
+when restoring encrypted rows from backup.
 
 ### `sources`
 

@@ -90,8 +90,10 @@ the server process — no extra processes needed in dev.
 **Via UI:** Library → Add novel → choose a website and paste its supported novel or
 chapter URL, or drop an EPUB on the Import screen. The website choice sets language and
 raw-translation defaults; check them before saving. Raw FuckNovelpia also asks for the
-downloaded archive's ZIP password. The [supported-sites guide](../pipelines/supported-sites.md)
-lists URL formats and source-specific limits.
+downloaded archive's ZIP password. For Novelpia Global, first save your browser cookie
+export under **Settings → Source accounts**; use a private `SESSION_SECRET` rather than
+the development default to enable encrypted cookie storage. The
+[supported-sites guide](../pipelines/supported-sites.md) lists URL formats and source-specific limits.
 
 **Via CLI:**
 

@@ -121,6 +121,13 @@ app.include_router(reading_router, prefix="/api", dependencies=[Depends(current_
 app.include_router(work_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(catalog_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(acquisition_router, prefix="/api", dependencies=[Depends(current_user)])
+
+from novelwiki.modules.acquisition.adapters.inbound.account_cookies_http import (
+    router as account_cookies_router, account_cookie_service_dependency,
+)
+from novelwiki.bootstrap.account_cookies import build_account_cookie_service
+app.include_router(account_cookies_router, prefix="/api", dependencies=[Depends(current_user)])
+app.dependency_overrides[account_cookie_service_dependency] = build_account_cookie_service
 app.include_router(experience_projection_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(codex_router, prefix="/api", dependencies=[Depends(current_user)])
 app.include_router(translation_router, prefix="/api", dependencies=[Depends(current_user)])

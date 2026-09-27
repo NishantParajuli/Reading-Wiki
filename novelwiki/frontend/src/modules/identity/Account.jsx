@@ -10,6 +10,7 @@ import { useAuth } from "../../App.jsx";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, PageHeader } from "../../components/ui.jsx";
 import { useTitle } from "../../lib/hooks.js";
+import { NovelpiaCookies } from "../acquisition/index.js";
 
 export function Account() {
   const { section: sectionParam } = useParams();
@@ -42,6 +43,7 @@ export function Account() {
           {section === "audio" && <AudioSection />}
           {section === "security" && <SecuritySection links={links} reloadLinks={reloadLinks} />}
           {section === "linked" && <LinkedSection links={links} />}
+          {section === "sources" && <NovelpiaCookies />}
           {section === "usage" && <UsageSection />}
         </div>
       </div>

@@ -44,10 +44,10 @@ compares the live application against deterministic JSON snapshots in
 
 | Snapshot | Freezes |
 |---|---|
-| `routes.json` | the full HTTP route inventory (method + path + endpoint name; currently 127 routes) |
+| `routes.json` | the full HTTP route inventory (method + path + endpoint name; currently 130 routes) |
 | `openapi.json` | the normalized OpenAPI document (request/response schemas) |
 | `cli.json`, `cli_help.json` | the 14 CLI commands and every help surface, captured semantically via Typer's `CliRunner` (ANSI styling/wrapping discarded; every word, option, default, and command order kept) |
-| `schema.json` | normalized DDL (which creates all 50 tables) plus the 49-entry `ALL_TABLES` reset list; `auth_rate_limits` omission is frozen by ADR 002 |
+| `schema.json` | normalized DDL (which creates all 51 tables) plus the 50-entry `ALL_TABLES` reset list; `auth_rate_limits` omission is frozen by ADR 002 |
 | `job_states.json` | the three job systems' state machines (generic kinds + active/terminal sets, import trigger/marker/resume map, TTS states) |
 | `responses.json` | representative success/error JSON for every route family |
 | `agy_contracts.json` | AGY manifest schemas and plugin file hashes |

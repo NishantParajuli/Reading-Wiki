@@ -1,10 +1,10 @@
 # HTTP API reference
 
 > **Source of truth:** the contract snapshot `tests/contracts/snapshots/routes.json`
-> (127 routes) and `openapi.json` (schemas). A live instance serves interactive docs at
+> (130 routes) and `openapi.json` (schemas). A live instance serves interactive docs at
 > `/docs` (Swagger) and `/redoc`, and the raw spec at `/openapi.json`. This page is the
 > annotated map: every route family, grouped by owning module, plus the cross-cutting
-> rules. For the literal 125-row method/path/endpoint-name list, use
+> rules. For the literal 130-row method/path/endpoint-name list, use
 > [http-route-inventory.md](http-route-inventory.md).
 
 ## Cross-cutting rules
@@ -130,6 +130,25 @@ string; an empty string clears it. Source text fields also reject null character
 invalid Unicode, while their existing nullable fields remain nullable. Updates validate
 all supplied fields before renumbering chapters. Creating a novel with an invalid nested
 source returns `422` and leaves no novel, source, or library entry behind.
+
+Account cookies: `GET|PUT|DELETE /api/settings/novelpia-cookies` operate only on the
+signed-in user's Novelpia connection. PUT accepts exactly `{"cookies": [...]}`, where
+the array is an EditThisCookie-style export (1–100 entries). The request is capped at
+64 KiB (`413`); malformed JSON or invalid login-cookie data returns `422` without
+echoing credential values. Only `TKEY`, `LOGINKEY`, and `USERKEY` are retained, `TKEY`
+is required, and accepted login-cookie domains are `novelpia.com`, `.novelpia.com`, or
+`global.novelpia.com` with root path `/`. Other cookie names are discarded. PUT replaces
+the saved set; DELETE removes it. Mutation requests require the usual CSRF protection.
+All successful responses contain only `configured`, `usable`, `updated_at`, and
+`cookies: [{name, domain, expires_at}]` and use `Cache-Control: no-store`. `usable`
+means a TKEY exists with no known past storage expiry, not that Novelpia has verified
+the login or granted chapter access. No endpoint returns stored cookie values.
+
+The `global-novelpia` scrape adapter uses the requesting job user's saved cookies,
+including when an admin scrapes another owner's novel. Sources and jobs do not store
+cookie values. Login/ad/unlock requirements fail the scrape with a recovery instruction
+while retaining chapters already saved; completing the requirement on Novelpia and
+retrying resumes ingestion. See [Novelpia setup](../pipelines/supported-sites.md#novelpia-global-account-access).
 
 Upload: `POST /api/import/upload` (≤ `MAX_UPLOAD_MB`) · chunked:
 `POST /api/import/upload/init` → `PUT /api/import/upload/{job}/chunk` (contiguous,

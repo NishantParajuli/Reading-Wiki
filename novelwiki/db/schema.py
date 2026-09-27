@@ -1093,10 +1093,20 @@ DDL_QUERIES = [
       PRIMARY KEY(job_id,chapter)
     );""",
 
+    """
+    CREATE TABLE IF NOT EXISTS acquisition_account_cookies (
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK (provider = 'novelpia-global'),
+      ciphertext TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(user_id, provider)
+    );
+    """,
 ]
 
 # Tables in dependency order (children first) — used by reset_db to drop cleanly.
 ALL_TABLES = [
+    "acquisition_account_cookies",
     "codex_art_chapter_plans",
     "codex_art_plans",
     "codex_art",

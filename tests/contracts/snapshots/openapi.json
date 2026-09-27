@@ -6676,6 +6676,72 @@
         "summary": "Api Set Visibility"
       }
     },
+    "/api/settings/novelpia-cookies": {
+      "delete": {
+        "operationId": "delete_cookies_api_settings_novelpia_cookies_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete Cookies"
+      },
+      "get": {
+        "operationId": "cookie_status_api_settings_novelpia_cookies_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cookie Status"
+      },
+      "put": {
+        "operationId": "replace_cookies_api_settings_novelpia_cookies_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "cookies": {
+                    "description": "EditThisCookie JSON export; credential values are write-only.",
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "cookies"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Replace Cookies"
+      }
+    },
     "/api/tts/jobs/{job_id}": {
       "get": {
         "operationId": "api_tts_job_api_tts_jobs__job_id__get",

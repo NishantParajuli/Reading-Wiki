@@ -534,6 +534,20 @@
 .acct-card { padding: 20px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
 .acct-ok { font-size: var(--text-sm); color: var(--ok); font-weight: 600; }
 .acct-err { font-size: var(--text-sm); color: var(--danger); font-weight: 600; }
+.source-account { min-width: 0; }
+.source-account-heading { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.source-account-heading h2 { margin: 0; font-size: var(--text-xl); }
+.source-account-copy { margin: 0; font-size: var(--text-sm); line-height: 1.6; }
+.source-account-status, .source-cookie-form { display: flex; flex-direction: column; gap: 12px; }
+.source-cookie-form { margin-top: 4px; }
+.source-cookie-form textarea { width: 100%; min-width: 0; resize: vertical; }
+.source-account summary { cursor: pointer; font-weight: 600; font-size: var(--text-sm); }
+.source-cookie-help ol { padding-left: 24px; font-size: var(--text-sm); line-height: 1.7; }
+.source-cookie-dates { margin: 12px 0; display: grid; gap: 8px; font-size: var(--text-sm); }
+.source-cookie-dates > div { display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: space-between; }
+.source-cookie-dates dt { font-weight: 600; }
+.source-cookie-dates dd { margin: 0; color: var(--muted); }
+.source-recovery-links { margin-top: 8px; gap: 8px 16px; font-family: var(--sans); font-size: var(--text-sm); white-space: normal; }
 .acct-quota-top { display: flex; justify-content: space-between; font-size: var(--text-sm); margin-bottom: 4px; }
 
 .accent-swatches { display: flex; flex-wrap: wrap; gap: 8px; }

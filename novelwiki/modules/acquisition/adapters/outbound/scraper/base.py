@@ -198,6 +198,8 @@ class ScrapeContext:
     source_host: str | None = None
     allowed_hosts: set[str] = field(default_factory=set)
     require_same_host: bool = True
+    account_cookies: list[dict] = field(default_factory=list, repr=False)
+    resume_after_checkpoint: bool = False
 
     def _fetch_kwargs(self, headers: dict | None = None) -> dict:
         return {
@@ -252,6 +254,7 @@ class BaseAdapter:
     default_language: str = "en"
     allowed_hosts: list[str] = []
     start_url_hint: str = "Paste the first chapter URL to start reading from."
+    resume_after_checkpoint: bool = False
 
     async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
         raise NotImplementedError()

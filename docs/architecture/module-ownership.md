@@ -10,7 +10,7 @@ when production SQL violates it. Keep this page and that registry in the same ch
 | Identity | `users`, `oauth_accounts`, `sessions`, `email_tokens`, `auth_rate_limits`, `quota_usage` |
 | Catalog | `novels`, `library_entries`, `tag_suggestions` |
 | Reading | `chapters`, `reading_progress`, `bookmarks`, `chapter_overlays`, `contributions` |
-| Acquisition | `sources`, `import_jobs`, `assets` |
+| Acquisition | `sources`, `import_jobs`, `assets`, `acquisition_account_cookies` |
 | Translation | `translation_glossary` |
 | Codex | `chunks`, `entities`, `entity_descriptions`, `entity_aliases`, `identity_links`, `entity_facts`, `relationships`, `events`, `chapter_summaries`, `memory_segments`, `entity_activity`, `entity_state_transitions`, `relationship_state_transitions`, `plot_threads`, `plot_thread_updates`, `extraction_contexts`, `extraction_state`, `wiki_cache`, `query_cache`, `codex_art`, `codex_art_plans`, `codex_art_chapter_plans` |
 | Narration | `tts_jobs`, `chapter_audio` |

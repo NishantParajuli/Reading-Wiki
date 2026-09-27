@@ -8,7 +8,7 @@ store. Pipeline walkthroughs live in
 [../pipelines/file-import.md](../pipelines/file-import.md); this page covers the module's
 shape.
 
-**Owned tables:** `sources`, `import_jobs`, `assets`.
+**Owned tables:** `sources`, `import_jobs`, `assets`, `acquisition_account_cookies`.
 **Owned filesystem roots:** `IMPORT_DIR` (job artifacts, block streams, upload scratch),
 `ASSET_DIR/<novel_id>/` (extracted images; served via access-controlled routes).
 
@@ -50,6 +50,9 @@ shape.
     `GET /api/assets/import-jobs/{job_id}/{filename}` — **access-controlled** streaming
     (Catalog readable-check / job ownership) so private-novel images never leak via a
     public static mount.
+- **`account_cookies_http.py`** — authenticated
+  `GET|PUT|DELETE /api/settings/novelpia-cookies`; accepts a browser export and returns
+  status/expiry metadata only. Cookie values are write-only.
 - **`cli.py`** — `add-novel`, `scrape`, `import`, `import-batch`, `import-series`,
   `import-worker` (Typer transports; logic in application commands).
 - **`worker.py::ImportWorkerAdapter`** — the in-process durable import worker
@@ -60,6 +63,9 @@ shape.
 
 - **`sources.py` / `commands.py`** — source CRUD + scrape orchestration/scheduling
   (idempotency key per novel/source; stops cleanly at premium walls).
+- **`account_cookies.py`** — per-user replacement, removal, and metadata projection
+  behind an encrypted repository. Domain validation keeps only supported Novelpia login
+  cookies and requires `TKEY`; unrelated exported cookies are discarded.
 - **`imports.py`** — upload session state machine (`receiving` → `uploaded`), plan
   and validated metadata-override editing, cost estimation, commit preparation, series
   grouping, and target authorization for single- or multi-volume appends.
@@ -89,7 +95,8 @@ cross-page paragraph rejoining).
 - **`scraper/`** — `base.py` (shared crawl context, chapter contract, parsing helpers,
   and error types), `adapters.py` (the registry and original site
   adapters, including Novel543), `translation_sites.py` (Dreamy Translations, Penguin
-  Squad, Azure Chronicles), `novelpia.py` (current FuckNovelpia PHP reader), and
+  Squad, Azure Chronicles), `novelpia.py` (current FuckNovelpia PHP reader),
+  `global_novelpia.py` (official Novelpia Global account-backed API reader), and
   `raw_archive.py` (Raw FuckNovelpia catalogue downloads, bounded ZIP/EPUB/TXT/HTML text
   extraction, archive password and ordered-section checkpoints). See
   [supported sites](../pipelines/supported-sites.md) for keys, URL formats, and limits.
@@ -99,6 +106,9 @@ cross-page paragraph rejoining).
   detection and source timestamps. `safe_fetch.py` provides the SSRF boundary: HTTP(S)-only, public-IP
   DNS pinning, redirect re-validation, response size caps, same-host binding with
   adapter-declared `allowed_hosts` exceptions.
+- **`account_cookies.py`** — encrypted `acquisition_account_cookies` storage, keyed by
+  user/provider. The bootstrap runtime loads the explicit scrape requester's cookies;
+  the adapter receives them in memory, never through persisted source configuration.
 - **`importer/`** — `parsers/epub.py` (ZIP + lxml; spine + XHTML + images, with external
   XML resources and document entities disabled).
   Missing EPUB headings fall back to NCX/EPUB3 navigation titles; scraper text mode skips

@@ -38,7 +38,7 @@ src/
 │   ├── catalog/             #    Library, Discover, Overview, Manage(+Panels),
 │   │                        #    AddNovelDialog, NovelHeader, tags
 │   ├── reading/             #    Reader(+Parts/Toolbar), TranslationTools, Chapters, toc, queries
-│   ├── acquisition/         #    ImportView(+Parts/History) — upload/plan-review/commit
+│   ├── acquisition/         #    ImportView(+Parts/History), NovelpiaCookies
 │   ├── translation/         #    glossary + translate API bindings
 │   ├── codex/               #    Browser, Entity, Ask, CeilingControl, ChapterIllustrations
 │   ├── narration/           #    audio transport components + queries
@@ -76,6 +76,24 @@ Signed-in, inside `Shell` (desktop sidebar, breadcrumb bar, mobile bottom tabs, 
 | `/u/:username` · `/account(/:section)` · `/admin(/:tab)` | profile · account/quota settings · admin dashboard |
 | `/n/:novelId` (NovelLayout tabs) | `index` Overview · `chapters` · `manage` · `codex` · `codex/e/:entityId` · `ask` |
 | `/n/:novelId/read/:number` | the Reader — **full-bleed, outside Shell** |
+
+**Settings → Source accounts** (`/account/sources`) renders the Acquisition slice's
+`NovelpiaCookies` through its public export. Users paste an EditThisCookie JSON array,
+save or replace their own login cookies, and remove a saved connection. The field is
+never populated from stored values, clears after successful saving/removal, and is not
+persisted in browser storage. The screen shows cookie names/expiry dates and the last
+update, with loading/retry and save-error feedback. Replacement and removal remain
+available when saved status cannot be read, including after an encryption-key change.
+“Cookies saved” reports local storage status, not a live Novelpia login check; the page
+explains that the site's plan
+and ad requirements still apply. Expiry dates are storage deadlines, not guaranteed
+session lifetimes. The account API returns metadata only. Choosing Novelpia Global in
+Add novel or Add source also shows a Source accounts link; it opens in a new tab so the
+unfinished novel/source form is preserved.
+
+Novelpia scrape failures offer recovery links in expanded Jobs errors and Manage health:
+**Open chapter on Novelpia** for an official numeric viewer URL, or **Update Novelpia
+cookies** for login/session errors. Both open another tab so the current screen is kept.
 
 ## Reading room and library
 
@@ -280,6 +298,9 @@ completed build.
   actions, draft protection, keyboard save, failed-write recovery, and contribution/revert
   controls. Editor browser scenarios in `e2e/critical-paths.spec.js` cover desktop/mobile
   space, preview switching, and draft protection.
+- `src/modules/acquisition/NovelpiaCookies.test.jsx` — saved/expired status, JSON
+  validation, successful replacement and field clearing, removal, request failures, and
+  replacement/removal recovery after unreadable saved status.
 - `src/modules/acquisition/ImportView.test.jsx` — commit/OCR polling resumes, previous
   reviews stay hidden while a selected job loads, and a series commit cannot save retained
   edits under a newly selected volume; `src/modules/reading/readerPrefs.test.js`

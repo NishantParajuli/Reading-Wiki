@@ -72,7 +72,7 @@ chapter ranges; `rebuild-bm25` rebuilds the whole novel index.
 | `uv run python -m novelwiki.db.migrate_multiuser` | run the guarded multi-user migration supervised (take a `pg_dump` first) |
 | `uv run python -m novelwiki.agy.worker` | the dedicated AGY host worker (normally via systemd — see [../agy-operator-runbook.md](../agy-operator-runbook.md)) |
 | `uv run python -m novelwiki.openai_codex.worker` | the dedicated ChatGPT Codex App Server worker (normally via systemd — see [../openai-codex-operator-runbook.md](../openai-codex-operator-runbook.md)) |
-| `uv run python try_adapter.py ADAPTER URL [--max N] [--archive-password-env NAME]` | bounded live website diagnostic; prints chapter metadata, creates no jobs and saves no chapter text. Default maximum 2; [details](../pipelines/supported-sites.md#check-a-source-without-importing-it). |
+| `uv run python try_adapter.py ADAPTER URL [--max N] [--archive-password-env NAME] [--cookies-file PATH]` | bounded live website diagnostic; prints chapter metadata, creates no jobs and saves no chapter text. Default maximum 2; [details](../pipelines/supported-sites.md#check-a-source-without-importing-it). |
 
 ## Typical sequences
 
@@ -82,7 +82,9 @@ not a promise about an existing database. Replace example source URLs with
 are system-owned and editable by admins. `--lang` and `--raw` are explicit source settings;
 the CLI does not apply the selected adapter's language default. Encrypted RAW archive
 sources require `config.archive_password`, which the `add-novel` CLI does not expose;
-create those sources through the web form or HTTP API.
+create those sources through the web form or HTTP API. Novelpia Global authentication
+is per-user; the ordinary `scrape` CLI has no requesting user and cannot inherit saved
+account cookies. Start authenticated Novelpia scrapes from the web app or HTTP API.
 
 ```bash
 # Scrape-based novel with codex

@@ -45,9 +45,10 @@ unlock future codex data. Full model:
   covers all three durable-job systems, with **cost estimates before you spend**,
   Discover filters + provenance badges, and a per-novel pipeline **health panel**.
 - **🕸 Scraping** — a novel stitched from several sources (each with a `chapter_offset`
-  mapping onto one **global** chapter sequence); incremental, stops cleanly at
-  paywalls; per-site adapters with [documented URL formats and limits](docs/pipelines/supported-sites.md);
-  SSRF-hardened fetching.
+  mapping onto one **global** chapter sequence); incremental, with clear access-boundary
+  handling; per-site adapters with [documented URL formats and limits](docs/pipelines/supported-sites.md);
+  SSRF-hardened fetching. Novelpia Global supports your saved account cookies through
+  **Settings → Source accounts**, with explicit recovery when login or an ad is required.
 - **📥 File import** — EPUB and digital/scanned PDF as **durable, resumable jobs**:
   multi-file + chunked uploads, local PaddleOCR + Gemini-vision escalation (with a
   cost-confirm gate), PDF paragraph reflow and illustration cleanup, fully editable
@@ -176,7 +177,7 @@ uv run python -m novelwiki.cli --help
 # · import-series · import-worker · rebuild-bm25 · merge · reset-codex · reset-db
 ```
 
-Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (127 routes):
+Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (130 routes):
 [docs/api/http-api.md](docs/api/http-api.md), or `/docs` on a running instance.
 
 ---

@@ -6,7 +6,7 @@
 > [http-api.md](http-api.md). After changing routes, run
 > `uv run python scripts/contracts.py --update` and update this table in the same change.
 
-Current snapshot: **127 routes**. FastAPI-generated documentation routes and the
+Current snapshot: **130 routes**. FastAPI-generated documentation routes and the
 Platform health endpoint are included; the SPA catch-all is not an HTTP contract row.
 
 | Method | Exact path | FastAPI endpoint name |
@@ -129,6 +129,9 @@ Platform health endpoint are included; the SPA catch-all is not an HTTP contract
 | `POST` | `/api/novels/{novel_id}/tag-suggestions/{suggestion_id}/reject` | `api_reject_tag_suggestion` |
 | `POST` | `/api/novels/{novel_id}/translate` | `api_translate` |
 | `PATCH` | `/api/novels/{novel_id}/visibility` | `api_set_visibility` |
+| `DELETE` | `/api/settings/novelpia-cookies` | `delete_cookies` |
+| `GET` | `/api/settings/novelpia-cookies` | `cookie_status` |
+| `PUT` | `/api/settings/novelpia-cookies` | `replace_cookies` |
 | `GET` | `/api/tts/jobs/{job_id}` | `api_tts_job` |
 | `POST` | `/api/tts/jobs/{job_id}/cancel` | `api_cancel_tts_job` |
 | `GET` | `/api/tts/voices` | `api_tts_voices` |

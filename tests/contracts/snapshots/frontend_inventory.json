@@ -15,7 +15,8 @@
       "/api/import/upload/init",
       "/api/import/upload/{}/chunk",
       "/api/import/upload/{}/complete",
-      "/api/novels/{}"
+      "/api/novels/{}",
+      "/api/settings/novelpia-cookies"
     ],
     "modules/admin/api.js": [
       "/api/admin/ai/agy/health",

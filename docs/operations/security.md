@@ -12,8 +12,9 @@
   `COOKIE_SECURE`) carries a random token; the DB stores only its hash; deletion =
   instant revocation (logout, ban, admin "revoke sessions"). Expiry is fixed at creation
   using `SESSION_TTL_DAYS` (30 by default); reads update `last_seen_at`, not expiry.
-  `SESSION_SECRET` signs OAuth state only. Rotating it invalidates in-flight OAuth
-  handshakes; sessions and email tokens use unkeyed SHA-256 hashes and remain valid.
+  `SESSION_SECRET` signs OAuth state and derives per-user website-cookie encryption
+  keys. Rotating it invalidates in-flight OAuth handshakes and requires replacing saved
+  Novelpia cookies; sessions and email tokens use unkeyed SHA-256 hashes and remain valid.
   Revoke the relevant session rows when existing logins must be invalidated.
 - Email verification and password reset use single-use, expiring, hashed tokens.
 - Registration, password changes/resets, and email verification use database transactions
@@ -73,6 +74,29 @@ path, and symlink checks; the scraper does not extract files or stage images. Th
 ZIP password is stored in `sources.config` JSONB and omitted from reader-facing novel source
 metadata. It is not built into the application or included in chapter text/checkpoint URLs.
 Supported formats and limits: [supported sites](../pipelines/supported-sites.md).
+
+### Novelpia Global account cookies
+
+Authenticated Settings routes accept bounded (64 KiB, at most 100 entries) browser
+cookie exports and retain only `TKEY`, `LOGINKEY`, and `USERKEY` from the exact allowed
+Novelpia domains. The export must contain `TKEY`; duplicate login names, non-root
+paths, invalid expiries, and invalid cookie characters are rejected with fixed messages
+that do not echo values. Unrelated analytics, preferences, and temporary CloudFront
+grants are discarded. Metadata-only responses use `Cache-Control: no-store`.
+
+Credentials are encrypted with Fernet in `acquisition_account_cookies`. A
+namespace-separated HMAC-derived key binds encryption to `SESSION_SECRET` and the
+user ID. The known development secret is rejected when saving/opening credentials.
+Database backups therefore require the same private secret to restore these rows;
+changing it requires a fresh cookie export. This protects database-only disclosure,
+not compromise of an application host that also holds its encryption key.
+
+Only the user ID recorded on the scrape job selects credentials. The runner never
+borrows a novel owner's or administrator's saved account, and does not load cookies
+for other adapters. CLI scrapes without a requesting account have no saved credentials.
+Cookie expiry metadata is a local hint, not proof that Novelpia still accepts the
+session. Replacing/deleting cookies affects subsequent loads; it does not revoke an
+already-running request or the remote Novelpia login itself.
 
 ## Upload hardening (Acquisition)
 

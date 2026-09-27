@@ -360,8 +360,9 @@ class Settings(BaseSettings):
 
     # ── Multi-user / auth ──────────────────────────────────────────────────
     # Server-side opaque sessions backed by a DB table; the browser only holds an
-    # httpOnly+Secure cookie. SESSION_SECRET signs OAuth state — set a long random
-    # value in prod (a changed secret invalidates all sessions).
+    # httpOnly+Secure cookie. SESSION_SECRET signs OAuth state and derives encrypted
+    # website-cookie keys. Rotation requires replacing saved website cookies, but
+    # does not revoke Tideglass session rows. Set a long random value in prod.
     SESSION_SECRET: str = "dev-insecure-change-me"
     SESSION_COOKIE: str = "tg_session"
     CSRF_COOKIE: str = "tg_csrf"

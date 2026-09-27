@@ -13,7 +13,7 @@ def chapter(number, content="Synthetic prose."):
                        url=f"https://readhive.org/novel/1/{number}")
 
 
-def setup_run(monkeypatch, chapters, *, resume=None, force_writes=None, config=None, offset=0):
+def setup_run(monkeypatch, chapters, *, resume=None, force_writes=None, config=None, offset=0, exclusive_resume=False):
     source = dict(id=1, novel_id=2, adapter="readhive", start_url="https://readhive.org/novel/1/1",
                   config=config or {}, language="en", is_raw=False, chapter_offset=offset)
     connection = SimpleNamespace(fetchrow=AsyncMock(return_value=source), execute=AsyncMock())
@@ -29,6 +29,7 @@ def setup_run(monkeypatch, chapters, *, resume=None, force_writes=None, config=N
 
     class Adapter:
         allowed_hosts = ["readhive.org"]
+        resume_after_checkpoint = exclusive_resume
 
         async def crawl(self, ctx):
             contexts.append(ctx)
@@ -104,3 +105,37 @@ async def test_cancellation_does_not_record_success(monkeypatch):
         await runner.scrape_source(1, cancel_check=cancel, runtime=runtime)
     runtime.upsert_ingested_chapter.assert_not_awaited()
     connection.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter,user_id,expected", [
+    ("global-novelpia", 23, 23), ("global-novelpia", None, None), ("readhive", 23, None),
+])
+async def test_account_credentials_are_only_loaded_for_explicit_actor_and_adapter(monkeypatch, adapter, user_id, expected):
+    runtime, connection, contexts = setup_run(monkeypatch, [chapter(1)])
+    connection.fetchrow.return_value["adapter"] = adapter
+    cookies = [{"name": "TKEY", "value": "synthetic-secret", "domain": ".novelpia.com", "expires": None}]
+    runtime.account_cookies = AsyncMock(return_value=cookies)
+    await runner.scrape_source(1, runtime=runtime, credential_user_id=user_id)
+    if expected:
+        runtime.account_cookies.assert_awaited_once_with(expected)
+        assert contexts[0].account_cookies == cookies
+        assert "synthetic-secret" not in repr(contexts[0])
+    else:
+        runtime.account_cookies.assert_not_awaited()
+        assert contexts[0].account_cookies == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("force,checkpoint,expected", [
+    (False, "https://readhive.org/novel/1/10", True),
+    (True, "https://readhive.org/novel/1/10", False),
+    (False, None, False),
+])
+async def test_exclusive_resume_adapter_keeps_requested_limit(monkeypatch, force, checkpoint, expected):
+    runtime, _, contexts = setup_run(monkeypatch, [chapter(11), chapter(12)],
+                                     resume=checkpoint, exclusive_resume=True)
+    assert await runner.scrape_source(1, runtime=runtime, max_chapters=1, force=force) == 1
+    assert contexts[0].resume_after_checkpoint is expected
+    assert contexts[0].max_chapters == 1
+    assert runtime.upsert_ingested_chapter.await_count == 1

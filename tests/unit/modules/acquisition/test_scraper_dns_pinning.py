@@ -129,3 +129,50 @@ async def test_concurrent_fetches_keep_their_own_dns_options(monkeypatch):
     assert [options[CurlOpt.RESOLVE] for _, options in session.requests] == [
         ["one.example:443:8.8.8.8"], ["two.example:443:1.1.1.1"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_inspecting_error_payload_keeps_dns_and_size_guards(monkeypatch):
+    async def resolve(_host, _port):
+        return [ipaddress.ip_address("8.8.8.8")]
+
+    class ErrorSession(_Session):
+        @asynccontextmanager
+        async def stream(self, method, url, **kwargs):
+            self.requests.append((url, dict(self.curl_options)))
+            response = _Response()
+            response.status_code = 401
+            yield response
+
+    monkeypatch.setattr(safe_fetch, "_resolve_host", resolve)
+    session = ErrorSession()
+    with pytest.raises(safe_fetch.FetchHTTPError):
+        await safe_fetch.safe_fetch(session, "https://public.example/chapter")
+    response = await safe_fetch.safe_fetch(session, "https://public.example/chapter", raise_for_status=False)
+    assert response.status_code == 401 and response.body == b"chapter text"
+    assert session.requests[-1][1][CurlOpt.RESOLVE] == ["public.example:443:8.8.8.8"]
+    with pytest.raises(safe_fetch.ResponseTooLargeError):
+        await safe_fetch.safe_fetch(session, "https://public.example/chapter", raise_for_status=False, max_bytes=1)
+    assert session.curl_options == {CurlOpt.TIMEOUT: 10}
+
+
+@pytest.mark.asyncio
+async def test_inspecting_error_payload_does_not_allow_redirects_when_disabled(monkeypatch):
+    async def resolve(_host, _port):
+        return [ipaddress.ip_address("8.8.8.8")]
+
+    class RedirectSession(_Session):
+        @asynccontextmanager
+        async def stream(self, method, url, **kwargs):
+            self.requests.append((url, dict(self.curl_options)))
+            response = _Response()
+            response.status_code = 302
+            response.headers = {"Location": "https://other.example/steal"}
+            yield response
+
+    monkeypatch.setattr(safe_fetch, "_resolve_host", resolve)
+    session = RedirectSession()
+    with pytest.raises(safe_fetch.UnsafeUrlError, match="Too many redirects"):
+        await safe_fetch.safe_fetch(session, "https://public.example/chapter", raise_for_status=False,
+                                    max_redirects=0, headers={"Cookie": "TKEY=synthetic"})
+    assert len(session.requests) == 1

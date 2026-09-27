@@ -23,12 +23,20 @@ uv run pytest -q tests
 ```
 
 Website extraction fixtures live under `tests/unit/modules/acquisition/`: existing
-adapters, new translation sites, Novelpia/RAW archives, runner resume/error handling,
+adapters, new translation sites, Novelpia/RAW archives, per-user account-cookie
+validation/encryption and write-only settings, runner resume/error handling,
 and the diagnostic CLI. They use synthetic text and do not make live website requests.
 For a bounded check against an actual website without importing its text or requiring
 PostgreSQL, use `uv run python try_adapter.py ADAPTER URL --max 2`. See
 [supported sites](pipelines/supported-sites.md#check-a-source-without-importing-it) for
-accepted URLs, archive-password input, exit codes, and the scope of live verification.
+accepted URLs, archive-password input, the Novelpia-only `--cookies-file` option, exit
+codes, and the scope of live verification. `test_global_novelpia.py` covers API session
+refresh, multipart prose, chapter navigation, and access-gate failures with synthetic
+responses. Account-cookie tests cover validation, encryption/user isolation, metadata-only
+HTTP responses, and request-user selection; live credentials are never fixtures. The
+PostgreSQL-backed `novelwiki/eval/novelpia_account_tests.py` verifies persistence across
+pool reload, authenticated session/CSRF isolation, encryption-key rotation recovery,
+and deletion with the owning user; run it through the disposable backend test launcher.
 
 AGY contract/runner/workload suites use `novelwiki/eval/fake_agy.py` and do not consume
 subscription capacity. The authenticated CLI canary is opt-in because it makes real model

@@ -102,7 +102,7 @@ against `HEAD` and the living references above before implementation.
 | [data/database-schema](data/database-schema.md) | all 50 created tables, table-by-table column semantics, including the intentional 49-table reset-list quirk |
 | [data/filesystem-layout](data/filesystem-layout.md) | on-disk roots, serving rules, cleanup, backup |
 | [api/http-api](api/http-api.md) | annotated route families + auth/CSRF/error conventions |
-| [api/http-route-inventory](api/http-route-inventory.md) | exact method/path/endpoint-name inventory for all 127 routes |
+| [api/http-route-inventory](api/http-route-inventory.md) | exact method/path/endpoint-name inventory for all 130 routes |
 | [api/cli](api/cli.md) | all 14 commands + module entrypoints + recipes |
 
 ## Frontend

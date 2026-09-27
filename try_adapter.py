@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import json
+from pathlib import Path
 import sys
 
 from curl_cffi.requests import AsyncSession
@@ -41,10 +43,12 @@ def _parser() -> argparse.ArgumentParser:
                         help="maximum chapters to check (default: 2)")
     parser.add_argument("--archive-password-env", metavar="NAME",
                         help="read an archive password from this environment variable")
+    parser.add_argument("--cookies-file", metavar="PATH",
+                        help="read a local Novelpia Global cookie JSON export (never printed)")
     return parser
 
 
-async def probe(adapter_name: str, url: str, maximum: int, config: dict) -> int:
+async def probe(adapter_name: str, url: str, maximum: int, config: dict, *, account_cookies=None) -> int:
     adapter = get_adapter(adapter_name)
     source_host = host_from_url(url)
     allowed_hosts = parse_allowed_hosts(settings.SCRAPER_ALLOWED_HOST_OVERRIDES)
@@ -60,6 +64,7 @@ async def probe(adapter_name: str, url: str, maximum: int, config: dict) -> int:
             source_host=source_host,
             allowed_hosts=allowed_hosts,
             require_same_host=settings.SCRAPER_REQUIRE_SAME_HOST,
+            account_cookies=account_cookies or [],
         )
         try:
             async for chapter in adapter.crawl(context):
@@ -83,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     config = {}
     password = None
+    cookies = []
     if args.archive_password_env:
         password = os.environ.get(args.archive_password_env)
         if not password:
@@ -90,7 +96,20 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         config["archive_password"] = password
     try:
-        asyncio.run(probe(args.adapter, args.url, args.maximum, config))
+        cookies = []
+        if args.cookies_file:
+            if args.adapter != "global-novelpia":
+                raise ValueError("Cookie files are supported only for global-novelpia.")
+            from novelwiki.modules.acquisition.domain.account_cookies import normalize_novelpia_cookies
+            try:
+                with Path(args.cookies_file).open("rb") as cookie_file:
+                    encoded = cookie_file.read(65537)
+                if len(encoded) > 65536:
+                    raise ValueError()
+                cookies = normalize_novelpia_cookies(json.loads(encoded))
+            except Exception:
+                raise ValueError("Could not read a valid Novelpia cookie export (maximum 64 KiB).") from None
+        asyncio.run(probe(args.adapter, args.url, args.maximum, config, account_cookies=cookies))
     except KeyboardInterrupt:
         print("Check cancelled.", file=sys.stderr)
         return 130
@@ -98,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
         message = str(exc)
         if password:
             message = message.replace(password, "[redacted]")
+        for cookie in cookies:
+            message = message.replace(cookie["value"], "[redacted]")
         print(f"Check failed: {message}", file=sys.stderr)
         return 1
     return 0

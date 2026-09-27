@@ -182,7 +182,7 @@ screen or novel metadata.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `SESSION_SECRET` | `dev-insecure-change-me` | HMAC-signs OAuth state; use a long random value in prod. Rotation invalidates in-flight OAuth state, not stored sessions or email tokens; revoke session rows to sign users out |
+| `SESSION_SECRET` | `dev-insecure-change-me` | HMAC-signs OAuth state and derives user-bound Fernet keys for Novelpia cookie storage; use a long random value in prod. The development default cannot store website cookies. Rotation invalidates in-flight OAuth state and requires replacing saved Novelpia cookies, but does not invalidate Tideglass sessions or email tokens; preserve this secret with encrypted-credential backups |
 | `SESSION_COOKIE` / `CSRF_COOKIE` | `tg_session` / `tg_csrf` | |
 | `SESSION_TTL_DAYS` | 30 | |
 | `ALLOWED_ORIGINS` | `http://localhost:8001,http://localhost:8000` | explicit CORS list (credentialed requests forbid `*`) |

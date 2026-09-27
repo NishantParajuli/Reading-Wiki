@@ -4,6 +4,9 @@ import {
 
 const novel = (id) => `${API_BASE}/novels/${id}`;
 export const acquisitionApi = {
+  novelpiaCookies: () => getJSON(`${API_BASE}/settings/novelpia-cookies`),
+  updateNovelpiaCookies: (cookies) => putJSON(`${API_BASE}/settings/novelpia-cookies`, { cookies }),
+  deleteNovelpiaCookies: () => delJSON(`${API_BASE}/settings/novelpia-cookies`),
   adapters: () => getJSON(`${API_BASE}/adapters`),
   addSource: (id, body) => postJSON(`${novel(id)}/sources`, body),
   updateSource: (id, sourceId, body) => req("PATCH", `${novel(id)}/sources/${sourceId}`, body),

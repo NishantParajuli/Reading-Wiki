@@ -205,6 +205,7 @@ async def safe_fetch(
     max_bytes: int | None = None,
     max_redirects: int = _DEFAULT_MAX_REDIRECTS,
     impersonate: str | None = "chrome",
+    raise_for_status: bool = True,
 ) -> SafeFetchResponse:
     current_url = url
     timeout = float(timeout if timeout is not None else settings.SCRAPER_TIMEOUT_SECONDS)
@@ -236,7 +237,7 @@ async def safe_fetch(
                 current_url = urljoin(validated.url, location)
                 continue
 
-            if resp.status_code >= 400:
+            if raise_for_status and resp.status_code >= 400:
                 raise FetchHTTPError(resp.status_code, validated.url)
 
             body = await _read_limited(resp, max_bytes)

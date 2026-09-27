@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { acquisitionApi } from "../acquisition/api.js";
+import { NovelpiaRecoveryLinks } from "../acquisition/index.js";
 import { catalogApi } from "./api.js";
 import { experienceApi } from "../experience/api.js";
 import { readingApi } from "../reading/api.js";
@@ -183,7 +184,10 @@ export function HealthPanel({ novelId, ttsVoices }) {
         )}
         {hp.source_last_scraped && <div>• Source last scraped {new Date(hp.source_last_scraped).toLocaleString()}.</div>}
         {(hp.recent_errors || []).slice(0, 3).map((e, i) => (
-          <div key={i} className="health-err" title={e.error}>• {e.kind} error: {(e.error || "").slice(0, 80)}</div>
+          <div key={i} className="health-err" title={e.error}>
+            • {e.kind} error: {(e.error || "").slice(0, 80)}
+            <NovelpiaRecoveryLinks kind={e.kind} error={e.error} />
+          </div>
         ))}
       </div>
     </div>

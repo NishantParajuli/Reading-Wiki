@@ -590,6 +590,21 @@
     "path": "/api/novels/{novel_id}/visibility"
   },
   {
+    "method": "DELETE",
+    "name": "delete_cookies",
+    "path": "/api/settings/novelpia-cookies"
+  },
+  {
+    "method": "GET",
+    "name": "cookie_status",
+    "path": "/api/settings/novelpia-cookies"
+  },
+  {
+    "method": "PUT",
+    "name": "replace_cookies",
+    "path": "/api/settings/novelpia-cookies"
+  },
+  {
     "method": "GET",
     "name": "api_tts_job",
     "path": "/api/tts/jobs/{job_id}"
