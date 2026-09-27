@@ -24,7 +24,14 @@ async def illustration_service_dependency():
 
 
 class GenerateIllustrations(BaseModel):
-    count: int = Field(default=1, ge=1, le=3)
+    count: int | None = Field(default=None, ge=1, le=3)
+    style: Literal["luminous", "celestial", "ink"] = "luminous"
+    force: bool = False
+
+
+class GenerateIllustrationRange(BaseModel):
+    from_chapter: float = Field(ge=0, allow_inf_nan=False)
+    to_chapter: float = Field(ge=0, allow_inf_nan=False)
     style: Literal["luminous", "celestial", "ink"] = "luminous"
     force: bool = False
 
@@ -106,6 +113,33 @@ async def illustration_image(
                 "Cache-Control": "private, no-store",
                 "X-Content-Type-Options": "nosniff",
             },
+        )
+    except ApplicationError as exc:
+        translate_error(exc)
+
+
+@router.get("/novels/{novel_id}/illustrations")
+async def illustration_range_info(
+    novel_id: int,
+    user=Depends(current_user),
+    service=Depends(illustration_service_dependency),
+):
+    try:
+        return await service.range_info(novel_id, Principal.from_user(user))
+    except ApplicationError as exc:
+        translate_error(exc)
+
+
+@router.post("/novels/{novel_id}/illustrations")
+async def generate_illustration_range(
+    novel_id: int,
+    payload: GenerateIllustrationRange,
+    user=Depends(current_user),
+    service=Depends(illustration_service_dependency),
+):
+    try:
+        return await service.generate_range(
+            novel_id, Principal.from_user(user), **payload.model_dump()
         )
     except ApplicationError as exc:
         translate_error(exc)

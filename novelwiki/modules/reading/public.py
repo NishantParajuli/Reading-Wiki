@@ -133,6 +133,10 @@ class ReadingNarrationApi(Protocol):
 
 
 class ReadingCodexApi(Protocol):
+    async def illustration_snapshot(self, novel_id: int, chapter: float) -> dict | None: ...
+    async def previous_illustration_context(
+        self, novel_id: int, chapter: float, limit: int, max_chars: int
+    ) -> list[dict]: ...
     async def chapter_snapshot(self, novel_id: int, chapter: float) -> dict | None: ...
     async def chapter_numbers(
         self, novel_id: int, start: float | None = None, end: float | None = None,

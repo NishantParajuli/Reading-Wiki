@@ -50,7 +50,7 @@ is a convenience to look *backwards*; it cannot unlock unread future chapters.
 | **Forward-only extraction** | chapters are extracted ascending; facts/transitions are chapter-stamped; chapter/checkpoint/volume memory carries exact through/source hashes and contains only grounded children ≤ K |
 | **Bounded context** | extraction sees selected pre-chapter entities/current state, three recent summaries, completed hierarchical memory, relevant open threads, and current chunks; the full entity table is never put in a prompt |
 | **Recap** | same trusted ceiling, same cache keying (`(novel, ceiling)`), same filtered evidence |
-| **Illustrations** | planning context and reusable character sheets are bounded by the target chapter; gallery and authenticated PNG routes enforce the allowed reading ceiling and source freshness |
+| **Illustrations** | planning context and reusable character sheets are bounded by the target chapter; Manage can prepare future chapters without advancing progress, while gallery and authenticated PNG routes retain the allowed reading ceiling and source freshness |
 
 ## Adjacent integrity guards (same philosophy)
 

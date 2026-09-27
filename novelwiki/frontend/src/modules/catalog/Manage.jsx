@@ -37,6 +37,8 @@ import {
   MetadataCard, NovelJobs, TagSuggestionsInbox,
 } from "../../modules/catalog/ManagePanels.jsx";
 
+import { IllustrationRangePanel } from "../codex/index.js";
+
 import { AddSourceForm } from "./AddSourceForm.jsx";
 
 export function Manage() {
@@ -301,6 +303,8 @@ export function Manage() {
             </p>
           </div>
         </div>
+
+        <IllustrationRangePanel key={novelId} novelId={novelId} novel={novel} />
 
         {/* Sharing + tags */}
         <div className="card manage-card">

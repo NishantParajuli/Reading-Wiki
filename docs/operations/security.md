@@ -97,9 +97,11 @@ HTML is sanitized (nh3). Eval:
   through `ASK_REQUIRE_VERIFIED` and `ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED`.
 - Provider budgets: persistent Gemini daily counter; jobs pause (`ocr_paused`,
   `waiting_provider`) instead of hammering providers.
-- Illustration generation is explicitly requested, bounded to one to three scenes and
-  at most four new character sheets, and governed by subscription grants/concurrency and
-  provider capacity. It does not reserve a monthly Codex-build unit or permit metered API
+- Illustration generation is explicitly requested and governed by subscription
+  grants/concurrency and provider capacity. AI chooses one to three scenes and at most
+  four new character sheets per chapter. A Manage request may include up to 1,000 translated
+  story chapters, processed sequentially in one durable job. Owner/admin preparation ahead
+  of reading does not advance trusted progress or bypass image-read ceilings. It does not reserve a monthly Codex-build unit or permit metered API
   fallback. Reading/listing art never starts a provider turn.
 - Estimates before spend (`/cost-estimate`), explicit reserve/refund accounting with
   exactly-once settlement. Eval: `ai_cost_controls_tests.py`,

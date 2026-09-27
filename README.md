@@ -66,10 +66,10 @@ unlock future codex data. Full model:
   hybrid retrieval (BM25 ⊕ pgvector → RRF → rerank) → agentic **Ask** with inline
   citations; entity profiles, timelines, identity-reveal banners; one-click no-spoiler
   **recap** — all bounded by the same trusted ceiling and cached per ceiling.
-- **Chapter illustrations** *(opt-in)* — one to three scene images with reusable
-  character reference sheets, generated through the connected Codex subscription.
-  Choose Luminous, Celestial, or Ink styling; galleries follow chapter access and source
-  freshness. [Workflow and limits](docs/pipelines/chapter-illustrations.md).
+- **Chapter illustrations** *(opt-in)* — AI chooses one to three scenes per chapter
+  and places them throughout the prose, using reusable character sheets and the connected
+  Codex subscription. Prepare a chapter range ahead of reading from Manage. Choose
+  Luminous, Celestial, or Ink styling; images follow chapter access and source freshness. [Workflow and limits](docs/pipelines/chapter-illustrations.md).
 - **⚙️ Durable pipelines** — scrapes, imports, codex builds, translation batches, and
   narration survive restarts as database-backed jobs with dedupe and cooperative
   cancellation. Generic Work jobs and imports use claim leases and heartbeats; the TTS
@@ -85,7 +85,7 @@ unlock future codex data. Full model:
 **A modular monolith, organized as vertical slices, with Clean/Hexagonal boundaries
 inside each module.** One FastAPI process + one PostgreSQL database + one React SPA —
 but the code is partitioned into ten business modules that each own their tables (all
-49 have exactly one writer), expose a small `public.py` contract, and receive every
+50 have exactly one writer), expose a small `public.py` contract, and receive every
 cross-module capability by injection from a single composition root. Eight named
 workflows coordinate cross-module writes: seven use an opaque unit-of-work for one DB
 transaction; initial AI scheduling uses guarded compensation by explicit ADR. Boundaries are
@@ -176,7 +176,7 @@ uv run python -m novelwiki.cli --help
 # · import-series · import-worker · rebuild-bm25 · merge · reset-codex · reset-db
 ```
 
-Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (125 routes):
+Reference + recipes: [docs/api/cli.md](docs/api/cli.md). The HTTP API (127 routes):
 [docs/api/http-api.md](docs/api/http-api.md), or `/docs` on a running instance.
 
 ---

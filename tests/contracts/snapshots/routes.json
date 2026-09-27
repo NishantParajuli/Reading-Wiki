@@ -491,6 +491,16 @@
   },
   {
     "method": "GET",
+    "name": "illustration_range_info",
+    "path": "/api/novels/{novel_id}/illustrations"
+  },
+  {
+    "method": "POST",
+    "name": "generate_illustration_range",
+    "path": "/api/novels/{novel_id}/illustrations"
+  },
+  {
+    "method": "GET",
     "name": "illustration_image",
     "path": "/api/novels/{novel_id}/illustrations/{art_id}/image"
   },

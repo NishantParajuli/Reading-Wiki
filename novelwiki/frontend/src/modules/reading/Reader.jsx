@@ -328,17 +328,15 @@ export function Reader() {
                 <Button variant="ghost" icon="refresh" onClick={() => setReloadKey(k => k + 1)}>Retry</Button>
               </div>
             </div>
-          ) : preparedNarration.kind === "rich" ? (
+          ) : <ChapterIllustrations novelId={novelId} chapter={number} personalVersion={!!(ch.overlay || ch.overlay_conflict)}>
+          {scenes => preparedNarration.kind === "rich" ? (
             // Imported chapters ship sanitized rich HTML (server-side nh3).
-            <RichContent html={preparedNarration.html} />
+            <RichContent html={preparedNarration.html} illustrations={scenes} />
           ) : (
             <NarratedProse prepared={preparedNarration}
-                           justify={prefs.justify} indent={prefs.indent} />
+                           justify={prefs.justify} indent={prefs.indent} illustrations={scenes} />
           )}
-
-          {(ch.content || ch.rich_html) && (
-            <ChapterIllustrations novelId={novelId} chapter={number} />
-          )}
+          </ChapterIllustrations>}
 
           {(ch.content || ch.rich_html) && (
             <EndOfChapterCard ch={ch} novelId={novelId}

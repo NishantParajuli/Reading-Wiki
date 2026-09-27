@@ -53,6 +53,37 @@ class PostgresReadingCodexGateway:
             )
         return result
 
+    async def illustration_snapshot(self, novel_id: int, chapter: float) -> dict | None:
+        """Art needs one shared chapter, without expanding the novel's chapter index."""
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                "SELECT title,content,COALESCE(kind,'chapter') kind FROM chapters "
+                "WHERE novel_id=$1 AND number=$2;",
+                novel_id, chapter,
+            )
+        return dict(row) if row else None
+
+    async def previous_illustration_context(
+        self, novel_id: int, chapter: float, limit: int, max_chars: int
+    ) -> list[dict]:
+        """Read only bounded tails of preceding narrative chapters for art continuity."""
+        limit, max_chars = min(3, max(0, limit)), min(9000, max(0, max_chars))
+        if not limit or not max_chars:
+            return []
+        per_chapter = max_chars // limit
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                "SELECT number AS chapter,left(COALESCE(title,''),200) AS title,"
+                "right(content,$4) AS text,"
+                "encode(sha256(convert_to(COALESCE(title,'') || E'\\n' || content,'UTF8')),'hex') AS source_hash "
+                "FROM chapters "
+                "WHERE novel_id=$1 AND number<$2 AND content ~ '[^[:space:]]' "
+                "AND COALESCE(kind,'chapter')=ANY($5::text[]) "
+                "ORDER BY number DESC LIMIT $3;",
+                novel_id, chapter, limit, per_chapter, ["chapter", "interlude"],
+            )
+        return [dict(row) for row in rows]
+
     async def chapter_numbers(
         self, novel_id: int, start: float | None = None, end: float | None = None,
         require_content: bool = False, narrative_only: bool = False,

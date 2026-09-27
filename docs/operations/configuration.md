@@ -287,7 +287,7 @@ owned by the dedicated worker user, not an application API key. See the
 | `OPENAI_CODEX_WORKER_HEALTH_TTL_SECONDS` | 90 | heartbeat staleness for capabilities/admin health |
 
 Chapter illustrations share the `codex_extract` grant and these enable switches, but
-their planner/rendering model is fixed to `gpt-6-luna` with `max` effort. The ordinary
+their context-decision/planner/rendering model is fixed to `gpt-6-luna` with `max` effort. The ordinary
 translation/extraction model settings do not change it. The renderer checks the model's
 MAX capability before a turn; no alternate model or API fallback is selected. Each image
 is bounded to 16 MiB/24 million pixels and stored in PostgreSQL, while temporary image

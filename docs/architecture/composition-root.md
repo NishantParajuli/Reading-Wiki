@@ -131,8 +131,10 @@ variant (`bootstrap/ai_execution_worker.py`); Codex/Translation reuse their shar
 handlers with either the AGY CLI runtime or the OpenAI Codex App Server runtime injected.
 The OpenAI Codex registry additionally binds `codex_illustrate` to
 `bootstrap/illustrations.py::execute_illustration_job`, which injects Reading snapshots,
-Codex storage, Work progress/cancellation, and AI Execution's native renderer. The API
-and AGY registries have no illustration handler.
+Codex storage, Work progress/cancellation, and AI Execution's native renderer. It dispatches
+single-chapter requests directly and range requests through the sequential batch worker,
+using chapter-scoped stores within the shared job. The API and AGY registries have no
+illustration handler.
 
 ## 5. Runtime bundles (`bootstrap/*_runtime.py`, `*_worker.py`)
 

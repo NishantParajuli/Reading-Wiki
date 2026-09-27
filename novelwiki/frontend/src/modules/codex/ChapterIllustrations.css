@@ -42,3 +42,15 @@
   .chapter-art-fields .btn { width: 100%; }
   .chapter-illustrations-toggle { font-size: 22px; }
 }
+
+.chapter-art-inline { margin-block: var(--space-6) var(--space-7); color: var(--ink); font: 400 var(--text-sm)/1.5 var(--sans); text-align: left; }
+.chapter-art-inline img { aspect-ratio: 3 / 2; }
+.reader-text .chapter-art-inline figcaption p { margin: 4px 0 0; text-indent: 0; text-align: left; color: var(--muted); }
+.reader-text .chapter-art-inline figcaption p::first-letter { all: unset; }
+.chapter-art-inline + .chapter-art-inline { margin-top: var(--space-6); }
+.illustration-range > p { max-width: 75ch; margin: 0 0 var(--space-5); }
+.illustration-range .chapter-art-fields label { flex: 1 1 130px; }
+.chapter-art-fields input[type="number"] { width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: 400 var(--text-md)/1.4 var(--sans); }
+.chapter-art-fields input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.illustration-range-replace { display: flex; align-items: start; gap: 9px; margin-top: 18px; font-size: var(--text-sm); }
+.illustration-range-replace input { flex-shrink: 0; margin-top: 3px; accent-color: var(--accent); }

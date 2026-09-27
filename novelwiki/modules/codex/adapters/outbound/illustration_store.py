@@ -16,13 +16,18 @@ class IllustrationStore:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""WITH latest_references AS (
-                    SELECT DISTINCT ON (style,character_key) id
+                    SELECT DISTINCT ON (style,character_key) id,created_at
                     FROM codex_art WHERE novel_id=$1 AND chapter<=$2 AND kind='reference'
                     ORDER BY style,character_key,chapter DESC,created_at DESC,id DESC
+                ), latest_scenes AS (
+                    SELECT id FROM codex_art WHERE novel_id=$1 AND chapter=$2 AND kind='scene'
+                    ORDER BY created_at DESC,id DESC LIMIT 100
                 )
                 SELECT {fields} FROM codex_art WHERE novel_id=$1
-                  AND ((kind='scene' AND chapter=$2) OR id IN (SELECT id FROM latest_references))
-                ORDER BY created_at DESC,id DESC LIMIT 100;""",
+                  AND (id IN (SELECT id FROM latest_scenes) OR id IN (
+                    SELECT id FROM latest_references ORDER BY created_at DESC,id DESC LIMIT 100
+                  ))
+                ORDER BY created_at DESC,id DESC;""",
                 novel_id,
                 chapter,
             )
@@ -116,25 +121,41 @@ class IllustrationStore:
                 )
         return dict(row)
 
-    async def context(self, novel_id, chapter):
+    async def context(self, novel_id, chapter, *, preceding, max_chars):
+        """Prefer short Codex summaries; use bounded prose tails when none exist."""
+        budget = min(9000, max(0, max_chars))
+        preceding = [row for row in preceding if float(row["chapter"]) < chapter][:3]
+        if not preceding or not budget:
+            return {"previous_chapters": []}
+        numbers = [float(row["chapter"]) for row in preceding]
         async with self.pool.acquire() as conn:
             summaries = await conn.fetch(
-                "SELECT chapter,summary FROM chapter_summaries WHERE novel_id=$1 AND chapter<$2 ORDER BY chapter DESC LIMIT 8;",
+                "SELECT chapter,left(summary,$3) AS summary FROM chapter_summaries "
+                "WHERE novel_id=$1 AND chapter=ANY($2::numeric[]);",
                 novel_id,
-                chapter,
+                numbers,
+                budget // len(preceding),
             )
-            facts = await conn.fetch(
-                """SELECT e.canonical_name,f.content FROM entity_facts f
-                JOIN entities e ON e.id=f.entity_id AND e.novel_id=f.novel_id
-                WHERE f.novel_id=$1 AND f.chapter<=$2 AND e.first_seen_chapter<=$2
-                AND e.type='character' ORDER BY f.chapter DESC,f.id DESC LIMIT 120;""",
-                novel_id,
-                chapter,
+        by_number = {float(row["chapter"]): row["summary"] for row in summaries}
+        result = []
+        for row in preceding:
+            summary = by_number.get(float(row["chapter"]))
+            text = summary or row.get("text", "")
+            allowance = budget // (len(preceding) - len(result))
+            text = (
+                text[:allowance] if summary else text[-allowance:] if allowance else ""
             )
-        return {
-            "recent_summaries": [dict(r) for r in summaries],
-            "character_facts": [dict(r) for r in facts],
-        }
+            result.append(
+                {
+                    "chapter": float(row["chapter"]),
+                    "title": row.get("title", "")[:200],
+                    "kind": "summary" if summary else "chapter_tail",
+                    "source_hash": row.get("source_hash"),
+                    "text": text,
+                }
+            )
+            budget -= len(text)
+        return {"previous_chapters": list(reversed(result))}
 
     async def for_job(self, job_id):
         async with self.pool.acquire() as conn:
@@ -148,6 +169,15 @@ class IllustrationStore:
         async with self.pool.acquire() as conn:
             data = await conn.fetchval(
                 "SELECT plan FROM codex_art_plans WHERE job_id=$1;", job_id
+            )
+        return json.loads(data) if isinstance(data, str) else data
+
+    async def range_plan(self, job_id, chapter):
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchval(
+                "SELECT plan FROM codex_art_chapter_plans WHERE job_id=$1 AND chapter=$2;",
+                job_id,
+                chapter,
             )
         return json.loads(data) if isinstance(data, str) else data
 

@@ -1,15 +1,16 @@
 # Chapter illustrations and character sheets
 
 Chapter illustrations are an optional Codex feature. An eligible owner or administrator
-can request **one to three scene images for a chapter**, with up to four new character
-reference sheets when the chosen scenes need them. This is a per-chapter image count,
-not a restriction to chapters 1–3. Reading, importing, and opening the illustration
-gallery do not start image generation.
+can request illustrations for one chapter or prepare a chapter range from Manage.
+**The AI chooses one to three scene images per chapter**, with up to four new character
+reference sheets when the chosen scenes need them. Reading, importing, and opening the
+illustration gallery do not start image generation.
 
 ## Reader workflow
 
-After the chapter prose, open **Illustrate this chapter**. Choose the number of scenes
-and one of three styles, then select **Generate illustrations**:
+Open **Illustrate this chapter**, choose an art style, then select
+**Generate illustrations**. The current chapter is already selected; there is no image-count
+control. Luna chooses how many distinct moments warrant an image:
 
 | Style | Direction |
 |---|---|
@@ -17,11 +18,33 @@ and one of three styles, then select **Generate illustrations**:
 | `celestial` | pearlescent pastel light, lavender/peach atmosphere, delicate linework |
 | `ink` | refined ink linework, navy shadows, amber light, dramatic contrast |
 
-The default request is one Luminous scene. The gallery has full-size scene links,
-expandable character sheets, and design notes. Generated artwork is an interpretation:
+The default style is Luminous. Scene images appear within the chapter at their planned
+narrative beats: before the opening prose, after an anchored passage, or at the end.
+Placement after a quotation uses the containing paragraph/block boundary rather than
+splitting prose. If an anchor is missing or ambiguous in the displayed text, the reader
+omits that inline image instead of guessing its location. Older images without placement
+metadata appear at the end. Character sheets and design notes remain in the illustration
+controls; scenes have full-size image links. Generated artwork is an interpretation:
 unspecified visual details are artistic choices, not new canonical story facts.
 **Generate again** explicitly requests another set. Running work reports its real stage
 and links to the Jobs center; the reader can continue reading while it runs.
+
+## Prepare a chapter range
+
+In **Manage → Illustrate ahead**, enter **From chapter** and **Through chapter**, choose
+an art style, then select **Illustrate chapters**. For example, 25 through 100 prepares
+the translated story chapters in that inclusive range. It includes interludes and
+fractional chapter numbers, skips missing/untranslated chapters and non-story material,
+and accepts at most 1,000 eligible chapters per request. Every included chapter must
+contain no more than 150,000 characters of shared text.
+
+The request schedules one durable job. Chapters run in order, allowing later scenes to
+reuse character sheets and chapter-scoped name revisions established earlier in the
+batch. Existing complete, current art in the selected style is skipped by default;
+**Generate again for chapters that already have this art style** opts into replacements.
+Leaving Manage does not stop generation. Progress and cancellation are available in Jobs;
+completed art is retained if later work fails or is canceled. Range progress shows chapter
+numbers and generic phases, avoiding future character names or scene titles.
 
 Generation requires editable novel access, an active account (verified email for
 non-admins), the existing
@@ -43,8 +66,10 @@ A chapter without shared text cannot be illustrated.
 Both gallery and image requests enforce novel readability and the server's allowed
 chapter ceiling. Every account, including owners/admins, uses the same trusted-progress
 ceiling, with the first stored chapter as the fallback when no progress exists. The requested
-chapter bounds the planner's story text, earlier summaries, character facts, and reusable
-reference sheets. Future character designs are excluded even if already generated.
+chapter bounds the planner's story text, requested earlier context, and reusable
+reference sheets. Manage may schedule future chapters before they are read, but doing so
+does not advance reading progress or grant access to the resulting gallery/PNG bytes.
+Future character designs are excluded even if already generated.
 The reference catalog keeps the latest story-chapter revision per character key, using
 creation time to break ties within a chapter. It prioritizes names, saved aliases, or
 keys mentioned in the current chapter before its 100-identity cap. Matching is
@@ -67,6 +92,8 @@ not a background rename scan or synchronization with Codex entity edits.
 
 Each image records a SHA-256 of its source chapter title and content. Changed source
 text makes old artwork unavailable instead of displaying an outdated interpretation.
+Selected prior-context chapters also retain their source hashes; edits to those chapters
+invalidate dependent scenes and character sheets, including on a resumed job.
 Reference sheets keep stable per-novel character keys and a style; a scene records the
 exact reference image IDs used for its characters. Reuse respects chapter boundaries and
 source validity. Changing an upstream reference's source also hides scenes that used
@@ -80,40 +107,59 @@ exists; import replacement invalidates art/plans from the replaced chapter onwar
 
 `POST /api/novels/{id}/chapters/{chapter}/illustrations` schedules a Work
 `codex_illustrate` job explicitly on `openai_codex`. The request contains
-`{count: 1..3, style: "luminous"|"celestial"|"ink", force: false}`. The active-job
-identity includes requester, novel, chapter, style, scene count, and source hash. The OpenAI Codex host worker
-claims the job; API and AGY workers do not execute it.
+`{count: null, style: "luminous"|"celestial"|"ink", force: false}`. Omitted or
+`null` count lets the AI choose one to three scenes; explicit integers 1–3 remain
+supported for legacy clients and saved jobs. The active-job
+identity includes requester, novel, chapter, style, scene count, and source hash. The
+OpenAI Codex host worker claims the job; API and AGY workers do not execute it.
 
-The pipeline runs:
+`POST /api/novels/{id}/illustrations` schedules one range job with
+`{from_chapter: 25, to_chapter: 100, style: "luminous", force: false}`. Its options
+snapshot the actual eligible chapter numbers and source hashes. A resume checks those
+sources before continuing; changed/deleted chapter text requires a fresh request. Each
+chapter has its own saved art-plan row and prefixed image slots under the parent job.
+The small parent record identifies the range; child plans are loaded individually so
+each render does not read or rewrite every earlier chapter's plan.
 
-1. Verify the chapter source and check cancellation.
-2. Ask **`gpt-6-luna` at `max` reasoning** for a strict JSON art plan. Inputs include
-   the chapter text, bounded existing Codex context, and prior reference descriptions.
-   The renderer checks that the account exposes `gpt-6-luna` and advertises `max`
-   reasoning before starting a turn. This planning turn has no tools. The host validates the requested scene count,
-   character keys, exact scene evidence quotations, and proposed name-update evidence
-   and name occurrences from this chapter.
-3. Persist the plan and its chosen reference revisions. A retry resumes that plan
-   instead of inventing a different set of scenes.
-4. Checkpoint name revisions using the existing sheet bytes, then render missing new
-   character sheets and the scenes with the selected
-   character images attached. Native image generation runs through a separate App
-   Server turn; it does not relax the tool-free translation/extraction runner.
-   The host accepts the first completed image event and closes that session, preventing
-   a follow-up redraw from turning one requested image into additional work.
-5. Check source freshness/cancellation around rendering and persist validated PNG bytes
-   with prompts, discretionary design notes, evidence, reference IDs, model/effort, and
-   job-slot provenance. Unique `(job_id, slot)` records keep completed work reusable on
-   retry. A deleted/invalidated plan prevents late image writes from recreating its art.
+For each chapter, the pipeline runs:
+
+1. Verify the shared chapter source and check cancellation.
+2. Ask **`gpt-6-luna` at `max` reasoning** whether preceding context is needed. This
+   tool-free turn sees only the current chapter, its title/number, and character/word
+   counts. It chooses **zero to three previous chapters** and a total text budget of
+   **zero to 9,000 characters**. Zero chapters requires a zero budget. The prompt favors
+   no history for long, self-contained chapters and a small budget for direct continuations.
+3. Only after that decision, retrieve the selected number of preceding translated story
+   chapters. Prefer their Codex summaries; where absent, use bounded tails of their shared
+   prose. Divide the budget across those chapters and send them in story order. The budget
+   limits context text; short chapter titles and JSON metadata are additional. This replaces
+   the previous fixed summary/fact bundle: no broad character-fact dump is loaded.
+4. Ask Luna/MAX for the art plan using the current chapter, the selected context, and
+   eligible character-reference descriptions. It chooses one to three scenes unless a
+   legacy request fixes the count. The host validates character keys, exact scene evidence,
+   name-update evidence/name occurrences, and placement. An `after` placement must quote
+   a unique exact 12–600 character passage; `start`/`end` placements have no anchor. The
+   prompt forbids placing a revelation before the prose establishes it.
+5. Persist the plan, context decision, supplied context, and exact chosen reference revisions.
+   Retries reuse this checkpoint rather than choosing different scenes or context. The
+   renderer checks Luna/MAX availability before each turn; neither planning turn has tools.
+6. Checkpoint name revisions using existing sheet bytes, then render missing new character
+   sheets and scenes with only their selected character images attached. Native image
+   generation runs through a separate App Server turn and stops at the first completed
+   image event; translation/extraction retain their tool-free runner.
+7. Check freshness/cancellation around rendering and persist validated PNG bytes with
+   prompts, design notes, evidence, placement, reference IDs, model/effort, and job-slot
+   provenance. Unique `(job_id, slot)` records keep completed work reusable on retry. A
+   deleted/invalidated plan prevents late image writes from recreating its art.
 
 For each style, the reader gallery selects the newest **complete** scene batch in scene
 order. Partial replacement work does not displace the previous complete set. Character
 sheets are checkpointed separately and can remain available when a later scene fails.
 The Art style selector changes both the visible gallery and the next generation request.
 
-The scene count is bounded to three, new character designs to four, distinct referenced
-characters across the whole set to four, shared source text to 150,000 characters, and each stored PNG
-to 16 MiB and 24 million pixels, with a host PNG decode/verification check. Normal
+Per chapter, the scene count is bounded to three, new character designs to four, distinct
+referenced characters across its whole set to four, shared source text to 150,000
+characters, and each stored PNG to 16 MiB and 24 million pixels, with a host PNG decode/verification check. Normal
 host-worker leases, heartbeat, cancellation, and provider-wait handling
 apply. There is no image-generation API fallback and no automatic generation during a
 gallery refresh. These jobs use subscription access/concurrency and provider limits;
@@ -127,8 +173,9 @@ for worker health, waiting jobs, and the separately authorized subscription setu
 
 ## Storage and HTTP
 
-Codex owns `codex_art` (reference/scene metadata and PNG `BYTEA`) and `codex_art_plans`
-(durable job plan). Image bytes live in PostgreSQL, not `ASSET_DIR` or a public static
+Codex owns `codex_art` (reference/scene metadata and PNG `BYTEA`), `codex_art_plans`
+(single-chapter plan or small range header), and `codex_art_chapter_plans` (individual
+chapter plans belonging to a range). Image bytes live in PostgreSQL, not `ASSET_DIR` or a public static
 directory. Include them in normal database backup sizing. Novel deletion cascades its
 art rows; plan lifetime follows the corresponding durable job. `reset-codex` also
 clears the novel's generated art and saved art plans while keeping chunks/embeddings.
@@ -137,17 +184,23 @@ clears the novel's generated art and saved art plans while keeping chunks/embedd
 |---|---|
 | `GET /api/novels/{id}/chapters/{chapter}/illustrations` | `items`, `can_generate`, `unavailable_reason`, and `active_job` |
 | `POST /api/novels/{id}/chapters/{chapter}/illustrations` | durable `job_id`; reuse/deduplication may avoid a new job |
+| `GET /api/novels/{id}/illustrations` | Manage generation availability and latest requester range job, including completed jobs; no art or chapter text |
+| `POST /api/novels/{id}/illustrations` | queue one range job; returns `job_id`, `created`, and eligible `chapter_count` |
 | `GET /api/novels/{id}/illustrations/{art_id}/image` | authenticated `image/png`, `Cache-Control: private, no-store` |
 
 Gallery items expose ID, kind, title, caption, style, source chapter, prompt, design
-notes, and image URL. Despite its name, `active_job` can also contain the latest failed
-or canceled job for the requester; completed work returns `null` there. The image route
+notes, evidence, placement (`position`, `anchor`, character `offset`), and image URL.
+Placement may be `null` on older records. Despite its name, `active_job` can contain the
+latest failed or canceled job for the requester. The chapter gallery returns `null` for
+completed work; Manage's range endpoint retains the latest completed job so its UI can
+show completion. The image route
 rechecks access and source validity on every fetch, including direct full-size links.
 Gallery polling and source validation load metadata only; image bytes are fetched when
 needed for rendering or an authenticated image response.
 
 Implementation: `modules/codex/application/illustrations.py`,
-`application/illustration_worker.py`, `domain/illustrations.py`,
-`adapters/outbound/illustration_store.py`, and `bootstrap/illustrations.py`. AI Execution
+`application/illustration_worker.py`, `application/illustration_batch.py`,
+`domain/illustrations.py`, `adapters/outbound/illustration_store.py`,
+`adapters/outbound/illustration_range_store.py`, and `bootstrap/illustrations.py`. AI Execution
 owns `openai_codex/illustration_runner.py` and `images.py`; the frontend owns
 `codex/ChapterIllustrations.jsx` and its scoped stylesheet.

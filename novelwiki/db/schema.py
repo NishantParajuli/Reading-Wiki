@@ -1085,11 +1085,19 @@ DDL_QUERIES = [
       plan JSONB NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );""",
+    """CREATE TABLE IF NOT EXISTS codex_art_chapter_plans (
+      job_id BIGINT NOT NULL REFERENCES codex_art_plans(job_id) ON DELETE CASCADE,
+      chapter NUMERIC NOT NULL,
+      plan JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(job_id,chapter)
+    );""",
 
 ]
 
 # Tables in dependency order (children first) — used by reset_db to drop cleanly.
 ALL_TABLES = [
+    "codex_art_chapter_plans",
     "codex_art_plans",
     "codex_art",
     "audit_events",

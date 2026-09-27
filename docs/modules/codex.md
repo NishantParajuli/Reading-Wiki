@@ -8,12 +8,12 @@ character reference sheets. Every read is bounded by the server-trusted
 chapter ceiling — see [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md).
 Pipeline walkthrough: [../pipelines/codex-build-and-ask.md](../pipelines/codex-build-and-ask.md).
 
-**Owned tables (21):** `chunks`, `entities`, `entity_descriptions`, `entity_aliases`,
+**Owned tables (22):** `chunks`, `entities`, `entity_descriptions`, `entity_aliases`,
 `identity_links`, `entity_facts`, `relationships`, `events`, `chapter_summaries`,
 `memory_segments`, `entity_activity`, `entity_state_transitions`,
 `relationship_state_transitions`, `plot_threads`, `plot_thread_updates`,
 `extraction_contexts`, `extraction_state`, `wiki_cache`, `query_cache`, `codex_art`,
-`codex_art_plans`.
+`codex_art_plans`, `codex_art_chapter_plans`.
 **Owned filesystem root:** `BM25_INDEX_PATH` (`./data/bm25_index/<novel_id>/`).
 
 ---
@@ -153,9 +153,11 @@ handler (or individually from the CLI):
 
 - **Chapter illustrations** — `application/illustrations.py` authorizes gallery/image
   reads and explicit generation requests; `application/illustration_worker.py` persists
-  a bounded art plan and renders reusable character sheets before chapter scenes.
-  `domain/illustrations.py` defines styles, strict briefs, and source/evidence checks;
-  `adapters/outbound/illustration_store.py` owns the image/plan SQL. Bootstrap injects
+  a bounded context decision/art plan and renders reusable character sheets before chapter
+  scenes. `application/illustration_batch.py` processes requested ranges sequentially in
+  one durable job. `domain/illustrations.py` defines styles, context/scene briefs, placement,
+  and source/evidence checks; `adapters/outbound/illustration_store.py` owns image/plan SQL,
+  with `illustration_range_store.py` providing chapter-scoped plan and image checkpoints. Bootstrap injects
   Reading snapshots, access, Work scheduling, and AI Execution's native image renderer.
   The `codex_illustrate` job runs only through OpenAI Codex, under its existing
   `codex_extract` grant, with `gpt-6-luna`/`max` planning and no billed API fallback.

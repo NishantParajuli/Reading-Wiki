@@ -7,12 +7,12 @@ import "./ChapterIllustrations.css";
 
 const ACTIVE = new Set(["queued", "running", "waiting_provider"]);
 const STATUS = { queued: "Waiting to begin", running: "Creating your illustrations", waiting_provider: "Waiting for image generation to become available" };
-const STYLES = [{ value: "luminous", label: "Luminous" }, { value: "celestial", label: "Celestial" }, { value: "ink", label: "Ink" }];
+export const ILLUSTRATION_STYLES = [{ value: "luminous", label: "Luminous" }, { value: "celestial", label: "Celestial" }, { value: "ink", label: "Ink" }];
 
-function Illustration({ item }) {
+export function Illustration({ item, inline = false }) {
   const [failed, setFailed] = useState(false);
   return (
-    <figure className="chapter-art">
+    <figure className={"chapter-art" + (inline ? " chapter-art-inline" : "")}>
       {failed ? <div className="chapter-art-missing" role="status">This image couldn’t load. <a href={item.image_url} target="_blank" rel="noreferrer">Open image</a></div>
         : <a className="chapter-art-image" href={item.image_url} target="_blank" rel="noreferrer" aria-label={`Open ${item.title || "illustration"} at full size`}>
           <img src={item.image_url} alt={item.caption || item.title || "Generated chapter illustration"} loading="lazy" decoding="async" onError={() => setFailed(true)} />
@@ -26,15 +26,15 @@ function Illustration({ item }) {
   );
 }
 
-function IllustrationPanel({ novelId, chapter }) {
+function IllustrationPanel({ novelId, chapter, children, personalVersion }) {
   const panelId = useId();
   const [open, setOpen] = useState(false);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [count, setCount] = useState(1);
   const [style, setStyle] = useState("luminous");
+  const initialStyle = useRef(false);
   const alive = useRef(true);
   const inFlight = useRef(false);
   const revision = useRef(0);
@@ -48,6 +48,11 @@ function IllustrationPanel({ novelId, chapter }) {
     try {
       const result = await codexApi.illustrations(novelId, chapter);
       if (!alive.current || request !== revision.current) return;
+      if (!initialStyle.current) {
+        initialStyle.current = true;
+        const available = (result.items || []).filter(item => item.kind === "scene");
+        if (available.length && !available.some(item => item.style === "luminous")) setStyle(available[0].style);
+      }
       setData(result);
       setError(null);
     } catch (failure) {
@@ -58,7 +63,7 @@ function IllustrationPanel({ novelId, chapter }) {
     }
   }, [novelId, chapter]);
 
-  useEffect(() => { if (open && data === null && !error) load(); }, [open, data, error, load]);
+  useEffect(() => { if (data === null && !error) load(); }, [data, error, load]);
   const job = data?.active_job;
   const active = ACTIVE.has(job?.status);
   useEffect(() => {
@@ -72,12 +77,12 @@ function IllustrationPanel({ novelId, chapter }) {
 
   async function generate(event) {
     event.preventDefault();
-    if (busy || active || !data?.can_generate || ![1, 2, 3].includes(count)) return;
+    if (busy || active || !data?.can_generate) return;
     setBusy(true); setError(null);
     // A list response that started before this action must not erase its job.
     revision.current += 1;
     try {
-      const result = await codexApi.generateIllustrations(novelId, chapter, { count, style, force: scenes.length > 0 });
+      const result = await codexApi.generateIllustrations(novelId, chapter, { style, force: scenes.length > 0 });
       if (!alive.current) return;
       setData(current => ({ ...current, active_job: { id: result.job_id, status: "queued" } }));
     } catch (failure) {
@@ -88,10 +93,12 @@ function IllustrationPanel({ novelId, chapter }) {
   }
 
   return (
+    <>
+    {children?.(personalVersion ? [] : scenes)}
     <section className="chapter-illustrations" aria-label="Chapter illustrations">
       <h2 className="chapter-illustrations-heading">
         <button type="button" className="chapter-illustrations-toggle" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(value => !value)}>
-          <span>Illustrate this chapter<span className="chapter-illustrations-subtitle">Optional scenes & character sheets</span></span>
+          <span>Illustrate this chapter<span className="chapter-illustrations-subtitle">AI-chosen scenes & character sheets</span></span>
           <Icon name="chevronDown" size={20} className={open ? "is-open" : ""} />
         </button>
       </h2>
@@ -99,13 +106,13 @@ function IllustrationPanel({ novelId, chapter }) {
         {data === null && loading && <Loading label="Opening illustrations…" />}
         {error && <div className="chapter-art-error" role="alert"><p>{error}</p><Button variant="ghost" size="sm" onClick={load} loading={loading}>Refresh illustrations</Button></div>}
         {data && <>
-          <p className="chapter-illustrations-intro">A visual interpretation of the story through this chapter. Character sheets help keep recurring faces consistent; imagined details may differ from yours.</p>
+          <p className="chapter-illustrations-intro">AI chooses one to three scenes and places each illustration in the story. Character sheets help keep recurring faces consistent; imagined details may differ from yours.</p>
           {!data.can_generate && <div className="chapter-art-fields">
             <label htmlFor={`${panelId}-gallery-style`}>Art style<select id={`${panelId}-gallery-style`} value={style} onChange={event => setStyle(event.target.value)}>
-              {STYLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              {ILLUSTRATION_STYLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select></label>
           </div>}
-          {scenes.length > 0 && <div className="chapter-art-scenes">{scenes.map(item => <Illustration key={item.id} item={item} />)}</div>}
+          {personalVersion && scenes.length > 0 && <p className="chapter-art-note">Illustrations follow the shared chapter. Switch to the shared version to see them in the story.</p>}
           {references.length > 0 && <details className="chapter-art-references"><summary>Character reference sheets <span>({references.length})</span></summary>
             <div className="chapter-art-reference-grid">{references.map(item => <Illustration key={item.id} item={item} />)}</div>
           </details>}
@@ -114,11 +121,8 @@ function IllustrationPanel({ novelId, chapter }) {
           {job?.status === "canceled" && <p className="chapter-art-note" role="status">Illustration generation was canceled.</p>}
           {data.can_generate ? <form className="chapter-art-form" onSubmit={generate}>
             <div className="chapter-art-fields">
-              <label htmlFor={`${panelId}-count`}>Scenes<select id={`${panelId}-count`} value={count} disabled={busy || active} onChange={event => setCount(Number(event.target.value))}>
-                {[1, 2, 3].map(value => <option key={value} value={value}>{value} {value === 1 ? "illustration" : "illustrations"}</option>)}
-              </select></label>
               <label htmlFor={`${panelId}-style`}>Art style<select id={`${panelId}-style`} value={style} disabled={busy || active} onChange={event => setStyle(event.target.value)}>
-                {STYLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                {ILLUSTRATION_STYLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select></label>
               <Button type="submit" icon="sparkles" loading={busy} disabled={active || loading}>{busy ? "Starting…" : scenes.length ? "Generate again" : "Generate illustrations"}</Button>
             </div>
@@ -127,10 +131,11 @@ function IllustrationPanel({ novelId, chapter }) {
         </>}
       </div>}
     </section>
+    </>
   );
 }
 
 // Remount on navigation so no image or in-flight result crosses a chapter boundary.
-export function ChapterIllustrations({ novelId, chapter }) {
-  return <IllustrationPanel key={`${novelId}:${chapter}`} novelId={novelId} chapter={chapter} />;
+export function ChapterIllustrations({ novelId, chapter, children, personalVersion }) {
+  return <IllustrationPanel key={`${novelId}:${chapter}`} novelId={novelId} chapter={chapter} personalVersion={personalVersion}>{children}</IllustrationPanel>;
 }

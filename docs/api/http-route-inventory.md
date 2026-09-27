@@ -6,7 +6,7 @@
 > [http-api.md](http-api.md). After changing routes, run
 > `uv run python scripts/contracts.py --update` and update this table in the same change.
 
-Current snapshot: **125 routes**. FastAPI-generated documentation routes and the
+Current snapshot: **127 routes**. FastAPI-generated documentation routes and the
 Platform health endpoint are included; the SPA catch-all is not an HTTP contract row.
 
 | Method | Exact path | FastAPI endpoint name |
@@ -109,6 +109,8 @@ Platform health endpoint are included; the SPA catch-all is not an HTTP contract
 | `POST` | `/api/novels/{novel_id}/glossary/seed` | `api_seed_glossary` |
 | `DELETE` | `/api/novels/{novel_id}/glossary/{term_id}` | `api_delete_glossary` |
 | `GET` | `/api/novels/{novel_id}/health` | `api_novel_health` |
+| `GET` | `/api/novels/{novel_id}/illustrations` | `illustration_range_info` |
+| `POST` | `/api/novels/{novel_id}/illustrations` | `generate_illustration_range` |
 | `GET` | `/api/novels/{novel_id}/illustrations/{art_id}/image` | `illustration_image` |
 | `DELETE` | `/api/novels/{novel_id}/library` | `api_remove_from_library` |
 | `POST` | `/api/novels/{novel_id}/library` | `api_add_to_library` |

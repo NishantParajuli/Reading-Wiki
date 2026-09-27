@@ -3,7 +3,7 @@
 > **Source of truth:** `novelwiki/db/schema.py` — a list of idempotent DDL statements
 > applied on every startup (and via `python -m novelwiki.db.schema`). The normalized DDL
 > is contract-frozen in `tests/contracts/snapshots/schema.json`. This page documents all
-> **49 tables**, grouped by owning module, with the reasoning behind the non-obvious
+> **50 tables**, grouped by owning module, with the reasoning behind the non-obvious
 > columns. Single-writer ownership is enforced by the architecture checker
 > ([../architecture/enforcement.md](../architecture/enforcement.md)).
 
@@ -232,7 +232,7 @@ Per-novel name/term consistency anchor. `UNIQUE (novel_id, source_term)`;
 `notes`, **`locked`** (user-pinned
 renderings the auto-glossary never overwrites).
 
-## Codex-owned (21 tables — story-derived rows carry their chapter boundary)
+## Codex-owned (22 tables — story-derived rows carry their chapter boundary)
 
 ### `chunks`
 
@@ -363,10 +363,14 @@ Generated character references and chapter scenes. `id UUID PK`, novel FK (casca
 delete), `chapter NUMERIC`, `kind` (`reference`|`scene`), optional stable `character_key`,
 `title`, `caption`, and `style` (`luminous`|`celestial`|`ink`). `source_hash` identifies the
 source chapter title/text; `metadata JSONB` stores prompts, artistic design notes, scene
-evidence, exact reference IDs, model/effort, and batch/index information. `image BYTEA`
+evidence, exact reference IDs, model/effort, and batch/index information. Scene placement
+stores `position` (`start`/`after`/`end`), an exact chapter `anchor` for `after`, and its
+resolved character `offset`; older rows may omit it. `image BYTEA`
 stores a validated PNG capped at 16 MiB. `job_id` references Work (SET NULL on deletion);
 `UNIQUE(job_id, slot)` makes reference/scene checkpoints idempotent. Reads check chapter
-access and current source validity before returning metadata or bytes.
+access and current source validity before returning metadata or bytes. New scenes and
+reference sheets retain selected prior-context chapter/hash pairs in metadata `sources`;
+changes to those chapters invalidate dependent art.
 
 A character name change creates a new reference row at the chapter establishing the
 name, retaining the original `character_key` and copying its PNG bytes. Its metadata
@@ -381,11 +385,28 @@ earlier chapters. Existing rows without alias or source-history metadata remain 
 ### `codex_art_plans`
 
 Durable illustration plan keyed by `job_id` (FK to Work, cascade delete), with `plan
-JSONB` and `created_at`. The plan includes chosen scene briefs, optional `name_updates`,
-and the exact prior reference IDs used by scenes or name updates, so a retry resumes
-the same compositions and identities. These bytes and `codex_art`
-belong in PostgreSQL backups, not the imported-asset directory. See
-[chapter illustrations](../pipelines/chapter-illustrations.md).
+JSONB` and `created_at`. A single-chapter plan includes chosen scene briefs, optional
+`name_updates`, the context decision (0–3 preceding chapters and a 0–9,000 character text
+budget), supplied bounded context, and exact prior reference IDs used by scenes or name
+updates, so a retry resumes the same compositions and identities.
+
+For range jobs, the parent contains only `novel_id`, first `chapter`, `through_chapter`,
+and `mode: "range"`. Range invalidation accounts for `through_chapter`; renumbering checks
+the entire saved range. Deleting the parent cascades to all chapter plans below.
+
+### `codex_art_chapter_plans`
+
+Chapter-specific plans for range jobs. Composite primary key `(job_id, chapter)`;
+`job_id BIGINT` references `codex_art_plans(job_id)` with `ON DELETE CASCADE`,
+`chapter NUMERIC`, `plan JSONB`, and `created_at TIMESTAMPTZ`. Each row carries the same
+context, scenes, name updates, and pinned reference revisions as a single-chapter plan.
+Inserts retain the first checkpoint on conflict. Saving checks/locks the parent so an
+invalidated range cannot recreate its plans. Individual rows avoid repeatedly loading
+or rewriting the plans of every previously processed chapter.
+
+Art image slots retain their `chapter:<number>:` prefix to keep checkpoints distinct
+within the shared job. Both plan tables and `codex_art` belong in PostgreSQL backups,
+not the imported-asset directory. See [chapter illustrations](../pipelines/chapter-illustrations.md).
 
 ## Narration-owned
 

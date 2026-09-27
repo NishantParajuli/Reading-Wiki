@@ -1,7 +1,7 @@
 # HTTP API reference
 
 > **Source of truth:** the contract snapshot `tests/contracts/snapshots/routes.json`
-> (125 routes) and `openapi.json` (schemas). A live instance serves interactive docs at
+> (127 routes) and `openapi.json` (schemas). A live instance serves interactive docs at
 > `/docs` (Swagger) and `/redoc`, and the raw spec at `/openapi.json`. This page is the
 > annotated map: every route family, grouped by owning module, plus the cross-cutting
 > rules. For the literal 125-row method/path/endpoint-name list, use
@@ -32,8 +32,9 @@ limits (429 carries `Retry-After` where applicable), 422 validation.
 but the server clamps it to the caller's **trusted** ceiling (server-observed
 `max_chapter_read`, including owners/admins; the first stored chapter is the fallback
 without progress). Sending a bigger number does
-not unlock anything. Illustration routes use their stored/requested chapter boundary
-against the same trusted progress.
+not unlock anything. Illustration gallery and PNG reads use their stored/requested
+chapter boundary against the same trusted progress. Owners/admins may queue future
+illustrations through the Manage range endpoint without unlocking them or advancing progress.
 
 ---
 
@@ -172,20 +173,38 @@ alone does not discard an otherwise grounded answer; optional heartbeat NDJSON) 
 `POST /api/novels/{id}/codex/build` (durable build job; reserves a `codex_builds` unit) ·
 `POST /api/novels/{id}/merge-entities` (owner/admin duplicate repair).
 
-Chapter art uses `GET|POST /api/novels/{id}/chapters/{chapter}/illustrations` and
-`GET /api/novels/{id}/illustrations/{art_id}/image`. The list returns `items`,
-`can_generate`, `unavailable_reason`, and the requester's latest job as `active_job`
-(including failed/canceled states; `null` if absent or completed). Items contain kind, title, caption,
-style, source chapter, prompt/design notes, and authenticated image URL. The image route
-returns `image/png` with `Cache-Control: private, no-store`; all reads verify novel and
-chapter access plus source freshness.
+Chapter art uses `GET|POST /api/novels/{id}/chapters/{chapter}/illustrations`,
+`GET|POST /api/novels/{id}/illustrations`, and
+`GET /api/novels/{id}/illustrations/{art_id}/image`. The chapter list returns `items`,
+`can_generate`, `unavailable_reason`, and the requester's latest matching job as `active_job`
+(including failed/canceled states; `null` if absent or completed). Items contain kind,
+title, caption, style, source chapter, prompt/design notes, evidence, optional placement
+(`position: "start"|"after"|"end"`, exact `anchor`, character `offset`), and authenticated
+image URL. The image route returns `image/png` with `Cache-Control: private, no-store`;
+all art reads verify novel/chapter access and source freshness.
 
-The generation body is `{count: 1..3, style: "luminous"|"celestial"|"ink", force: false}`,
-defaulting to one Luminous scene. It requires editable access and the granted,
+Single-chapter generation accepts
+`{count: null, style: "luminous"|"celestial"|"ink", force: false}`. Omitted or `null`
+count lets AI choose one to three images; integers 1–3 remain accepted for legacy clients.
+The default style is Luminous. Generation requires editable chapter access and the granted,
 available OpenAI Codex backend. It returns `job_id`, with `created` for newly scheduled
-or deduplicated work, or `already_created: true` when a sufficient current gallery is
-reused. Missing shared text returns 404, denied access 403, invalid request 422, unavailable
-provider 503, and active-job limit exhaustion 429. There is no API fallback or monthly
+or deduplicated work, or `already_created: true` when current art is reused.
+
+Manage's `GET /api/novels/{id}/illustrations` requires owner/admin edit access and returns
+`can_generate`, `unavailable_reason`, and the latest range job in `active_job`, including
+`done` so Manage can show completion. This differs from the chapter gallery, which clears
+completed jobs to `null`. The response reveals no chapter text or art. `POST` accepts `{from_chapter: 25, to_chapter: 100, style: "luminous", force: false}`.
+Bounds are inclusive, finite nonnegative chapter numbers; the upper bound must not precede
+the lower. It returns `job_id`, `created`, and `chapter_count`, scheduling one durable job
+over at most 1,000 existing translated story chapters/interludes, including fractional
+chapter numbers. Missing/untranslated and
+non-story chapters are skipped; valid complete art in the chosen style is skipped unless
+`force` is true. Owners/admins may schedule ahead of reading, but image access remains
+bounded by trusted reading progress. Each included chapter is limited to 150,000 text
+characters. No eligible text returns 404; invalid ranges/counts return 422.
+
+Denied access returns 403, changed source returns 409, unavailable provider returns 503,
+and active-job limit exhaustion returns 429. There is no API fallback or monthly
 Codex-build reservation. [Illustration pipeline](../pipelines/chapter-illustrations.md).
 
 ## Narration (`/api`, auth)

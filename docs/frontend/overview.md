@@ -199,24 +199,36 @@ Contribution requires saved, conflict-free text; replacing a dirty draft through
 retranslation or conflict resolution is guarded. Reverting confirms deletion of the
 personal copy. The dedicated `TranslationTools.css` scopes this workspace's layout.
 
-**Chapter illustrations.** The after-prose `codex/ChapterIllustrations.jsx` panel starts
-collapsed and loads its gallery only when opened. Readers can browse available scene
-images and expand character reference sheets; full-size links use the authenticated
-image endpoint. Eligible owners/admins choose one to three scenes and Luminous,
-Celestial, or Ink styling, then explicitly generate. The default is one Luminous image.
-The style selector also switches the gallery, showing only that style's scene batch and
-character sheets; readers without generation access can still switch existing galleries.
-Generation is never started by opening the panel, reading, navigation, or retrying a
-failed gallery request. Generate again requests a fresh set while retaining the current
-gallery during processing.
+**Chapter illustrations.** `codex/ChapterIllustrations.jsx` loads available art when
+its chapter opens, while its generation controls remain collapsed after the prose.
+Scenes appear at the opening, after an anchored passage, or at the end of the story,
+independently of whether the controls are open. Plain prose retains its original
+paragraph and narration indices; rich HTML keeps its sanitized markup and narration
+spans, inserting React figures into dedicated slots outside the text. Unknown or
+ambiguous anchors are omitted rather than inserted at an unrelated passage. Shared
+illustrations are hidden while a personal translation or conflict overlay is displayed.
 
-The panel polls every five seconds only while its job is queued, running, or waiting
-for the provider. It displays reported stages, links to the Jobs center, recovers after
-temporary polling errors, and stops polling on terminal state. Generation failures
-retain completed images and expose the failure; an unavailable account/chapter shows
-the backend's explanation. Navigation remounts the panel and discards late responses,
-so a previous chapter's art never flashes into a new chapter. The feature's source and
-permission boundaries are described in [chapter illustrations](../pipelines/chapter-illustrations.md).
+Eligible owners/admins choose Luminous, Celestial, or Ink styling and explicitly
+generate. AI selects one to three scenes; there is no image-count field. Luminous is
+the default; if a chapter only has another style, that available style is shown initially.
+The style selector switches inline scenes and reference sheets together. Character
+sheets remain under a disclosure, and full-size links use authenticated image endpoints.
+Opening the chapter or controls never starts generation. Generate again requests a fresh
+set while retaining the current art during processing.
+
+**Manage → Illustrate ahead.** The novel management screen accepts an inclusive first
+and final chapter and a style. Existing illustrations in that style are skipped by
+default; the explicit replacement checkbox requests regeneration. The background range
+job processes chapters in order to carry character designs forward. Its status survives
+navigation, reports waiting/failure/completion, and links to Jobs for progress and
+cancellation. Preparing upcoming chapters does not mark them read or reveal their art
+before the reader's trusted chapter boundary permits it.
+
+Both illustration surfaces poll every five seconds only while work is queued, running,
+or waiting for the provider, and stop on terminal state. Errors preserve completed art
+and expose a retry or refresh action. Navigation discards late responses so another
+chapter or novel's state cannot appear in the new view. Source, generation, and viewing
+boundaries are described in [chapter illustrations](../pipelines/chapter-illustrations.md).
 
 The reader fetches a chapter when the reader navigates to it. It does not prefetch the
 next chapter's authenticated content endpoint, because that endpoint records a trusted
@@ -262,7 +274,7 @@ completed build.
   hidden across ceiling changes, including delayed responses.
 - `src/modules/codex/ChapterIllustrations.test.jsx` — explicit generation, active-job
   polling/recovery, unavailable access, preserved galleries, and discarded late responses
-  after chapter navigation. `e2e/illustrations.spec.js` exercises desktop/mobile controls
+  after chapter navigation. `e2e/illustrations.spec.js` exercises desktop/mobile controls, range generation, and inline placement
   and verifies opening the panel does not generate images.
 - `src/modules/reading/TranslationTools.test.jsx` — shared/personal editing, conflict
   actions, draft protection, keyboard save, failed-write recovery, and contribution/revert

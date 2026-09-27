@@ -91,7 +91,7 @@ against `HEAD` and the living references above before implementation.
 | [file-import](pipelines/file-import.md) | upload → parse → OCR → segment → review → commit |
 | [translation](pipelines/translation.md) | engine, glossary, atomic commits, overlays, subscription staging |
 | [codex-build-and-ask](pipelines/codex-build-and-ask.md) | chunk/embed/extract/link/index; retrieval; the agent; recap |
-| [chapter-illustrations](pipelines/chapter-illustrations.md) | opt-in scene art, reusable character sheets, subscription execution, source and spoiler boundaries |
+| [chapter-illustrations](pipelines/chapter-illustrations.md) | AI-selected inline art, chapter-range preparation, bounded recent context, reusable character sheets, source and spoiler boundaries |
 | [narration](pipelines/narration.md) | TTS worker, sidecar, caching, invalidation |
 | [ai-backends](pipelines/ai-backends.md) | API, AGY, and OpenAI Codex: selection, hardened execution, failure paths |
 
@@ -99,10 +99,10 @@ against `HEAD` and the living references above before implementation.
 
 | Doc | Contents |
 |---|---|
-| [data/database-schema](data/database-schema.md) | all 49 created tables, table-by-table column semantics, including the intentional 48-table reset-list quirk |
+| [data/database-schema](data/database-schema.md) | all 50 created tables, table-by-table column semantics, including the intentional 49-table reset-list quirk |
 | [data/filesystem-layout](data/filesystem-layout.md) | on-disk roots, serving rules, cleanup, backup |
 | [api/http-api](api/http-api.md) | annotated route families + auth/CSRF/error conventions |
-| [api/http-route-inventory](api/http-route-inventory.md) | exact method/path/endpoint-name inventory for all 125 routes |
+| [api/http-route-inventory](api/http-route-inventory.md) | exact method/path/endpoint-name inventory for all 127 routes |
 | [api/cli](api/cli.md) | all 14 commands + module entrypoints + recipes |
 
 ## Frontend

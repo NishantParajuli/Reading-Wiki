@@ -141,23 +141,29 @@ with mode `0700`. Do not point this setting at `ASSET_DIR`, the repository, or a
 
 ## Native chapter illustrations
 
-The reader's opt-in illustration control schedules `codex_illustrate` on this worker.
+The reader's opt-in illustration control and Manage's **Illustrate ahead** range control
+schedule `codex_illustrate` on this worker. A range is one durable job over up to 1,000
+translated story chapters, processed sequentially with per-chapter checkpoints.
 It shares the `codex_extract` grant and `OPENAI_CODEX_CODEX_ENABLED` switch, requires
 owner/admin edit access, and uses the connected ChatGPT subscription for both art planning
 and native image generation. It never uses an image API key or falls back to metered API
 generation. No monthly Codex-build unit is reserved.
 
-The illustration planner and rendering turn are fixed to `gpt-6-luna` with `max`
-reasoning, independently of the ordinary extraction model/effort settings. Before each
+The initial context decision, illustration planner, and rendering turns are fixed to
+`gpt-6-luna` with `max` reasoning, independently of the ordinary extraction model/effort
+settings. Before each
 operation the renderer confirms Luna is available and its model catalog advertises MAX.
 A missing model/effort fails explicitly rather than silently selecting a different model.
 The native-image turn remains isolated and stops at the first completed image event;
 translation and extraction retain their existing tool-free structured-output contract.
 
-Start with one scene in a short, already readable shared chapter. New character sheets
-can add up to four image turns before the requested one to three scene images. A saved
-plan and image-slot checkpoints make retries resume completed work. Image quota failures
-park in `waiting_provider`; restore capacity before retrying. Chapter/source changes
+For rollout, start with one short, already readable shared chapter. AI selects one to
+three scene images; new character sheets can add up to four image turns per chapter.
+Two tool-free planning turns first decide whether recent context is needed, then plan
+scenes. Existing complete art is skipped in a range unless replacement is explicitly
+requested. Saved plans and chapter-scoped image-slot checkpoints make retries resume
+completed work. Use Jobs for progress/cancellation; canceling retains completed images.
+Image quota failures park in `waiting_provider`; restore capacity before retrying. Chapter/source changes
 require a fresh request instead of publishing stale images. These limits and the reader
 workflow are detailed in [chapter illustrations](pipelines/chapter-illustrations.md).
 

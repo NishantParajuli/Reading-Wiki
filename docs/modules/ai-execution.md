@@ -150,7 +150,7 @@ admin panel and `/auth/me` capability), orphan-run detection, resumable-run quer
 - **`smoke.py`** implements the explicitly consuming, rate-limited admin readiness turn and
   always terminalizes its run record as completed, failed, or canceled with `finished_at`.
 - **`illustration_runner.py` / `images.py`** provide separate `gpt-6-luna`/`max` art
-  planning and native image turns, injected into Codex's illustration worker. Planning
+  context-decision, scene-planning, and native image turns, injected into Codex's illustration worker. Planning
   uses structured JSON without tools; rendering attaches bounded reference PNGs and
   permits native image generation while retaining disabled shell/unified execution and
   isolated account state. The first completed image is validated and returned, then the

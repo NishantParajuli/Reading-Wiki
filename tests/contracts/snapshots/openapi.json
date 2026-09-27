@@ -507,14 +507,55 @@
         "title": "ContributionAccept",
         "type": "object"
       },
+      "GenerateIllustrationRange": {
+        "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "from_chapter": {
+            "minimum": 0.0,
+            "title": "From Chapter",
+            "type": "number"
+          },
+          "style": {
+            "default": "luminous",
+            "enum": [
+              "luminous",
+              "celestial",
+              "ink"
+            ],
+            "title": "Style",
+            "type": "string"
+          },
+          "to_chapter": {
+            "minimum": 0.0,
+            "title": "To Chapter",
+            "type": "number"
+          }
+        },
+        "required": [
+          "from_chapter",
+          "to_chapter"
+        ],
+        "title": "GenerateIllustrationRange",
+        "type": "object"
+      },
       "GenerateIllustrations": {
         "properties": {
           "count": {
-            "default": 1,
-            "maximum": 3.0,
-            "minimum": 1.0,
-            "title": "Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 3.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
           },
           "force": {
             "default": false,
@@ -5724,6 +5765,88 @@
           }
         },
         "summary": "Api Novel Health"
+      }
+    },
+    "/api/novels/{novel_id}/illustrations": {
+      "get": {
+        "operationId": "illustration_range_info_api_novels__novel_id__illustrations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "novel_id",
+            "required": true,
+            "schema": {
+              "title": "Novel Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Illustration Range Info"
+      },
+      "post": {
+        "operationId": "generate_illustration_range_api_novels__novel_id__illustrations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "novel_id",
+            "required": true,
+            "schema": {
+              "title": "Novel Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateIllustrationRange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Illustration Range"
       }
     },
     "/api/novels/{novel_id}/illustrations/{art_id}/image": {

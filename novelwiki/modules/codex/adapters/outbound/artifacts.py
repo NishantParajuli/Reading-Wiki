@@ -18,7 +18,10 @@ class PostgresCodexTransactionService:
                 EXISTS (SELECT 1 FROM chunks WHERE novel_id=$1 AND chapter=ANY($2::numeric[]))
              OR EXISTS (SELECT 1 FROM codex_art WHERE novel_id=$1 AND chapter=ANY($2::numeric[]))
              OR EXISTS (SELECT 1 FROM codex_art_plans
-                        WHERE (plan->>'novel_id')::bigint=$1 AND (plan->>'chapter')::numeric=ANY($2::numeric[]))
+                        WHERE (plan->>'novel_id')::bigint=$1 AND EXISTS (
+                            SELECT 1 FROM unnest($2::numeric[]) AS supplied(number)
+                            WHERE supplied.number BETWEEN (plan->>'chapter')::numeric
+                                AND COALESCE((plan->>'through_chapter')::numeric,(plan->>'chapter')::numeric)))
              OR EXISTS (SELECT 1 FROM entities WHERE novel_id=$1 AND first_seen_chapter=ANY($2::numeric[]))
              OR EXISTS (SELECT 1 FROM entity_descriptions WHERE novel_id=$1 AND chapter=ANY($2::numeric[]))
              OR EXISTS (SELECT 1 FROM entity_aliases WHERE novel_id=$1 AND revealed_at_chapter=ANY($2::numeric[]))
@@ -46,7 +49,7 @@ class PostgresCodexTransactionService:
     ) -> None:
         await self._connection.execute(
             "DELETE FROM codex_art_plans WHERE (plan->>'novel_id')::bigint=$1 "
-            "AND (plan->>'chapter')::numeric >= $2;", novel_id, start,
+            "AND COALESCE((plan->>'through_chapter')::numeric,(plan->>'chapter')::numeric) >= $2;", novel_id, start,
         )
         for table in (
             "entity_facts", "relationships", "events", "entity_descriptions",

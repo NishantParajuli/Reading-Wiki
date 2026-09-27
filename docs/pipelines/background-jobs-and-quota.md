@@ -90,7 +90,7 @@ another process's live job.
 | Kind | Reserve | Consume | On cancel/fail |
 |---|---|---|---|
 | `codex_build` | 1 up front | 1 on success | full refund |
-| `codex_illustrate` | none | subscription capacity only; no monthly Codex-build debit | completed image slots remain for retry; no API fallback |
+| `codex_illustrate` | none | subscription capacity only; no monthly Codex-build debit | single chapter or one sequential range job (up to 1,000 translated story chapters); chapter/image checkpoints remain for retry; no API fallback |
 | `translate` (AGY/OpenAI Codex) | pending-chapter count up front | +1 per chapter **as it actually commits** (inside the `commit_translation` transaction) | refund of the unconsumed remainder — finished chapters stay charged |
 | `translate` (API) | availability-check only at scheduling; reserve 1 under each chapter lock | the reserved unit is the charge; failed provider/commit attempts refund it immediately | no batch reservation remains to settle |
 | TTS (`tts_jobs`) | none (checked, not reserved) | 1 per chapter **only on actual generation** (cache hits/skips free) | nothing to refund |

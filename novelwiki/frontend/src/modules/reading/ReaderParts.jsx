@@ -1,4 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Illustration } from "../codex/index.js";
+import { prepareIllustratedHtml } from "./illustrationPlacement.js";
 import { useNavigate } from "react-router-dom";
 
 import { identityApi } from "../identity/api.js";
@@ -494,15 +497,26 @@ export function EndOfChapterCard({ ch, novelId, onNext, onPrev }) {
 }
 
 /* ---------- Reader ---------- */
-export function RichContent({ html }) {
+const NO_ILLUSTRATIONS = [];
+export function RichContent({ html, illustrations = NO_ILLUSTRATIONS }) {
+  const proseRef = useRef(null);
+  const prepared = useMemo(() => prepareIllustratedHtml(html, illustrations), [html, illustrations]);
+  const [portals, setPortals] = useState([]);
+  useLayoutEffect(() => {
+    setPortals(prepared.targets.flatMap(({ index, scene }) => {
+      const node = proseRef.current?.querySelector(`[data-illustration-slot="${index}"]`);
+      return node ? [{ node, scene }] : [];
+    }));
+  }, [prepared]);
   const [lightbox, setLightbox] = useState(null);
   const onClick = (e) => {
     const img = e.target.closest("img");
-    if (img && img.src) { e.stopPropagation(); setLightbox(img.src); }
+    if (img && img.src && !img.closest(".chapter-art")) { e.stopPropagation(); setLightbox(img.src); }
   };
   return (
     <>
-      <div className="reader-text reader-rich" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />
+      <div ref={proseRef} className="reader-text reader-rich" onClick={onClick} dangerouslySetInnerHTML={{ __html: prepared.html }} />
+      {portals.map(({ node, scene }) => createPortal(<Illustration item={scene} inline />, node, scene.id))}
       {lightbox && (
         <div className="lightbox-scrim" onClick={(e) => { e.stopPropagation(); setLightbox(null); }}>
           <img src={lightbox} alt="" />

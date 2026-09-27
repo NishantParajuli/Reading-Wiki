@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from novelwiki.kernel.errors import Conflict
 from ..domain.illustrations import (
+    ContextDecision,
+    CONTEXT_INSTRUCTIONS,
     IllustrationPlan,
     PLANNER_INSTRUCTIONS,
     STYLES,
+    placement_metadata,
     render_prompt,
     source_hash,
     validate_plan,
@@ -13,9 +16,10 @@ from .illustrations import IllustrationSourceChanged, metadata
 
 
 class IllustrationWorker:
-    def __init__(self, *, store, snapshot, renderer, progress, cancel):
+    def __init__(self, *, store, snapshot, renderer, progress, cancel, preceding=None):
         self.store, self.snapshot, self.renderer = store, snapshot, renderer
         self.progress, self.cancel = progress, cancel
+        self.preceding = preceding
 
     async def execute(self, job):
         job_id, novel_id = job["id"], job["novel_id"]
@@ -23,11 +27,24 @@ class IllustrationWorker:
         chapter, style, count = (
             float(options["chapter"]),
             options["style"],
-            int(options["count"]),
+            options.get("count"),
         )
-        if style not in STYLES or count not in (1, 2, 3):
+        if count == "auto":
+            count = None
+        if style not in STYLES or (
+            count is not None and (type(count) is not int or count not in (1, 2, 3))
+        ):
             raise ValueError("Invalid illustration request")
         plan_persisted = False
+        context_sources = []
+
+        def provenance(context):
+            # Old saved plans predate context hashes and remain resumable.
+            return [
+                {"chapter": float(row["chapter"]), "source_hash": row["source_hash"]}
+                for row in context.get("previous_chapters", [])
+                if row.get("source_hash")
+            ]
 
         async def current():
             await self.cancel(job_id)
@@ -40,6 +57,16 @@ class IllustrationWorker:
                 raise IllustrationSourceChanged(
                     "Chapter changed while illustrations were being prepared. Request a fresh set."
                 )
+            for origin in context_sources:
+                previous = await self.snapshot(novel_id, origin["chapter"])
+                if (
+                    not previous
+                    or not previous.get("content")
+                    or source_hash(previous) != origin["source_hash"]
+                ):
+                    raise IllustrationSourceChanged(
+                        "A preceding chapter used for art context changed. Request a fresh set."
+                    )
             if plan_persisted and not await self.store.plan(job_id):
                 raise IllustrationSourceChanged(
                     "Illustration context was invalidated. Request a fresh set."
@@ -81,6 +108,41 @@ class IllustrationWorker:
         snapshot = await current()
         saved = await self.store.plan(job_id)
         if not saved:
+            await self.progress(
+                job_id,
+                {"stage": "Checking story context", "step": 0, "steps": 1},
+                stage="Planning illustrations",
+            )
+            decision = ContextDecision.model_validate(
+                await self.renderer.plan(
+                    CONTEXT_INSTRUCTIONS,
+                    {
+                        "chapter": chapter,
+                        "title": snapshot["title"],
+                        "text": snapshot["content"],
+                        "length": {
+                            "characters": len(snapshot["content"]),
+                            "words": len(snapshot["content"].split()),
+                        },
+                    },
+                    ContextDecision.model_json_schema(),
+                )
+            )
+            if bool(decision.previous_chapters) != bool(decision.max_chars):
+                raise ValueError(
+                    "Illustration context count and budget must both be zero or positive"
+                )
+            await current()
+            knowledge = {"previous_chapters": []}
+            if decision.previous_chapters and self.preceding:
+                preceding = await self.preceding(
+                    novel_id, chapter, decision.previous_chapters, decision.max_chars
+                )
+                knowledge = await self.store.context(
+                    novel_id, chapter, preceding=preceding, max_chars=decision.max_chars
+                )
+            context_sources = provenance(knowledge)
+            await current()
             existing = {}
             for row in await self.store.references(
                 novel_id, chapter, style, snapshot["content"]
@@ -97,7 +159,7 @@ class IllustrationWorker:
                     continue
             await self.progress(
                 job_id,
-                {"stage": "Choosing scenes", "step": 0, "steps": count},
+                {"stage": "Choosing scenes", "step": 0, "steps": count or 1},
                 stage="Planning illustrations",
             )
             data = {
@@ -106,7 +168,8 @@ class IllustrationWorker:
                 "text": snapshot["content"],
                 "scene_count": count,
                 "style": STYLES[style],
-                "knowledge": await self.store.context(novel_id, chapter),
+                "knowledge": knowledge,
+                "context_decision": decision.model_dump(),
                 "existing_characters": [
                     {
                         "key": key,
@@ -142,6 +205,8 @@ class IllustrationWorker:
                     "chapter": chapter,
                     "source_hash": options["source_hash"],
                     "plan": plan.model_dump(),
+                    "context_decision": decision.model_dump(),
+                    "context": knowledge,
                     "references": {
                         key: str(row["id"])
                         for key, row in existing.items()
@@ -151,6 +216,8 @@ class IllustrationWorker:
                 },
             )
         plan_persisted = True
+        context_sources = provenance(saved.get("context", {}))
+        await current()
         # Always use the persisted winner, including when two recovered attempts race.
         plan = IllustrationPlan.model_validate(saved["plan"])
         existing = {
@@ -164,6 +231,7 @@ class IllustrationWorker:
             set(existing),
             existing_names={key: row["title"] for key, row in existing.items()},
         )
+        count = len(plan.scenes)
         completed = {row["slot"]: row for row in await self.store.for_job(job_id)}
         used = {key for scene in plan.scenes for key in scene.characters}
         for update in plan.name_updates:
@@ -186,6 +254,7 @@ class IllustrationWorker:
             prior = await reference(await self.store.get(novel_id, prior["id"]))
             sources = [
                 *previous.get("sources", []),
+                *context_sources,
                 {
                     "chapter": float(prior["chapter"]),
                     "source_hash": prior["source_hash"],
@@ -241,6 +310,7 @@ class IllustrationWorker:
                 metadata={
                     "prompt": prompt,
                     "canon": design.canon,
+                    "sources": context_sources,
                     "design_notes": design.design_notes,
                     "model": "gpt-6-luna",
                     "effort": "max",
@@ -297,6 +367,8 @@ class IllustrationWorker:
                 metadata={
                     "prompt": prompt,
                     "evidence": scene.evidence,
+                    "sources": context_sources,
+                    "placement": placement_metadata(scene, snapshot["content"]),
                     "references": [str(row["id"]) for row in refs],
                     "batch": job_id,
                     "index": index,

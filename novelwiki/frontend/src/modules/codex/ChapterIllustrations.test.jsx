@@ -2,12 +2,12 @@ import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChapterIllustrations } from "./ChapterIllustrations.jsx";
+import { ChapterIllustrations, Illustration } from "./ChapterIllustrations.jsx";
 import { codexApi } from "./api.js";
 
 const empty = { items: [], can_generate: true, active_job: null };
 const art = { id: "scene-1", kind: "scene", title: "The glass shore", caption: "Mira watches the tide.", style: "luminous", image_url: "/api/novels/1/illustrations/scene-1/image" };
-const wrap = (chapter = 1) => <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><ChapterIllustrations novelId={1} chapter={chapter} /></MemoryRouter>;
+const wrap = (chapter = 1) => <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><ChapterIllustrations novelId={1} chapter={chapter}>{scenes => <article>{scenes.map(item => <Illustration key={item.id} item={item} inline />)}</article>}</ChapterIllustrations></MemoryRouter>;
 const open = async () => { await act(async () => fireEvent.click(screen.getByRole("button", { name: /Illustrate this chapter/ }))); };
 
 beforeEach(() => {
@@ -17,18 +17,17 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("chapter illustrations", () => {
-  it("loads on demand and never starts generation without an explicit action", async () => {
+  it("loads existing art automatically and never starts generation without an explicit action", async () => {
     render(wrap());
-    expect(codexApi.illustrations).not.toHaveBeenCalled();
+    expect(codexApi.illustrations).toHaveBeenCalledWith(1, 1);
     await open();
     expect(codexApi.illustrations).toHaveBeenCalledWith(1, 1);
-    expect(screen.getByLabelText("Scenes")).toHaveValue("1");
+    expect(screen.queryByLabelText("Scenes")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Art style")).toHaveValue("luminous");
     expect(codexApi.generateIllustrations).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("Scenes"), { target: { value: "3" } });
     fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "ink" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Generate illustrations" })));
-    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { count: 3, style: "ink", force: false });
+    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { style: "ink", force: false });
     expect(screen.getByRole("button", { name: "Generate illustrations" })).toBeDisabled();
     expect(screen.getByRole("link", { name: "View jobs" })).toHaveAttribute("href", "/jobs");
   });
@@ -86,7 +85,7 @@ describe("chapter illustrations", () => {
     render(wrap());
     await open();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Generate again" })));
-    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { count: 1, style: "luminous", force: true });
+    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { style: "luminous", force: true });
     expect(screen.getByRole("alert")).toHaveTextContent("Codex is unavailable");
     expect(screen.getByText("The glass shore")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate again" })).toBeEnabled();
@@ -103,15 +102,14 @@ describe("chapter illustrations", () => {
     expect(screen.queryByText("The glass shore")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "celestial" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Generate illustrations" })));
-    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { count: 1, style: "celestial", force: false });
+    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { style: "celestial", force: false });
   });
 
-  it("lets readers without generation access browse every available style", async () => {
+  it("shows an existing alternative style automatically when Luminous is unavailable", async () => {
     codexApi.illustrations.mockResolvedValue({ ...empty, can_generate: false, items: [{ ...art, style: "celestial" }] });
     render(wrap());
     await open();
-    expect(screen.queryByText("The glass shore")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "celestial" } });
+    expect(screen.getByLabelText("Art style")).toHaveValue("celestial");
     expect(screen.getByText("The glass shore")).toBeInTheDocument();
     expect(codexApi.generateIllustrations).not.toHaveBeenCalled();
   });

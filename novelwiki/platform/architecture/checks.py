@@ -23,7 +23,7 @@ TABLE_OWNERS = {
     "relationship_state_transitions": "codex", "plot_threads": "codex",
     "plot_thread_updates": "codex", "extraction_contexts": "codex",
     "extraction_state": "codex", "wiki_cache": "codex",
-    "codex_art": "codex", "codex_art_plans": "codex", "query_cache": "codex", "tts_jobs": "narration", "chapter_audio": "narration",
+    "codex_art_chapter_plans": "codex", "codex_art": "codex", "codex_art_plans": "codex", "query_cache": "codex", "tts_jobs": "narration", "chapter_audio": "narration",
     "jobs": "work",
 }
 

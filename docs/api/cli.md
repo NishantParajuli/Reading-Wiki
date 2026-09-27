@@ -61,7 +61,7 @@ chapter ranges; `rebuild-bm25` rebuilds the whole novel index.
 
 | Command | What it does |
 |---|---|
-| `reset-db [--force]` | **Destructive.** Drops the 48-table reset list in dependency order and re-applies the schema. Interactive confirmation unless `--force`. (`auth_rate_limits` is intentionally absent from the drop list — ADR 002.) |
+| `reset-db [--force]` | **Destructive.** Drops the 49-table reset list in dependency order and re-applies the schema. Interactive confirmation unless `--force`. (`auth_rate_limits` is intentionally absent from the drop list — ADR 002.) |
 
 ## Related module-style entrypoints (not Typer commands)
 

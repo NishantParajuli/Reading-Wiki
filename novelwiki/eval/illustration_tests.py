@@ -114,6 +114,12 @@ class Renderer:
         self.plans, self.images = [], []
 
     async def plan(self, instructions, data, schema):
+        if "previous_chapters" in schema.get("properties", {}):
+            return {
+                "previous_chapters": 0,
+                "max_chars": 0,
+                "reason": "Self-contained scene.",
+            }
         self.plans.append(data)
         result = {
             "characters": []
@@ -137,7 +143,7 @@ class Renderer:
                     "prompt": "Wide cinematic composition of a lantern lighting the old bridge. "
                     * 2,
                 }
-                for index in range(data["scene_count"])
+                for index in range(data["scene_count"] or 1)
             ],
         }
         if self.after_plan:
@@ -174,7 +180,7 @@ async def execute(db, job, renderer, cancel=None):
 async def finish(job):
     await work.update_job(job["id"], status="running")
     assert await work.mark_done_if_running(
-        job["id"], {"images": job["options"]["count"]}
+        job["id"], {"images": job["options"].get("count")}
     )
 
 
@@ -580,6 +586,8 @@ RENAMING = "Mira lifted the bronze lantern. Mira now called herself Aria, also k
 class RenamingRenderer(Renderer):
     async def plan(self, instructions, data, schema):
         plan = await super().plan(instructions, data, schema)
+        if "scenes" not in plan:
+            return plan
         plan["name_updates"] = [
             {
                 "key": "mira",
@@ -694,8 +702,149 @@ async def test_alias_matching_prioritizes_old_identity_in_large_cast(art_db):
                 for i in range(125)
             ],
         )
+    gallery = await db.service.list(db.novel, 2, db.owner)
+    assert any(item["kind"] == "scene" for item in gallery["items"])
     for name in ("Mira", "Aria", "Starling", "STARLING"):
         refs = await db.store.references(db.novel, 2, "luminous", name + " spoke.")
         assert len(refs) == 100
         assert refs[0]["character_key"] == "mira" and refs[0]["title"] == "Aria"
         assert all("image" not in ref for ref in refs)
+
+
+async def execute_range(db, job, renderer, cancel=None):
+    from novelwiki.modules.codex.application.illustration_batch import (
+        IllustrationBatchWorker,
+    )
+    from novelwiki.modules.codex.adapters.outbound.illustration_range_store import (
+        IllustrationRangeStore,
+    )
+
+    async def chapter(child, progress):
+        return await IllustrationWorker(
+            store=IllustrationRangeStore(db.pool, child["options"]["chapter"]),
+            snapshot=db.snapshot,
+            renderer=renderer,
+            progress=progress,
+            cancel=cancel or AsyncMock(),
+        ).execute(child)
+
+    return await IllustrationBatchWorker(
+        store=db.store,
+        snapshot=db.snapshot,
+        current_rows=db.service.current_rows,
+        execute_chapter=chapter,
+        progress=AsyncMock(),
+        cancel=cancel or AsyncMock(),
+    ).execute(job)
+
+
+@pytest.mark.asyncio
+async def test_range_generation_ahead_is_one_job_and_preserves_read_ceiling(art_db):
+    db = art_db
+    result = await db.service.generate_range(
+        db.novel, db.owner, from_chapter=1, to_chapter=3
+    )
+    assert result["chapter_count"] == 3
+    repeated = await db.service.generate_range(
+        db.novel, db.owner, from_chapter=1, to_chapter=3
+    )
+    assert repeated["job_id"] == result["job_id"] and repeated["created"] is False
+    job = await work.get_job(result["job_id"])
+    renderer = Renderer()
+    progress = await execute_range(db, job, renderer)
+    assert progress["done"] == progress["total"] == 3
+    assert len(renderer.images) == 4  # one sheet, then three scenes
+    assert all(len(references) == 1 for _, references in renderer.images[1:])
+    rows = await db.store.for_job(job["id"])
+    assert {row["slot"] for row in rows} == {
+        "chapter:1:reference:mira",
+        "chapter:1:scene:0",
+        "chapter:2:scene:0",
+        "chapter:3:scene:0",
+    }
+    parent = await db.store.plan(job["id"])
+    assert parent["mode"] == "range"
+    assert all([await db.store.range_plan(job["id"], chapter) for chapter in (1, 2, 3)])
+    scene3 = next(row for row in rows if row["slot"] == "chapter:3:scene:0")
+    with pytest.raises(Forbidden):
+        await db.service.image(db.novel, scene3["id"], db.owner)
+    with pytest.raises(Forbidden):
+        await db.service.generate_range(
+            db.novel, db.reader, from_chapter=1, to_chapter=3
+        )
+    assert (await db.service.range_info(db.novel, db.owner))["active_job"]["id"] == job[
+        "id"
+    ]
+    assert (await db.service.list(db.novel, 2, db.owner))["active_job"]["id"] == job[
+        "id"
+    ]
+    gallery = await db.service.list(db.novel, 2, db.owner)
+    scene = next(item for item in gallery["items"] if item["kind"] == "scene")
+    assert scene["placement"]["position"] == "after"
+    assert scene["placement"]["anchor"] == QUOTE
+    await finish(job)
+    assert (await db.service.range_info(db.novel, db.owner))["active_job"][
+        "status"
+    ] == "done"
+
+
+@pytest.mark.asyncio
+async def test_range_retry_resumes_chapter_checkpoints_without_rerendering(art_db):
+    db = art_db
+    result = await db.service.generate_range(
+        db.novel, db.owner, from_chapter=1, to_chapter=3, force=True
+    )
+    job = await work.get_job(result["job_id"])
+    failing = Renderer(fail_image=3)
+    with pytest.raises(RuntimeError, match="transient"):
+        await execute_range(db, job, failing)
+    assert len(await db.store.for_job(job["id"])) == 2
+    retry = Renderer()
+    await execute_range(db, job, retry)
+    assert len(retry.images) == 2
+    assert [plan["chapter"] for plan in retry.plans] == [3]
+    assert len(await db.store.for_job(job["id"])) == 4
+
+
+@pytest.mark.asyncio
+async def test_range_skips_existing_and_invalidation_removes_range_plan(art_db):
+    db = art_db
+    first = await enqueue(db, chapter=1)
+    await execute(db, first, Renderer())
+    await finish(first)
+    result = await db.service.generate_range(
+        db.novel, db.owner, from_chapter=1, to_chapter=3
+    )
+    job = await work.get_job(result["job_id"])
+    renderer = Renderer()
+    progress = await execute_range(db, job, renderer)
+    assert progress["skipped"] == 1 and len(renderer.images) == 2
+    async with db.pool.acquire() as conn:
+        artifacts = PostgresCodexTransactionService(conn)
+        assert await artifacts.has_chapter_artifacts(db.novel, (3,))
+        await artifacts.invalidate_chapter_range(db.novel, 2, 2)
+    assert await db.store.plan(job["id"]) is None
+    assert await db.store.range_plan(job["id"], 2) is None
+    assert await db.store.for_job(job["id"]) == []
+    from novelwiki.modules.codex.adapters.outbound.illustration_range_store import (
+        IllustrationRangeStore,
+    )
+
+    with pytest.raises(Conflict, match="invalidated"):
+        await IllustrationRangeStore(db.pool, 2).save_plan(job["id"], {"plan": {}})
+    with pytest.raises(Conflict, match="invalidated"):
+        await execute_range(
+            db, {**job, "progress": {"range_started": True}}, Renderer()
+        )
+
+
+@pytest.mark.asyncio
+async def test_previous_illustration_context_hash_matches_full_chapter(art_db):
+    db = art_db
+    reading = PostgresReadingCodexGateway(db.pool)
+    rows = await reading.previous_illustration_context(db.novel, 3, 2, 20)
+    assert len(rows) == 2 and sum(len(row["text"]) for row in rows) <= 20
+    for row in rows:
+        assert row["source_hash"] == source_hash(
+            await reading.illustration_snapshot(db.novel, row["chapter"])
+        )

@@ -65,8 +65,11 @@ the overlay instead; the overlay records the `base_version` it forked from, so a
 base change marks it `conflict` and the UI offers a base-vs-mine resolver. Narration's
 audio cache is keyed by `content_version` too — text edits naturally invalidate audio.
 Codex illustration planning uses the shared chapter snapshot through this gateway;
-personal overlays are not art sources. These internal reads do not record a trusted
-chapter read. The spacious translation editing dialog is documented in the
+personal overlays are not art sources. `illustration_snapshot` reads only the target
+chapter; `previous_illustration_context` retrieves bounded tails of up to three prior
+translated story chapters only after the planner requests them. `chapter_numbers` can
+filter an inclusive range to translated chapters/interludes for batch scheduling. These
+internal reads do not record a trusted chapter read. The spacious translation editing dialog is documented in the
 [frontend overview](../frontend/overview.md#reader-specifics).
 
 ### Overlays & contributions (translation collaboration)

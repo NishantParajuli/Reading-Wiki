@@ -70,7 +70,10 @@ and extraction chapters before enabling either global switch for general use; se
 
 Illustration regressions are also provider-free: `tests/unit/codex/test_illustrations.py`
 covers strict scene plans, name-update identity/evidence validation, source/reference
-boundaries, gallery selection, and resumable worker behavior;
+boundaries, gallery selection, and resumable worker behavior.
+`tests/unit/codex/test_illustration_planning.py` covers automatic scene counts,
+context decisions before history retrieval, bounded summary/tail context, prior-context
+source invalidation, legacy fixed counts, and exact placement anchors;
 `tests/unit/ai_execution/test_openai_codex_images.py` covers bounded
 native-image results; `tests/unit/platform/test_illustration_routes.py` prevents the
 production SPA catch-all from shadowing the image APIs. Frontend component tests and

@@ -269,9 +269,11 @@ and reading preview, becoming a full-height Edit/Preview workspace on mobile. It
 save controls remain outside the scrolling prose area. Narration highlights the
 active text while retaining the reader's typography and tone.
 
-Optional chapter illustrations follow the prose in a collapsed disclosure. Scene
-images use the reading column's width, with character reference sheets under a
-separate disclosure. The illustration styles belong to this feature; surrounding
+Optional chapter illustrations appear between prose blocks at the opening, an anchored
+passage, or the ending. Generation controls follow the prose in a collapsed disclosure,
+with character reference sheets under a separate disclosure. Scene images keep the
+reading column’s width and use quiet sans-serif captions. Manage includes an
+“Illustrate ahead” range form in the existing management grid. The illustration styles belong to this feature; surrounding
 controls retain the existing paper, ink, and forest visual system. See the
 [reader surface brief](.impeccable/surfaces/novelwiki-frontend-src-modules-reading-reader-jsx.md)
 for its composition and interaction rules.
