@@ -25,9 +25,9 @@ describe("chapter illustrations", () => {
     expect(screen.queryByLabelText("Scenes")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Art style")).toHaveValue("luminous");
     expect(codexApi.generateIllustrations).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "ink" } });
+    fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "painterly" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Generate illustrations" })));
-    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { style: "ink", force: false });
+    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { style: "painterly", force: false });
     expect(screen.getByRole("button", { name: "Generate illustrations" })).toBeDisabled();
     expect(screen.getByRole("link", { name: "View jobs" })).toHaveAttribute("href", "/jobs");
   });
@@ -91,27 +91,40 @@ describe("chapter illustrations", () => {
     expect(screen.getByRole("button", { name: "Generate again" })).toBeEnabled();
   });
 
-  it("shows only the chosen style and does not force regeneration for an unillustrated style", async () => {
-    codexApi.illustrations.mockResolvedValue({ ...empty, items: [art, { ...art, id: "ink-1", title: "Ink shore", style: "ink" }] });
+  it("shows only the chosen style and regenerates the selected style", async () => {
+    codexApi.illustrations.mockResolvedValue({ ...empty, items: [art, { ...art, id: "painterly-1", title: "Painted shore", style: "painterly" }] });
     render(wrap());
     await open();
     expect(screen.getByText("The glass shore")).toBeInTheDocument();
-    expect(screen.queryByText("Ink shore")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "ink" } });
-    expect(screen.getByText("Ink shore")).toBeInTheDocument();
+    expect(screen.queryByText("Painted shore")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "painterly" } });
+    expect(screen.getByText("Painted shore")).toBeInTheDocument();
     expect(screen.queryByText("The glass shore")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "celestial" } });
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Generate illustrations" })));
-    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { style: "celestial", force: false });
+    expect(screen.getByLabelText("Art style")).toHaveAccessibleDescription("Semi-realistic characters, textured brushwork, and cinematic lighting.");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Generate again" })));
+    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { style: "painterly", force: true });
   });
 
-  it("shows an existing alternative style automatically when Luminous is unavailable", async () => {
-    codexApi.illustrations.mockResolvedValue({ ...empty, can_generate: false, items: [{ ...art, style: "celestial" }] });
+  it.each([true, false])("keeps Luminous anime selected and legacy art separate when can_generate=%s", async canGenerate => {
+    codexApi.illustrations.mockResolvedValue({ ...empty, can_generate: canGenerate, items: [{ ...art, style: "celestial" }, { ...art, id: "ink-1", style: "ink", title: "Old ink art" }] });
     render(wrap());
     await open();
-    expect(screen.getByLabelText("Art style")).toHaveValue("celestial");
-    expect(screen.getByText("The glass shore")).toBeInTheDocument();
+    expect(screen.getByLabelText("Art style")).toHaveValue("luminous");
+    expect(screen.getAllByRole("option").map(option => option.textContent)).toEqual(["Luminous anime", "Painterly"]);
+    expect(screen.getByLabelText("Art style")).toHaveAccessibleDescription("Expressive anime characters, clean linework, soft cel shading, and luminous light.");
+    expect(screen.getByText("Earlier illustrations")).toBeInTheDocument();
+    expect(screen.getByText("The glass shore").closest("details")).not.toHaveAttribute("open");
+    expect(document.querySelector("article .chapter-art")).toBeNull();
     expect(codexApi.generateIllustrations).not.toHaveBeenCalled();
+  });
+
+  it("defaults to anime when only painterly art exists and does not force new anime scenes", async () => {
+    codexApi.illustrations.mockResolvedValue({ ...empty, items: [{ ...art, style: "painterly" }] });
+    render(wrap());
+    await open();
+    expect(screen.getByLabelText("Art style")).toHaveValue("luminous");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Generate illustrations" })));
+    expect(codexApi.generateIllustrations).toHaveBeenCalledWith(1, 1, { style: "luminous", force: false });
   });
 
   it("continues checking an active job after a temporary polling failure", async () => {

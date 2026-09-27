@@ -1069,7 +1069,7 @@ DDL_QUERIES = [
       character_key TEXT,
       title TEXT NOT NULL,
       caption TEXT NOT NULL DEFAULT '',
-      style TEXT NOT NULL CHECK(style IN ('luminous','celestial','ink')),
+      style TEXT NOT NULL CHECK(style IN ('luminous','painterly','celestial','ink')),
       source_hash TEXT NOT NULL,
       metadata JSONB NOT NULL DEFAULT '{}',
       image BYTEA NOT NULL CHECK(octet_length(image) BETWEEN 1 AND 16777216),
@@ -1079,6 +1079,10 @@ DDL_QUERIES = [
       UNIQUE(job_id,slot)
     );
     """,
+    # Retain historical styles while adding the selectable painterly direction.
+    "ALTER TABLE codex_art DROP CONSTRAINT IF EXISTS codex_art_style_check;",
+    "ALTER TABLE codex_art ADD CONSTRAINT codex_art_style_check "
+    "CHECK(style IN ('luminous','painterly','celestial','ink'));",
     "CREATE INDEX IF NOT EXISTS codex_art_novel_chapter_idx ON codex_art(novel_id,chapter);",
     """CREATE TABLE IF NOT EXISTS codex_art_plans (
       job_id BIGINT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,

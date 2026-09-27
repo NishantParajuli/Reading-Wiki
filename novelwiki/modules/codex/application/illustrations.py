@@ -9,7 +9,7 @@ from novelwiki.kernel.errors import (
     NotFound,
     ValidationFailed,
 )
-from ..domain.illustrations import STYLES, source_hash
+from ..domain.illustrations import STYLES, current_style, source_hash
 
 
 class IllustrationSourceChanged(Conflict):
@@ -175,7 +175,7 @@ class IllustrationService:
             scenes = [
                 row
                 for row in complete_scenes(await self.current_rows(novel_id, chapter))
-                if row["style"] == style
+                if row["style"] == style and current_style(style, metadata(row))
             ]
             if scenes and (count is None or len(scenes) >= count):
                 return {"job_id": metadata(scenes[0])["batch"], "already_created": True}

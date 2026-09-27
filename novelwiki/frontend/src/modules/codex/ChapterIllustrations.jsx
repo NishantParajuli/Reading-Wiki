@@ -7,7 +7,10 @@ import "./ChapterIllustrations.css";
 
 const ACTIVE = new Set(["queued", "running", "waiting_provider"]);
 const STATUS = { queued: "Waiting to begin", running: "Creating your illustrations", waiting_provider: "Waiting for image generation to become available" };
-export const ILLUSTRATION_STYLES = [{ value: "luminous", label: "Luminous" }, { value: "celestial", label: "Celestial" }, { value: "ink", label: "Ink" }];
+export const ILLUSTRATION_STYLES = [
+  { value: "luminous", label: "Luminous anime", description: "Expressive anime characters, clean linework, soft cel shading, and luminous light." },
+  { value: "painterly", label: "Painterly", description: "Semi-realistic characters, textured brushwork, and cinematic lighting." },
+];
 
 export function Illustration({ item, inline = false }) {
   const [failed, setFailed] = useState(false);
@@ -34,7 +37,6 @@ function IllustrationPanel({ novelId, chapter, children, personalVersion }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [style, setStyle] = useState("luminous");
-  const initialStyle = useRef(false);
   const alive = useRef(true);
   const inFlight = useRef(false);
   const revision = useRef(0);
@@ -48,11 +50,6 @@ function IllustrationPanel({ novelId, chapter, children, personalVersion }) {
     try {
       const result = await codexApi.illustrations(novelId, chapter);
       if (!alive.current || request !== revision.current) return;
-      if (!initialStyle.current) {
-        initialStyle.current = true;
-        const available = (result.items || []).filter(item => item.kind === "scene");
-        if (available.length && !available.some(item => item.style === "luminous")) setStyle(available[0].style);
-      }
       setData(result);
       setError(null);
     } catch (failure) {
@@ -74,6 +71,8 @@ function IllustrationPanel({ novelId, chapter, children, personalVersion }) {
 
   const scenes = (data?.items || []).filter(item => item.kind === "scene" && item.style === style);
   const references = (data?.items || []).filter(item => item.kind === "reference" && item.style === style);
+  const earlierIllustrations = (data?.items || []).filter(item => !ILLUSTRATION_STYLES.some(option => option.value === item.style));
+  const styleDescription = ILLUSTRATION_STYLES.find(option => option.value === style)?.description;
 
   async function generate(event) {
     event.preventDefault();
@@ -108,25 +107,31 @@ function IllustrationPanel({ novelId, chapter, children, personalVersion }) {
         {data && <>
           <p className="chapter-illustrations-intro">AI chooses one to three scenes and places each illustration in the story. Character sheets help keep recurring faces consistent; imagined details may differ from yours.</p>
           {!data.can_generate && <div className="chapter-art-fields">
-            <label htmlFor={`${panelId}-gallery-style`}>Art style<select id={`${panelId}-gallery-style`} value={style} onChange={event => setStyle(event.target.value)}>
+            <label htmlFor={`${panelId}-gallery-style`}>Art style<select id={`${panelId}-gallery-style`} aria-describedby={`${panelId}-style-description`} value={style} onChange={event => setStyle(event.target.value)}>
               {ILLUSTRATION_STYLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select></label>
           </div>}
+          {!data.can_generate && <p id={`${panelId}-style-description`} className="chapter-art-note">{styleDescription}</p>}
           {personalVersion && scenes.length > 0 && <p className="chapter-art-note">Illustrations follow the shared chapter. Switch to the shared version to see them in the story.</p>}
           {references.length > 0 && <details className="chapter-art-references"><summary>Character reference sheets <span>({references.length})</span></summary>
             <div className="chapter-art-reference-grid">{references.map(item => <Illustration key={item.id} item={item} />)}</div>
+          </details>}
+          {earlierIllustrations.length > 0 && <details className="chapter-art-references"><summary>Earlier illustrations <span>({earlierIllustrations.length})</span></summary>
+            <p className="chapter-art-note">These images use styles that are no longer available for generation.</p>
+            {earlierIllustrations.map(item => <Illustration key={item.id} item={item} />)}
           </details>}
           {active && <div className="chapter-art-progress" role="status"><span className="btn-spinner" aria-hidden /><span>{job.status === "running" ? job.progress?.stage || job.stage || STATUS.running : STATUS[job.status]}. You can keep reading.</span><Link to="/jobs">View jobs</Link></div>}
           {job?.status === "failed" && <p className="chapter-art-error" role="alert">{job.error || "Illustration generation failed. You can try again."} <Link to="/jobs">View jobs</Link></p>}
           {job?.status === "canceled" && <p className="chapter-art-note" role="status">Illustration generation was canceled.</p>}
           {data.can_generate ? <form className="chapter-art-form" onSubmit={generate}>
             <div className="chapter-art-fields">
-              <label htmlFor={`${panelId}-style`}>Art style<select id={`${panelId}-style`} value={style} disabled={busy || active} onChange={event => setStyle(event.target.value)}>
+              <label htmlFor={`${panelId}-style`}>Art style<select id={`${panelId}-style`} aria-describedby={`${panelId}-style-description`} value={style} disabled={busy || active} onChange={event => setStyle(event.target.value)}>
                 {ILLUSTRATION_STYLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select></label>
               <Button type="submit" icon="sparkles" loading={busy} disabled={active || loading}>{busy ? "Starting…" : scenes.length ? "Generate again" : "Generate illustrations"}</Button>
             </div>
-            <p className="chapter-art-note">Generation uses the connected Codex account and can take a few minutes. {scenes.length ? "Generate again creates a new set of scenes." : "Nothing is generated until you choose to begin."}</p>
+            <p id={`${panelId}-style-description`} className="chapter-art-note">{styleDescription}</p>
+            <p className="chapter-art-note">New character sheets are created before chapter scenes, so early chapters can take longer. Generation uses the connected Codex account. {scenes.length ? "Generate again creates a new set of scenes." : "Nothing is generated until you choose to begin."}</p>
           </form> : !active && <p className="chapter-art-note">{data.unavailable_reason || "Illustration generation isn’t available for this chapter or account."}</p>}
         </>}
       </div>}

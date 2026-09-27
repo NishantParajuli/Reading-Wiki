@@ -33,7 +33,9 @@ class IllustrationStore:
             )
         return [dict(row) for row in rows]
 
-    async def references(self, novel_id: int, chapter: float, style: str, content: str):
+    async def references(
+        self, novel_id: int, chapter: float, style: str, content: str, *, revision=None
+    ):
         """Keep old recurring identities available without sending revision history."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
@@ -42,6 +44,7 @@ class IllustrationStore:
                     FROM codex_art
                     WHERE novel_id=$1 AND chapter<=$2 AND style=$3
                       AND kind='reference' AND character_key IS NOT NULL
+                      AND ($5::text IS NULL OR metadata->>'style_revision'=$5)
                     ORDER BY character_key,chapter DESC,created_at DESC,id DESC
                 )
                 SELECT * FROM latest
@@ -60,6 +63,7 @@ class IllustrationStore:
                 chapter,
                 style,
                 content,
+                revision,
             )
         return [dict(row) for row in rows]
 

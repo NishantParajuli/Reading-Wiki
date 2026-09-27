@@ -175,3 +175,51 @@ def test_alias_only_update_can_retain_absent_preferred_name_but_not_invent_one()
     plan.name_updates[0].name = "Invented name"
     with pytest.raises(ValueError, match="must appear"):
         validate_plan(plan, text, 1, {"mira"}, existing_names={"mira": "Mira"})
+
+
+@pytest.mark.parametrize("payload_type,extra", [
+    (http.GenerateIllustrations, {}),
+    (http.GenerateIllustrationRange, {"from_chapter": 1, "to_chapter": 2}),
+])
+def test_only_two_new_style_choices_and_anime_default(payload_type, extra):
+    from pydantic import ValidationError
+    assert payload_type(**extra).style == "luminous"
+    assert payload_type(style="painterly", **extra).style == "painterly"
+    for retired in ("celestial", "ink"):
+        with pytest.raises(ValidationError):
+            payload_type(style=retired, **extra)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision,should_reuse", [(None, False), ("soft-cel-anime-v2", True)])
+async def test_legacy_luminous_scene_does_not_satisfy_new_generation(revision, should_reuse):
+    from novelwiki.modules.codex.application.illustrations import IllustrationService
+
+    schedule = AsyncMock(return_value={"job_id": 99})
+    service = IllustrationService(
+        access=AsyncMock(), snapshot=AsyncMock(), store=None,
+        grant=AsyncMock(return_value="grant"), schedule=schedule, latest=None,
+    )
+    service.chapter = AsyncMock(return_value={"title": "A dawn", "content": "The dawn was clear."})
+    row = scene(1, 0, 1)
+    if revision:
+        row["metadata"]["style_revision"] = revision
+    service.current_rows = AsyncMock(return_value=[row])
+    result = await service.generate(1, 2, SimpleNamespace(user_id=1))
+    assert bool(result.get("already_created")) is should_reuse
+    assert schedule.await_count == (0 if should_reuse else 1)
+
+
+def test_render_direction_wraps_brief_and_reference_rendering_cannot_override_it():
+    from novelwiki.modules.codex.domain.illustrations import render_prompt, STYLES
+
+    brief = "A gritty painterly portrait of a knight beside a detailed palace."
+    prompt = render_prompt(brief, "luminous", ["Mira"])
+    assert prompt.startswith("BINDING ART DIRECTION")
+    assert prompt.endswith(STYLES["luminous"])
+    assert "subject matter only" in prompt and "Reference images establish identity" in prompt
+    assert "simplified expressive anime faces" in prompt
+    assert "No semi-realistic faces" in prompt
+    painterly = render_prompt(brief, "painterly", ["Mira"])
+    assert "finely textured garments" in painterly
+    assert "LUMINOUS SOFT-CEL ANIME" not in painterly

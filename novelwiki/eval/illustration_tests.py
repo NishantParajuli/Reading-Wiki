@@ -24,6 +24,7 @@ from novelwiki.modules.codex.adapters.outbound.illustration_store import (
 )
 from novelwiki.modules.codex.adapters.outbound.maintenance import reset_structured_codex
 from novelwiki.modules.codex.application.illustration_worker import IllustrationWorker
+from novelwiki.modules.codex.application.illustrations import metadata
 from novelwiki.modules.codex.domain.illustrations import source_hash
 from novelwiki.modules.identity.public import Principal
 from novelwiki.modules.reading.adapters.outbound.codex import (
@@ -848,3 +849,47 @@ async def test_previous_illustration_context_hash_matches_full_chapter(art_db):
         assert row["source_hash"] == source_hash(
             await reading.illustration_snapshot(db.novel, row["chapter"])
         )
+
+
+@pytest.mark.asyncio
+async def test_legacy_luminous_art_remains_readable_but_new_direction_redesigns_sheets(art_db):
+    db = art_db
+    original = await enqueue(db)
+    await execute(db, original, Renderer())
+    await finish(original)
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE codex_art SET metadata=metadata-'style_revision' WHERE novel_id=$1",
+            db.novel,
+        )
+    old_rows = await db.store.for_job(original["id"])
+    scene = next(row for row in old_rows if row["kind"] == "scene")
+    assert await db.service.image(db.novel, scene["id"], db.owner) == b"image-2"
+    fresh = await enqueue(db)
+    assert fresh["id"] != original["id"]
+    assert fresh["options"]["style_revision"] == "soft-cel-anime-v2"
+    renderer = Renderer()
+    await execute(db, fresh, renderer)
+    assert len(renderer.images) == 2  # Corrected sheet, then chapter scene.
+    assert renderer.plans[0]["existing_characters"] == []
+    assert all(metadata(row)["style_revision"] == "soft-cel-anime-v2"
+               for row in await db.store.for_job(fresh["id"]))
+    assert await db.store.get(db.novel, scene["id"])  # No global legacy-art deletion.
+
+
+@pytest.mark.asyncio
+async def test_painterly_direction_stores_separately_from_anime(art_db):
+    db = art_db
+    anime = await enqueue(db)
+    await execute(db, anime, Renderer())
+    await finish(anime)
+    request = await db.service.generate(db.novel, 2, db.owner, style="painterly")
+    job = await work.get_job(request["job_id"])
+    renderer = Renderer()
+    await execute(db, job, renderer)
+    rows = await db.store.for_job(job["id"])
+    assert len(rows) == 2
+    assert all(row["style"] == "painterly" and metadata(row)["style_revision"] == "painterly-v1"
+               for row in rows)
+    assert renderer.plans[0]["existing_characters"] == []
+    assert all("SEMI-REALISTIC PAINTERLY CINEMA" in prompt for prompt, _ in renderer.images)

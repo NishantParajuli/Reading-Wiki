@@ -374,16 +374,19 @@ subset of those evidence ids are written.
 
 Generated character references and chapter scenes. `id UUID PK`, novel FK (cascade
 delete), `chapter NUMERIC`, `kind` (`reference`|`scene`), optional stable `character_key`,
-`title`, `caption`, and `style` (`luminous`|`celestial`|`ink`). `source_hash` identifies the
+`title`, `caption`, and `style` (`luminous`|`painterly`, with historical
+`celestial`/`ink` values retained). `source_hash` identifies the
 source chapter title/text; `metadata JSONB` stores prompts, artistic design notes, scene
-evidence, exact reference IDs, model/effort, and batch/index information. Scene placement
+evidence, exact reference IDs, model/effort, batch/index information, and the style
+revision (`soft-cel-anime-v2` or `painterly-v1` for new work). Scene placement
 stores `position` (`start`/`after`/`end`), an exact chapter `anchor` for `after`, and its
 resolved character `offset`; older rows may omit it. `image BYTEA`
 stores a validated PNG capped at 16 MiB. `job_id` references Work (SET NULL on deletion);
 `UNIQUE(job_id, slot)` makes reference/scene checkpoints idempotent. Reads check chapter
 access and current source validity before returning metadata or bytes. New scenes and
 reference sheets retain selected prior-context chapter/hash pairs in metadata `sources`;
-changes to those chapters invalidate dependent art.
+changes to those chapters invalidate dependent art. Historical style revisions remain
+readable but cannot seed current-generation references or satisfy new generation reuse.
 
 A character name change creates a new reference row at the chapter establishing the
 name, retaining the original `character_key` and copying its PNG bytes. Its metadata
@@ -400,8 +403,9 @@ earlier chapters. Existing rows without alias or source-history metadata remain 
 Durable illustration plan keyed by `job_id` (FK to Work, cascade delete), with `plan
 JSONB` and `created_at`. A single-chapter plan includes chosen scene briefs, optional
 `name_updates`, the context decision (0–3 preceding chapters and a 0–9,000 character text
-budget), supplied bounded context, and exact prior reference IDs used by scenes or name
-updates, so a retry resumes the same compositions and identities.
+budget), supplied bounded context, exact prior reference IDs used by scenes or name
+updates, and a style revision, so a retry resumes the same compositions and identities.
+Resuming an older Luminous plan after the soft-cel style revision requires a fresh request.
 
 For range jobs, the parent contains only `novel_id`, first `chapter`, `through_chapter`,
 and `mode: "range"`. Range invalidation accounts for `through_chapter`; renumbering checks

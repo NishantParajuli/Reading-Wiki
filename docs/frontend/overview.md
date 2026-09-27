@@ -227,17 +227,20 @@ spans, inserting React figures into dedicated slots outside the text. Unknown or
 ambiguous anchors are omitted rather than inserted at an unrelated passage. Shared
 illustrations are hidden while a personal translation or conflict overlay is displayed.
 
-Eligible owners/admins choose Luminous, Celestial, or Ink styling and explicitly
-generate. AI selects one to three scenes; there is no image-count field. Luminous is
-the default; if a chapter only has another style, that available style is shown initially.
-The style selector switches inline scenes and reference sheets together. Character
+Eligible owners/admins choose **Luminous anime** (soft-cel anime, the default) or
+**Painterly** (semi-realistic painted illustration) and explicitly generate. These are
+the only two selectable styles, each with a short description. AI selects one to three
+scenes; there is no image-count field. Each chapter initially selects Luminous anime,
+even if it only has Painterly art. The style selector switches inline scenes and
+reference sheets together. Historical Celestial/Ink images remain accessible under
+**Earlier illustrations**, without reintroducing those styles into the selector. Character
 sheets remain under a disclosure, and full-size links use authenticated image endpoints.
 Opening the chapter or controls never starts generation. Generate again requests a fresh
 set while retaining the current art during processing.
 
 **Manage → Illustrate ahead.** The novel management screen accepts an inclusive first
-and final chapter and a style. Existing illustrations in that style are skipped by
-default; the explicit replacement checkbox requests regeneration. The background range
+and final chapter and one of the same two styles, defaulting to Luminous anime.
+Existing illustrations in that style and its current revision are skipped by default; the explicit replacement checkbox requests regeneration. The background range
 job processes chapters in order to carry character designs forward. Its status survives
 navigation, reports waiting/failure/completion, and links to Jobs for progress and
 cancellation. Preparing upcoming chapters does not mark them read or reveal their art

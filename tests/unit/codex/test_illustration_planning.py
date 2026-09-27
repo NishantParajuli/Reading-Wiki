@@ -237,3 +237,43 @@ async def test_published_scene_retains_previous_context_provenance():
     _, sources = context_with_provenance(worker)
     await worker.execute(job)
     assert all(row["metadata"]["sources"] == sources for row in images)
+
+
+@pytest.mark.asyncio
+async def test_obsolete_saved_style_plan_cannot_resume_with_painterly_references():
+    from novelwiki.modules.codex.application.illustrations import IllustrationSourceChanged
+
+    worker, job, saved, images, _ = harness()
+    saved.update({"plan": planned(), "references": {"mira": "legacy-sheet"}})
+    with pytest.raises(IllustrationSourceChanged, match="style has been updated"):
+        await worker.execute(job)
+    worker.renderer.plan.assert_not_awaited()
+    worker.renderer.image.assert_not_awaited()
+    assert images == []
+
+
+@pytest.mark.asyncio
+async def test_old_luminous_reference_is_excluded_and_new_plan_and_images_are_versioned():
+    from novelwiki.modules.codex.domain.illustrations import style_revision
+
+    worker, job, saved, images, _ = harness()
+    worker.store.references.return_value = [{
+        "id": "legacy-sheet", "kind": "reference", "style": "luminous",
+        "novel_id": 1, "chapter": 1, "character_key": "mira", "title": "Mira",
+        "metadata": {}, "source_hash": job["options"]["source_hash"],
+    }]
+    await worker.execute(job)
+    revision = style_revision("luminous")
+    assert worker.store.references.call_args.kwargs == {"revision": revision}
+    assert worker.renderer.plan.call_args_list[1].args[1]["existing_characters"] == []
+    assert saved["style_revision"] == revision
+    assert all(row["metadata"]["style_revision"] == revision for row in images)
+
+
+@pytest.mark.asyncio
+async def test_reference_revision_is_filtered_before_latest_and_limit():
+    pool = Pool([])
+    await IllustrationStore(pool).references(1, 2, "luminous", TEXT, revision="soft-cel-anime-v2")
+    query, *args = pool.connection.fetch.call_args.args
+    assert query.index("metadata->>'style_revision'=$5") < query.index("ORDER BY character_key")
+    assert args[-1] == "soft-cel-anime-v2"

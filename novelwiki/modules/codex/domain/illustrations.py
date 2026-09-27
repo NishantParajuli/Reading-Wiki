@@ -7,11 +7,46 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+# Public choices. Historical styles below exist only to read/resume older jobs.
 STYLES = {
-    "luminous": "Cinematic luminous soft-cel anime illustration. Precise expressive linework, luminous rim light, rich cobalt shadows and warm gold highlights, exquisite atmospheric depth, restrained bloom, painterly environments and clean cel-shaded characters.",
+    "luminous": (
+        "LUMINOUS SOFT-CEL ANIME — STYLE A. Hand-drawn 2D Japanese anime illustration. "
+        "Fine, clean colored outlines; simplified expressive anime faces and eyes; smooth, "
+        "untextured skin; elegant anime proportions. Broad, clearly designed cel-shadow shapes "
+        "with selectively softened edges, flat local colors and restrained smooth gradients. "
+        "Airy atmospheric glow, delicate luminous rim light, softly blooming highlights and "
+        "beautiful color separation. Detailed backgrounds use stylized shapes and atmospheric "
+        "depth consistent with a 2D anime world. Cinematic composition without photographic "
+        "rendering. Every person, including older adults and background figures, uses the same "
+        "anime drawing language. No semi-realistic faces, skin pores, stubble texture, gritty "
+        "fabric brushwork, oil-paint texture, sculpted 3D forms or photorealistic materials."
+    ),
+    "painterly": (
+        "SEMI-REALISTIC PAINTERLY CINEMA. An elaborate digitally painted fantasy novel "
+        "illustration with anime-influenced character design, believable anatomical volume, "
+        "dimensional faces, finely textured garments, visible controlled brushwork and rich "
+        "material detail. Cinematic motivated lighting, warm luminous highlights, deep cool "
+        "shadows and detailed atmospheric environments. Preserve an illustrated finish with "
+        "subtle skin and cloth texture rather than flat animation cels."
+    ),
+}
+LEGACY_STYLES = {
     "celestial": "Cinematic luminous soft-cel anime illustration. Pearlescent pastel light, airy lavender and peach atmosphere, delicate clean linework, soft atmospheric gradients, exquisite painterly environments and readable cel-shaded characters.",
     "ink": "Cinematic light-novel anime illustration. Refined expressive ink linework, deep navy shadows and glowing amber light, dramatic chiaroscuro, sophisticated painterly environments and luminous soft-cel characters.",
 }
+RENDER_STYLES = {**LEGACY_STYLES, **STYLES}
+STYLE_REVISIONS = {"luminous": "soft-cel-anime-v2", "painterly": "painterly-v1"}
+
+
+def style_revision(style: str) -> str | None:
+    return STYLE_REVISIONS.get(style)
+
+
+def current_style(style: str, metadata: dict) -> bool:
+    """Historical art stays readable, but cannot seed a different rendering direction."""
+    return metadata.get("style_revision") == style_revision(style)
+
+
 PLANNER_MODEL = "gpt-6-luna"
 PLANNER_EFFORT = "max"
 
@@ -189,18 +224,26 @@ clean white-ground manga/light-novel production sheet: front/three-quarter/back 
 large face study and three expressions, outfit details and palette swatches, coherent proportions.
 Scenes may omit characters entirely when a landscape is the strongest moment. Supplied reference
 images will be attached during rendering in the exact order of each scene's characters list.
-Return complete, production-ready image prompts in the selected art direction. Do not say 'as above'."""
+The selected art direction is a binding rendering constraint for EVERY character and scene.
+Prior descriptions and story adjectives describe identity, materials, mood and events, not a license
+to change the selected rendering style. For luminous soft-cel anime, translate gritty or realistic
+story details into clean drawn shapes; never request realistic skin, painterly character texture,
+photographic shading or 3D rendering. Use fine colored outlines, simple anime faces, smooth skin,
+broad cel shadows and airy glow consistently, including older/background characters. Keep
+character-sheet rendering in this same style. Return complete, production-ready image prompts
+in the selected art direction. Do not say 'as above'."""
 
 
 def render_prompt(
     prompt: str, style: str, names: list[str], *, reference: bool = False
 ) -> str:
     identity = "\n".join(
-        f"Reference image {i + 1}: {name}. Preserve this exact visual identity."
+        f"Reference image {i + 1}: {name}. Preserve identity, silhouette, hair, eye color and outfit motifs."
         for i, name in enumerate(names)
     )
     return (
-        STYLES[style]
+        "BINDING ART DIRECTION (takes precedence over the scene brief and reference rendering):\n"
+        + RENDER_STYLES[style]
         + "\n"
         + (
             "CHARACTER PRODUCTION SHEET\n"
@@ -208,10 +251,13 @@ def render_prompt(
             else "FINISHED CHAPTER ILLUSTRATION\n"
         )
         + identity
-        + "\nArt brief:\n"
+        + "\nSCENE AND DESIGN BRIEF (subject matter only; apply the binding art direction):\n"
         + prompt
         + "\n"
         "One exceptionally polished image. Preserve reference faces, hair, palette and signature details; "
-        "adapt pose, expression and lighting to the scene. Correct anatomy, clear focal hierarchy, "
-        "sophisticated composition. No watermarks, logos or dialogue lettering."
+        "adapt pose, expression and lighting to the scene. Reference images establish identity, not "
+        "a competing rendering style: redraw all details in the binding art direction. "
+        "Correct anatomy, clear focal hierarchy, "
+        "sophisticated composition. No watermarks, logos or dialogue lettering.\n"
+        "FINAL STYLE CHECK: " + RENDER_STYLES[style]
     )

@@ -63,9 +63,10 @@ export function IllustrationRangePanel({ novelId, novel }) {
       <div className="chapter-art-fields">
         <label htmlFor={`${id}-from`}>From chapter<input id={`${id}-from`} type="number" step="any" required value={from} disabled={busy || active} onChange={event => setFrom(event.target.value)} /></label>
         <label htmlFor={`${id}-through`}>Through chapter<input id={`${id}-through`} type="number" step="any" required value={through} disabled={busy || active} onChange={event => setThrough(event.target.value)} placeholder="100" /></label>
-        <label htmlFor={`${id}-style`}>Art style<select id={`${id}-style`} value={style} disabled={busy || active} onChange={event => setStyle(event.target.value)}>{ILLUSTRATION_STYLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+        <label htmlFor={`${id}-style`}>Art style<select id={`${id}-style`} aria-describedby={`${id}-style-description`} value={style} disabled={busy || active} onChange={event => setStyle(event.target.value)}>{ILLUSTRATION_STYLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <Button type="submit" icon="sparkles" loading={busy} disabled={!data?.can_generate || active}>{busy ? "Starting…" : "Illustrate chapters"}</Button>
       </div>
+      <p id={`${id}-style-description`} className="chapter-art-note">{ILLUSTRATION_STYLES.find(option => option.value === style)?.description}</p>
       <label className="illustration-range-replace"><input type="checkbox" checked={force} disabled={busy || active} onChange={event => setForce(event.target.checked)} /> Generate again for chapters that already have this art style</label>
       <p className="chapter-art-note">Existing illustrations are skipped by default. Chapters run in order so character designs carry forward. You can leave this screen while they finish.</p>
     </form>

@@ -14,12 +14,13 @@ control. Luna chooses how many distinct moments warrant an image:
 
 | Style | Direction |
 |---|---|
-| `luminous` (default) | expressive anime linework, warm gold light, cobalt shadows, painterly settings |
-| `celestial` | pearlescent pastel light, lavender/peach atmosphere, delicate linework |
-| `ink` | refined ink linework, navy shadows, amber light, dramatic contrast |
+| `luminous` (default) | Luminous anime: clean colored outlines, simplified expressive anime faces, smooth skin, broad cel shadows with selective soft edges, and airy luminous light |
+| `painterly` | Painterly: more realistic anatomy and facial rendering, textured brushwork, detailed materials, and cinematic light |
 
-The default style is Luminous. Scene images appear within the chapter at their planned
-narrative beats: before the opening prose, after an anchored passage, or at the end.
+Only these two styles can be selected for new requests. Luminous anime uses soft-cel
+rendering and is the default. Its character rendering explicitly excludes realistic skin texture and painterly
+surface detail; character sheets follow the same direction as scenes. Scene images
+appear within the chapter at their planned narrative beats: before the opening prose, after an anchored passage, or at the end.
 Placement after a quotation uses the containing paragraph/block boundary rather than
 splitting prose. If an anchor is missing or ambiguous in the displayed text, the reader
 omits that inline image instead of guessing its location. Older images without placement
@@ -107,10 +108,10 @@ exists; import replacement invalidates art/plans from the replaced chapter onwar
 
 `POST /api/novels/{id}/chapters/{chapter}/illustrations` schedules a Work
 `codex_illustrate` job explicitly on `openai_codex`. The request contains
-`{count: null, style: "luminous"|"celestial"|"ink", force: false}`. Omitted or
+`{count: null, style: "luminous"|"painterly", force: false}`. Omitted or
 `null` count lets the AI choose one to three scenes; explicit integers 1–3 remain
 supported for legacy clients and saved jobs. The active-job
-identity includes requester, novel, chapter, style, scene count, and source hash. The
+identity includes requester, novel, chapter, style and its revision, scene count, and source hash. The
 OpenAI Codex host worker claims the job; API and AGY workers do not execute it.
 
 `POST /api/novels/{id}/illustrations` schedules one range job with
@@ -152,6 +153,14 @@ For each chapter, the pipeline runs:
    provenance. Unique `(job_id, slot)` records keep completed work reusable on retry. A
    deleted/invalidated plan prevents late image writes from recreating its art.
 
+New saved plans, character references, and scenes also record a style revision:
+`soft-cel-anime-v2` for `luminous` and `painterly-v1` for `painterly`. Generation reuse
+and range skipping require the current revision. Older Luminous art stays readable,
+but cannot seed new character references or make a new anime request appear already
+complete. An old saved Luminous plan requires a fresh request rather than resuming
+with a mixture of render directions. Historical `celestial`/`ink` records remain
+readable and existing jobs can resume internally; new API requests reject those styles.
+
 For each style, the reader gallery selects the newest **complete** scene batch in scene
 order. Partial replacement work does not displace the previous complete set. Character
 sheets are checkpointed separately and can remain available when a later scene fails.
@@ -170,6 +179,26 @@ without starting another job. Empty or unfinished provider image results enter p
 out-of-workspace image artifacts are rejected. Provider exhaustion or unavailability is shown through
 the durable job state; see the [OpenAI Codex operator runbook](../openai-codex-operator-runbook.md)
 for worker health, waiting jobs, and the separately authorized subscription setup.
+
+## Understanding generation time
+
+A chapter is a sequence of provider turns: one context decision, one scene/design plan,
+then one image turn for each missing character sheet and each chosen scene. These image
+turns run sequentially, and a range processes one chapter at a time. A first chapter can
+therefore require up to nine turns (two planning turns, four sheets, three scenes).
+Later chapters reuse eligible same-style, same-revision sheets, but newly introduced
+characters still need their own images. The one-to-three scene count does not include
+character sheets. Both planning turns use Luna/MAX.
+
+Each turn creates an `ai_execution_runs` record with `created_at`, `started_at`,
+`finished_at`, attempt, status, and failure code. For historical records without stage
+metrics, correlate their order with saved chapter-plan timestamps and image creation
+times; label that stage mapping as inferred. A run's elapsed interval includes app-server
+initialization/model checks and the entire provider turn. It cannot by itself distinguish
+provider-side queueing, reasoning, image-tool processing, and network transfer. Job
+creation-to-first-run time measures initial queue plus worker setup; gaps between runs
+include checkpointing and application work. Check failures/attempts before attributing
+slow generation to retries, and distinguish canceled partial chapters from completed ones.
 
 ## Storage and HTTP
 

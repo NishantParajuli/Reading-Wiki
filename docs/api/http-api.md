@@ -205,11 +205,15 @@ image URL. The image route returns `image/png` with `Cache-Control: private, no-
 all art reads verify novel/chapter access and source freshness.
 
 Single-chapter generation accepts
-`{count: null, style: "luminous"|"celestial"|"ink", force: false}`. Omitted or `null`
+`{count: null, style: "luminous"|"painterly", force: false}`. Omitted or `null`
 count lets AI choose one to three images; integers 1–3 remain accepted for legacy clients.
-The default style is Luminous. Generation requires editable chapter access and the granted,
+The default style is Luminous anime (`luminous`, soft-cel rendering); `painterly`
+selects Painterly, a semi-realistic painted direction. New requests reject historical `celestial` and `ink` styles.
+Generation requires editable chapter access and the granted,
 available OpenAI Codex backend. It returns `job_id`, with `created` for newly scheduled
-or deduplicated work, or `already_created: true` when current art is reused.
+or deduplicated work, or `already_created: true` when current art is reused. Reuse
+requires the current style revision; older Luminous artwork cannot satisfy a new
+soft-cel anime request.
 
 Manage's `GET /api/novels/{id}/illustrations` requires owner/admin edit access and returns
 `can_generate`, `unavailable_reason`, and the latest range job in `active_job`, including

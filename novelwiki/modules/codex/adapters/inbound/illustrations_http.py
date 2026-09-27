@@ -25,14 +25,14 @@ async def illustration_service_dependency():
 
 class GenerateIllustrations(BaseModel):
     count: int | None = Field(default=None, ge=1, le=3)
-    style: Literal["luminous", "celestial", "ink"] = "luminous"
+    style: Literal["luminous", "painterly"] = "luminous"
     force: bool = False
 
 
 class GenerateIllustrationRange(BaseModel):
     from_chapter: float = Field(ge=0, allow_inf_nan=False)
     to_chapter: float = Field(ge=0, allow_inf_nan=False)
-    style: Literal["luminous", "celestial", "ink"] = "luminous"
+    style: Literal["luminous", "painterly"] = "luminous"
     force: bool = False
 
 

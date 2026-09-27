@@ -6,7 +6,9 @@ from ..domain.illustrations import (
     CONTEXT_INSTRUCTIONS,
     IllustrationPlan,
     PLANNER_INSTRUCTIONS,
-    STYLES,
+    RENDER_STYLES,
+    current_style,
+    style_revision,
     placement_metadata,
     render_prompt,
     source_hash,
@@ -31,7 +33,7 @@ class IllustrationWorker:
         )
         if count == "auto":
             count = None
-        if style not in STYLES or (
+        if style not in RENDER_STYLES or (
             count is not None and (type(count) is not int or count not in (1, 2, 3))
         ):
             raise ValueError("Invalid illustration request")
@@ -78,6 +80,7 @@ class IllustrationWorker:
                 not row
                 or row["kind"] != "reference"
                 or row["style"] != style
+                or not current_style(style, metadata(row))
                 or int(row["novel_id"]) != novel_id
                 or float(row["chapter"]) > chapter
             ):
@@ -107,6 +110,10 @@ class IllustrationWorker:
 
         snapshot = await current()
         saved = await self.store.plan(job_id)
+        if saved and not current_style(style, saved):
+            raise IllustrationSourceChanged(
+                "The illustration style has been updated. Request a fresh set to use the new art direction."
+            )
         if not saved:
             await self.progress(
                 job_id,
@@ -145,7 +152,7 @@ class IllustrationWorker:
             await current()
             existing = {}
             for row in await self.store.references(
-                novel_id, chapter, style, snapshot["content"]
+                novel_id, chapter, style, snapshot["content"], revision=style_revision(style)
             ):
                 if (
                     row["kind"] != "reference"
@@ -167,7 +174,7 @@ class IllustrationWorker:
                 "title": snapshot["title"],
                 "text": snapshot["content"],
                 "scene_count": count,
-                "style": STYLES[style],
+                "style": RENDER_STYLES[style],
                 "knowledge": knowledge,
                 "context_decision": decision.model_dump(),
                 "existing_characters": [
@@ -184,7 +191,7 @@ class IllustrationWorker:
             }
             plan = IllustrationPlan.model_validate(
                 await self.renderer.plan(
-                    PLANNER_INSTRUCTIONS,
+                    PLANNER_INSTRUCTIONS + "\nBINDING SELECTED ART DIRECTION:\n" + RENDER_STYLES[style],
                     data,
                     IllustrationPlan.model_json_schema(),
                 )
@@ -201,6 +208,7 @@ class IllustrationWorker:
             saved = await self.store.save_plan(
                 job_id,
                 {
+                    "style_revision": style_revision(style),
                     "novel_id": novel_id,
                     "chapter": chapter,
                     "source_hash": options["source_hash"],
@@ -214,6 +222,10 @@ class IllustrationWorker:
                         or key in {update.key for update in plan.name_updates}
                     },
                 },
+            )
+        if not current_style(style, saved):
+            raise IllustrationSourceChanged(
+                "The illustration style has been updated. Request a fresh set to use the new art direction."
             )
         plan_persisted = True
         context_sources = provenance(saved.get("context", {}))
@@ -233,6 +245,10 @@ class IllustrationWorker:
         )
         count = len(plan.scenes)
         completed = {row["slot"]: row for row in await self.store.for_job(job_id)}
+        if any(not current_style(style, metadata(row)) for row in completed.values()):
+            raise IllustrationSourceChanged(
+                "Saved illustrations use an older art direction. Request a fresh set."
+            )
         used = {key for scene in plan.scenes for key in scene.characters}
         for update in plan.name_updates:
             await current()
@@ -308,6 +324,7 @@ class IllustrationWorker:
                 style=style,
                 source_hash=options["source_hash"],
                 metadata={
+                    "style_revision": style_revision(style),
                     "prompt": prompt,
                     "canon": design.canon,
                     "sources": context_sources,
@@ -365,6 +382,7 @@ class IllustrationWorker:
                 style=style,
                 source_hash=options["source_hash"],
                 metadata={
+                    "style_revision": style_revision(style),
                     "prompt": prompt,
                     "evidence": scene.evidence,
                     "sources": context_sources,

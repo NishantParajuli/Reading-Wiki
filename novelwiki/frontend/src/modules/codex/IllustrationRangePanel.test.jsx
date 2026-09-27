@@ -17,6 +17,8 @@ describe("illustrate ahead", () => {
   it("queues the selected chapter range with AI count and preserves existing art by default", async () => {
     await act(async () => render(wrap()));
     expect(screen.getByLabelText("From chapter")).toHaveValue(25);
+    expect(screen.getByLabelText("Art style")).toHaveValue("luminous");
+    expect(screen.getAllByRole("option").map(option => option.textContent)).toEqual(["Luminous anime", "Painterly"]);
     fireEvent.change(screen.getByLabelText("Through chapter"), { target: { value: "100" } });
     expect(codexApi.generateIllustrationRange).not.toHaveBeenCalled();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Illustrate chapters" })));
@@ -35,10 +37,10 @@ describe("illustrate ahead", () => {
     vi.useFakeTimers();
     await act(async () => render(wrap()));
     fireEvent.change(screen.getByLabelText("Through chapter"), { target: { value: "100" } });
-    fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "ink" } });
+    fireEvent.change(screen.getByLabelText("Art style"), { target: { value: "painterly" } });
     fireEvent.click(screen.getByRole("checkbox"));
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Illustrate chapters" })));
-    expect(codexApi.generateIllustrationRange).toHaveBeenCalledWith(7, { from_chapter: 25, to_chapter: 100, style: "ink", force: true });
+    expect(codexApi.generateIllustrationRange).toHaveBeenCalledWith(7, { from_chapter: 25, to_chapter: 100, style: "painterly", force: true });
     codexApi.illustrationRange.mockResolvedValue({ ...ready, active_job: { status: "waiting_provider" } });
     await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(screen.getByRole("status")).toHaveTextContent("Waiting for image generation");

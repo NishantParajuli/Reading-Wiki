@@ -34,7 +34,9 @@ for (const [layout, viewport] of [["desktop", { width: 1440, height: 1000 }], ["
     const panel = page.getByRole("region", { name: "Chapter illustrations" });
     await expect(panel.getByRole("button", { name: "Generate illustrations" })).toBeVisible();
     await expect(panel.getByLabel("Scenes")).toHaveCount(0);
-    await panel.getByLabel("Art style").selectOption("celestial");
+    await expect(panel.getByRole("combobox", { name: /Art style/ })).toHaveValue("luminous");
+    await expect(panel.getByRole("combobox", { name: /Art style/ }).locator("option")).toHaveText(["Luminous anime", "Painterly"]);
+    await panel.getByRole("combobox", { name: /Art style/ }).selectOption("painterly");
     expect(requests).toEqual([]);
     await panel.scrollIntoViewIfNeeded();
     await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0); });
@@ -42,7 +44,7 @@ for (const [layout, viewport] of [["desktop", { width: 1440, height: 1000 }], ["
     const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     expect(hasOverflow).toBe(false);
     await panel.getByRole("button", { name: "Generate illustrations" }).click();
-    expect(requests).toEqual([{ style: "celestial", force: false }]);
+    expect(requests).toEqual([{ style: "painterly", force: false }]);
     await expect(panel.getByRole("button", { name: "Generate illustrations" })).toBeDisabled();
     await expect(panel.getByRole("link", { name: "View jobs" })).toHaveAttribute("href", "/jobs");
     await toggle.click();
@@ -83,6 +85,8 @@ for (const [layout, viewport] of [["desktop", { width: 1440, height: 1000 }], ["
     await page.goto("/n/7/manage");
     const panel = page.getByRole("region", { name: "Illustrate ahead" });
     await expect(panel.getByLabel("From chapter")).toHaveValue("25");
+    await expect(panel.getByRole("combobox", { name: /Art style/ })).toHaveValue("luminous");
+    await expect(panel.getByRole("combobox", { name: /Art style/ }).locator("option")).toHaveText(["Luminous anime", "Painterly"]);
     await panel.getByLabel("Through chapter").fill("100");
     await expect(panel.getByRole("checkbox")).not.toBeChecked();
     await panel.scrollIntoViewIfNeeded();

@@ -20,6 +20,7 @@ async def build_illustration_service():
     )
     from novelwiki.modules.catalog.application import CatalogAccessService
     from novelwiki.modules.codex.application.illustrations import IllustrationService
+    from novelwiki.modules.codex.domain.illustrations import style_revision
     from novelwiki.modules.codex.adapters.outbound.illustration_store import (
         IllustrationStore,
     )
@@ -81,9 +82,10 @@ async def build_illustration_service():
                     "chapter": chapter,
                     "count": count,
                     "style": style,
+                    "style_revision": style_revision(style),
                     "source_hash": digest,
                 },
-                idempotency_key=f"illustrate:{principal.user_id}:{novel_id}:{chapter}:{style}:{count}:{digest}",
+                idempotency_key=f"illustrate:{principal.user_id}:{novel_id}:{chapter}:{style}:{style_revision(style)}:{count}:{digest}",
                 max_attempts=2,
                 backend_requested="openai_codex",
                 execution_backend="openai_codex",
@@ -112,9 +114,10 @@ async def build_illustration_service():
                     "from_chapter": chapters[0]["chapter"],
                     "to_chapter": chapters[-1]["chapter"],
                     "style": style,
+                    "style_revision": style_revision(style),
                     "force": force,
                 },
-                idempotency_key=f"illustrate-range:{principal.user_id}:{novel_id}:{style}:{force}:{digest}",
+                idempotency_key=f"illustrate-range:{principal.user_id}:{novel_id}:{style}:{style_revision(style)}:{force}:{digest}",
                 max_attempts=2,
                 backend_requested="openai_codex",
                 execution_backend="openai_codex",

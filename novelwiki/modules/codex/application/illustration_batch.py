@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .illustrations import IllustrationSourceChanged, complete_scenes
-from ..domain.illustrations import source_hash
+from .illustrations import IllustrationSourceChanged, complete_scenes, metadata
+from ..domain.illustrations import current_style, source_hash
 
 
 class IllustrationBatchWorker:
@@ -88,6 +88,7 @@ class IllustrationBatchWorker:
                         await self.current_rows(job["novel_id"], chapter)
                     )
                     if row["style"] == options["style"]
+                    and current_style(options["style"], metadata(row))
                 ]
                 if existing:
                     skipped += 1

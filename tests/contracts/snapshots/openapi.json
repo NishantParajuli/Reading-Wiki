@@ -523,8 +523,7 @@
             "default": "luminous",
             "enum": [
               "luminous",
-              "celestial",
-              "ink"
+              "painterly"
             ],
             "title": "Style",
             "type": "string"
@@ -566,8 +565,7 @@
             "default": "luminous",
             "enum": [
               "luminous",
-              "celestial",
-              "ink"
+              "painterly"
             ],
             "title": "Style",
             "type": "string"

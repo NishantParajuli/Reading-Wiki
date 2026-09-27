@@ -71,7 +71,7 @@ unlock future codex data. Full model:
 - **Chapter illustrations** *(opt-in)* — AI chooses one to three scenes per chapter
   and places them throughout the prose, using reusable character sheets and the connected
   Codex subscription. Prepare a chapter range ahead of reading from Manage. Choose
-  Luminous, Celestial, or Ink styling; images follow chapter access and source freshness. [Workflow and limits](docs/pipelines/chapter-illustrations.md).
+  Luminous anime (soft-cel, default) or Painterly (semi-realistic) styling; images follow chapter access and source freshness. [Workflow and limits](docs/pipelines/chapter-illustrations.md).
 - **⚙️ Durable pipelines** — scrapes, imports, codex builds, translation batches, and
   narration survive restarts as database-backed jobs with dedupe and cooperative
   cancellation. Generic Work jobs and imports use claim leases and heartbeats; the TTS

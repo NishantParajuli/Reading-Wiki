@@ -50,11 +50,15 @@ scenes per requested chapter; the user chooses only the style. Manage's “Illus
 ahead” form accepts first/final chapters, defaults to keeping existing art, and links
 the background range job to Jobs. No generation starts from reading or navigation.
 
-Luminous Cinema is the chosen default art direction, shown as “Luminous” in the
-style selector. Its generation prompt specifies expressive linework, luminous rim
-light, cobalt shadows, warm gold highlights, painterly environments, and soft-cel
-characters. Celestial and Ink are alternatives. These are requested image styles,
-not changes to the app's theme or guarantees of provider output quality.
+The selector offers exactly two styles: “Luminous anime” (the default) and
+“Painterly.” Luminous anime requests expressive anime characters, clean linework,
+soft cel shading, and luminous light; Painterly requests semi-realistic characters,
+textured brushwork, and cinematic lighting. A short description follows the
+selected value in Reader and Manage and is associated with its selector for
+assistive technology. The default remains Luminous anime when a chapter contains
+only another style. Retired styles remain viewable under “Earlier illustrations”
+in the reader but cannot be selected for new generation. These are requested image
+styles, not changes to the app's theme or guarantees of provider output quality.
 
 Scenes occupy prose gaps at reading width, containing the complete image in a 3:2
 frame, and link to full-size images. Titles and captions sit below the art; design notes and character reference
