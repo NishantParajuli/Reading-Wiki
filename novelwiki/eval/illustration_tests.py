@@ -572,3 +572,130 @@ async def test_invalidated_plan_cannot_publish_a_late_provider_result(art_db):
             slot="scene:0",
         )
     assert await db.store.for_job(job["id"]) == []
+
+
+RENAMING = "Mira lifted the bronze lantern. Mira now called herself Aria, also known as Starling."
+
+
+class RenamingRenderer(Renderer):
+    async def plan(self, instructions, data, schema):
+        plan = await super().plan(instructions, data, schema)
+        plan["name_updates"] = [
+            {
+                "key": "mira",
+                "name": "Aria",
+                "aliases": ["Starling"],
+                "evidence": "Mira now called herself Aria, also known as Starling.",
+            }
+        ]
+        return plan
+
+
+async def prepare_rename(db):
+    first = await enqueue(db, chapter=1.0)
+    await execute(db, first, Renderer())
+    await finish(first)
+    original = next(
+        row for row in await db.store.for_job(first["id"]) if row["kind"] == "reference"
+    )
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE chapters SET content=$2 WHERE novel_id=$1 AND number=2",
+            db.novel,
+            RENAMING,
+        )
+    return original, await enqueue(db, chapter=2.0)
+
+
+@pytest.mark.asyncio
+async def test_name_change_keeps_pixels_aliases_and_spoiler_boundary_on_retry(art_db):
+    db = art_db
+    original, job = await prepare_rename(db)
+    failing = RenamingRenderer(fail_image=1)
+    with pytest.raises(RuntimeError, match="transient"):
+        await execute(db, job, failing)
+    revision = (await db.store.for_job(job["id"]))[0]
+    assert revision["title"] == "Aria" and revision["character_key"] == "mira"
+    assert revision["slot"] == "name:mira"
+    assert json.loads(revision["metadata"])["aliases"] == ["Mira", "Starling"]
+    retry = Renderer()
+    await execute(db, job, retry)
+    assert retry.plans == []
+    assert len(retry.images) == 1 and retry.images[0][1] == [b"image-1"]
+    assert "Reference image 1: Aria" in retry.images[0][0]
+    assert len(await db.store.for_job(job["id"])) == 2
+    for chapter, expected in ((1, "Mira"), (2, "Aria")):
+        refs = await db.store.references(
+            db.novel, chapter, "luminous", "Starling spoke."
+        )
+        assert refs[0]["title"] == expected
+        gallery = await db.service.list(db.novel, chapter, db.owner)
+        assert [
+            item["title"] for item in gallery["items"] if item["kind"] == "reference"
+        ] == [expected]
+    assert (await db.store.get(db.novel, original["id"]))["title"] == "Mira"
+    # Generating an earlier chapter later must not roll the preferred name back.
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE codex_art SET created_at=now()+interval '1 day' WHERE id=$1",
+            original["id"],
+        )
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO codex_art(id,novel_id,chapter,kind,character_key,title,caption,style,"
+            "source_hash,metadata,image,slot,created_at) "
+            "SELECT gen_random_uuid(),novel_id,chapter,kind,character_key,title,caption,style,"
+            "source_hash,metadata,image,'old-revision',now()+interval '1 day' "
+            "FROM codex_art CROSS JOIN generate_series(1,125) WHERE id=$1",
+            original["id"],
+        )
+    assert (await db.store.references(db.novel, 2, "luminous", "Aria"))[0][
+        "title"
+    ] == "Aria"
+    gallery = await db.service.list(db.novel, 2, db.owner)
+    assert [
+        item["title"] for item in gallery["items"] if item["kind"] == "reference"
+    ] == ["Aria"]
+
+
+@pytest.mark.asyncio
+async def test_renamed_reference_retains_original_source_validation(art_db):
+    db = art_db
+    _original, job = await prepare_rename(db)
+    await execute(db, job, RenamingRenderer())
+    rows = await db.store.for_job(job["id"])
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE chapters SET content=content || ' Changed.' WHERE novel_id=$1 AND number=1",
+            db.novel,
+        )
+    assert (await db.service.list(db.novel, 2, db.owner))["items"] == []
+    for row in rows:
+        with pytest.raises(NotFound, match="older chapter"):
+            await db.service.image(db.novel, row["id"], db.owner)
+    with pytest.raises(Conflict, match="sheet source changed"):
+        await execute(db, job, Renderer())
+
+
+@pytest.mark.asyncio
+async def test_alias_matching_prioritizes_old_identity_in_large_cast(art_db):
+    import uuid
+
+    db = art_db
+    _original, job = await prepare_rename(db)
+    await execute(db, job, RenamingRenderer())
+    digest = source_hash(await db.snapshot(db.novel, 1))
+    async with db.pool.acquire() as conn:
+        await conn.executemany(
+            "INSERT INTO codex_art(id,novel_id,chapter,kind,character_key,title,style,source_hash,image,slot) "
+            "VALUES($1,$2,1,'reference',$3,$4,'luminous',$5,$6,'seed')",
+            [
+                (uuid.uuid4(), db.novel, f"person-{i}", f"Person {i}", digest, b"image")
+                for i in range(125)
+            ],
+        )
+    for name in ("Mira", "Aria", "Starling", "STARLING"):
+        refs = await db.store.references(db.novel, 2, "luminous", name + " spoke.")
+        assert len(refs) == 100
+        assert refs[0]["character_key"] == "mira" and refs[0]["title"] == "Aria"
+        assert all("image" not in ref for ref in refs)

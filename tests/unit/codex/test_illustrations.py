@@ -107,3 +107,71 @@ async def test_illustration_http_errors_preserve_status_and_retry_after(error, s
     assert response.json()["detail"] == str(error)
     if isinstance(error, RateLimited):
         assert response.headers["retry-after"] == "12"
+
+
+def test_character_name_updates_require_known_identity_and_chapter_evidence():
+    text = "Mira now called herself Aria, also known as Starling."
+    plan = IllustrationPlan.model_validate(
+        {
+            "characters": [],
+            "scenes": [
+                {
+                    "title": "Meeting",
+                    "caption": "A quiet meeting.",
+                    "evidence": text,
+                    "characters": ["mira"],
+                    "prompt": "A luminous scene. " * 5,
+                }
+            ],
+            "name_updates": [
+                {
+                    "key": "mira",
+                    "name": "Aria",
+                    "aliases": ["Starling"],
+                    "evidence": text,
+                }
+            ],
+        }
+    )
+    validate_plan(plan, text, 1, {"mira"})
+    with pytest.raises(ValueError, match="distinct existing"):
+        validate_plan(plan, text, 1, {"someone-else"})
+    with pytest.raises(ValueError, match="exact evidence"):
+        validate_plan(plan, "An entirely different chapter.", 1, {"mira"})
+    plan.name_updates[0].aliases = ["Invented nickname"]
+    with pytest.raises(ValueError, match="must appear"):
+        validate_plan(plan, text, 1, {"mira"})
+    plan.name_updates[0].aliases = []
+    plan.name_updates.append(plan.name_updates[0])
+    with pytest.raises(ValueError, match="distinct existing"):
+        validate_plan(plan, text, 1, {"mira"})
+
+
+def test_alias_only_update_can_retain_absent_preferred_name_but_not_invent_one():
+    text = "Starling answered to her new nickname."
+    plan = IllustrationPlan.model_validate(
+        {
+            "characters": [],
+            "scenes": [
+                {
+                    "title": "Meeting",
+                    "caption": "A quiet meeting.",
+                    "evidence": text,
+                    "characters": ["mira"],
+                    "prompt": "A luminous scene. " * 5,
+                }
+            ],
+            "name_updates": [
+                {
+                    "key": "mira",
+                    "name": "Mira",
+                    "aliases": ["Starling"],
+                    "evidence": text,
+                }
+            ],
+        }
+    )
+    validate_plan(plan, text, 1, {"mira"}, existing_names={"mira": "Mira"})
+    plan.name_updates[0].name = "Invented name"
+    with pytest.raises(ValueError, match="must appear"):
+        validate_plan(plan, text, 1, {"mira"}, existing_names={"mira": "Mira"})

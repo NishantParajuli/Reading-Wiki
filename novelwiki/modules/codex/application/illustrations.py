@@ -66,6 +66,17 @@ class IllustrationService:
             )
         if hashes[number] != row["source_hash"]:
             return False
+        for source in metadata(row).get("sources", []):
+            source_number = float(source["chapter"])
+            if source_number not in hashes:
+                snapshot = await self.snapshot(row["novel_id"], source_number)
+                hashes[source_number] = (
+                    source_hash(snapshot)
+                    if snapshot and snapshot.get("content")
+                    else None
+                )
+            if hashes[source_number] != source["source_hash"]:
+                return False
         if row["kind"] == "scene":
             for art_id in metadata(row).get("references", []):
                 reference = await self.store.get(row["novel_id"], art_id, images=False)
@@ -96,7 +107,7 @@ class IllustrationService:
         rows = await self.current_rows(novel_id, chapter)
         selected = complete_scenes(rows)
         seen = set()
-        for row in rows:
+        for row in sorted(rows, key=lambda item: float(item["chapter"]), reverse=True):
             if row["kind"] != "reference":
                 continue
             key = (row["style"], row["character_key"])

@@ -12,6 +12,7 @@ from novelwiki.modules.ai_execution.adapters.outbound.agy.runs import (
 from novelwiki.modules.ai_execution.adapters.outbound.agy.runner import _proc_start_time
 from novelwiki.modules.ai_execution.application.errors import AgyError
 from .client import AppServerSession
+from .contracts import _strict_json_schema
 from .images import ImageSession
 from .workspace import create_run_workspace, codex_home_path, workspace_relpath
 
@@ -108,7 +109,7 @@ class IllustrationRenderer:
                     effort="max",
                     developer_instructions=instructions,
                     user_input=json.dumps(data, ensure_ascii=False, default=str),
-                    output_schema=schema,
+                    output_schema=_strict_json_schema(schema),
                     cancel_check=cancel,
                 )
             ).value

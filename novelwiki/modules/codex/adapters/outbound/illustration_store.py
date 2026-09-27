@@ -15,8 +15,14 @@ class IllustrationStore:
         fields = "*" if images else METADATA_COLUMNS
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                f"SELECT {fields} FROM codex_art WHERE novel_id=$1 AND chapter<=$2 "
-                "AND (kind='reference' OR chapter=$2) ORDER BY created_at DESC LIMIT 100;",
+                f"""WITH latest_references AS (
+                    SELECT DISTINCT ON (style,character_key) id
+                    FROM codex_art WHERE novel_id=$1 AND chapter<=$2 AND kind='reference'
+                    ORDER BY style,character_key,chapter DESC,created_at DESC,id DESC
+                )
+                SELECT {fields} FROM codex_art WHERE novel_id=$1
+                  AND ((kind='scene' AND chapter=$2) OR id IN (SELECT id FROM latest_references))
+                ORDER BY created_at DESC,id DESC LIMIT 100;""",
                 novel_id,
                 chapter,
             )
@@ -31,11 +37,18 @@ class IllustrationStore:
                     FROM codex_art
                     WHERE novel_id=$1 AND chapter<=$2 AND style=$3
                       AND kind='reference' AND character_key IS NOT NULL
-                    ORDER BY character_key,created_at DESC,id DESC
+                    ORDER BY character_key,chapter DESC,created_at DESC,id DESC
                 )
                 SELECT * FROM latest
                 ORDER BY (strpos(lower($4),lower(title))>0
-                          OR strpos(lower($4),replace(replace(character_key,'-',' '),'_',' '))>0) DESC,
+                          OR strpos(lower($4),replace(replace(character_key,'-',' '),'_',' '))>0
+                          OR EXISTS (
+                              SELECT 1 FROM jsonb_array_elements_text(
+                                  COALESCE(metadata->'aliases','[]'::jsonb)
+                              ) AS alias(name)
+                              WHERE length(btrim(alias.name))>0
+                                AND strpos(lower($4),lower(alias.name))>0
+                          )) DESC,
                          created_at DESC,id DESC
                 LIMIT 100;""",
                 novel_id,

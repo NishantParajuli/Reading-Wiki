@@ -368,11 +368,22 @@ stores a validated PNG capped at 16 MiB. `job_id` references Work (SET NULL on d
 `UNIQUE(job_id, slot)` makes reference/scene checkpoints idempotent. Reads check chapter
 access and current source validity before returning metadata or bytes.
 
+A character name change creates a new reference row at the chapter establishing the
+name, retaining the original `character_key` and copying its PNG bytes. Its metadata
+adds `aliases` (retained old names and observed aliases), `name_evidence` (an exact
+chapter quotation), and `sources` (upstream chapter/hash pairs for the original sheet
+and earlier name revisions). The `name:<character_key>` job slot makes this checkpoint
+idempotent. Source checks include these upstream hashes. Reference retrieval chooses
+the latest eligible story chapter per key, then the latest creation time within that
+chapter; it matches titles, keys, and saved aliases without exposing later names to
+earlier chapters. Existing rows without alias or source-history metadata remain valid.
+
 ### `codex_art_plans`
 
 Durable illustration plan keyed by `job_id` (FK to Work, cascade delete), with `plan
-JSONB` and `created_at`. The plan includes chosen scene briefs and prior reference IDs,
-so a retry resumes the same compositions and identities. These bytes and `codex_art`
+JSONB` and `created_at`. The plan includes chosen scene briefs, optional `name_updates`,
+and the exact prior reference IDs used by scenes or name updates, so a retry resumes
+the same compositions and identities. These bytes and `codex_art`
 belong in PostgreSQL backups, not the imported-asset directory. See
 [chapter illustrations](../pipelines/chapter-illustrations.md).
 

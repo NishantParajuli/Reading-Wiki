@@ -45,18 +45,35 @@ chapter ceiling. Every account, including owners/admins, uses the same trusted-p
 ceiling, with the first stored chapter as the fallback when no progress exists. The requested
 chapter bounds the planner's story text, earlier summaries, character facts, and reusable
 reference sheets. Future character designs are excluded even if already generated.
-The reference catalog keeps the newest sheet per character key and prioritizes names
-or keys mentioned in the current chapter before its 100-identity cap. Historical sheet
-revisions do not crowd the same recurring character out of that catalog. Only previous
-references actually used by the selected scenes are pinned into the saved plan.
+The reference catalog keeps the latest story-chapter revision per character key, using
+creation time to break ties within a chapter. It prioritizes names, saved aliases, or
+keys mentioned in the current chapter before its 100-identity cap. Matching is
+case-insensitive literal text matching, not semantic search. Historical sheet revisions
+do not crowd the same recurring character out of that catalog. Only previous references
+used by the selected scenes or a proposed name update are pinned into the saved plan.
+
+During an explicitly requested illustration job, the planner can propose up to four
+name or alias updates for existing character keys. Each requires an exact quotation
+from the current chapter establishing the identity/name connection; every new preferred
+name or proposed alias must appear in that chapter. The host checks the quotation and name
+occurrences, while the planner judges whether the quotation establishes the identity.
+The update retains the stable key and existing image bytes, records the old name and
+new aliases for future matching, and saves the preferred name as a new chapter-scoped
+reference revision. It does not redraw the character. Earlier chapters keep their
+earlier names, and illustrating an earlier chapter later cannot supersede a later
+chapter's name revision. Alias-only updates retain the existing preferred name, even
+when that unchanged name is absent from the current chapter. This is illustration planning,
+not a background rename scan or synchronization with Codex entity edits.
 
 Each image records a SHA-256 of its source chapter title and content. Changed source
 text makes old artwork unavailable instead of displaying an outdated interpretation.
 Reference sheets keep stable per-novel character keys and a style; a scene records the
 exact reference image IDs used for its characters. Reuse respects chapter boundaries and
 source validity. Changing an upstream reference's source also hides scenes that used
-that reference. A later chapter can reuse an earlier sheet without rewriting that
-earlier visual identity. Renumbering is blocked while chapter art or a saved art plan
+that reference. Name revisions retain the source hashes of the original sheet and
+intervening name revisions; edits to those chapters invalidate the revised sheet and
+scenes that depend on it. A later chapter can reuse an earlier sheet without rewriting
+that earlier visual identity. Renumbering is blocked while chapter art or a saved art plan
 exists; import replacement invalidates art/plans from the replaced chapter onward.
 
 ## Durable execution
@@ -74,10 +91,12 @@ The pipeline runs:
    the chapter text, bounded existing Codex context, and prior reference descriptions.
    The renderer checks that the account exposes `gpt-6-luna` and advertises `max`
    reasoning before starting a turn. This planning turn has no tools. The host validates the requested scene count,
-   character keys, and exact scene evidence quotations from this chapter.
+   character keys, exact scene evidence quotations, and proposed name-update evidence
+   and name occurrences from this chapter.
 3. Persist the plan and its chosen reference revisions. A retry resumes that plan
    instead of inventing a different set of scenes.
-4. Render missing new character sheets first, then the scenes with the selected
+4. Checkpoint name revisions using the existing sheet bytes, then render missing new
+   character sheets and the scenes with the selected
    character images attached. Native image generation runs through a separate App
    Server turn; it does not relax the tool-free translation/extraction runner.
    The host accepts the first completed image event and closes that session, preventing

@@ -66,6 +66,16 @@ class IllustrationWorker:
                 raise IllustrationSourceChanged(
                     "A character sheet source changed. Request a fresh illustration set."
                 )
+            for origin in metadata(row).get("sources", []):
+                original = await self.snapshot(novel_id, float(origin["chapter"]))
+                if (
+                    not original
+                    or not original.get("content")
+                    or source_hash(original) != origin["source_hash"]
+                ):
+                    raise IllustrationSourceChanged(
+                        "A character name or original sheet source changed. Request a fresh illustration set."
+                    )
             return row
 
         snapshot = await current()
@@ -101,6 +111,7 @@ class IllustrationWorker:
                     {
                         "key": key,
                         "name": row["title"],
+                        "aliases": metadata(row).get("aliases", []),
                         "canon": metadata(row).get("canon", ""),
                         "design_notes": metadata(row).get("design_notes", ""),
                         "prompt": metadata(row).get("prompt", ""),
@@ -116,7 +127,13 @@ class IllustrationWorker:
                 )
             )
             await current()
-            validate_plan(plan, snapshot["content"], count, set(existing))
+            validate_plan(
+                plan,
+                snapshot["content"],
+                count,
+                set(existing),
+                existing_names={key: row["title"] for key, row in existing.items()},
+            )
             used = {key for scene in plan.scenes for key in scene.characters}
             saved = await self.store.save_plan(
                 job_id,
@@ -129,6 +146,7 @@ class IllustrationWorker:
                         key: str(row["id"])
                         for key, row in existing.items()
                         if key in used
+                        or key in {update.key for update in plan.name_updates}
                     },
                 },
             )
@@ -139,9 +157,62 @@ class IllustrationWorker:
             key: await reference(await self.store.get(novel_id, art_id, images=False))
             for key, art_id in saved["references"].items()
         }
-        validate_plan(plan, snapshot["content"], count, set(existing))
+        validate_plan(
+            plan,
+            snapshot["content"],
+            count,
+            set(existing),
+            existing_names={key: row["title"] for key, row in existing.items()},
+        )
         completed = {row["slot"]: row for row in await self.store.for_job(job_id)}
         used = {key for scene in plan.scenes for key in scene.characters}
+        for update in plan.name_updates:
+            await current()
+            prior = existing[update.key]
+            previous = metadata(prior)
+            aliases = list(
+                dict.fromkeys(
+                    [*previous.get("aliases", []), prior["title"], *update.aliases]
+                )
+            )
+            if update.name == prior["title"] and set(aliases) <= set(
+                previous.get("aliases", [])
+            ) | {prior["title"]}:
+                continue
+            slot = "name:" + update.key
+            if slot in completed:
+                existing[update.key] = await reference(completed[slot])
+                continue
+            prior = await reference(await self.store.get(novel_id, prior["id"]))
+            sources = [
+                *previous.get("sources", []),
+                {
+                    "chapter": float(prior["chapter"]),
+                    "source_hash": prior["source_hash"],
+                },
+            ]
+            # A name revision reuses the original pixels. Keep chapter-scoped provenance
+            # so a later identity reveal never rewrites an earlier chapter's sheet.
+            existing[update.key] = await self.store.save(
+                novel_id=novel_id,
+                chapter=chapter,
+                kind="reference",
+                key=update.key,
+                title=update.name,
+                caption=prior["caption"],
+                style=style,
+                source_hash=options["source_hash"],
+                metadata={
+                    **previous,
+                    "aliases": aliases,
+                    "sources": sources,
+                    "name_evidence": update.evidence,
+                    "batch": job_id,
+                },
+                image=prior["image"],
+                job_id=job_id,
+                slot=slot,
+            )
         for design in plan.characters:
             if design.key in existing or design.key not in used:
                 continue

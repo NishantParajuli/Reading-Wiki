@@ -148,3 +148,31 @@ def test_empty_or_failed_image_uses_provider_wait_instead_of_publishing(tmp_path
         with pytest.raises(AgyError) as error:
             image_bytes(item, tmp_path)
         assert error.value.code == "openai_codex_provider_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_illustration_planner_sends_strict_schema_for_optional_name_history(
+    tmp_path,
+):
+    from types import SimpleNamespace
+    from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.illustration_runner import (
+        IllustrationRenderer,
+    )
+    from novelwiki.modules.codex.domain.illustrations import IllustrationPlan
+
+    session = SimpleNamespace(
+        run_turn=AsyncMock(return_value=SimpleNamespace(value={"name_updates": []}))
+    )
+    renderer = IllustrationRenderer({}, None, None)
+
+    async def run(operation):
+        return await operation(session, tmp_path, AsyncMock())
+
+    renderer._run = run
+    schema = IllustrationPlan.model_json_schema()
+    assert "name_updates" not in schema["required"]  # Old saved plans still load.
+    await renderer.plan("instructions", {}, schema)
+    transmitted = session.run_turn.call_args.kwargs["output_schema"]
+    assert set(transmitted["required"]) == set(transmitted["properties"])
+    assert transmitted["additionalProperties"] is False
+    assert session.run_turn.call_args.kwargs["effort"] == "max"
