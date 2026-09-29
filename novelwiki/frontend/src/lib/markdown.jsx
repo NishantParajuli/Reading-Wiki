@@ -2,70 +2,145 @@
    Markdown / answer rendering with inline provenance citations.
    The backend answers + synthesized codex entries are markdown with inline
    tokens like "[Chunk 12, Chapter 5]" / "[Fact 29]". We render:
-   - mode "answer": tokens present in citeMap become clickable, numbered <Cite>;
-       tokens NOT in the map were dropped by the server as beyond-ceiling, so we
-       omit them silently (the spoiler boundary already did its job server-side).
+   - mode "answer": tokens present in citeMap become numbered citation
+       buttons that open a source popover; tokens NOT in the map were dropped
+       by the server as beyond-ceiling, so we omit them silently (the spoiler
+       boundary already did its job server-side).
    - mode "prose": tokens render as small, non-clickable footnote markers.
    ============================================================ */
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 /* ---------- Citation popover (context) ---------- */
-const CiteContext = createContext({ setPop: () => {} });
+const CiteContext = createContext({ toggle: () => {}, activeKey: null });
 
 export function CiteProvider({ children }) {
-  const [pop, setPop] = useState(null); // {cite, x, y}
-  useEffect(() => {
-    const close = () => setPop(null);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => { window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
+  const [pop, setPop] = useState(null); // { id, cite, n, x, y, top, trigger }
+  const popRef = useRef(null);
+  popRef.current = pop;
+  const panelRef = useRef(null);
+
+  const close = useCallback((restoreFocus = false) => {
+    const current = popRef.current;
+    setPop(null);
+    if (restoreFocus && current && current.trigger && current.trigger.isConnected) current.trigger.focus({ preventScroll: true });
   }, []);
+
+  const toggle = useCallback((next) => {
+    setPop(current => (current && current.id === next.id ? null : next));
+  }, []);
+
+  useEffect(() => {
+    if (!pop) return undefined;
+    let frame = 0;
+    // Follow the citation while the page scrolls; close once it leaves the view.
+    const follow = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const trigger = popRef.current && popRef.current.trigger;
+        if (!trigger || !trigger.isConnected) { close(false); return; }
+        const r = trigger.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > window.innerHeight) { close(false); return; }
+        setPop(current => (current && current.trigger === trigger ? { ...current, x: r.left, y: r.bottom, top: r.top } : current));
+      });
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(true); };
+    const onDown = (e) => {
+      const target = e.target;
+      if (panelRef.current && panelRef.current.contains(target)) return;
+      if (pop.trigger && pop.trigger.contains(target)) return;
+      close(false);
+    };
+    window.addEventListener("scroll", follow, true);
+    window.addEventListener("resize", follow);
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", follow, true);
+      window.removeEventListener("resize", follow);
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown, true);
+    };
+  }, [pop && pop.id, close]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const value = useMemo(() => ({ toggle, activeKey: pop ? pop.id : null }), [toggle, pop]);
   return (
-    <CiteContext.Provider value={{ setPop }}>
+    <CiteContext.Provider value={value}>
       {children}
-      {pop && <CitePopover {...pop} onClose={() => setPop(null)} />}
+      {pop && <CitePopover key={pop.id} cite={pop.cite} n={pop.n} x={pop.x} y={pop.y} top={pop.top} trigger={pop.trigger} panelRef={panelRef} onClose={close} />}
     </CiteContext.Provider>
   );
 }
 
-function CitePopover({ cite, x, y }) {
-  const ref = useRef(null);
-  const [pos, setPos] = useState({ left: x, top: y, vis: false });
+function CitePopover({ cite, n, x, y, top, trigger, panelRef, onClose }) {
+  const [pos, setPos] = useState({ left: x, top: y + 12, vis: false, below: true });
+  useLayoutEffect(() => {
+    const el = panelRef.current; if (!el) return;
+    const r = el.getBoundingClientRect();
+    const gutter = 12;
+    const width = r.width || 320;
+    let left = Math.min(x - 18, window.innerWidth - width - gutter);
+    left = Math.max(gutter, left);
+    let below = true;
+    let nextTop = y + 12;
+    if (nextTop + r.height > window.innerHeight - gutter && top - r.height - 12 > gutter) {
+      nextTop = top - r.height - 12;
+      below = false;
+    }
+    setPos({ left, top: nextTop, vis: true, below });
+  }, [x, y, top, panelRef]);
   useEffect(() => {
-    const el = ref.current; if (!el) return;
-    const w = 300, r = el.getBoundingClientRect();
-    let left = Math.min(x, window.innerWidth - w - 14);
-    left = Math.max(14, left);
-    let top = y + 14;
-    if (top + r.height > window.innerHeight - 14) top = y - r.height - 14;
-    setPos({ left, top, vis: true });
-  }, [x, y]);
+    if (pos.vis && panelRef.current) panelRef.current.focus({ preventScroll: true });
+  }, [pos.vis, panelRef]);
+  const kind = cite.kind ? cite.kind.charAt(0).toUpperCase() + cite.kind.slice(1) : "Source";
   return (
-    <div ref={ref} className="cite-pop" style={{ left: pos.left, top: pos.top, visibility: pos.vis ? "visible" : "hidden" }}
+    <div ref={panelRef} className={"cite-pop cx-cite-pop" + (pos.below ? "" : " is-above")} role="dialog"
+         aria-label={`Source ${n}`} tabIndex={-1}
+         style={{ left: pos.left, top: pos.top, visibility: pos.vis ? "visible" : "hidden" }}
+         onBlur={(e) => {
+           // Keyboard focus leaving for another control closes it; pointer
+           // dismissal is handled by the document listener above.
+           const to = e.relatedTarget;
+           if (!to || e.currentTarget.contains(to) || (trigger && trigger.contains(to))) return;
+           onClose(false);
+         }}
          onClick={(e) => e.stopPropagation()}>
       <div className="cp-head">
-        <span className="chip mono">ch. {cite.ch}</span>
-        <span className="muted" style={{ fontSize: "var(--text-xs)" }}>{cite.label || ""}</span>
+        <span className="cx-cite-num" aria-hidden="true">{n}</span>
+        <span className="cp-where">
+          <b>{cite.ch != null ? `Chapter ${cite.ch}` : "Source"}</b>
+          <span>{kind}{cite.id != null ? ` ${cite.id}` : ""}</span>
+        </span>
+        <button type="button" className="icon-btn plain cx-cite-close" aria-label="Close source" onClick={() => onClose(true)}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
       </div>
       {cite.quote
-        ? <div className="cp-quote">“{cite.quote}”</div>
-        : <div className="cp-quote muted">Retrieved evidence (bounded)</div>}
+        ? <blockquote className={"cp-quote" + (/^[\u201C\u2018"']/.test(String(cite.quote).trim()) ? " is-quoted" : "")}>{cite.quote}</blockquote>
+        : <div className="cp-quote is-empty">Retrieved evidence (bounded)</div>}
       <div className="cp-meta">
-        <span>{cite.chunk || ""}</span>
-        <span>retrieved · bounded</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4" /></svg>
+        <span>Retrieved within your chapter boundary</span>
       </div>
     </div>
   );
 }
 
 export function Cite({ n, cite }) {
-  const { setPop } = useContext(CiteContext);
+  const { toggle, activeKey } = useContext(CiteContext);
+  const key = useId();
+  const expanded = activeKey === key;
   return (
-    <sup className="cite" onClick={(e) => {
-      e.stopPropagation();
-      const r = e.currentTarget.getBoundingClientRect();
-      setPop({ cite, x: r.left, y: r.bottom });
-    }}>{n}</sup>
+    <button type="button" className={"cite cx-cite" + (expanded ? " is-open" : "")}
+            aria-label={`Source ${n}${cite.ch != null ? `, chapter ${cite.ch}` : ""}`}
+            aria-haspopup="dialog" aria-expanded={expanded}
+            onClick={(e) => {
+              e.stopPropagation();
+              const r = e.currentTarget.getBoundingClientRect();
+              toggle({ id: key, cite, n, x: r.left, y: r.bottom, top: r.top, trigger: e.currentTarget });
+            }}>
+      {n}
+    </button>
   );
 }
 
@@ -167,4 +242,14 @@ export function AnswerBody({ answer, citeMap }) {
   const state = { n: 0, assigned: {} };
   const nodes = renderMarkdown(answer, { mode: "answer", citeMap: citeMap || {}, state });
   return <div className="answer-body" data-cites={state.n}>{nodes}</div>;
+}
+
+/* The citations an answer actually shows, in the order AnswerBody numbers
+   them ({ n, key, cite }). Parses exactly as AnswerBody renders. */
+export function collectCitations(answer, citeMap) {
+  const state = { n: 0, assigned: {} };
+  renderMarkdown(answer, { mode: "answer", citeMap: citeMap || {}, state });
+  return Object.entries(state.assigned)
+    .map(([key, n]) => ({ n, key, cite: (citeMap || {})[key] }))
+    .sort((a, b) => a.n - b.n);
 }
