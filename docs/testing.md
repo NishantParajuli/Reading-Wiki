@@ -191,7 +191,10 @@ The mocked Playwright scenarios in `novelwiki/frontend/e2e/critical-paths.spec.j
 cover critical flows with fetch-level fixtures, including mobile narration highlighting
 and automatic reveal. List the current cases with `npm run test:e2e -- --list` from
 `novelwiki/frontend`; counts change as regressions are added. The regular browser run
-skips `real-backend.spec.js` unless `REAL_BACKEND=1`. The screenshot harness in
+skips `real-backend.spec.js` unless `REAL_BACKEND=1`. The specs mock
+`http://127.0.0.1:4173/api/**`, so run them on port 4173; mocked runs point the dev
+server's proxy at a closed port, so anything left unmocked fails instead of reaching a
+local backend. The screenshot harness in
 `novelwiki/frontend/e2e/showcase/` renders routes from synthetic fixtures for visual
 review across themes and viewports; it is not a test gate and Playwright does not
 collect it (see the [frontend overview](frontend/overview.md#testing)).

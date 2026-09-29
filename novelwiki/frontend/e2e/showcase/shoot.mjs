@@ -62,6 +62,9 @@ const clickFrames = Number(opt("click-frames", 0));
 const accent = opt("accent", null);
 mkdirSync(out, { recursive: true });
 
+// Anything the fixtures don't answer must fail here, never reach a real backend
+// through vite.config's proxy (whose default is the local production port).
+process.env.VITE_API_PROXY = "http://127.0.0.1:9";
 // A cache per port keeps concurrent showcase servers from racing on dep optimization.
 const server = await createServer({ root, logLevel: "error", cacheDir: resolve(root, `node_modules/.vite-showcase-${port}`), server: { port, strictPort: true, host: "127.0.0.1" } });
 await server.listen();
