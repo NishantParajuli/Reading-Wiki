@@ -112,12 +112,12 @@ p { text-wrap: pretty; }
    .page-enter        : the route's content rises in.
    .rise / --i         : staggered children (set style={{"--i": n}}).        */
 @media (prefers-reduced-motion: no-preference) {
-  .page-enter { animation: page-enter var(--dur-4) var(--ease-out) both; }
+  .page-enter { animation: page-enter var(--dur-4) var(--ease-out) backwards; }
   .rise {
-    animation: rise var(--dur-4) var(--ease-out) both;
+    animation: rise var(--dur-4) var(--ease-out) backwards;
     animation-delay: calc(var(--i, 0) * var(--stagger) + var(--rise-delay, 0ms));
   }
-  .fade-in { animation: fade-in var(--dur-3) var(--ease-out) both; }
+  .fade-in { animation: fade-in var(--dur-3) var(--ease-out) backwards; }
 }
 @keyframes page-enter {
   from { opacity: 0; transform: translateY(14px); filter: blur(6px); }
@@ -134,7 +134,7 @@ p { text-wrap: pretty; }
 @supports (animation-timeline: view()) {
   @media (prefers-reduced-motion: no-preference) {
     .reveal-on-scroll {
-      animation: rise linear both;
+      animation: rise linear backwards;
       animation-timeline: view();
       animation-range: entry 0% entry 42%;
     }

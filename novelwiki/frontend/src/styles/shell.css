@@ -163,7 +163,7 @@
 }
 .novel-capsule::-webkit-scrollbar { display: none; }
 @media (prefers-reduced-motion: no-preference) {
-  .novel-capsule { animation: capsule-in 620ms var(--ease-spring) both; }
+  .novel-capsule { animation: capsule-in 620ms var(--ease-spring) backwards; }
 }
 @keyframes capsule-in { from { opacity: 0; transform: translateY(-10px) scale(0.96); filter: blur(6px); } }
 .nc-book {

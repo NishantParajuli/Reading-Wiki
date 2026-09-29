@@ -5,7 +5,13 @@
    All stories, people and text are invented for this fixture.
    ============================================================ */
 
+import { bigLibrary, withDiscoverExtras } from "./fixtures-library.mjs";
+
 const DAY = 86_400_000;
+// SHOWCASE_BIG_LIBRARY=1 renders a 60-book library for density/performance review.
+const BIG = typeof process !== "undefined" && process.env && process.env.SHOWCASE_BIG_LIBRARY === "1";
+// SHOWCASE_EMPTY=1 renders a brand-new account (first-run welcome, empty states).
+const EMPTY = typeof process !== "undefined" && process.env && process.env.SHOWCASE_EMPTY === "1";
 const now = Date.now();
 const iso = (msAgo) => new Date(now - msAgo).toISOString();
 
@@ -253,6 +259,25 @@ export const users = [
   { id: 3, username: "sol", display_name: "Sol", email: "sol@example.test", role: "user", status: "suspended", email_verified: false, avatar_url: null, quota_overrides: { ocr_pages: 50 }, ai_backend_policy: {}, usage: { translated_chapters: 3, ocr_pages: 50, codex_builds: 0, tts_chapters: 0 }, limits: { translated_chapters: 300, ocr_pages: 50, codex_builds: 5, tts_chapters: 100 } },
 ];
 
+/* ---------- illustration art (synthetic scene, served as SVG) ---------- */
+export function sceneSvg() {
+  const stars = Array.from({ length: 70 }, (_, i) => `<circle cx="${(i * 97) % 1200}" cy="${(i * 53) % 330}" r="${(i % 3) * 0.6 + 0.6}" fill="#e9f4ff" opacity="${0.25 + (i % 5) * 0.12}"/>`).join("");
+  const glints = Array.from({ length: 16 }, (_, i) => `<rect x="${780 - i * 6 - (i % 3) * 14}" y="${470 + i * 16}" width="${120 - i * 6}" height="3" rx="1.5" fill="#d9f6ff" opacity="${0.75 - i * 0.04}"/>`).join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#050b1f"/><stop offset=".55" stop-color="#15305a"/><stop offset="1" stop-color="#2b6f8a"/></linearGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2d7c93"/><stop offset="1" stop-color="#071426"/></linearGradient>
+    <radialGradient id="moon"><stop offset="0" stop-color="#fbfdff"/><stop offset=".4" stop-color="#cfe9ff" stop-opacity=".6"/><stop offset="1" stop-color="#cfe9ff" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>${stars}
+  <circle cx="830" cy="200" r="190" fill="url(#moon)" opacity=".5"/><circle cx="830" cy="200" r="58" fill="#f4f9ff"/>
+  <rect y="440" width="1200" height="360" fill="url(#sea)"/>${glints}
+  <path d="M0 440 L1200 440" stroke="#bfefff" stroke-opacity=".35"/>
+  <g fill="#0b1830" opacity=".85"><rect x="140" y="360" width="46" height="80"/><rect x="196" y="330" width="34" height="110"/><rect x="240" y="376" width="60" height="64"/><path d="M196 330 l17 -30 l17 30z"/></g>
+  <g transform="translate(560 560)"><ellipse cx="0" cy="44" rx="26" ry="5" fill="#000" opacity=".35"/><path d="M-9 44 L-6 6 Q0 -6 6 6 L9 44Z" fill="#0d1a2c"/><circle cx="0" cy="-6" r="9" fill="#0d1a2c"/><circle cx="16" cy="18" r="5" fill="#ffd89a"/><circle cx="16" cy="18" r="16" fill="#ffd89a" opacity=".25"/></g>
+  </svg>`;
+}
+
 /* ---------- router ---------- */
 export function respond(method, path, query) {
   const novelMatch = path.match(/^\/api\/novels\/(\d+)(\/.*)?$/);
@@ -261,10 +286,10 @@ export function respond(method, path, query) {
   if (path === "/api/auth/links") return { linked: ["google"], has_password: true };
   if (path === "/api/auth/login" || path === "/api/auth/register") return user;
   if (path === "/api/me/usage") return { unlimited: false, usage: { translated_chapters: 212, ocr_pages: 40, codex_builds: 6, tts_chapters: 90 }, limits: { translated_chapters: 1000, ocr_pages: 500, codex_builds: 20, tts_chapters: 300 } };
-  if (path === "/api/home") return home;
-  if (path === "/api/activity") return { jobs: query.get("status") === "active" ? activity.filter(j => j.cancelable) : activity };
-  if (path === "/api/novels" && method === "GET") return novels;
-  if (path === "/api/discover") return { items: discover, total: discover.length, offset: 0, limit: 60 };
+  if (path === "/api/home") return EMPTY ? { continue_reading: [], updated_in_library: [], newest: home.newest, recent_imports: [] } : home;
+  if (path === "/api/activity") return { jobs: EMPTY ? [] : (query.get("status") === "active" ? activity.filter(j => j.cancelable) : activity) };
+  if (path === "/api/novels" && method === "GET") return EMPTY ? [] : BIG ? bigLibrary(novels, 60) : novels;
+  if (path === "/api/discover") return { items: withDiscoverExtras(discover), total: discover.length, offset: 0, limit: 60 };
   if (path === "/api/adapters") return [{ name: "royalroad", label: "Royal Road", default_language: "en", start_url_hint: "Paste the novel's main page." }, { name: "global-novelpia", label: "Novelpia Global", default_language: "en" }];
   if (path === "/api/tts/voices") return voices;
   if (path === "/api/jobs") return { jobs: activity.filter(j => j.source === "job").map(j => ({ ...j })) };
@@ -324,7 +349,15 @@ export function respond(method, path, query) {
     if (rest === "/contributions") return [];
     if (rest === "/tag-suggestions") return [];
     if (rest === "/illustrations") return { can_generate: true, active_job: null };
-    if (/\/chapters\/[\d.]+\/illustrations$/.test(rest)) return { items: [], can_generate: true, active_job: null };
+    if (/\/chapters\/[\d.]+\/illustrations$/.test(rest)) {
+      const number = Number(rest.match(/\/chapters\/([\d.]+)\//)[1]);
+      return id === 1 && number === 5 ? { can_generate: true, active_job: null, items: [{
+        id: "scene-5", kind: "scene", style: "luminous", title: "Low water at the glass shore",
+        caption: "Mira waits at the edge of the glass as the tide pulls back.",
+        placement: { position: "after", anchor: "that no one admitted to ringing." },
+        image_url: "/api/novels/1/illustrations/scene-5/image",
+      }] } : { items: [], can_generate: true, active_job: null };
+    }
     if (rest.startsWith("/cost-estimate")) return { estimated_units: 12, quota_kind: "translated_chapters", unlimited: false, remaining: 788, limit: 1000, allowed: true, spend_allowed: true };
     if (rest === "/meta") return { title: detail && detail.title };
     return {};

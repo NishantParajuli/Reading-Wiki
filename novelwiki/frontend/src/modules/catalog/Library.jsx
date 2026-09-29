@@ -1,21 +1,36 @@
 /* ============================================================
-   Library (§6.4) — cover-forward bookshelf. Search, sort, grid/list toggle,
-   shelf tabs, optimistic shelf moves with undo, add-novel dialog.
+   Library — the reader's private collection: a luminous shelf at night.
+
+   Covers are the heroes. A glass toolbar docks under the island with the
+   shelf tabs (sliding lozenge + live counts), search ("/" to focus), sort
+   and the grid/list toggle — all persisted (nw-lib-tab/-view/-sort).
+   The header's quiet summary is computed from real data only.
+
+   Motion: the shelf rises in a capped cascade; changing shelf, search or
+   sort FLIPs the books into place while leavers sink into the tide; the
+   grid/list toggle flies every jacket to its new home. Lingering on a book
+   (fine pointers) tints the room with its cover. Shelf moves and removals
+   are optimistic with rollback and an Undo toast.
    ============================================================ */
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { catalogApi } from "../../modules/catalog/api.js";
-import { Icon } from "../../components/Icon.jsx";
-import { Button, Chip, Cover, EmptyState, Loading, PageHeader, ProgressBar, SegmentedControl, Tabs } from "../../components/ui.jsx";
-import { Popover, MenuItem } from "../../components/overlay.jsx";
+import { catalogApi } from "./api.js";
 import { AddNovelDialog } from "./AddNovelDialog.jsx";
+import { useNovelsQuery } from "./queries.js";
+import {
+  MOTION_CAP, SearchField, ShelfCard, ShelfRow, ShelfSkeleton, SortMenu, Tally, readPct, useSlashFocus,
+} from "./LibraryParts.jsx";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, EmptyState, PageHeader, SegmentedControl, Tabs } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
-import { useNovelsQuery } from "../../modules/catalog/queries.js";
+import { AnimatePresence, LayoutGroup } from "../../motion/index.js";
+import { prefersReducedMotion, useReadySignal } from "../../motion/navigation.js";
+import { useBookAtmosphere } from "../../atmosphere/store.js";
 import { useLocalStorage, useTitle } from "../../lib/hooks.js";
-import { SHELF_LABELS, SHELF_ORDER } from "../../lib/constants.js";
-import { fmtChapter, relativeTime } from "../../lib/utils.js";
+import { SHELF_LABELS } from "../../lib/constants.js";
 
 const LIBRARY_TABS = [
   { id: "all", label: "All" },
@@ -32,127 +47,107 @@ const SORTS = [
 ];
 
 const EMPTY_COPY = {
-  all: { title: "No novels yet", body: "Add your first novel to start reading." },
-  reading: { title: "Nothing on the go", body: "Open a book and it lands here." },
-  to_read: { title: "The pile is empty", body: "Shelve something for later from a novel's page." },
-  completed: { title: "Nothing finished yet", body: "The ending will come." },
+  all: { icon: "library", title: "No novels yet", body: "Add your first novel to start reading." },
+  reading: { icon: "bookOpen", title: "Nothing on the go", body: "Open a book and it lands here." },
+  to_read: { icon: "bookmark", title: "The pile is empty", body: "Shelve something for later from a novel's page." },
+  completed: { icon: "circleCheck", title: "Nothing finished yet", body: "The ending will come." },
 };
 
-function pct(n) {
-  const max = n.max_chapter || 0;
-  const read = n.max_chapter_read || 0;
-  return max > 0 ? Math.round(Math.min(100, (read / max) * 100)) : 0;
+const COMPARE = {
+  recent_read: (a, b) => String(b.last_read_at || "").localeCompare(String(a.last_read_at || "")),
+  recent_updated: (a, b) => String(b.source_updated_at || "").localeCompare(String(a.source_updated_at || "")),
+  title: (a, b) => String(a.title || "").localeCompare(String(b.title || "")),
+  progress: (a, b) => readPct(b) - readPct(a),
+};
+
+/* Linger on a book (fine pointer, motion allowed) and the room takes its colour. */
+function useLingerAtmosphere() {
+  const [book, setBook] = useState(null);
+  const timer = useRef(0);
+  const enabled = useMemo(() => {
+    try { return window.matchMedia("(hover: hover) and (pointer: fine)").matches && !prefersReducedMotion(); }
+    catch { return false; }
+  }, []);
+  useBookAtmosphere(book);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const onFocusBook = useCallback((n) => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setBook(n ? { id: n.id, title: n.title, cover_url: n.cover_url } : null), n ? 850 : 1400);
+  }, []);
+  return enabled ? onFocusBook : null;
 }
 
-function statusChip(n) {
-  const started = n.last_chapter != null;
-  if (n.new_chapters > 0) return <Chip tone="accent">{n.new_chapters} new</Chip>;
-  if (n.shelf === "completed") return <Chip tone="ok">Finished</Chip>;
-  if (started) return <Chip>Ch. {fmtChapter(n.last_chapter)}</Chip>;
-  return null;
-}
-
-function ShelfMenu({ n, onMove, onRemove }) {
-  const [open, setOpen] = useState(false);
+function FirstShelf({ onAdd, onImport }) {
+  const ways = [
+    { icon: "globe", title: "From the web", body: "Paste a novel's page and Tideglass keeps it in step as chapters arrive.", action: onAdd, label: "Add a novel" },
+    { icon: "upload", title: "From a file", body: "Bring an EPUB or PDF — scanned pages included.", action: onImport, label: "Import a book" },
+    { icon: "compass", title: "From the shared library", body: "Pick up something other readers have shelved.", to: "/discover", label: "Browse shared library" },
+  ];
   return (
-    <Popover open={open} onClose={() => setOpen(false)} trigger={
-      <button className="cover-action" aria-label="Shelf menu" aria-expanded={open}
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(o => !o); }}>
-        <Icon name="more" size={16} sw={2.6} />
-      </button>
-    }>
-      <div className="menu-label">Shelf</div>
-      {SHELF_ORDER.map(s => (
-        <MenuItem key={s} selected={n.shelf === s}
-                  onClick={(e) => { e.preventDefault(); setOpen(false); onMove(n, n.shelf === s ? "" : s); }}>
-          {SHELF_LABELS[s]}
-        </MenuItem>
-      ))}
-      <div className="menu-sep" />
-      <MenuItem icon="x" danger onClick={(e) => { e.preventDefault(); setOpen(false); onRemove(n); }}>
-        Remove from library
-      </MenuItem>
-    </Popover>
-  );
-}
-
-function GridCard({ n, onMove, onRemove }) {
-  const started = n.last_chapter != null;
-  const resumeCh = started ? n.last_chapter : (n.min_chapter || 1);
-  return (
-    <article className="shelf-card">
-      <span style={{ position: "relative", display: "block" }}>
-        <Link to={`/n/${n.id}`} aria-label={`About ${n.title}`}><Cover src={n.cover_url} title={n.title} /></Link>
-        <span className="cover-actions">
-          {(n.chapter_count || 0) > 0 && (
-            <Link className="cover-action" aria-label={`${started ? "Resume" : "Start reading"} ${n.title}`} to={`/n/${n.id}/read/${resumeCh}`}>
-              <Icon name="arrowRight" size={17} />
-            </Link>
-          )}
-          <ShelfMenu n={n} onMove={onMove} onRemove={onRemove} />
-        </span>
-      </span>
-      <span>
-        <Link className="shelf-card-title" to={`/n/${n.id}`}>{n.title}</Link>
-        {n.author && <span className="shelf-card-author" style={{ display: "block" }}>{n.author}</span>}
-      </span>
-      {started && pct(n) > 0 && <ProgressBar size="xs" value={pct(n)} label={`Reading progress for ${n.title}`} />}
-      <span className="shelf-card-meta">{statusChip(n)}</span>
-    </article>
-  );
-}
-
-function ListRow({ n, onMove, onRemove }) {
-  return (
-    <article className="lib-row">
-      <Link className="lib-row-link" to={`/n/${n.id}`}>
-      <Cover src={n.cover_url} title={n.title} />
-      <span className="grow">
-        <span className="lib-row-title" style={{ display: "block" }}>{n.title}</span>
-        {n.author && <span className="lib-row-author">{n.author}</span>}
-      </span>
-      </Link>
-      <ProgressBar size="xs" value={pct(n)} label={`Reading progress for ${n.title}`} />
-      <span className="lib-row-nums">
-        {n.last_chapter != null ? `${fmtChapter(n.last_chapter)}/${fmtChapter(n.max_chapter || 0)}` : `${n.chapter_count} ch.`}
-      </span>
-      {n.shelf && <Chip>{SHELF_LABELS[n.shelf]}</Chip>}
-      {n.last_read_at && <span className="lib-row-date">{relativeTime(n.last_read_at)}</span>}
-      <ShelfMenu n={n} onMove={onMove} onRemove={onRemove} />
-    </article>
+    <section className="lib-first rise" aria-labelledby="lib-first-title">
+      <div className="lib-first-glow" aria-hidden="true" />
+      <p className="section-eyebrow">An empty shelf</p>
+      <h2 className="lib-first-title" id="lib-first-title">No novels yet</h2>
+      <p className="lib-first-body">Add your first novel to start reading. Three ways to begin:</p>
+      <div className="lib-first-ways">
+        {ways.map((w, i) => {
+          const inner = (
+            <>
+              <span className="lib-first-icon"><Icon name={w.icon} size={20} /></span>
+              <span className="lib-first-copy"><b>{w.title}</b><span>{w.body}</span></span>
+              <span className="lib-first-go">{w.label} <Icon name="arrowRight" size={14} /></span>
+            </>
+          );
+          return w.to
+            ? <Link key={w.title} className="lib-first-way rise" style={{ "--i": i + 2 }} to={w.to}>{inner}</Link>
+            : <button key={w.title} type="button" className="lib-first-way rise" style={{ "--i": i + 2 }} onClick={w.action}>{inner}</button>;
+        })}
+      </div>
+    </section>
   );
 }
 
 export function Library() {
-  const { data: novels, isLoading, isError, refetch } = useNovelsQuery();
+  const { data: novels, isLoading, isError, isFetching, refetch } = useNovelsQuery();
   const qc = useQueryClient();
   const { toast } = useToast();
   const navigate = useNavigate();
-  const [tab, setTab] = useLocalStorage("nw-lib-tab", "all");
-  const [view, setView] = useLocalStorage("nw-lib-view", "grid");
-  const [sort, setSort] = useLocalStorage("nw-lib-sort", "recent_read");
+  const [storedTab, setTab] = useLocalStorage("nw-lib-tab", "all");
+  const [storedView, setView] = useLocalStorage("nw-lib-view", "grid");
+  const [storedSort, setSort] = useLocalStorage("nw-lib-sort", "recent_read");
+  const tab = LIBRARY_TABS.some(t => t.id === storedTab) ? storedTab : "all";
+  const view = storedView === "list" ? "list" : "grid";
+  const sort = COMPARE[storedSort] ? storedSort : "recent_read";
   const [q, setQ] = useState("");
   const [adding, setAdding] = useState(false);
+  const searchRef = useRef(null);
+  const onFocusBook = useLingerAtmosphere();
   useTitle("Library");
+  useReadySignal("library", !isLoading);
+  useSlashFocus(searchRef);
 
-  const all = novels || [];
-  const counts = { all: all.length, reading: 0, to_read: 0, completed: 0 };
-  all.forEach(n => { if (n.shelf && counts[n.shelf] != null) counts[n.shelf]++; });
+  // A view toggle morphs jackets between grid and list instead of re-cascading.
+  const lastView = useRef(view);
+  const morph = lastView.current !== view;
+  useEffect(() => { lastView.current = view; }, [view]);
 
+  const all = useMemo(() => novels || [], [novels]);
+  const counts = useMemo(() => {
+    const c = { all: all.length, reading: 0, to_read: 0, completed: 0 };
+    all.forEach(n => { if (n.shelf && c[n.shelf] != null) c[n.shelf] += 1; });
+    return c;
+  }, [all]);
+  const chaptersRead = useMemo(() => Math.floor(all.reduce((sum, n) => sum + (Number(n.max_chapter_read) || 0), 0)), [all]);
+
+  const needle = q.trim().toLowerCase();
   const shown = useMemo(() => {
     let list = tab === "all" ? all : all.filter(n => n.shelf === tab);
-    const needle = q.trim().toLowerCase();
     if (needle) {
-      list = list.filter(n => n.title.toLowerCase().includes(needle) || (n.author || "").toLowerCase().includes(needle));
+      list = list.filter(n => String(n.title || "").toLowerCase().includes(needle) || String(n.author || "").toLowerCase().includes(needle));
     }
-    const key = {
-      recent_read: (a, b) => String(b.last_read_at || "").localeCompare(String(a.last_read_at || "")),
-      recent_updated: (a, b) => String(b.source_updated_at || "").localeCompare(String(a.source_updated_at || "")),
-      title: (a, b) => a.title.localeCompare(b.title),
-      progress: (a, b) => pct(b) - pct(a),
-    }[sort];
-    return key ? [...list].sort(key) : list;
-  }, [all, tab, q, sort]);
+    return [...list].sort(COMPARE[sort]);
+  }, [all, tab, needle, sort]);
+  const layoutKey = useMemo(() => `${view}|${shown.map(n => n.id).join(",")}`, [view, shown]);
 
   /* Optimistic shelf move with rollback + undo toast. */
   async function moveShelf(n, shelf) {
@@ -196,11 +191,86 @@ export function Library() {
     }
   }
 
+  const ready = !isLoading && !isError;
+  const summary = isLoading
+    ? <span className="lib-summary is-quiet">Gathering your shelves…</span>
+    : ready && (all.length
+      ? (
+        <span className="lib-summary">
+          <span className="lib-summary-part"><b><Tally value={all.length} /></b> {all.length === 1 ? "book" : "books"} on your shelves</span>
+          {chaptersRead > 0 && (
+            <>
+              <span className="lib-summary-sep" aria-hidden="true">·</span>
+              <span className="lib-summary-part"><b><Tally value={chaptersRead} /></b> {chaptersRead === 1 ? "chapter" : "chapters"} read</span>
+            </>
+          )}
+        </span>
+      )
+      : <span className="lib-summary is-quiet">Your shelves are waiting for their first book.</span>);
+
+  const shelfName = LIBRARY_TABS.find(t => t.id === tab).label;
+  const status = isLoading ? "Finding your books…"
+    : isError ? "Library unavailable"
+    : needle ? `${shown.length} ${shown.length === 1 ? "book" : "books"} matching “${q.trim()}”`
+    : tab === "all" ? `${shown.length} ${shown.length === 1 ? "book" : "books"} in your collection`
+    : `${shown.length} ${shown.length === 1 ? "book" : "books"} on ${shelfName}`;
+
   const emptyCopy = EMPTY_COPY[tab] || EMPTY_COPY.all;
+  const itemProps = { q, morph, layoutDependency: layoutKey, onMove: moveShelf, onRemove: removeFromLibrary };
+
+  let body;
+  if (isLoading) {
+    body = <ShelfSkeleton view={view} />;
+  } else if (isError) {
+    body = (
+      <EmptyState icon="alert" title="Your library couldn't load" body="Try again to see your books and saved progress."
+        primaryAction={<Button icon="refresh" loading={isFetching} onClick={() => refetch()}>Try again</Button>} />
+    );
+  } else if (!all.length) {
+    body = <FirstShelf onAdd={() => setAdding(true)} onImport={() => navigate("/import")} />;
+  } else {
+    body = (
+      <LayoutGroup id="library-shelf">
+        {view === "grid" ? (
+          <ul className="lib-grid" aria-label={`${shelfName} books`}>
+            <AnimatePresence mode="popLayout" initial>
+              {shown.map((n, i) => (
+                <ShelfCard key={n.id} n={n} index={i} animated={i < MOTION_CAP} onFocusBook={onFocusBook} {...itemProps} />
+              ))}
+            </AnimatePresence>
+          </ul>
+        ) : (
+          <div className="lib-list-wrap">
+            <div className="lib-list-head" aria-hidden="true">
+              <span /><span>Title</span><span>Progress</span><span>Shelf</span><span>Last read</span><span />
+            </div>
+            <ul className="lib-list" aria-label={`${shelfName} books`}>
+              <AnimatePresence mode="popLayout" initial>
+                {shown.map((n, i) => (
+                  <ShelfRow key={n.id} n={n} index={i} animated={i < MOTION_CAP} {...itemProps} />
+                ))}
+              </AnimatePresence>
+            </ul>
+          </div>
+        )}
+        {shown.length === 0 && (
+          needle
+            ? <EmptyState key={`q-${tab}`} icon="search" title="No matches" body={`Nothing on this shelf matches “${q.trim()}”. Try a different search.`}
+                primaryAction={<Button variant="ghost" icon="x" onClick={() => setQ("")}>Clear search</Button>} />
+            : <EmptyState key={`t-${tab}`} icon={emptyCopy.icon} title={emptyCopy.title} body={emptyCopy.body}
+                primaryAction={<Button variant="ghost" icon="library" onClick={() => setTab("all")}>Show all books</Button>}
+                secondaryAction={tab === "to_read" ? <Button variant="ghost" icon="compass" onClick={() => navigate("/discover")}>Browse shared library</Button> : null} />
+        )}
+      </LayoutGroup>
+    );
+  }
 
   return (
-    <div className="page page-enter">
-      <PageHeader title="Library" subtitle="Old favourites. New worlds. All yours to explore."
+    <div className="page page-enter lib-page">
+      <PageHeader
+        eyebrow={<><span className="lib-eyebrow-mark" aria-hidden="true" />Your collection</>}
+        title="Library"
+        subtitle={summary}
         actions={
           <>
             <Button variant="ghost" icon="upload" onClick={() => navigate("/import")}>Import</Button>
@@ -208,45 +278,27 @@ export function Library() {
           </>
         } />
 
-      <div className="lib-toolbar">
-        <div className="search-box">
-          <Icon name="search" size={16} className="muted" />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search your library…" aria-label="Search your library" />
-          {q && <button className="icon-btn plain" style={{ width: 26, height: 26 }} aria-label="Clear search" onClick={() => setQ("")}><Icon name="x" size={13} /></button>}
+      <section className="lib-controls rise" style={{ "--i": 5 }} aria-label="Library tools">
+        <Tabs className="lib-shelves" tabs={LIBRARY_TABS.map(t => ({ ...t, count: novels ? counts[t.id] : undefined }))}
+              value={tab} onChange={setTab} />
+        <div className="lib-tools">
+          <SearchField ref={searchRef} className="lib-search" value={q} onChange={setQ}
+                       placeholder="Search your library…" label="Search your library" shortcut />
+          <SortMenu value={sort} options={SORTS} onChange={setSort} className="lib-sort" />
+          <SegmentedControl fit ariaLabel="View" value={view} onChange={setView} className="lib-view"
+            options={[{ value: "grid", icon: "grid", title: "Grid" }, { value: "list", icon: "list", title: "List" }]} />
         </div>
-        <select className="shelf-select" value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort by" style={{ padding: "8px 10px" }}>
-          {SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-        </select>
-        <SegmentedControl fit ariaLabel="View" value={view} onChange={setView}
-          options={[{ value: "grid", icon: "grid", title: "Grid" }, { value: "list", icon: "list", title: "List" }]} />
-      </div>
+      </section>
 
-      <Tabs className="wrap" tabs={LIBRARY_TABS.map(t => ({ ...t, count: counts[t.id] }))} value={tab} onChange={setTab} />
+      <p className="lib-status" role="status"><span className="lib-status-dot" aria-hidden="true" />{status}</p>
 
-      <p className="lib-results" role="status">{isLoading ? "Finding your books…" : isError ? "Library unavailable" : `${shown.length} ${shown.length === 1 ? "book" : "books"}${q.trim() ? ` matching “${q.trim()}”` : tab === "all" ? " in your collection" : ` on this shelf`}`}</p>
-      <div>
-        {isLoading ? (
-          <Loading label="Loading your library…" />
-        ) : isError ? (
-          <EmptyState icon="alert" title="Your library couldn't load" body="Try again to see your books and saved progress." primaryAction={<Button icon="refresh" onClick={() => refetch()}>Try again</Button>} />
-        ) : shown.length === 0 ? (
-          <EmptyState icon="library" title={q ? "No matches" : emptyCopy.title} body={q ? "Try a different search." : emptyCopy.body}
-            primaryAction={q ? <Button variant="ghost" onClick={() => setQ("")}>Clear search</Button> : tab === "all" ? <Button variant="primary" icon="plus" onClick={() => setAdding(true)}>Add a novel</Button> : null}
-            secondaryAction={!q && tab === "all" ? <Button variant="ghost" icon="compass" onClick={() => navigate("/discover")}>Browse shared library</Button> : null} />
-        ) : view === "grid" ? (
-          <div className="lib-grid">
-            {shown.map(n => <GridCard key={n.id} n={n} onMove={moveShelf} onRemove={removeFromLibrary} />)}
-          </div>
-        ) : (
-          <div className="card lib-list" style={{ padding: 6 }}>
-            {shown.map(n => <ListRow key={n.id} n={n} onMove={moveShelf} onRemove={removeFromLibrary} />)}
-          </div>
-        )}
-      </div>
+      <div className="lib-stage" aria-busy={isLoading || undefined}>{body}</div>
 
-      {adding && (
+      {/* Portaled so no animated ancestor can become its containing block. */}
+      {adding && createPortal(
         <AddNovelDialog onClose={() => setAdding(false)}
-                        onCreated={(id) => { setAdding(false); qc.invalidateQueries({ queryKey: ["novels"] }); navigate(`/n/${id}`); }} />
+                        onCreated={(id) => { setAdding(false); qc.invalidateQueries({ queryKey: ["novels"] }); navigate(`/n/${id}`); }} />,
+        document.body,
       )}
     </div>
   );

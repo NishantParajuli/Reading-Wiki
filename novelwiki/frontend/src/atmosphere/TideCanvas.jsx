@@ -32,6 +32,7 @@ uniform vec3 uC;
 uniform vec2 uPointer;
 uniform float uLight;
 uniform float uIntensity;
+uniform float uNight;
 
 vec2 hash2(vec2 p) {
   p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
@@ -48,6 +49,18 @@ float fbm(vec2 p) {
   mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
   for (int i = 0; i < 5; i++) { v += a * noise(p); p = m * p; a *= 0.5; }
   return v;
+}
+
+/* Soft, sparse stars that twinkle slowly — only at night, above the water. */
+float stars(vec2 p, float t) {
+  vec2 cell = floor(p * 46.0);
+  vec2 f = fract(p * 46.0);
+  float h = fract(sin(dot(cell, vec2(41.3, 289.1))) * 43758.5453);
+  if (h < 0.955) return 0.0;
+  vec2 c = vec2(fract(h * 13.7), fract(h * 7.3)) * 0.6 + 0.2;
+  float d = length(f - c);
+  float twinkle = 0.55 + 0.45 * sin(t * (0.6 + h * 1.8) + h * 40.0);
+  return smoothstep(0.2, 0.0, d) * twinkle * (0.5 + h * 0.5);
 }
 
 void main() {
@@ -70,8 +83,12 @@ void main() {
 
   // Caustic filaments: thin bright seams in the warped field.
   float seam = abs(sin((r.x * 1.3 + r.y) * 8.5 + uTime * 0.18));
-  float caustic = pow(1.0 - seam, 22.0) * smoothstep(0.1, 0.9, sky);
-  col += uC * caustic * 0.16 * uIntensity;
+  float caustic = pow(1.0 - seam, 30.0) * smoothstep(0.15, 0.95, sky);
+  col += uC * caustic * 0.1 * uIntensity;
+
+  // Stars above the waterline at night, fading where the aurora is bright.
+  float starMask = smoothstep(0.42, 0.95, uv.y) * (1.0 - clamp(aurora * 0.9, 0.0, 1.0));
+  col += vec3(0.92, 0.95, 1.0) * stars(p, uTime) * starMask * uNight * 0.55;
 
   // Moon-glow under the pointer.
   float d = distance(p, vec2(uPointer.x * aspect, uPointer.y));
@@ -93,6 +110,15 @@ function readAccentHue() {
   return Number.isFinite(value) ? value : 192;
 }
 
+/* How much night sky shows: full after dark, half at dusk/dawn, none by day. */
+function nightFactor(date = new Date()) {
+  const h = date.getHours() + date.getMinutes() / 60;
+  if (h >= 21 || h < 5) return 1;
+  if (h >= 18.5) return (h - 18.5) / 2.5;
+  if (h < 7) return 1 - (h - 5) / 2;
+  return 0;
+}
+
 function targetColors() {
   const light = document.documentElement.getAttribute("data-theme") === "light";
   const { palette } = getAtmosphere();
@@ -108,6 +134,7 @@ function targetColors() {
       b: oklchToSrgb(0.9, Math.min(0.08, c * 0.55), h2),
       c: oklchToSrgb(0.985, 0.03, h1 + 20),
       intensity: 0.9,
+      night: 0,
     };
   }
   return {
@@ -117,6 +144,7 @@ function targetColors() {
     b: oklchToSrgb(0.27, Math.min(0.12, c * 0.95), h2),
     c: oklchToSrgb(0.8, 0.09, h1 + 18),
     intensity: 1,
+    night: nightFactor(),
   };
 }
 
@@ -170,7 +198,7 @@ export function TideCanvas({ className = "" }) {
     const u = (name) => gl.getUniformLocation(program, name);
     const uni = {
       res: u("uRes"), time: u("uTime"), bg: u("uBg"), a: u("uA"), b: u("uB"), c: u("uC"),
-      pointer: u("uPointer"), light: u("uLight"), intensity: u("uIntensity"),
+      pointer: u("uPointer"), light: u("uLight"), intensity: u("uIntensity"), night: u("uNight"),
     };
 
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -209,6 +237,7 @@ export function TideCanvas({ className = "" }) {
       gl.uniform2f(uni.pointer, pointer[0], pointer[1]);
       gl.uniform1f(uni.light, current.light);
       gl.uniform1f(uni.intensity, current.intensity);
+      gl.uniform1f(uni.night, current.night);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
     };
 
@@ -216,6 +245,7 @@ export function TideCanvas({ className = "" }) {
       current = {
         light: lerp(current.light, target.light, k),
         intensity: lerp(current.intensity, target.intensity, k),
+        night: lerp(current.night, target.night, k),
         bg: mix3(current.bg, target.bg, k),
         a: mix3(current.a, target.a, k),
         b: mix3(current.b, target.b, k),

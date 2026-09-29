@@ -47,10 +47,23 @@
   opacity: 0.85;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .home-moon, .welcome-moon { animation: moon-rise 2.4s var(--ease-out) both, moon-drift 18s var(--ease-in-out) 2.4s infinite alternate; }
+  .home-moon, .welcome-moon { animation: moon-rise 2.4s var(--ease-out) backwards, moon-drift 18s var(--ease-in-out) 2.4s infinite alternate; }
   .moon::before { animation: moon-breathe 7s var(--ease-in-out) infinite; }
 }
 @keyframes moon-rise { from { opacity: 0; transform: translateY(40px) scale(0.92); filter: blur(10px); } }
+/* The moon sinks slower than the page as you scroll (scroll-driven, where supported). */
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .home-moon {
+      animation: moon-rise 2.4s var(--ease-out) backwards, moon-drift 18s var(--ease-in-out) 2.4s infinite alternate, moon-parallax linear both;
+      animation-timeline: auto, auto, scroll(root);
+      animation-range: normal, normal, 0 520px;
+    }
+    .spotlight-backdrop { animation: backdrop-parallax linear both; animation-timeline: scroll(root); animation-range: 0 700px; }
+  }
+}
+@keyframes moon-parallax { to { translate: 0 150px; opacity: 0.25; } }
+@keyframes backdrop-parallax { to { translate: 0 60px; } }
 @keyframes moon-drift { to { transform: translate(-14px, 8px); } }
 @keyframes moon-breathe { 0%, 100% { opacity: 0.75; transform: scale(0.96); } 50% { opacity: 1; transform: scale(1.04); } }
 
@@ -159,7 +172,7 @@
   transform-origin: left;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .spotlight-tideline span { animation: tideline-in 1.6s var(--ease-out) 0.5s both; }
+  .spotlight-tideline span { animation: tideline-in 1.6s var(--ease-out) 0.5s backwards; }
 }
 @keyframes tideline-in { from { transform: scaleX(0); } }
 

@@ -468,8 +468,8 @@ img.avatar-user { background: var(--bg-3); }
 }
 .modal-card.wide { width: min(680px, 100%); }
 @media (prefers-reduced-motion: no-preference) {
-  .modal-scrim { animation: scrim-in var(--dur-3) var(--ease-out) both; }
-  .modal-card { animation: dialog-in 560ms var(--ease-spring) both; }
+  .modal-scrim { animation: scrim-in var(--dur-3) var(--ease-out) backwards; }
+  .modal-card { animation: dialog-in 560ms var(--ease-spring) backwards; }
   .modal-scrim.is-closing { animation: scrim-out 220ms var(--ease-in) both; }
   .modal-scrim.is-closing .modal-card { animation: dialog-out 220ms var(--ease-in) both; }
 }
@@ -494,7 +494,7 @@ img.avatar-user { background: var(--bg-3); }
     background: var(--border-2); margin: -8px auto 16px;
   }
   @media (prefers-reduced-motion: no-preference) {
-    .modal-card { animation: sheet-in 520ms var(--ease-spring) both; }
+    .modal-card { animation: sheet-in 520ms var(--ease-spring) backwards; }
     .modal-scrim.is-closing .modal-card { animation: sheet-out 240ms var(--ease-in) both; }
   }
 }
@@ -513,7 +513,7 @@ img.avatar-user { background: var(--bg-3); }
   transform-origin: var(--pop-origin, top right);
 }
 @media (prefers-reduced-motion: no-preference) {
-  .popover { animation: pop-in 380ms var(--ease-spring) both; }
+  .popover { animation: pop-in 380ms var(--ease-spring) backwards; }
 }
 @keyframes pop-in { from { opacity: 0; transform: translateY(-6px) scale(0.95); filter: blur(6px); } }
 .menu-item {
@@ -670,7 +670,7 @@ img.avatar-user { background: var(--bg-3); }
 .tr-inner { display: inline-block; }
 @media (prefers-reduced-motion: no-preference) {
   .tr-inner {
-    animation: tr-rise 1s var(--ease-out) both;
+    animation: tr-rise 1s var(--ease-out) backwards;
     animation-delay: calc(var(--tr-delay, 0ms) + var(--i, 0) * var(--tr-step, 70ms));
   }
 }
@@ -780,7 +780,7 @@ img.avatar-user { background: var(--bg-3); }
   border: 1px solid var(--border-2);
   box-shadow: inset 0 1px 0 var(--hairline-hi), var(--shadow-pop);
 }
-@media (prefers-reduced-motion: no-preference) { .cite-pop { animation: pop-in 360ms var(--ease-spring) both; } }
+@media (prefers-reduced-motion: no-preference) { .cite-pop { animation: pop-in 360ms var(--ease-spring) backwards; } }
 .cite-pop .cp-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .cite-pop .cp-quote { font-family: var(--font-read); font-style: italic; font-size: 15px; line-height: 1.55; color: var(--ink); border-left: 2px solid var(--accent); padding-left: 12px; }
 .cite-pop .cp-meta { margin-top: 12px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); display: flex; gap: 10px; }
@@ -820,8 +820,8 @@ img.avatar-user { background: var(--bg-3); }
   box-shadow: var(--shadow-pop);
 }
 @media (prefers-reduced-motion: no-preference) {
-  .drawer-scrim { animation: scrim-in var(--dur-3) var(--ease-out) both; }
-  .drawer { animation: drawer-in 560ms var(--ease-spring) both; }
+  .drawer-scrim { animation: scrim-in var(--dur-3) var(--ease-out) backwards; }
+  .drawer { animation: drawer-in 560ms var(--ease-spring) backwards; }
   .drawer-scrim.is-closing { animation: scrim-out 240ms var(--ease-in) both; }
   .drawer-scrim.is-closing .drawer { animation: drawer-out 240ms var(--ease-in) both; }
 }
@@ -872,8 +872,8 @@ img.avatar-user { background: var(--bg-3); }
   box-shadow: inset 0 1px 0 var(--hairline-hi), var(--shadow-pop), 0 0 80px -30px var(--accent-glow);
 }
 @media (prefers-reduced-motion: no-preference) {
-  .palette-scrim { animation: scrim-in var(--dur-3) var(--ease-out) both; }
-  .palette { animation: dialog-in 520ms var(--ease-spring) both; }
+  .palette-scrim { animation: scrim-in var(--dur-3) var(--ease-out) backwards; }
+  .palette { animation: dialog-in 520ms var(--ease-spring) backwards; }
 }
 .palette-input { display: flex; align-items: center; gap: 12px; padding: 16px 16px 16px 20px; border-bottom: 1px solid var(--border); }
 .palette-input > svg { color: var(--accent-ink); }
@@ -889,7 +889,7 @@ img.avatar-user { background: var(--bg-3); }
   transition: background-color var(--dur-1) var(--ease-out);
 }
 @media (prefers-reduced-motion: no-preference) {
-  .palette-item { animation: rise 460ms var(--ease-out) both; animation-delay: calc(min(var(--i, 0), 10) * 28ms); }
+  .palette-item { animation: rise 460ms var(--ease-out) backwards; animation-delay: calc(min(var(--i, 0), 10) * 28ms); }
 }
 .palette-item.focused { background: color-mix(in oklch, var(--accent) 13%, transparent); }
 .palette-item.focused::before {
@@ -989,3 +989,28 @@ kbd, .kbd {
   .screen-loading-orb { animation: fade-in 400ms var(--ease-out) 350ms forwards, boot-breathe 1.6s var(--ease-in-out) 350ms infinite; }
 }
 .screen-error { margin-top: 8vh; }
+
+
+/* ---------- Filter pills (shared: Discover filters, admin moderation) ---------- */
+.filter-chip {
+  position: relative; display: inline-flex; align-items: center; gap: 7px;
+  min-height: 38px; padding: 0 15px; border-radius: var(--radius-full);
+  border: 1px solid var(--border-2);
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+  color: var(--ink-2); font-size: var(--text-sm); font-weight: 580; white-space: nowrap;
+  box-shadow: inset 0 1px 0 var(--hairline-hi);
+  transition: color var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out),
+              background-color var(--dur-2) var(--ease-out), box-shadow var(--dur-3) var(--ease-out),
+              transform var(--dur-3) var(--ease-spring);
+}
+.filter-chip > svg { color: var(--muted); transition: color var(--dur-2), transform var(--dur-3) var(--ease-spring); }
+.filter-chip:hover { color: var(--ink); border-color: color-mix(in oklch, var(--ink) 24%, transparent); background: color-mix(in oklch, var(--ink) 7%, transparent); }
+.filter-chip:active { transform: scale(0.96); }
+.filter-chip:focus-visible { border-radius: var(--radius-full); }
+.filter-chip.on {
+  color: var(--accent-ink); border-color: color-mix(in oklch, var(--accent) 46%, transparent);
+  background: linear-gradient(180deg, color-mix(in oklch, var(--accent) 20%, transparent), color-mix(in oklch, var(--accent) 11%, transparent));
+  box-shadow: inset 0 1px 0 var(--hairline-hi), 0 0 22px -8px var(--accent-glow);
+}
+.filter-chip.on > svg { color: var(--accent-ink); }
+.filter-chip[aria-expanded="true"] > svg:last-child { transform: rotate(180deg); }

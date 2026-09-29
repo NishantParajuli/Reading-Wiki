@@ -16,7 +16,7 @@ import { chromium } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { respond, coverSvg, novels } from "./fixtures.mjs";
+import { respond, coverSvg, novels, sceneSvg } from "./fixtures.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
@@ -89,6 +89,10 @@ try {
           const n = covers.get(id);
           const [title, author] = n ? [n.title, n.author] : (extraTitles[id] || ["Untitled", ""]);
           await route.fulfill({ contentType: "image/svg+xml", body: coverSvg(id, title, author) || "<svg xmlns='http://www.w3.org/2000/svg'/>" });
+          return;
+        }
+        if (/\/illustrations\/[^/]+\/image$/.test(url.pathname)) {
+          await route.fulfill({ contentType: "image/svg+xml", body: sceneSvg() });
           return;
         }
         if (signedOut && url.pathname === "/api/auth/me") {
