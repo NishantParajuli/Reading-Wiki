@@ -219,7 +219,7 @@ export function Reveal({ chapter, ceiling, lines = 2, label, children, className
   const lockLabel = label || `Unlocks at ch. ${chapter}`;
   return (
     <div className={`reveal ${locked ? "locked" : ""} ${className}`}>
-      <div className="r-content" aria-hidden={locked}>{children}</div>
+      <div className="r-content" aria-hidden={locked} inert={locked ? "" : undefined}>{children}</div>
       <div className="r-cover">
         <div className="redact">
           {Array.from({ length: lines }).map((_, i) => (

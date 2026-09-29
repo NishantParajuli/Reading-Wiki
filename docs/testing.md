@@ -191,7 +191,10 @@ The mocked Playwright scenarios in `novelwiki/frontend/e2e/critical-paths.spec.j
 cover critical flows with fetch-level fixtures, including mobile narration highlighting
 and automatic reveal. List the current cases with `npm run test:e2e -- --list` from
 `novelwiki/frontend`; counts change as regressions are added. The regular browser run
-skips `real-backend.spec.js` unless `REAL_BACKEND=1`.
+skips `real-backend.spec.js` unless `REAL_BACKEND=1`. The screenshot harness in
+`novelwiki/frontend/e2e/showcase/` renders routes from synthetic fixtures for visual
+review across themes and viewports; it is not a test gate and Playwright does not
+collect it (see the [frontend overview](frontend/overview.md#testing)).
 
 `scripts/test_real_browser.py` creates its own random `tg_playwright_*` database and
 temporary file roots, starts FastAPI on port 8011, and runs the real-stack browser path

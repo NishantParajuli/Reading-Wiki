@@ -11,10 +11,9 @@
    Also hosts the command palette, the offline banner, and job-completion
    toasts driven by the shared activity poller.
    ============================================================ */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { motion } from "motion/react";
 
 import { identityApi } from "../modules/identity/api.js";
 import { catalogApi } from "../modules/catalog/api.js";
@@ -29,7 +28,7 @@ import { isActiveJob, useActivityQuery } from "../modules/experience/queries.js"
 import { useOnline } from "../lib/hooks.js";
 import { ACT_KIND_LABEL } from "../lib/constants.js";
 import { Ambient } from "../atmosphere/Ambient.jsx";
-import { springs } from "../motion/index.js";
+import { motion, springs } from "../motion/index.js";
 import { transitionTheme } from "../motion/navigation.js";
 
 import { CommandPalette } from "./CommandPalette.jsx";
@@ -174,6 +173,8 @@ function UserMenu() {
     }
   }, [open, usage]);
 
+  // A session can drop mid-render (sign-out, 401); render nothing rather than crash.
+  if (!user) return null;
   const name = user.display_name || user.username;
   const go = (path) => { setOpen(false); navigate(path); };
 
@@ -218,7 +219,7 @@ function UserMenu() {
 
 function IslandLink({ item, badge }) {
   return (
-    <NavLink to={item.to} end={item.end} className={({ isActive }) => "island-link" + (isActive ? " active" : "")}>
+    <NavLink to={item.to} end={item.end} title={item.label} className={({ isActive }) => "island-link" + (isActive ? " active" : "")}>
       {({ isActive }) => (
         <>
           {isActive && <motion.span layoutId="island-pill" className="island-pill" transition={springs.layout} aria-hidden="true" />}
@@ -242,9 +243,18 @@ function NovelCapsule({ novelId, novel }) {
     ] : []),
     ...(novel && novel.can_edit ? [{ to: `/n/${novelId}/manage`, icon: "sliders", label: "Manage", badge: inbox }] : []),
   ];
+  const navRef = useRef(null);
+  const { pathname } = useLocation();
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const active = nav && nav.querySelector(".nc-link.active");
+    if (!active || nav.scrollWidth <= nav.clientWidth) return;
+    const offset = active.getBoundingClientRect().left - nav.getBoundingClientRect().left;
+    nav.scrollLeft += offset - (nav.clientWidth - active.offsetWidth) / 2;
+  }, [pathname, items.length]);
   return (
     <div className="novel-capsule-wrap">
-      <nav className="novel-capsule" aria-label="Novel sections">
+      <nav className="novel-capsule" aria-label="Novel sections" ref={navRef}>
         <Link className="nc-book" to={`/n/${novelId}`} aria-label={novel ? `${novel.title} overview` : "Novel overview"}>
           <Cover src={novel && novel.cover_url} title={novel ? novel.title : ""} className="nc-cover" />
           <span className="nc-title">{novel ? novel.title : "…"}</span>
@@ -257,8 +267,8 @@ function NovelCapsule({ novelId, novel }) {
                 <>
                   {isActive && <motion.span layoutId="nc-pill" className="nc-pill" transition={springs.layout} aria-hidden="true" />}
                   <Icon name={item.icon} size={15} />
-                  <span>{item.label}</span>
-                  {item.badge > 0 && <span className="tab-count">{item.badge}</span>}
+                  <span className="nc-label">{item.label}</span>
+                  {item.badge > 0 && <span className="tab-count" aria-label={`${item.badge} waiting`}>{item.badge}</span>}
                 </>
               )}
             </NavLink>
@@ -348,7 +358,7 @@ export function Shell() {
                 {isActive && <motion.span layoutId="dock-blob" className="dock-blob" transition={springs.layout} aria-hidden="true" />}
                 <span className="dock-icon">
                   <Icon name={item.icon} size={21} />
-                  {item.label === "Jobs" && activeCount > 0 && <span className="island-badge">{activeCount}</span>}
+                  {item.label === "Jobs" && activeCount > 0 && <span className="island-badge" aria-label={`${activeCount} active`}>{activeCount}</span>}
                 </span>
                 <span className="dock-label">{item.label}</span>
               </>

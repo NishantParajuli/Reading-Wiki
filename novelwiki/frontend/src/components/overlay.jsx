@@ -19,7 +19,9 @@ export function OverlayHostProvider({ hostRef, children }) {
   return <OverlayHost.Provider value={hostRef}>{children}</OverlayHost.Provider>;
 }
 
-function useOverlayPortal() {
+/** Render `node` where overlays belong: the nearest OverlayHostProvider's
+    element, else <body>. For custom floating panels that must escape glass. */
+export function useOverlayPortal() {
   const hostRef = useContext(OverlayHost);
   return (node) => createPortal(node, (hostRef && hostRef.current) || document.body);
 }

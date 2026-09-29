@@ -74,7 +74,7 @@ export function CommandPalette({ onClose, novelId, ceiling }) {
     <div className="palette" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Search" tabIndex={-1} onKeyDown={onKey}>
       <div className="palette-input">
         <Icon name="search" size={20} />
-        <input role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls={listId} aria-activedescendant={items.length ? `${listId}-${activeIndex}` : undefined} aria-label="Find a story or Codex entry" value={q} onChange={e => setQ(e.target.value)} placeholder="Find a story or Codex entry…" />
+        <input role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls={listId} aria-activedescendant={items.length ? `${listId}-${activeIndex}` : undefined} aria-label="Find a story or Codex entry" value={q} onChange={e => setQ(e.target.value)} placeholder={novelId != null ? "Find a story or Codex entry…" : "Find a story…"} />
         <kbd className="palette-esc" aria-hidden="true">esc</kbd>
         <button className="icon-btn plain" aria-label="Close search" onClick={onClose}><Icon name="x" size={17} /></button>
       </div>
@@ -91,7 +91,7 @@ export function CommandPalette({ onClose, novelId, ceiling }) {
           </button>
         </React.Fragment>)}
       </div>
-      <div className="palette-status" role="status">{q.trim() && !current ? "Searching…" : current?.failed ? "Some results couldn't load. Your library is still available." : !items.length ? "No matches. Try a title or author." : <><span><kbd>↑</kbd> <kbd>↓</kbd> to browse</span><span><kbd>↵</kbd> to open</span><span><kbd>esc</kbd> to close</span></>}</div>
+      <div className="palette-status" role="status">{q.trim() && !current ? "Searching…" : current?.failed ? "Some results couldn't load. Your library is still available." : !items.length ? "No matches. Try a title or author." : <><span className="palette-keys"><span><kbd>↑</kbd> <kbd>↓</kbd> to browse</span><span><kbd>↵</kbd> to open</span><span><kbd>esc</kbd> to close</span></span><span className="palette-touch">Tap a result to open it.</span></>}</div>
     </div>
   </div>;
 }

@@ -2,7 +2,9 @@
    Shell — floating glass island, novel capsule, mobile dock.
    ============================================================ */
 
-.shell { position: relative; min-height: 100vh; min-height: 100dvh; isolation: isolate; }
+/* overflow-x: clip keeps decorative overhang (the moon's glow) from widening
+   the page on phones without creating a scroll container, so sticky still works. */
+.shell { position: relative; min-height: 100vh; min-height: 100dvh; isolation: isolate; overflow-x: clip; }
 .shell-main {
   position: relative; z-index: 1;
   min-height: 100vh; min-height: 100dvh;
@@ -33,7 +35,7 @@
 .shell-top {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100;
   display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px;
-  padding: 16px var(--gutter);
+  padding: 16px max(var(--gutter), calc((100vw - 1640px) / 2));
   pointer-events: none;
   transition: padding var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out);
 }
@@ -99,15 +101,20 @@
   box-shadow: 0 0 26px -8px var(--accent-glow), inset 0 1px 0 var(--hairline-hi);
 }
 .island-badge {
+  position: relative; isolation: isolate;
   display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px;
   border-radius: var(--radius-full); background: var(--accent); color: var(--on-accent);
   font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums;
-  box-shadow: 0 0 14px var(--accent-glow);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.island-badge::after {
+  content: ""; position: absolute; inset: -3px; z-index: -1; border-radius: inherit;
+  background: var(--accent-glow); filter: blur(5px); opacity: 0.4;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .island-badge { animation: badge-breathe 2.6s var(--ease-in-out) infinite; }
+  .island-badge::after { animation: badge-breathe 2.6s var(--ease-in-out) infinite; }
 }
-@keyframes badge-breathe { 0%, 100% { box-shadow: 0 0 8px var(--accent-glow); } 50% { box-shadow: 0 0 18px 2px var(--accent-glow); } }
+@keyframes badge-breathe { 50% { opacity: 1; transform: scale(1.25); } }
 
 /* tools */
 .shell-tools { justify-self: end; display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -138,7 +145,8 @@
 .theme-toggle[data-theme-now="dark"]:hover .tt-sun, .theme-toggle[data-theme-now="light"]:hover .tt-moon { transform: translateY(130%); }
 
 .avatar-trigger {
-  border: none; background: none; padding: 0; border-radius: 50%; display: block;
+  border: none; background: none; padding: 0; border-radius: 50%;
+  display: grid; place-items: center; width: 44px; height: 44px;
   transition: transform var(--dur-3) var(--ease-spring);
 }
 .avatar-trigger:hover { transform: scale(1.07); }
@@ -217,10 +225,16 @@
   backdrop-filter: blur(16px);
 }
 
+.shell-main:has(.novel-capsule-wrap) .offline-banner { top: 142px; }
+
 /* ---------- dock (phones) ---------- */
 .dock { display: none; }
 
 /* ---------- responsive ---------- */
+@media (max-width: 1320px) {
+  .search-trigger { min-width: 150px; }
+  .search-trigger kbd { display: none; }
+}
 @media (max-width: 1180px) {
   .search-trigger { min-width: 44px; width: 44px; padding: 0; justify-content: center; }
   .search-trigger .st-text, .search-trigger kbd { display: none; }
@@ -231,9 +245,11 @@
   .island-link { padding: 0 14px; }
 }
 @media (max-width: 880px) {
-  .island-link .island-label { display: none; }
+  .island-link:not(.active) .island-label {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
   .island-link { padding: 0 13px; }
-  .island-link.active .island-label { display: inline; }
 }
 @media (max-width: 767px) {
   .shell-main { padding-top: 72px; }
@@ -251,9 +267,14 @@
   /* Header tucked away: no band, except a short one under the capsule. */
   .shell-top.is-hidden ~ .shell-main::before { opacity: 0; }
   .shell[data-route="n"] .shell-top.is-hidden ~ .shell-main::before { opacity: 1; --band: 76px; }
-  .nc-book { max-width: 150px; }
-  .nc-link { padding: 0 12px; }
+  .nc-book { max-width: 150px; min-width: 40px; }
+  .nc-link { padding: 0 12px; min-width: 40px; justify-content: center; }
+  .nc-link:not(.active) .nc-label {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
   .offline-banner { top: 68px; }
+  .shell-main:has(.novel-capsule-wrap) .offline-banner { top: 124px; }
 
   .dock {
     display: flex; position: fixed; z-index: 100;
@@ -286,7 +307,15 @@
   }
   .page { padding-bottom: calc(128px + env(safe-area-inset-bottom)); }
 }
+@media (max-width: 480px) {
+  /* the jacket names the book (and the link's label says it); the sections get the room */
+  .nc-title { display: none; }
+  .nc-book { padding: 3px 6px 3px 4px; }
+}
 @media (max-width: 380px) {
   .brand-word { display: none; }
+}
+@media (pointer: coarse) {
+  .nc-link { height: 40px; }
 }
 .usermenu-note { font-size: var(--text-xs); color: var(--muted); padding: 8px 8px 4px; border-top: 1px solid var(--border); margin-top: 4px; }

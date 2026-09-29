@@ -146,7 +146,8 @@ Codex App Server subscription backends ·
 **Scraping** curl-cffi + selectolax/lxml, json-repair ·
 **Import** ZIP/lxml EPUB parsing, pymupdf, nh3, pillow, ftfy ·
 **TTS** OmniVoice sidecar, ffmpeg → Opus ·
-**Frontend** React 18 + TanStack Query, Vite 6, served same-origin by FastAPI ·
+**Frontend** React 18 + TanStack Query + Motion, Vite 6, View Transitions and a WebGL
+ambient layer, served same-origin by FastAPI ·
 **Packaging** uv (`pyproject.toml` + `uv.lock`)
 
 ---

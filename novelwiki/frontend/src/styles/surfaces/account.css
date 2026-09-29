@@ -882,7 +882,6 @@
 /* ---------- Source-account copy (still used by catalog's add-source forms;
    the Novelpia panel itself is styled by import.css .npc-*) ---------- */
 .source-account-copy { margin: 0; font-size: var(--text-sm); line-height: 1.6; }
-.source-recovery-links { margin-top: 8px; gap: 8px 16px; font-family: var(--sans); font-size: var(--text-sm); white-space: normal; }
 
 /* ---------- Section changes: header and nav hold still ----------
    Within /account a route change is a "tab" view transition; naming these

@@ -109,6 +109,9 @@
   --border-2: oklch(0.86 0.03 250 / 0.18);
   --hairline-hi: oklch(1 0 0 / 0.1);
   --redact: oklch(0.35 0.03 258);
+  /* the app theme's own page colours, unaffected by reader tones */
+  --app-bg: var(--bg);
+  --app-ink: var(--ink);
 
   --accent: oklch(0.83 0.115 var(--accent-h));
   --accent-2: oklch(0.76 0.13 calc(var(--accent-h) + 48));
@@ -166,6 +169,8 @@
   --border-2: oklch(0.3 0.05 262 / 0.18);
   --hairline-hi: oklch(1 0 0 / 0.85);
   --redact: oklch(0.88 0.012 260);
+  --app-bg: var(--bg);
+  --app-ink: var(--ink);
 
   --accent: oklch(0.52 0.1 var(--accent-h));
   --accent-2: oklch(0.5 0.13 calc(var(--accent-h) + 48));
@@ -177,13 +182,14 @@
   --gold: oklch(0.6 0.12 72);
   --gold-soft: oklch(0.7 0.12 75 / 0.16);
 
-  --ok: oklch(0.54 0.12 160);
+  /* deep enough to pass AA as text on their own soft tints */
+  --ok: oklch(0.5 0.11 160);
   --ok-soft: oklch(0.6 0.12 160 / 0.13);
-  --warn: oklch(0.58 0.13 68);
+  --warn: oklch(0.5 0.115 68);
   --warn-soft: oklch(0.72 0.13 75 / 0.18);
-  --danger: oklch(0.55 0.18 25);
+  --danger: oklch(0.5 0.18 25);
   --danger-soft: oklch(0.62 0.17 25 / 0.12);
-  --info: oklch(0.52 0.12 250);
+  --info: oklch(0.5 0.12 250);
   --info-soft: oklch(0.6 0.11 250 / 0.12);
 
   --shadow-1: 0 1px 2px oklch(0.3 0.05 262 / 0.08), 0 4px 14px oklch(0.3 0.05 262 / 0.06);

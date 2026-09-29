@@ -9,7 +9,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../../App.jsx";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, Cover, EmptyState, ProgressBar, ProgressRing, Skeleton, RelativeTime } from "../../components/ui.jsx";
+import { Button, Cover, ProgressBar, ProgressRing, Skeleton, RelativeTime } from "../../components/ui.jsx";
 import { TextReveal } from "../../motion/TextReveal.jsx";
 import { useReadySignal } from "../../motion/navigation.js";
 import { useBookAtmosphere } from "../../atmosphere/store.js";
@@ -50,7 +50,7 @@ function Spotlight({ novel: n }) {
       {n.cover_url && <div className="spotlight-backdrop" style={{ backgroundImage: `url(${JSON.stringify(n.cover_url)})` }} aria-hidden="true" />}
       <div className="spotlight-sheen" aria-hidden="true" />
       <div className="spotlight-stage">
-        <Link className="spotlight-book" to={`/n/${n.id}`} aria-label={`About ${n.title}`}>
+        <Link className="spotlight-book" to={`/n/${n.id}`} tabIndex={-1} aria-hidden="true">
           <span className="spotlight-float">
             <Cover src={n.cover_url} title={n.title} author={n.author} tilt={10} />
           </span>
@@ -116,13 +116,30 @@ function StartReading() {
   );
 }
 
+/* Home's own query failed: say so where the book would be, and keep the
+   destinations and background work beside it (they load separately). */
+function SpotlightError({ retry }) {
+  return (
+    <section className="spotlight spotlight-empty spotlight-error" role="alert">
+      <div className="spotlight-copy">
+        <p className="spotlight-eyebrow"><Icon name="alert" size={14} /> Something went adrift</p>
+        <h2 className="spotlight-title">Your reading room couldn't load</h2>
+        <p className="spotlight-author">Your books and progress are still saved. Try loading them again.</p>
+        <div className="spotlight-actions">
+          <Button icon="refresh" onClick={() => retry()}>Try again</Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /* ---------- a shelf of covers ---------- */
 function Book({ novel: n, progress = false, index = 0 }) {
   const chapter = resumeChapter(n);
   return (
     <article className="shelf-book rise" style={{ "--i": Math.min(index, 8) }} data-vt-card="">
       <div className="shelf-book-cover">
-        <Link to={`/n/${n.id}`} aria-label={`About ${n.title}`}><Cover src={n.cover_url} title={n.title} author={n.author} tilt /></Link>
+        <Link to={`/n/${n.id}`} tabIndex={-1} aria-hidden="true"><Cover src={n.cover_url} title={n.title} author={n.author} tilt /></Link>
         {n.chapter_count > 0 && (
           <Link className="shelf-book-play" aria-label={`Read ${n.title}`} to={`/n/${n.id}/read/${chapter}`}>
             <Icon name="arrowRight" size={17} />
@@ -144,6 +161,18 @@ function Book({ novel: n, progress = false, index = 0 }) {
         </span>
       )}
     </article>
+  );
+}
+
+/* The last jacket on a rail: a glass door onward, so a short shelf ends on
+   an invitation instead of empty space. */
+function RailEnd({ to, label, sub }) {
+  return (
+    <Link className="shelf-end" to={to} data-spotlight="">
+      <span className="shelf-end-orb" aria-hidden="true"><Icon name="arrowRight" size={20} /></span>
+      <b>{label}</b>
+      {sub && <span>{sub}</span>}
+    </Link>
   );
 }
 
@@ -302,27 +331,28 @@ export function Home() {
         </div>
         <div className="home-hero-actions rise" style={{ "--i": 5 }}>
           <Link className="btn btn-ghost" to="/import"><Icon name="upload" size={16} /> Import a book</Link>
-          <Button icon="plus" onClick={() => setAdding(true)}>Add novel</Button>
+          <Button variant="ghost" icon="plus" onClick={() => setAdding(true)}>Add novel</Button>
         </div>
       </header>
 
-      {isError ? (
-        <EmptyState icon="alert" title="Your reading room couldn't load" body="Your books and progress are still saved. Try loading them again."
-          primaryAction={<Button icon="refresh" onClick={() => refetch()}>Try again</Button>} />
-      ) : (
+      <div className="home-desk">
+        {isError ? <SpotlightError retry={refetch} /> : isLoading ? <SpotlightSkeleton /> : reading.length ? <Spotlight novel={reading[0]} /> : <StartReading />}
+        <aside className="home-aside rise" style={{ "--i": 4 }} aria-label="Reading room activity">
+          <Horizon count={novels?.length || 0} loading={libraryLoading} error={libraryError} />
+          <BackgroundWork loading={activityLoading} error={activityError} retry={retryActivity} jobs={active} />
+        </aside>
+      </div>
+
+      {!isError && (
         <>
-          <div className="home-desk">
-            {isLoading ? <SpotlightSkeleton /> : reading.length ? <Spotlight novel={reading[0]} /> : <StartReading />}
-            <aside className="home-aside rise" style={{ "--i": 4 }} aria-label="Reading room activity">
-              <Horizon count={novels?.length || 0} loading={libraryLoading} error={libraryError} />
-              <BackgroundWork loading={activityLoading} error={activityError} retry={retryActivity} jobs={active} />
-            </aside>
-          </div>
 
           {reading.length > 1 && (
             <Section eyebrow="In progress" title="Also on your nightstand"
                      action={<Link className="linkish" to="/library">Your library <Icon name="arrowRight" size={14} /></Link>}>
-              <div className="shelf-rail">{reading.slice(1).map((n, i) => <Book key={n.id} novel={n} progress index={i} />)}</div>
+              <div className="shelf-rail">
+                {reading.slice(1).map((n, i) => <Book key={n.id} novel={n} progress index={i} />)}
+                <RailEnd to="/library" label="Your library" sub={novels?.length ? `${novels.length} ${novels.length === 1 ? "book" : "books"}` : null} />
+              </div>
             </Section>
           )}
 
@@ -349,7 +379,10 @@ export function Home() {
           {newest.length > 0 && (
             <Section eyebrow="Shared library" title="New in the shared library"
                      action={<Link className="linkish" to="/discover">Browse all <Icon name="arrowRight" size={14} /></Link>}>
-              <div className="shelf-rail">{newest.map((n, i) => <Book key={n.id} novel={n} index={i} />)}</div>
+              <div className="shelf-rail">
+                {newest.map((n, i) => <Book key={n.id} novel={n} index={i} />)}
+                <RailEnd to="/discover" label="Browse all" sub="Discover more stories" />
+              </div>
             </Section>
           )}
         </>

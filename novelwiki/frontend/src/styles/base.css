@@ -5,6 +5,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 
 html {
+  scrollbar-gutter: stable;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   scrollbar-color: var(--border-2) transparent;
@@ -152,6 +153,11 @@ p { text-wrap: pretty; }
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+/* Separate rule: an engine that doesn't know ::details-content would
+   otherwise drop the whole reset above. */
+@media (prefers-reduced-motion: reduce) {
+  ::details-content { transition: none !important; }
 }
 
 .skip-link {
