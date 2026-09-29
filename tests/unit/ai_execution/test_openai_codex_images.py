@@ -1,6 +1,8 @@
 from __future__ import annotations
 import base64
 import io
+import struct
+import zlib
 from unittest.mock import AsyncMock
 import pytest
 from PIL import Image
@@ -148,6 +150,96 @@ def test_empty_or_failed_image_uses_provider_wait_instead_of_publishing(tmp_path
         with pytest.raises(AgyError) as error:
             image_bytes(item, tmp_path)
         assert error.value.code == "openai_codex_provider_unavailable"
+
+
+def test_relative_image_artifact_resolves_inside_run_workspace(tmp_path):
+    (tmp_path / "output").mkdir()
+    (tmp_path / "output" / "image.png").write_bytes(png())
+    assert image_bytes({"savedPath": "output/image.png"}, tmp_path) == png()
+    with pytest.raises(AgyError) as error:
+        image_bytes({"savedPath": "../outside.png"}, tmp_path)
+    assert error.value.code == "openai_codex_artifact_invalid"
+
+
+def test_oversized_saved_image_is_invalid_instead_of_empty_provider_result(tmp_path, monkeypatch):
+    from novelwiki.modules.ai_execution.adapters.outbound.openai_codex import images
+
+    monkeypatch.setattr(images, "MAX_IMAGE_BYTES", 32)
+    path = tmp_path / "image.png"
+    path.write_bytes(png())
+    with pytest.raises(AgyError) as error:
+        image_bytes({"savedPath": str(path)}, tmp_path)
+    assert error.value.code == "openai_codex_artifact_invalid"
+
+
+def test_png_with_valid_checksums_but_invalid_compressed_pixels_is_rejected(tmp_path):
+    def chunk(kind, payload):
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
+
+    data = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", b"invalid zlib pixels")
+        + chunk(b"IEND", b"")
+    )
+    with Image.open(io.BytesIO(data)) as image:
+        image.verify()  # This alone used to accept the corrupt artifact.
+    with pytest.raises(AgyError, match="corrupt"):
+        image_bytes({"result": base64.b64encode(data).decode()}, tmp_path)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("early", [True, False])
+async def test_image_notifications_before_start_reply_are_not_lost(tmp_path, early):
+    session = ImageSession(tmp_path)
+    session._send = AsyncMock()
+    image_event = {
+        "method": "item/completed", "params": {"item": {
+            "id": "image", "type": "imageGeneration", "status": "completed",
+            "result": base64.b64encode(png()).decode(),
+        }},
+    }
+    reply = {"id": 2, "result": {"turn": {"id": "turn"}}}
+    session._read = AsyncMock(side_effect=[
+        {"id": 1, "result": {"thread": {"id": "thread"}}},
+        *([image_event, reply] if early else [reply, image_event]),
+    ])
+    assert await session.generate("Scene", []) == png()
+    assert session._read.await_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("early", [True, False])
+@pytest.mark.parametrize("status,info,code", [
+    ("completed", None, "openai_codex_provider_unavailable"),
+    ("failed", "usageLimitExceeded", "openai_codex_quota_likely_exhausted"),
+    ("failed", "unauthorized", "openai_codex_not_authenticated"),
+])
+async def test_terminal_image_turn_is_classified_even_before_start_reply(tmp_path, early, status, info, code):
+    session = ImageSession(tmp_path)
+    session._send = AsyncMock()
+    event = {"method": "turn/completed", "params": {"turn": {
+        "id": "turn", "status": status, "error": {"codexErrorInfo": info},
+    }}}
+    reply = {"id": 2, "result": {"turn": {"id": "turn"}}}
+    session._read = AsyncMock(side_effect=[
+        {"id": 1, "result": {"thread": {"id": "thread"}}},
+        *([event, reply] if early else [reply, event]),
+    ])
+    with pytest.raises(AgyError) as error:
+        await session.generate("Scene", [])
+    assert error.value.code == code
+    assert session._read.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_image_thread_without_id_has_protocol_error(tmp_path):
+    session = ImageSession(tmp_path)
+    session.request = AsyncMock(return_value={"thread": {}})
+    with pytest.raises(AgyError) as error:
+        await session.generate("Scene", [])
+    assert error.value.code == "openai_codex_protocol_error"
+    session.request.assert_awaited_once()
 
 
 @pytest.mark.asyncio

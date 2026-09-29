@@ -159,11 +159,22 @@ translation and extraction retain their existing tool-free structured-output con
 
 For rollout, start with one short, already readable shared chapter. AI selects one to
 three scene images; new character sheets can add up to four image turns per chapter.
-Two tool-free planning turns first decide whether recent context is needed, then plan
-scenes. Existing complete art is skipped in a range unless replacement is explicitly
-requested. Saved plans and chapter-scoped image-slot checkpoints make retries resume
-completed work. Use Jobs for progress/cancellation; canceling retains completed images.
-Image quota failures park in `waiting_provider`; restore capacity before retrying. Chapter/source changes
+Two tool-free planning stages first decide whether recent context is needed, then plan
+scenes. Each stage can make up to two additional correction turns when host validation
+rejects a response. `illustration_plan_invalid` includes a safe validation reason, such
+as a scene quotation absent from the chapter; it does not contain the chapter text or
+raw provider response. Corrections preserve exact-evidence and placement requirements.
+If corrections are exhausted, normal job retries apply and completed chapter art is
+retained. Jobs reports the chapter and correction stage for a range. After deploying a
+worker fix, restart `novelwiki-openai-codex-worker.service`. For a terminally failed range,
+request the same range again in Manage with replacement disabled; complete current art
+is skipped and eligible character sheets are reused. Automatic retries of an existing
+job resume its saved plans and image slots. The admin **Retry waiting** action applies
+only to jobs in `waiting_provider`, not terminal failures.
+
+Use Jobs for progress/cancellation; canceling retains completed images.
+Image quota failures and completed turns with no image park in `waiting_provider`;
+restore capacity before retrying quota failures. Chapter/source changes
 require a fresh request instead of publishing stale images. These limits and the reader
 workflow are detailed in [chapter illustrations](pipelines/chapter-illustrations.md).
 

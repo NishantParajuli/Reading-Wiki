@@ -790,6 +790,37 @@ async def test_range_generation_ahead_is_one_job_and_preserves_read_ceiling(art_
 
 
 @pytest.mark.asyncio
+async def test_range_repairs_bad_evidence_and_reuses_completed_art_on_resume(art_db):
+    db = art_db
+
+    class RepairRenderer(Renderer):
+        async def plan(self, instructions, data, schema):
+            result = await super().plan(instructions, data, schema)
+            if "scenes" in result and data["chapter"] == 3 and "repair" not in data:
+                result["scenes"][0]["evidence"] = "An invented quotation absent from this chapter."
+            return result
+
+    result = await db.service.generate_range(
+        db.novel, db.owner, from_chapter=1, to_chapter=3
+    )
+    job = await work.get_job(result["job_id"])
+    renderer = RepairRenderer()
+    progress = await execute_range(db, job, renderer)
+    assert progress["done"] == 3
+    assert [plan["chapter"] for plan in renderer.plans] == [1, 2, 3, 3]
+    assert "exact evidence" in renderer.plans[-1]["repair"]["validation_error"]
+    assert len(renderer.images) == 4  # one sheet plus three scenes, with no wasted image turns
+    saved = await db.store.range_plan(job["id"], 3)
+    assert saved["plan"]["scenes"][0]["evidence"] == QUOTE
+    rows = await db.store.for_job(job["id"])
+    assert len(rows) == 4
+    retry = Renderer()
+    await execute_range(db, job, retry)
+    assert retry.plans == [] and retry.images == []
+    assert {row["id"] for row in await db.store.for_job(job["id"])} == {row["id"] for row in rows}
+
+
+@pytest.mark.asyncio
 async def test_range_retry_resumes_chapter_checkpoints_without_rerendering(art_db):
     db = art_db
     result = await db.service.generate_range(

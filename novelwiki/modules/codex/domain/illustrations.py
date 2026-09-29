@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 # Public choices. Historical styles below exist only to read/resume older jobs.
 STYLES = {
@@ -51,6 +51,16 @@ PLANNER_MODEL = "gpt-6-luna"
 PLANNER_EFFORT = "max"
 
 
+class IllustrationPlanInvalid(ValueError):
+    """Host-written validation reasons safe for durable job errors and repair feedback."""
+
+    code = "illustration_plan_invalid"
+
+    @property
+    def safe_detail(self) -> str:
+        return str(self)
+
+
 class Brief(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -79,6 +89,14 @@ class ContextDecision(Brief):
     previous_chapters: int = Field(ge=0, le=3)
     max_chars: int = Field(ge=0, le=9000)
     reason: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def consistent_budget(self):
+        if bool(self.previous_chapters) != bool(self.max_chars):
+            raise IllustrationPlanInvalid(
+                "Illustration context count and budget must both be zero or positive"
+            )
+        return self
 
 
 class ScenePlacement(Brief):
@@ -116,38 +134,38 @@ def validate_plan(
     existing_names: dict[str, str] | None = None,
 ) -> None:
     if count is not None and len(plan.scenes) != count:
-        raise ValueError(
+        raise IllustrationPlanInvalid(
             "The illustration plan did not match the requested image count"
         )
     keys = [character.key for character in plan.characters]
     if len(keys) != len(set(keys)):
-        raise ValueError("Duplicate character identities in illustration plan")
+        raise IllustrationPlanInvalid("Duplicate character identities in illustration plan")
     updates = [update.key for update in plan.name_updates]
     if len(updates) != len(set(updates)) or not set(updates) <= existing:
-        raise ValueError("Name updates must identify distinct existing characters")
+        raise IllustrationPlanInvalid("Name updates must identify distinct existing characters")
     folded = " ".join(content.casefold().split())
     for update in plan.name_updates:
         if update.evidence not in content:
-            raise ValueError(
+            raise IllustrationPlanInvalid(
                 "Character name update has no exact evidence in this chapter"
             )
         names = list(update.aliases)
         if update.name != (existing_names or {}).get(update.key):
             names.append(update.name)
         if any(" ".join(name.casefold().split()) not in folded for name in names):
-            raise ValueError("Updated character names must appear in this chapter")
+            raise IllustrationPlanInvalid("Updated character names must appear in this chapter")
     known = set(keys) | existing
     if len({key for scene in plan.scenes for key in scene.characters}) > 4:
-        raise ValueError(
+        raise IllustrationPlanInvalid(
             "Illustration scenes may use at most four character identities"
         )
     for scene in plan.scenes:
         if scene.evidence not in content:
-            raise ValueError("Illustration scene has no exact evidence in this chapter")
+            raise IllustrationPlanInvalid("Illustration scene has no exact evidence in this chapter")
         if scene.placement:
             placement_metadata(scene, content)
         if not set(scene.characters) <= known:
-            raise ValueError("Illustration scene references an unknown character")
+            raise IllustrationPlanInvalid("Illustration scene references an unknown character")
 
 
 def placement_metadata(scene: SceneBrief, content: str) -> dict:
@@ -161,14 +179,14 @@ def placement_metadata(scene: SceneBrief, content: str) -> dict:
         )
     if placement.position == "after":
         if len(placement.anchor.strip()) < 12 or content.count(placement.anchor) != 1:
-            raise ValueError(
+            raise IllustrationPlanInvalid(
                 "Illustration placement requires a unique exact chapter quotation"
             )
         offset = content.index(placement.anchor) + len(placement.anchor)
     else:
         if placement.anchor:
-            raise ValueError(
-                "Start/end illustration placement must not include a quotation"
+            raise IllustrationPlanInvalid(
+                "Start or end illustration placement must not include a quotation"
             )
         offset = 0 if placement.position == "start" else len(content)
     return {"position": placement.position, "anchor": placement.anchor, "offset": offset}
@@ -195,7 +213,10 @@ image for a short or focused chapter; use two or three only for distinct worthwh
 Never fill a quota. If scene_count is an integer, select exactly that many images for this legacy
 request. Select distinct, visually meaningful
 moments actually present in this chapter: action, place, atmosphere, or a quiet emotional encounter.
-For each scene provide an exact 12–600 character quotation from the chapter as evidence. Caption
+For each scene provide an exact 12–600 character quotation from the current chapter text as evidence.
+Copy it verbatim, preserving punctuation, capitalization, Markdown and whitespace. Do not paraphrase,
+combine separated passages, add ellipses, or quote the previous context. Apply the same rule to
+placement anchors and name-update evidence. Caption
 should describe visible action without revealing anything beyond that scene. Each scene MUST include
 placement: position "start", "after", or "end", and anchor. "after" needs a unique exact 12–600
 character quotation from the current chapter, preferably the end of a paragraph, locating where the
