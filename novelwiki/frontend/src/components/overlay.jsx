@@ -2,12 +2,27 @@
    Overlays — Dialog, ConfirmDialog, CostConfirmDialog, Popover, Menu, Drawer.
    All trap focus, close on Escape/backdrop, and restore focus on close.
    ============================================================ */
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { prefersReducedMotion } from "../motion/navigation.js";
 import { Icon } from "./Icon.jsx";
 import { Button } from "./ui.jsx";
 import { useDismissable, useFocusTrap } from "../lib/hooks.js";
 import { experienceApi } from "../modules/experience/api.js";
+
+/* Dialogs and drawers render at the top of the page, so a glass or animated
+   ancestor (backdrop-filter, transform) can never trap or clip them. A
+   surface with its own theme tokens (the reader's tones) hosts them instead. */
+const OverlayHost = createContext(null);
+
+export function OverlayHostProvider({ hostRef, children }) {
+  return <OverlayHost.Provider value={hostRef}>{children}</OverlayHost.Provider>;
+}
+
+function useOverlayPortal() {
+  const hostRef = useContext(OverlayHost);
+  return (node) => createPortal(node, (hostRef && hostRef.current) || document.body);
+}
 
 /* Close with a short exit animation when the dialog itself initiates it
    (Escape, backdrop). Parents that unmount directly simply skip the exit. */
@@ -28,13 +43,14 @@ function useAnimatedClose(onClose, busy, duration = 210) {
 
 export function Dialog({ title, icon, danger, wide, onClose, children, busy }) {
   const trapRef = useFocusTrap(true);
+  const portal = useOverlayPortal();
   const [closing, requestClose] = useAnimatedClose(onClose, busy);
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape" && !busy) requestClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [busy, requestClose]);
-  return (
+  return portal(
     <div className={"modal-scrim" + (closing ? " is-closing" : "")} onClick={(e) => { if (e.target === e.currentTarget && !busy) requestClose(); }}>
       <div ref={trapRef} className={"modal-card" + (wide ? " wide" : "")} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
         {(title || icon) && (
@@ -216,13 +232,14 @@ export function MenuItem({ icon, danger, selected, children, ...rest }) {
 
 export function Drawer({ onClose, title, children }) {
   const trapRef = useFocusTrap(true);
+  const portal = useOverlayPortal();
   const [closing, requestClose] = useAnimatedClose(onClose, false, 230);
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") requestClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [requestClose]);
-  return (
+  return portal(
     <div className={"drawer-scrim" + (closing ? " is-closing" : "")} onClick={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
       <div ref={trapRef} className="drawer" role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}>
         <div className="drawer-head">

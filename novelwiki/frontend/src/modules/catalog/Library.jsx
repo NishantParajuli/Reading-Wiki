@@ -13,7 +13,6 @@
    are optimistic with rollback and an Undo toast.
    ============================================================ */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -294,11 +293,9 @@ export function Library() {
 
       <div className="lib-stage" aria-busy={isLoading || undefined}>{body}</div>
 
-      {/* Portaled so no animated ancestor can become its containing block. */}
-      {adding && createPortal(
+      {adding && (
         <AddNovelDialog onClose={() => setAdding(false)}
-                        onCreated={(id) => { setAdding(false); qc.invalidateQueries({ queryKey: ["novels"] }); navigate(`/n/${id}`); }} />,
-        document.body,
+                        onCreated={(id) => { setAdding(false); qc.invalidateQueries({ queryKey: ["novels"] }); navigate(`/n/${id}`); }} />
       )}
     </div>
   );

@@ -61,6 +61,35 @@ export function waitReady(key, timeout = 600) {
   });
 }
 
+/* Route chunks still arriving: RouteBoundary's loading orb holds the old frame
+   while it is on screen, so a first visit morphs into the page, not the orb. */
+let pendingScreens = 0;
+const screenWaiters = new Set();
+
+export function holdForScreen() {
+  pendingScreens += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    pendingScreens -= 1;
+    if (!pendingScreens) { screenWaiters.forEach(resolve => resolve()); screenWaiters.clear(); }
+  };
+}
+
+function waitScreens(timeout) {
+  if (!pendingScreens) return Promise.resolve();
+  return new Promise(resolve => {
+    screenWaiters.add(resolve);
+    setTimeout(() => { screenWaiters.delete(resolve); resolve(); }, timeout);
+  });
+}
+
+/* Everything a destination needs before the new frame is captured. */
+function waitDestination(key, timeout) {
+  return Promise.all([key ? waitReady(key, timeout) : null, waitScreens(timeout)]);
+}
+
 /** Mark `key` ready while `ready` is true and the caller is mounted. */
 export function useReadySignal(key, ready) {
   useEffect(() => {
@@ -175,7 +204,7 @@ export function createTransitionHistory() {
     const key = readinessKey(next);
     runViewTransition(type, () => {
       flushSync(commit);
-      return key ? waitReady(key, HOLD[type] || 500) : undefined;
+      return waitDestination(key, HOLD[type] || 500);
     });
   };
 
@@ -190,7 +219,7 @@ export function createTransitionHistory() {
     const key = readinessKey(next);
     runViewTransition(type, () => {
       flushSync(() => fn(update));
-      return key ? waitReady(key, Math.min(HOLD[type] || 400, 500)) : undefined;
+      return waitDestination(key, Math.min(HOLD[type] || 400, 500));
     });
   });
   return history;
@@ -212,6 +241,9 @@ export function installCoverMorph() {
     let url;
     try { url = new URL(link.href, window.location.href); } catch { return; }
     if (url.origin !== window.location.origin || !NOVEL_LINK_RE.test(url.pathname)) return;
+    // A novel hero already on screen carries the name itself (and morphs into
+    // the next hero); naming a second jacket would cancel the transition.
+    if (doc.querySelector("[data-vt-hero]")) return;
     const scope = link.closest("[data-vt-card]") || link;
     const cover = scope.querySelector("[data-vt-cover]");
     if (!cover || cover.closest("[data-vt-hero]")) return;

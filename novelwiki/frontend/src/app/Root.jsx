@@ -16,7 +16,7 @@ import { ToastProvider, useToast } from "../components/toast.jsx";
 import { Shell } from "../layouts/Shell.jsx";
 import { NovelLayout } from "../layouts/NovelLayout.jsx";
 import {
-  AuthScreen, Profile, Account, Home, Library, Discover, Overview, Jobs, ImportView,
+  AuthScreen, Profile, Account, Home, NotFound, Library, Discover, Overview, Jobs, ImportView,
   Chapters, Reader, Manage, CodexBrowser, EntityPage, Ask, Admin, preloadScreens,
 } from "./lazyScreens.js";
 import { RouteBoundary } from "./RouteBoundary.jsx";
@@ -133,11 +133,14 @@ function AppRoutes() {
           <Route path="codex/e/:entityId" element={<EntityPage />} />
           <Route path="ask" element={<Ask />} />
         </Route>
+        <Route path="*" element={<NotFound />} />
       </Route>
       {/* signed-in user hitting an auth path → home */}
       <Route path="/login" element={<Navigate to="/" replace />} />
       <Route path="/register" element={<Navigate to="/" replace />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="/forgot" element={<Navigate to="/" replace />} />
+      <Route path="/reset" element={<Navigate to="/" replace />} />
+      <Route path="/verify-failed" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

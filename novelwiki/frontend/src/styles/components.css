@@ -417,9 +417,10 @@ input[type="range"].slider:focus-visible::-webkit-slider-thumb { box-shadow: var
 }
 img.avatar-user { background: var(--bg-3); }
 
-/* entity orb (codex): monogram in a type-tinted glass sphere */
+/* entity orb (codex): monogram in a type-tinted glass sphere. The accent is
+   only a zero-specificity default, so the .t-* type tints (tokens.css) win. */
+:where(.avatar, .badge) { --tc: var(--accent); }
 .avatar {
-  --tc: var(--accent);
   position: relative; width: 52px; height: 52px; border-radius: 16px; flex-shrink: 0; overflow: hidden;
   display: grid; place-items: center;
   background:
@@ -441,7 +442,6 @@ img.avatar-user { background: var(--bg-3); }
 .ph-label { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--font-mono); font-size: 9px; color: oklch(1 0 0 / 0.8); text-align: center; padding: 4px; }
 
 .badge {
-  --tc: var(--accent);
   display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--text-2xs); font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
   padding: 4px 10px; border-radius: var(--radius-full);

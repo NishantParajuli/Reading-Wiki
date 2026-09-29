@@ -14,7 +14,7 @@ import { useAuth } from "../../App.jsx";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, Chip, EmptyState, Loading } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
-import { Drawer } from "../../components/overlay.jsx";
+import { Drawer, OverlayHostProvider } from "../../components/overlay.jsx";
 import { ProvenanceBadges } from "../../components/ProvenanceBadges.jsx";
 import { VolumeTOC } from "./toc.jsx";
 import { NarratedProse } from "./NarratedProse.jsx";
@@ -280,6 +280,7 @@ export function Reader() {
   };
 
   return (
+    <OverlayHostProvider hostRef={readerRef}>
     <div ref={readerRef} className={`reader tone-${prefs.tone} reader-tone-${prefs.tone}` + (chrome ? "" : " chrome-hidden")} onClick={tapToggle} onFocusCapture={() => setChrome(true)}>
       <div className="reader-glow" aria-hidden="true" />
       <div className="reader-rail" aria-hidden><div style={{ transform: `scaleX(${readPct})` }} /></div>
@@ -377,7 +378,7 @@ export function Reader() {
             ? <Loading label="Loading…" />
             : <VolumeTOC toc={toc} currentNumber={Number(number)}
                          maxRead={novel && novel.progress ? novel.progress.max_chapter_read : null}
-                         virtualize={false}
+                         virtualize={false} locateNonce={1}
                          onOpen={(n) => { setShowToc(false); openReader(n); }}
                          audioCoverage={audioCoverage}
                          voices={(voicesData && voicesData.voices) || []}
@@ -385,5 +386,6 @@ export function Reader() {
         </Drawer>
       )}
     </div>
+    </OverlayHostProvider>
   );
 }

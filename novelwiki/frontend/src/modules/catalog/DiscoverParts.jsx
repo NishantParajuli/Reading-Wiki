@@ -12,7 +12,6 @@
    Nothing here invents data: labels, counts and blurbs are the server's own.
    ============================================================ */
 import React, { forwardRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 
 import { Icon } from "../../components/Icon.jsx";
@@ -335,7 +334,7 @@ export function MobileFilters({ filters, setParam, activeCount, onClearAll, tota
           {a.label}<Icon name="x" size={12} sw={2.4} />
         </button>
       ))}
-      {open && createPortal(
+      {open && (
         <Dialog title="Filters" icon="sliders" onClose={() => setOpen(false)}>
           <div className="disc-sheet">
             {fields.map(f => {
@@ -369,8 +368,7 @@ export function MobileFilters({ filters, setParam, activeCount, onClearAll, tota
               {loading ? "Show results" : `Show ${total.toLocaleString()} ${total === 1 ? "story" : "stories"}`}
             </Button>
           </div>
-        </Dialog>,
-        document.body,
+        </Dialog>
       )}
     </div>
   );

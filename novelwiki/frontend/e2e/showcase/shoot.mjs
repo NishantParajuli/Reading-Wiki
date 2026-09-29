@@ -16,7 +16,16 @@ import { chromium } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { respond, coverSvg, novels, sceneSvg } from "./fixtures.mjs";
+import { respond as respondBase, coverSvg, novels, sceneSvg } from "./fixtures.mjs";
+import { respondCodex, codexArt } from "./fixtures-codex.mjs";
+import { withNovelStates } from "./fixtures-novel.mjs";
+
+// Codex answers first (ceiling-aware entities, cited answers, illustration
+// plates), then the extra novel states, then the base fixtures.
+const respond = withNovelStates((method, path, query) => {
+  const hit = respondCodex(method, path, query);
+  return hit !== undefined ? hit : respondBase(method, path, query);
+});
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
@@ -89,6 +98,11 @@ try {
           const n = covers.get(id);
           const [title, author] = n ? [n.title, n.author] : (extraTitles[id] || ["Untitled", ""]);
           await route.fulfill({ contentType: "image/svg+xml", body: coverSvg(id, title, author) || "<svg xmlns='http://www.w3.org/2000/svg'/>" });
+          return;
+        }
+        const art = codexArt(url.pathname);
+        if (art) {
+          await route.fulfill({ contentType: "image/svg+xml", body: art });
           return;
         }
         if (/\/illustrations\/[^/]+\/image$/.test(url.pathname)) {

@@ -1,10 +1,14 @@
 /* Suspense + error boundary for lazily loaded screens. A screen that fails to
    load or render shows a calm recovery card instead of a blank page; a chunk
    that vanished after a deploy offers a reload into the new version. */
-import React, { Suspense } from "react";
+import React, { Suspense, useLayoutEffect } from "react";
 import { Icon } from "../components/Icon.jsx";
+import { holdForScreen } from "../motion/navigation.js";
 
 function ScreenLoading() {
+  // Registered during the commit, so a route transition started by the same
+  // navigation waits for the screen instead of capturing this orb.
+  useLayoutEffect(() => holdForScreen(), []);
   return (
     <div className="screen-loading" role="status" aria-label="Loading">
       <span className="screen-loading-orb" aria-hidden="true" />

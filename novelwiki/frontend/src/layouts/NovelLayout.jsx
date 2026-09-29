@@ -24,27 +24,28 @@ export function NovelLayout() {
   const { data: novel, isLoading, isError, refetch } = useNovelQuery(novelId);
 
   const [ceiling, setCeiling] = useState(1);
-  const [ceilingInit, setCeilingInit] = useState(false);
+  const [ceilingFor, setCeilingFor] = useState(null);
   const [stats, setStats] = useState(null);
+  const ceilingInit = ceilingFor === novelId;
   const debCeiling = useDebounce(ceiling, 250);
   // Hold route transitions until the book is on screen; tint the room with it.
   useReadySignal(`novel:${novelId}`, !!novel);
   useBookAtmosphere(novel);
 
-  // Default the ceiling to trusted read progress once the novel loads.
-  useEffect(() => {
-    if (!novel || ceilingInit) return;
+  // Default the ceiling to trusted read progress as soon as this novel is
+  // known — adjusted during render, so no tab (or its requests and deep links)
+  // ever sees a placeholder ceiling or the previous novel's.
+  if (novel && !ceilingInit) {
     setCeiling((novel.progress && novel.progress.max_chapter_read) || novel.min_chapter || 1);
-    setCeilingInit(true);
-  }, [novel, ceilingInit]);
+    setCeilingFor(novelId);
+    setStats(null);
+  }
 
-  // Reset when navigating to a different novel.
-  useEffect(() => { setCeilingInit(false); setStats(null); }, [novelId]);
-
-  // Codex aggregate stats as the ceiling moves; the server clamps requests
-  // above trusted progress and we adopt the clamped value.
+  // Codex aggregate stats once the ceiling settles; the server clamps requests
+  // above trusted progress and we adopt the clamped value. A debounced value
+  // still catching up (first load, another novel) is not requested.
   useEffect(() => {
-    if (!ceilingInit || !novel || !novel.codex_enabled) return;
+    if (!ceilingInit || !novel || !novel.codex_enabled || debCeiling !== ceiling) return;
     let cancel = false;
     codexApi.stats(novelId, debCeiling).then(s => {
       if (cancel) return;

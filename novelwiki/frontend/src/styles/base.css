@@ -54,14 +54,17 @@ p { text-wrap: pretty; }
   font-variation-settings: "SOFT" 40, "WONK" 0;
 }
 
-/* Keyboard focus: a glowing ring. Pointer focus stays quiet. */
+/* Keyboard focus: a glowing ring. Pointer focus stays quiet. The doubled
+   pseudo-class outranks single-class component shadows (buttons, cards) that
+   load later, while a component's own `.x:focus-visible` rule still wins. The
+   ring follows each control's shape; only bare links and summaries, which
+   have none, get softened corners. */
 :focus { outline: none; }
-:focus-visible {
+:focus-visible:focus-visible {
   outline: none;
   box-shadow: var(--ring);
-  border-radius: var(--radius-sm);
-  transition: box-shadow var(--dur-2) var(--ease-out);
 }
+:where(a, summary):focus-visible { border-radius: 4px; }
 
 /* scrollbars (WebKit) */
 ::-webkit-scrollbar { width: 10px; height: 10px; }

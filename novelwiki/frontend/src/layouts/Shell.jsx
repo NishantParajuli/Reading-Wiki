@@ -284,7 +284,8 @@ export function Shell() {
   const activeCount = (jobs || []).filter(isActiveJob).length;
   useJobCompletionToasts(jobs);
 
-  // Cmd/Ctrl+K opens the palette anywhere in the shell.
+  // Cmd/Ctrl+K opens the palette anywhere in the shell; screens can ask for it
+  // with a "tg-open-palette" event.
   useEffect(() => {
     const onKey = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -292,8 +293,13 @@ export function Shell() {
         setPalette(p => !p);
       }
     };
+    const onOpen = () => setPalette(true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("tg-open-palette", onOpen);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("tg-open-palette", onOpen);
+    };
   }, []);
 
   const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);

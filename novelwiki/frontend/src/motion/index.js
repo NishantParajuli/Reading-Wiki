@@ -12,7 +12,7 @@
 export {
   motion, AnimatePresence, LayoutGroup, MotionConfig, useReducedMotion,
   useMotionValue, useSpring, useTransform, useScroll, useInView, animate,
-  useAnimate, useMotionValueEvent, stagger as staggerDelay,
+  useAnimate, useMotionValueEvent, useIsPresent, stagger as staggerDelay,
 } from "motion/react";
 
 export const springs = {
