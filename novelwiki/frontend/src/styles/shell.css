@@ -274,3 +274,4 @@
 @media (max-width: 380px) {
   .brand-word { display: none; }
 }
+.usermenu-note { font-size: var(--text-xs); color: var(--muted); padding: 8px 8px 4px; border-top: 1px solid var(--border); margin-top: 4px; }

@@ -47,10 +47,24 @@ function Aura() {
 }
 
 /* The jacket is painted into a 24×36 canvas (pixels are never read, so any
-   cover origin works) and scaled up by the compositor: a free, huge blur. */
+   cover origin works) and scaled up by the compositor: a free, huge blur.
+   Colour grading happens in the draw — a CSS filter on an element this large
+   gets clipped by the compositor and shows hard edges. */
+function useThemeName() {
+  const read = () => document.documentElement.getAttribute("data-theme") || "dark";
+  const [theme, setTheme] = useState(read);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setTheme(read()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+  return theme;
+}
+
 function AuraLayer({ src, leaving }) {
   const canvasRef = React.useRef(null);
   const [painted, setPainted] = useState(false);
+  const theme = useThemeName();
   useEffect(() => {
     let cancelled = false;
     const img = new Image();
@@ -59,13 +73,18 @@ function AuraLayer({ src, leaving }) {
       if (cancelled || !canvasRef.current) return;
       const ctx = canvasRef.current.getContext("2d");
       if (!ctx) return;
-      try { ctx.filter = "blur(1.2px) saturate(1.5)"; } catch { /* older engines */ }
+      ctx.clearRect(0, 0, 24, 36);
+      try {
+        ctx.filter = theme === "light"
+          ? "blur(1.2px) saturate(1.7) brightness(1.35) contrast(0.8)"
+          : "blur(1.2px) saturate(1.8)";
+      } catch { /* older engines draw ungraded */ }
       ctx.drawImage(img, -2, -2, 28, 40);
       setPainted(true);
     };
     img.src = src;
     return () => { cancelled = true; };
-  }, [src]);
+  }, [src, theme]);
   return (
     <div className={"ambient-aura-layer" + (leaving ? " is-leaving" : "") + (painted ? " is-painted" : "")}>
       <canvas ref={canvasRef} width={24} height={36} />

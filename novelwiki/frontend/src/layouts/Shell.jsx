@@ -170,7 +170,7 @@ function UserMenu() {
 
   useEffect(() => {
     if (open && usage == null) {
-      identityApi.usage().then(setUsage).catch(() => setUsage({ unlimited: true }));
+      identityApi.usage().then(setUsage).catch(() => setUsage({ failed: true }));
     }
   }, [open, usage]);
 
@@ -193,7 +193,8 @@ function UserMenu() {
       {!user.email_verified && (
         <div className="usermenu-warn">Email not verified — check your inbox to unlock translation & uploads.</div>
       )}
-      {usage && !usage.unlimited && (
+      {usage && usage.failed && <div className="usermenu-note">Usage is unavailable right now.</div>}
+      {usage && !usage.unlimited && !usage.failed && (
         <div className="usermenu-usage">
           <div>
             <div className="usermenu-quota-top"><span>Chapters translated</span><span className="muted">{usage.usage.translated_chapters} / {usage.limits.translated_chapters}</span></div>

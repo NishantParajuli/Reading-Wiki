@@ -144,6 +144,12 @@ function AppRoutes() {
 
 function AuthedApp({ user, setUser, onLogout }) {
   useEffect(() => { preloadScreens(); }, []);
+  // The accent chosen in Account → Appearance follows the reader across devices.
+  const { setAccentHue } = useTheme();
+  const savedAccent = Number(user && user.prefs && user.prefs.appearance && user.prefs.appearance.accent_h);
+  useEffect(() => {
+    if (Number.isFinite(savedAccent) && savedAccent >= 0 && savedAccent <= 360) setAccentHue(savedAccent);
+  }, [savedAccent, setAccentHue]);
   const value = useMemo(() => ({
     user,
     onUserUpdate: setUser,
