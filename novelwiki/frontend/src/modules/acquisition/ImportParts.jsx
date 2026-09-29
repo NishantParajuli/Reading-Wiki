@@ -1,131 +1,137 @@
-import React, { useEffect, useRef, useState } from "react";
+/* ============================================================
+   Import wizard parts: the tideline stepper, the book header card,
+   the OCR / working / committed / error states, duplicate warning and the
+   admin folder import. The basin lives in ImportBasin.jsx and the review
+   editor in ImportReview.jsx; both are re-exported from here.
+   ============================================================ */
+import React, { useEffect, useState } from "react";
 
 import { acquisitionApi } from "./api.js";
-import { catalogApi } from "../catalog/api.js";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, Chip, ProgressBar } from "../../components/ui.jsx";
+import { Button, Cover } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
+import { AnimatePresence, motion, springs } from "../../motion/index.js";
+import { IMPORT_STATUS_LABEL, OCR_STATUSES, importTone, stepOf } from "./importStatus.js";
 
-export const IMPORT_KINDS = ["chapter", "frontmatter", "interlude", "backmatter"];
-export const IMPORT_BUSY = ["receiving", "uploaded", "parsing", "segmenting", "committing", "commit_running",
-  "ocr_pending", "ocr_running", "ocr_paused"];
-export const IMPORT_STATUS_LABEL = {
-  receiving: "Receiving…", uploaded: "Queued…", parsing: "Parsing…", segmenting: "Segmenting…",
-  awaiting_ocr_confirm: "Scanned — needs OCR", ocr_pending: "OCR queued…", ocr_running: "Reading pages…",
-  ocr_paused: "OCR paused (budget)", awaiting_review: "Ready to review",
-  committing: "Committing…", commit_running: "Committing…",
-  committed: "Committed", failed: "Failed", canceled: "Canceled",
+export { IMPORT_BUSY, IMPORT_KINDS, IMPORT_STATUS_LABEL, stepOf } from "./importStatus.js";
+export { UploadDrop } from "./ImportBasin.jsx";
+export { PlanEditor, SegmentRow } from "./ImportReview.jsx";
+
+const reveal = {
+  initial: { height: 0, opacity: 0 },
+  animate: { height: "auto", opacity: 1, transition: { height: springs.smooth, opacity: { duration: 0.3, delay: 0.06 } } },
+  exit: { height: 0, opacity: 0, transition: { duration: 0.22, ease: [0.55, 0, 1, 0.45] } },
 };
 
-/* Where a job sits in the wizard: 0 upload, 1 parse, 2 ocr, 3 review, 4 commit(ted). */
-export function stepOf(job) {
-  if (!job) return 0;
-  const s = job.status;
-  if (["receiving", "uploaded", "parsing", "segmenting"].includes(s)) return 1;
-  if (["awaiting_ocr_confirm", "ocr_pending", "ocr_running", "ocr_paused"].includes(s)) return 2;
-  if (s === "awaiting_review") return 3;
-  if (["committing", "commit_running", "committed"].includes(s)) return 4;
-  return 1;
-}
-
+/* ---------- the tideline: Upload → Parse → [OCR] → Review → Commit ---------- */
 export function Stepper({ job }) {
-  const hasOcr = job && ["awaiting_ocr_confirm", "ocr_pending", "ocr_running", "ocr_paused"].includes(job.status)
+  const hasOcr = job && OCR_STATUSES.includes(job.status)
     || (job && job.cost_estimate && job.cost_estimate.scanned_pages != null);
   const steps = ["Upload", "Parse", ...(hasOcr ? ["OCR"] : []), "Review", "Commit"];
   const rawIdx = stepOf(job);
   const idx = hasOcr ? rawIdx : (rawIdx >= 3 ? rawIdx - 1 : rawIdx);
-  const committed = job && job.status === "committed";
+  const committed = !!job && job.status === "committed";
+  const tone = importTone(job && job.status);
+  const stopped = tone === "failed" || (job && job.status === "canceled");
+  const fill = committed ? 1 : Math.min(1, idx / (steps.length - 1));
+  const phase = stopped ? "stopped" : tone === "working" ? "working" : tone === "paused" ? "paused" : "waiting";
+  const spoken = { stopped: "stopped", working: "in progress", paused: "paused", waiting: "waiting for you" };
   return (
-    <div className="stepper" aria-label="Import progress">
-      {steps.map((label, i) => (
-        <React.Fragment key={label}>
-          {i > 0 && <span className="stepper-line" aria-hidden />}
-          <span className={"stepper-step" + (i < idx || committed ? " done" : i === idx ? " active" : "")}>
-            <span className="ss-dot">{i < idx || committed ? <Icon name="check" size={13} sw={2.6} /> : i + 1}</span>
-            {label}
-          </span>
-        </React.Fragment>
-      ))}
+    <div className={["imp-tide", committed ? "is-complete" : "", `is-${phase}`].filter(Boolean).join(" ")}
+         style={{ "--steps": steps.length, "--fill": fill }}>
+      <div className="imp-tide-rail" aria-hidden="true"><span className="imp-tide-flow" /></div>
+      <ol className="imp-tide-steps" aria-label="Import progress">
+        {steps.map((label, i) => {
+          const done = i < idx || committed;
+          const current = !committed && i === idx;
+          const state = done ? "done" : current ? phase : "next";
+          return (
+            <li key={label} className={`imp-tide-step is-${state}`} style={{ "--i": i }}
+                aria-current={current ? "step" : undefined}>
+              <span className="imp-tide-node" aria-hidden="true">
+                {done ? <Icon name="check" size={13} sw={2.6} />
+                  : state === "stopped" ? <Icon name="x" size={12} sw={2.6} />
+                  : state === "next" ? <span className="imp-tide-num">{i + 1}</span>
+                  : <i className="imp-tide-core" />}
+              </span>
+              <span className="imp-tide-label">{label}</span>
+              {(done || current) && <span className="sr-only">{done ? " (done)" : ` (${spoken[phase]})`}</span>}
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
 
-export function UploadDrop({ onUploaded }) {
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [drag, setDrag] = useState(false);
-  const inputRef = useRef(null);
-  const { toast } = useToast();
+/* Re-print the generated jacket only once typing settles. */
+function useSettled(value, delay = 650) {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return settled;
+}
 
-  async function send(input) {
-    if (!input || busy) return;
-    const files = Array.from(input instanceof File ? [input] : input);
-    if (!files.length) return;
-    const unsupported = files.filter(file => !/\.(epub|pdf)$/i.test(file.name));
-    if (unsupported.length) {
-      toast("Only .epub and .pdf files are supported.", { tone: "danger" });
-      return;
-    }
-    setBusy(true); setProgress(0);
-    let queued = 0;
-    const failures = [];
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
-      try {
-        const r = await acquisitionApi.importFile(
-          file,
-          value => setProgress((index + value) / files.length),
-        );
-        queued += 1;
-        onUploaded(r.id, r.duplicate_of);
-      } catch (error) {
-        failures.push({ file, error });
-      }
-    }
-    if (files.length > 1 && queued) {
-      toast(
-        failures.length
-          ? `Queued ${queued} of ${files.length} books; ${failures.length} failed.`
-          : `Queued ${queued} books for import.`,
-        { tone: failures.length ? "warn" : "ok" },
-      );
-    } else if (failures.length) {
-      toast(failures[0].error.message || "Upload failed.", { tone: "danger" });
-    }
-    setBusy(false); setProgress(0);
-  }
-
+export function QualityBadge({ quality }) {
+  if (!quality || quality.score == null) return null;
+  const s = quality.score;
+  const tone = s >= 85 ? "good" : s >= 60 ? "warn" : "bad";
+  const tip = (quality.factors || []).map(f => `${f.ok ? "✓" : "✕"} ${f.label}: ${f.detail}`).join("\n");
+  const r = 17;
+  const circumference = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, Number(s) || 0));
   return (
-    <div>
-      <div className={"import-drop" + (drag ? " drag" : "")} role="button" tabIndex={busy ? -1 : 0}
-           aria-label="Choose EPUB or PDF books" aria-disabled={busy}
-           onKeyDown={e => {
-             if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
-               e.preventDefault();
-               if (!busy) inputRef.current?.click();
-             }
-           }}
-           onClick={() => !busy && inputRef.current && inputRef.current.click()}
-           onDragOver={e => { e.preventDefault(); setDrag(true); }}
-           onDragLeave={() => setDrag(false)}
-           onDrop={e => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files); }}>
-        <Icon name="upload" size={28} className="muted" />
-        <div className="import-drop-text">
-          <b>{busy
-            ? (progress > 0 && progress < 1 ? `Uploading… ${Math.round(progress * 100)}%` : "Uploading…")
-            : "Drop your books here, or choose files"}</b>
-          <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
-            Upload several volumes together, review them, then commit or append them as one series.
-          </span>
-        </div>
-        <div className="row" style={{ marginLeft: "auto", gap: 6 }}>
-          <Chip>.epub</Chip><Chip>.pdf</Chip>
-        </div>
-        <input ref={inputRef} type="file" accept=".epub,.pdf" multiple style={{ display: "none" }}
-               onChange={e => { send(e.target.files); e.target.value = ""; }} />
+    <span className={"quality-badge q-" + tone} title={tip} role="img" aria-label={`Quality ${s} of 100`}>
+      <svg viewBox="0 0 42 42" aria-hidden="true" focusable="false">
+        <circle className="qb-track" cx="21" cy="21" r={r} />
+        <circle className="qb-fill" cx="21" cy="21" r={r} strokeDasharray={circumference}
+                strokeDashoffset={circumference * (1 - pct / 100)} transform="rotate(-90 21 21)" />
+      </svg>
+      <span className="qb-num">{s}</span>
+      <span className="qb-label">Quality</span>
+    </span>
+  );
+}
+
+/* The book being imported: jacket, title, status, what was found. */
+export function JobHeader({ job, meta }) {
+  const detected = (job.detected_meta && job.detected_meta.title) || job.filename || "Untitled";
+  const jacketTitle = useSettled(meta.title || detected);
+  const title = meta.title || job.filename || "Untitled";
+  const tone = importTone(job.status);
+  const stats = job.stats;
+  const misses = ((stats && stats.quality && stats.quality.factors) || []).filter(f => !f.ok).slice(0, 3);
+  return (
+    <header className="imp-job card" data-spotlight>
+      <div className="imp-job-jacket" key={meta.cover_url || jacketTitle}>
+        <Cover src={meta.cover_url} title={jacketTitle} author={meta.author} tilt={8} />
       </div>
-      {busy && progress > 0 && <ProgressBar size="sm" value={progress * 100} style={{ marginTop: 8 }} />}
-    </div>
+      <div className="imp-job-body">
+        {job.filename && <p className="imp-job-file" title={job.filename}>{job.filename}</p>}
+        <h2 className="imp-job-title">{title}</h2>
+        {meta.author && <p className="imp-job-author">{meta.author}</p>}
+        <div className="imp-job-meta">
+          <span className={`imp-status tone-${tone}`}>
+            <i className="imp-dot" aria-hidden="true" />
+            {IMPORT_STATUS_LABEL[job.status] || job.status}
+            {job.stage ? <span className="imp-status-stage"> · {job.stage}</span> : null}
+          </span>
+          {stats && stats.images != null && (
+            <span className="imp-job-stat">{stats.segments || 0} segments · {stats.images || 0} images</span>
+          )}
+        </div>
+        {misses.length > 0 && (
+          <ul className="imp-job-notes" aria-label="Quality notes">
+            {misses.map(f => (
+              <li key={f.label}><Icon name="alert" size={12} sw={2} /><span><b>{f.label}</b>{f.detail ? ` — ${f.detail}` : ""}</span></li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {stats && <QualityBadge quality={stats.quality} />}
+    </header>
   );
 }
 
@@ -150,30 +156,39 @@ export function FolderImport({ onQueued }) {
     finally { setBusy(false); }
   }
 
-  if (!open) {
-    return (
-      <Button variant="ghost" size="sm" icon="layers" style={{ marginTop: 10 }} onClick={() => setOpen(true)}>
-        Advanced: import a folder / Calibre library
-      </Button>
-    );
-  }
   return (
-    <div className="card pad" style={{ marginTop: 10 }}>
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>Folder / batch import</p>
-      <input className="input" value={path} onChange={e => setPath(e.target.value)}
-             placeholder="Server path to a folder (blank = watched incoming dir)" style={{ marginBottom: 10 }} />
-      <label className="check">
-        <input type="checkbox" checked={autoCommit} onChange={e => setAutoCommit(e.target.checked)} />
-        Auto-commit each book (skip manual review)
-      </label>
-      <label className="check" style={{ marginTop: 6 }}>
-        <input type="checkbox" checked={groupSeries} onChange={e => setGroupSeries(e.target.checked)} />
-        Group detected EPUB/PDF volumes of one series into a single novel
-      </label>
-      <div className="row" style={{ gap: 10, marginTop: 12 }}>
-        <Button variant="primary" icon="play" loading={busy} onClick={run}>Scan & import</Button>
-        <Button variant="ghost" onClick={() => setOpen(false)}>Close</Button>
-      </div>
+    <div className="imp-folder-wrap">
+      {!open && (
+        <Button variant="ghost" size="sm" icon="layers" className="imp-folder-toggle" onClick={() => setOpen(true)}>
+          Advanced: import a folder / Calibre library
+        </Button>
+      )}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div key="folder" className="imp-folder-clip" {...reveal}>
+            <div className="imp-folder card">
+              <p className="section-eyebrow">Folder / batch import</p>
+              <label className="field">
+                <span>Server folder</span>
+                <input className="input" value={path} onChange={e => setPath(e.target.value)} spellCheck={false}
+                       placeholder="Blank = the watched incoming folder" />
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={autoCommit} onChange={e => setAutoCommit(e.target.checked)} />
+                Auto-commit each book (skip manual review)
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={groupSeries} onChange={e => setGroupSeries(e.target.checked)} />
+                Group detected EPUB/PDF volumes of one series into a single novel
+              </label>
+              <div className="imp-folder-actions">
+                <Button variant="primary" size="sm" icon="play" loading={busy} onClick={run}>Scan & import</Button>
+                <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Close</Button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -183,271 +198,24 @@ export function DuplicateWarning({ dups, onOpenNovel }) {
   if (!committed.length) return null;
   const d = committed[0];
   return (
-      <div className="card" style={{ padding: "10px 14px", margin: "12px 0", display: "flex", gap: 10, alignItems: "center" }}>
-      <Icon name="alert" size={16} className="muted" />
-      <div className="grow" style={{ fontSize: "var(--text-sm)" }}>
+    <div className="imp-dup">
+      <span className="imp-panel-icon is-warn" aria-hidden="true"><Icon name="alert" size={16} /></span>
+      <p className="grow">
         You already imported this file{d.novel_title ? <> into <b>{d.novel_title}</b></> : null}. Committing again makes a separate copy.
-      </div>
-      {d.novel_id && <Button variant="ghost" size="sm" onClick={() => onOpenNovel(d.novel_id)}>Open</Button>}
+      </p>
+      {d.novel_id && <Button variant="ghost" size="sm" iconRight="arrowRight" onClick={() => onOpenNovel(d.novel_id)}>Open</Button>}
     </div>
   );
 }
 
-export function QualityBadge({ quality }) {
-  if (!quality || quality.score == null) return null;
-  const s = quality.score;
-  const tone = s >= 85 ? "good" : s >= 60 ? "warn" : "bad";
-  const tip = (quality.factors || []).map(f => `${f.ok ? "✓" : "✕"} ${f.label}: ${f.detail}`).join("\n");
-  return <span className={"quality-badge q-" + tone} title={tip}>Quality {s}</span>;
-}
-
-export function SegmentRow({ seg, onPatch, onMerge, onSplit, canMerge }) {
-  const wc = seg.word_count != null ? `${seg.word_count.toLocaleString()} words` : "";
+/* A scanned page under a reading beam. */
+function ScanGlyph() {
   return (
-    <div className={"seg-row" + (seg.include ? "" : " excluded")}>
-      <label className="seg-include" title={seg.include ? "Included" : "Excluded"}>
-        <input type="checkbox" aria-label={`Include ${seg.title || "untitled segment"}`} checked={!!seg.include} onChange={e => onPatch({ include: e.target.checked })} />
-      </label>
-      <div className="seg-main">
-        <div className="seg-line1">
-          <input className="seg-title" value={seg.title || ""} aria-label="Segment title"
-                 onChange={e => onPatch({ title: e.target.value })} placeholder="Untitled" />
-          <select className="seg-kind" aria-label={`Type of ${seg.title || "untitled segment"}`} value={seg.kind} onChange={e => onPatch({ kind: e.target.value })}>
-            {IMPORT_KINDS.map(k => <option key={k} value={k}>{k}</option>)}
-          </select>
-          <input className="seg-num" value={seg.number == null ? "" : seg.number} placeholder="#"
-                 title="Chapter number" aria-label={`Chapter number for ${seg.title || "untitled segment"}`} type="number" step="any" inputMode="decimal"
-                 onChange={e => { const v = e.target.value.trim(); onPatch({ number: v === "" ? null : Number(v) }); }} />
-        </div>
-        <div className="seg-line2 muted">
-          <input className="input" value={seg.part_label || ""}
-                 aria-label={`Volume/group for ${seg.title || "untitled segment"}`}
-                 onChange={e => onPatch({ part_label: e.target.value || null })}
-                 placeholder="Volume/group"
-                 style={{ width: 125, height: 25, marginRight: 8, padding: "2px 7px", fontSize: "var(--text-xs)" }} />
-          <span className="mono" style={{ marginRight: 8 }}>[{seg.block_range[0]}–{seg.block_range[1]}]</span>
-          {wc && <span style={{ marginRight: 8 }}>{wc}</span>}
-          {seg.first_line && <span className="seg-first">{seg.first_line}</span>}
-        </div>
-      </div>
-      <div className="seg-actions">
-        <button className="icon-btn plain" title="Merge into previous" aria-label="Merge into previous" disabled={!canMerge} onClick={onMerge}>
-          <Icon name="merge" size={15} />
-        </button>
-        <button className="icon-btn plain" title="Split in half" aria-label="Split in half" onClick={onSplit}>
-          <Icon name="scissors" size={15} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-export function PlanEditor({
-  job, plan, setPlan, metadata, setMetadata, onSave, onCommit, busy,
-}) {
-  const segs = plan.segments || [];
-  const novels = job._novels || [];
-  const [mode, setMode] = useState("new");
-  const [novelId, setNovelId] = useState("");
-  const [offset, setOffset] = useState("0");
-  const [sourceId, setSourceId] = useState("");
-  const [sources, setSources] = useState([]);
-  const [sourcesError, setSourcesError] = useState(null);
-  const editableMeta = metadata || {};
-  const detectedSeries = editableMeta.series || "";
-  const detectedVolume = editableMeta.volume_label
-    || (editableMeta.series_index !== "" && editableMeta.series_index != null
-      ? `Volume ${editableMeta.series_index}`
-      : "");
-  const [asVolume, setAsVolume] = useState(
-    !!(detectedSeries || editableMeta.series_index !== "" && editableMeta.series_index != null),
-  );
-  const detectedLang = editableMeta.language || "";
-  const [isRaw, setIsRaw] = useState(!!(job.options && job.options.is_raw));
-
-  useEffect(() => {
-    if (!asVolume || !detectedSeries || novelId) return;
-    const normalize = value => String(value || "").trim().toLocaleLowerCase();
-    const match = novels.find(
-      novel => novel.can_edit && normalize(novel.title) === normalize(detectedSeries),
-    );
-    if (match) {
-      setMode("append");
-      setNovelId(String(match.id));
-    }
-  }, [asVolume, detectedSeries, novelId, novels]);
-
-  useEffect(() => {
-    if (mode !== "replace" || !novelId) { setSources([]); return; }
-    let cancel = false;
-    setSources([]); setSourcesError(null);
-    catalogApi.novel(parseInt(novelId)).then(n => { if (!cancel) setSources(n.sources || []); })
-      .catch(error => { if (!cancel) setSourcesError(error.message || "Could not load sources. Choose the novel again to retry."); });
-    return () => { cancel = true; };
-  }, [mode, novelId]);
-
-  const buildBody = () => {
-    if (mode === "append") return {
-      mode: "append", novel_id: parseInt(novelId), offset: parseFloat(offset) || 0,
-      is_raw: isRaw, as_volume: asVolume,
-    };
-    if (mode === "replace") return {
-      mode: "replace", source_id: parseInt(sourceId), offset: parseFloat(offset) || 0,
-      is_raw: isRaw, as_volume: false,
-    };
-    return { mode: "new", is_raw: isRaw, as_volume: asVolume };
-  };
-  const includedCount = segs.filter(s => s.include).length;
-  const warnings = segs.filter(s => s.include && s.kind === "chapter" && s.number == null).length;
-  const commitDisabled = busy || includedCount === 0
-    || (mode === "append" && !novelId)
-    || (mode === "replace" && (!sourceId || !sources.some(source => source.id === Number(sourceId))))
-    || (((mode === "append" && !asVolume) || mode === "replace") && !Number.isFinite(Number(offset)));
-
-  const patchSeg = (i, body) => setPlan(p => ({ ...p, segments: p.segments.map((s, j) => j === i ? { ...s, ...body } : s) }));
-  const patchMeta = body => setMetadata(p => ({ ...p, ...body }));
-  const mergePrev = (i) => setPlan(p => {
-    if (i <= 0) return p;
-    const segments = p.segments.slice();
-    const prev = segments[i - 1], cur = segments[i];
-    segments[i - 1] = { ...prev, block_range: [prev.block_range[0], cur.block_range[1]],
-      word_count: (prev.word_count || 0) + (cur.word_count || 0) };
-    segments.splice(i, 1);
-    return { ...p, segments };
-  });
-  const splitHalf = (i) => setPlan(p => {
-    const segments = p.segments.slice();
-    const s = segments[i];
-    const [a, b] = s.block_range;
-    if (b <= a) return p;
-    const mid = Math.floor((a + b) / 2);
-    segments.splice(i, 1,
-      { ...s, block_range: [a, mid] },
-      { ...s, id: s.id + "b", title: s.title + " (cont.)", block_range: [mid + 1, b], number: null });
-    return { ...p, segments };
-  });
-
-  return (
-    <div>
-      <div className="card pad" style={{ marginBottom: 10 }}>
-        <h2 className="section-title" style={{ marginTop: 0 }}>Book details</h2>
-        <p className="muted" style={{ margin: "0 0 10px", fontSize: "var(--text-xs)" }}>
-          These saved values override PDF/EPUB metadata and filename guesses.
-        </p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-          <label>
-            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Book title</span>
-            <input className="input" aria-label="Book title" value={editableMeta.title || ""}
-                   onChange={e => patchMeta({ title: e.target.value })} placeholder="Enter the exact title" />
-          </label>
-          <label>
-            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Author</span>
-            <input className="input" aria-label="Author" value={editableMeta.author || ""}
-                   onChange={e => patchMeta({ author: e.target.value })} placeholder="Optional" />
-          </label>
-          <label>
-            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Series / novel name</span>
-            <input className="input" aria-label="Series / novel name" value={editableMeta.series || ""}
-                   onChange={e => patchMeta({ series: e.target.value })}
-                   placeholder="e.g. Mushoku Tensei" />
-          </label>
-          <label>
-            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Volume number</span>
-            <input className="input" aria-label="Volume number" type="number" step="any"
-                   value={editableMeta.series_index ?? ""}
-                   onChange={e => patchMeta({ series_index: e.target.value })}
-                   placeholder="e.g. 2" inputMode="decimal" />
-          </label>
-          <label>
-            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Volume/group label</span>
-            <input className="input" aria-label="Volume/group label" value={editableMeta.volume_label || ""}
-                   onChange={e => patchMeta({ volume_label: e.target.value })}
-                   placeholder="e.g. Volume 2" />
-          </label>
-          <label>
-            <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Language code</span>
-            <input className="input" aria-label="Language code" value={editableMeta.language || ""}
-                   onChange={e => patchMeta({ language: e.target.value })}
-                   placeholder="e.g. en, ja" />
-          </label>
-        </div>
-        <label style={{ display: "block", marginTop: 10 }}>
-          <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Description</span>
-          <textarea className="input" aria-label="Description" value={editableMeta.description || ""}
-                    onChange={e => patchMeta({ description: e.target.value })}
-                    placeholder="Optional book description" rows={3}
-                    style={{ resize: "vertical", minHeight: 70 }} />
-        </label>
-        <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
-          <Button variant="ghost" size="sm" icon="check" loading={busy} onClick={onSave}>
-            Save review
-          </Button>
-        </div>
-      </div>
-      <div className="card plan-head">
-        <div>
-          <b>{segs.length} segments</b>
-          <span className="muted" style={{ marginLeft: 8, fontSize: "var(--text-sm)" }}>{includedCount} will be imported</span>
-        </div>
-        {warnings > 0 && <Chip tone="warn" icon="alert">{warnings} unnumbered chapter{warnings === 1 ? "" : "s"}</Chip>}
-      </div>
-      <div className="seg-list">
-        {segs.map((s, i) => (
-          <SegmentRow key={s.id + ":" + i} seg={s} canMerge={i > 0}
-                      onPatch={body => patchSeg(i, body)}
-                      onMerge={() => mergePrev(i)} onSplit={() => splitHalf(i)} />
-        ))}
-      </div>
-      <label className="check" style={{ margin: "10px 2px 0" }}>
-        <input type="checkbox" checked={isRaw} onChange={e => setIsRaw(e.target.checked)} />
-        These are raws — translate on read
-        {detectedLang && <span className="muted" style={{ fontSize: "var(--text-xs)" }}>(detected: {detectedLang})</span>}
-      </label>
-      <label className="check" style={{ margin: "8px 2px 0" }}>
-        <input type="checkbox" checked={asVolume} onChange={e => setAsVolume(e.target.checked)} />
-        Group this book as {detectedVolume || "a volume"}
-        {detectedSeries && (
-          <span className="muted" style={{ fontSize: "var(--text-xs)" }}>
-            in {detectedSeries}; append numbering is automatic
-          </span>
-        )}
-      </label>
-      <div className="card commit-bar">
-        <div className="seg fit" role="group" aria-label="Commit target">
-          <button aria-pressed={mode === "new"} className={mode === "new" ? "active" : ""} onClick={() => setMode("new")}>New novel</button>
-          <button aria-pressed={mode === "append"} className={mode === "append" ? "active" : ""} onClick={() => setMode("append")}>Append to…</button>
-          <button aria-pressed={mode === "replace"} className={mode === "replace" ? "active" : ""} title="Overwrite an existing source's chapters" onClick={() => { setMode("replace"); setSourceId(""); }}>Replace…</button>
-        </div>
-        {(mode === "append" || mode === "replace") && (
-          <select className="input" style={{ flex: "1 1 160px", width: "auto" }} value={novelId}
-                  aria-label="Destination novel"
-                  onChange={e => { setNovelId(e.target.value); setSourceId(""); }}>
-            <option value="">Choose a novel…</option>
-            {novels.map(n => <option key={n.id} value={n.id}>{n.title}</option>)}
-          </select>
-        )}
-        {mode === "replace" && novelId && (
-          <select className="input" aria-label="Source to replace" style={{ flex: "1 1 160px", width: "auto" }} value={sourceId} onChange={e => setSourceId(e.target.value)}>
-            <option value="">Choose a source…</option>
-            {sources.map(s => <option key={s.id} value={s.id}>{(s.label || s.adapter) + ` (#${s.id})`}</option>)}
-          </select>
-        )}
-        {((mode === "append" && !asVolume) || mode === "replace") && (
-          <input className="input" style={{ flex: "0 0 110px", width: "auto" }} value={offset}
-                 onChange={e => setOffset(e.target.value)} placeholder="offset" inputMode="decimal" title="Chapter offset" aria-label="Chapter offset" />
-        )}
-        <Button variant="primary" icon="check" disabled={commitDisabled} loading={busy}
-                onClick={() => onCommit(buildBody())}>
-          {mode === "replace" ? "Replace chapters" : "Commit"}
-        </Button>
-      </div>
-      {mode === "replace" && sourcesError && <p role="alert" className="acct-err">{sourcesError}</p>}
-      {mode === "replace" && (
-        <p className="muted" style={{ fontSize: "var(--text-xs)", margin: "8px 2px 0" }}>
-          Replacing deletes that source's current chapters and rebuilds its part of the codex.
-        </p>
-      )}
-    </div>
+    <svg className="imp-scan" viewBox="0 0 72 88" aria-hidden="true" focusable="false">
+      <rect className="imp-scan-page" x="8" y="6" width="56" height="76" rx="6" />
+      <path className="imp-scan-lines" d="M18 22h36M18 30h30M18 38h36M18 46h24M18 54h34M18 62h28M18 70h20" />
+      <rect className="imp-scan-beam" x="4" y="0" width="64" height="10" rx="5" />
+    </svg>
   );
 }
 
@@ -456,45 +224,119 @@ export function OcrConfirm({ job, onConfirm, busy }) {
   const est = job.cost_estimate || {};
   const pages = est.scanned_pages != null ? est.scanned_pages : (job.stats && job.stats.page_count) || 0;
   return (
-    <div className="card pad-lg">
-      <h2 className="section-title" style={{ marginTop: 0 }}>Read the text in this scanned PDF</h2>
-      <p style={{ margin: "0 0 8px", fontSize: "var(--text-md)" }}>
-        {pages.toLocaleString()} pages look scanned. We'll read them with the local OCR engine and escalate hard pages to Gemini vision.
-      </p>
-      {est.est_gemini_requests != null && (
-        <p className="muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 10px" }}>
-          ~{est.est_gemini_requests.toLocaleString()} Gemini requests (~{est.est_minutes} min)
-          {est.budget_remaining != null ? ` · ${est.budget_remaining.toLocaleString()} of today's quota left` : ""}
+    <section className="imp-panel imp-ocr card">
+      <ScanGlyph />
+      <div className="imp-ocr-body">
+        <p className="imp-eyebrow">Scanned pages found</p>
+        <h2 className="imp-panel-title">Read the text in this scanned PDF</h2>
+        <p className="imp-panel-lede">
+          {pages.toLocaleString()} pages look scanned. We'll read them with the local OCR engine and escalate hard pages to Gemini vision.
         </p>
-      )}
-      <label className="check" style={{ marginBottom: 12 }}>
-        <input type="checkbox" checked={geminiFirst} onChange={e => setGeminiFirst(e.target.checked)} />
-        Use Gemini for every page (skip the local engine — higher quality, more quota)
-      </label>
-      <div className="row" style={{ gap: 10 }}>
-        <Button variant="primary" icon="play" loading={busy} onClick={() => onConfirm({ gemini_first: geminiFirst })}>Run OCR</Button>
+        {est.est_gemini_requests != null && (
+          <dl className="imp-figures">
+            <div><dt>Gemini requests</dt><dd>~{est.est_gemini_requests.toLocaleString()}</dd></div>
+            {est.est_minutes != null && <div><dt>Estimated time</dt><dd>~{est.est_minutes} min</dd></div>}
+            {est.budget_remaining != null && <div><dt>Today's quota left</dt><dd>{est.budget_remaining.toLocaleString()}</dd></div>}
+          </dl>
+        )}
+        <label className="check imp-toggle">
+          <input type="checkbox" checked={geminiFirst} onChange={e => setGeminiFirst(e.target.checked)} />
+          <span>Use Gemini for every page <span className="imp-toggle-note">Skips the local engine — higher quality, more quota</span></span>
+        </label>
+        <div className="imp-panel-actions">
+          <Button variant="primary" icon="play" loading={busy} onClick={() => onConfirm({ gemini_first: geminiFirst })}>Run OCR</Button>
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
 
+const EDGE_PAGES = 48;
+
+/* OCR progress as a book's fore-edge: one sliver lights per page range read. */
 export function OcrProgress({ job }) {
   const p = job.progress || {};
   const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
   const paused = job.status === "ocr_paused";
+  const lit = p.total ? Math.round((Math.min(p.done, p.total) / p.total) * EDGE_PAGES) : 0;
   return (
-    <div className="card pad-lg">
-      <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-        <Icon name={paused ? "pause" : "cpu"} size={16} className="muted" />
+    <section className={"imp-panel imp-ocr-run card" + (paused ? " is-paused" : "")}>
+      <div className="imp-ocr-run-head">
+        <span className={"imp-panel-icon" + (paused ? " is-warn" : "")} aria-hidden="true"><Icon name={paused ? "pause" : "cpu"} size={16} /></span>
         <b className="grow">{IMPORT_STATUS_LABEL[job.status] || "Reading pages…"}</b>
-        {p.total ? <span className="mono muted" style={{ fontSize: "var(--text-sm)" }}>{p.done}/{p.total}</span> : null}
+        {p.total ? <span className="imp-ocr-count">{p.done}/{p.total} pages</span> : null}
       </div>
-      <ProgressBar size="sm" value={pct} />
+      <div className="imp-ocr-figure" aria-hidden="true">
+        <span className="imp-ocr-pct">{pct}</span><span className="imp-ocr-unit">%</span>
+      </div>
+      <div className="imp-foreedge" role="progressbar" aria-label="OCR progress"
+           aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+        {Array.from({ length: EDGE_PAGES }, (_, i) => (
+          <i key={i} className={i < lit ? "is-lit" : i === lit && !paused && p.total ? "is-next" : ""} style={{ "--i": i }} />
+        ))}
+      </div>
       {paused && (
-        <p className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 8, marginBottom: 0 }}>
+        <p className="imp-panel-note">
           Gemini's daily free quota is used up. This resumes automatically tomorrow — no pages are re-read.
         </p>
       )}
-    </div>
+    </section>
+  );
+}
+
+const WORKING_NOTE = {
+  receiving: "Receiving the file.", uploaded: "Waiting for an import worker to pick this book up.",
+  parsing: "Reading the book's structure.", segmenting: "Finding the chapter breaks.",
+  committing: "Adding the chapters to your library.", commit_running: "Adding the chapters to your library.",
+  ocr_pending: "Waiting for the OCR worker.",
+};
+
+export function WorkingState({ job }) {
+  return (
+    <section className="imp-panel imp-working card" role="status">
+      <svg className="imp-working-wave" viewBox="0 0 120 24" aria-hidden="true" focusable="false">
+        <path className="imp-working-path" d="M2 12Q17 2 32 12T62 12T92 12T118 12" />
+        <path className="imp-working-glint" d="M2 12Q17 2 32 12T62 12T92 12T118 12" />
+      </svg>
+      <div className="grow">
+        <b className="imp-working-title">{IMPORT_STATUS_LABEL[job.status] || "Working…"}</b>
+        <p className="imp-working-stage">{job.stage || WORKING_NOTE[job.status] || "Working on it."}</p>
+        <p className="imp-panel-note">This keeps going in the background — you can leave this page.</p>
+      </div>
+    </section>
+  );
+}
+
+export function CommittedState({ title, onOpen }) {
+  return (
+    <section className="imp-panel imp-done card">
+      <span className="imp-done-orb" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9" /></svg>
+      </span>
+      <div className="grow">
+        <b className="imp-done-title">Imported into your library.</b>
+        <p className="imp-panel-note">{title} is on your shelf now.</p>
+      </div>
+      <Button variant="primary" iconRight="arrowRight" onClick={onOpen}>Open novel</Button>
+    </section>
+  );
+}
+
+export function ErrorState({ job, onDelete }) {
+  const failed = job.status === "failed";
+  return (
+    <section className="imp-panel imp-error card">
+      <span className="imp-panel-icon is-danger" aria-hidden="true"><Icon name="alert" size={16} /></span>
+      <div className="imp-error-body">
+        <b className="imp-error-title">{failed ? "This import stopped" : "The last attempt hit a problem"}</b>
+        {job.error
+          ? <pre className="imp-error-text">{job.error}</pre>
+          : <p className="imp-panel-note">The import worker didn't report a reason.</p>}
+        {failed && <p className="imp-panel-note">Fix the file and upload it again, or remove this import.</p>}
+      </div>
+      {failed && onDelete && (
+        <Button variant="ghost" size="sm" icon="trash" className="is-danger imp-error-action" onClick={onDelete}>Delete import</Button>
+      )}
+    </section>
   );
 }

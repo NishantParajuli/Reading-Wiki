@@ -1,20 +1,21 @@
-/* EPUB/PDF wizard: Upload → Parse → [OCR] → Review → Commit. */
+/* EPUB/PDF wizard: Upload → Parse → [OCR] → Review → Commit.
+   Left: the glass basin and the shelf of recent imports.
+   Right: the selected import, told as a tideline. */
 import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { acquisitionApi } from "../../modules/acquisition/api.js";
 import { catalogApi } from "../../modules/catalog/api.js";
 import { useAuth } from "../../App.jsx";
-import { Icon } from "../../components/Icon.jsx";
-import { Button, Cover, EmptyState, Loading, PageHeader } from "../../components/ui.jsx";
+import { PageHeader } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
 import { ImportHistory } from "./ImportHistory.jsx";
+import { ImportDetail } from "./ImportDetail.jsx";
 import { ConfirmDialog } from "../../components/overlay.jsx";
 import { useTitle } from "../../lib/hooks.js";
 
 import {
-  DuplicateWarning, FolderImport, IMPORT_BUSY, IMPORT_STATUS_LABEL, OcrConfirm,
-  OcrProgress, PlanEditor, QualityBadge, Stepper, UploadDrop,
+  DuplicateWarning, FolderImport, IMPORT_BUSY, UploadDrop,
 } from "../../modules/acquisition/ImportParts.jsx";
 
 function editableMetadata(meta, jobId) {
@@ -209,82 +210,34 @@ export function ImportView() {
     finally { setBusy(false); }
   }
 
-  const meta = { ...(job?.detected_meta || {}), ...(metadata || {}) };
-  const committedNovel = job && job.status === "committed" && job.novel_id;
-
   return (
-    <div className="page page-enter">
-      <PageHeader title="Import a book"
+    <div className="page page-enter imp-page">
+      <PageHeader eyebrow="Bring books aboard" title="Import a book"
         subtitle="Bring your EPUBs and PDFs into the reading room. Review chapters and book details before adding them to your library." />
 
-      <UploadDrop onUploaded={onUploaded} />
-      {user && user.role === "admin" && <FolderImport onQueued={loadJobs} />}
-      {dupWarn && <DuplicateWarning dups={dupWarn} onOpenNovel={openNovel} />}
+      <div className="imp-layout">
+        <aside className="imp-side">
+          <div className="imp-side-drop rise" style={{ "--i": 3 }}>
+            <UploadDrop onUploaded={onUploaded} />
+            {user && user.role === "admin" && <FolderImport onQueued={loadJobs} />}
+          </div>
+          <div className="rise" style={{ "--i": 5 }}>
+            <ImportHistory jobs={jobs} jobsError={jobsError} loadJobs={loadJobs}
+              sel={sel} setSel={setSel} seriesCount={seriesCount}
+              seriesSel={seriesSel} setSeriesSel={setSeriesSel}
+              seriesTarget={seriesTarget} setSeriesTarget={setSeriesTarget}
+              novelChoices={novelChoices} busy={busy} seriesBlocked={seriesBlocked} commitSeriesNow={commitSeriesNow}
+              setDeleteTarget={setDeleteTarget} />
+          </div>
+        </aside>
 
-      <div className="import-cols">
-        <ImportHistory jobs={jobs} jobsError={jobsError} loadJobs={loadJobs}
-          sel={sel} setSel={setSel} seriesCount={seriesCount}
-          seriesSel={seriesSel} setSeriesSel={setSeriesSel}
-          seriesTarget={seriesTarget} setSeriesTarget={setSeriesTarget}
-          novelChoices={novelChoices} busy={busy} seriesBlocked={seriesBlocked} commitSeriesNow={commitSeriesNow}
-          setDeleteTarget={setDeleteTarget} />
-
-        {/* Selected job detail */}
-        <div>
-          {jobError && <div role="alert" className="acct-err">{jobError} Retrying automatically…</div>}
-          {sel != null && (!job || job.id !== sel) ? (
-            <Loading label="Opening import…" />
-          ) : job == null ? (
-            <EmptyState icon="book" title="Select an import" body="Upload an EPUB or pick a recent import to review it." />
-          ) : (
-            <>
-              <Stepper job={job} />
-              <div className="import-meta card">
-                {meta.cover_url && <Cover src={meta.cover_url} title={meta.title || ""} />}
-                <div className="grow" style={{ minWidth: 0 }}>
-                  <b>{meta.title || job.filename || "Untitled"}</b>
-                  {meta.author && <div className="muted" style={{ fontSize: "var(--text-sm)" }}>{meta.author}</div>}
-                  <div className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 4 }}>
-                    {IMPORT_STATUS_LABEL[job.status] || job.status}{job.stage ? " · " + job.stage : ""}
-                  </div>
-                  <div className="row wrap" style={{ gap: 8, marginTop: 6 }}>
-                    {job.stats && job.stats.images != null && (
-                      <span className="muted" style={{ fontSize: "var(--text-xs)" }}>
-                        {job.stats.segments || 0} segments · {job.stats.images || 0} images
-                      </span>
-                    )}
-                    {job.stats && <QualityBadge quality={job.stats.quality} />}
-                  </div>
-                </div>
-              </div>
-              {job.error && (
-                <div className="card" style={{ padding: "10px 14px", color: "var(--danger)", fontSize: "var(--text-sm)", marginBottom: 12 }}>
-                  {job.error}
-                </div>
-              )}
-
-              {committedNovel && (
-                <div className="card pad" style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
-                  <Icon name="check" size={18} style={{ color: "var(--ok)" }} />
-                  <b className="grow">Imported into your library.</b>
-                  <Button variant="primary" onClick={() => openNovel(job.novel_id)}>Open novel</Button>
-                </div>
-              )}
-
-              {job.status === "awaiting_ocr_confirm"
-                ? <OcrConfirm job={job} onConfirm={confirmOcr} busy={busy} />
-                : ["ocr_pending", "ocr_running", "ocr_paused"].includes(job.status)
-                  ? <OcrProgress job={job} />
-                  : job.status === "awaiting_review" && reviewReady
-                    ? <PlanEditor key={job.id} job={{ ...job, _novels: novelChoices }}
-                                  plan={plan} setPlan={setPlan}
-                                  metadata={metadata} setMetadata={setMetadata}
-                                  onSave={saveReview} onCommit={commit} busy={busy} />
-                    : IMPORT_BUSY.includes(job.status)
-                      ? <Loading label={IMPORT_STATUS_LABEL[job.status] || "Working…"} />
-                      : null}
-            </>
-          )}
+        <div className="imp-main rise" style={{ "--i": 4 }}>
+          {dupWarn && <DuplicateWarning dups={dupWarn} onOpenNovel={openNovel} />}
+          <ImportDetail sel={sel} job={job} jobError={jobError}
+            plan={plan} setPlan={setPlan} metadata={metadata} setMetadata={setMetadata}
+            novelChoices={novelChoices} busy={busy} reviewReady={reviewReady}
+            onSave={saveReview} onCommit={commit} onConfirmOcr={confirmOcr}
+            onOpenNovel={openNovel} onDelete={setDeleteTarget} />
         </div>
       </div>
       {deleteTarget && <ConfirmDialog title="Delete this import?"
