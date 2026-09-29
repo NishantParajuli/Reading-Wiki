@@ -1,0 +1,23 @@
+/* ============================================================
+   Admin — users, usage, moderation, workers
+   Surface styles owned by modules/admin. Shared primitives live in
+   components.css; tokens in tokens.css.
+   ============================================================ */
+/* ===================== Admin ===================== */
+.admin-user-list { display: flex; flex-direction: column; gap: 8px; }
+.admin-user-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); flex-wrap: wrap; }
+.admin-user-id { display: flex; align-items: center; gap: 10px; flex: 1 1 220px; min-width: 0; }
+.admin-user-name { font-weight: 600; font-size: var(--text-md); }
+.admin-user-email { font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-user-usage { font-size: 11.5px; flex: 0 0 auto; }
+.admin-user-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.admin-quota-edit { display: flex; align-items: flex-end; gap: 10px; padding: 12px; flex-wrap: wrap; margin: -2px 0 4px; }
+.admin-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.admin-spender-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: var(--text-sm); flex-wrap: wrap; }
+.admin-spender-row:last-child { border-bottom: none; }
+.admin-novel-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); flex-wrap: wrap; }
+.admin-novel-title { background: none; border: none; text-align: left; font: inherit; font-weight: 600; color: var(--ink); cursor: pointer; padding: 0; }
+.admin-novel-title:hover { color: var(--accent-ink); }
+.admin-job-row { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }

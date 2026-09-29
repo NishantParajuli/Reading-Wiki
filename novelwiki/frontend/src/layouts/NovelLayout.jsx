@@ -11,6 +11,8 @@ import { codexApi } from "../modules/codex/api.js";
 import { useNovelQuery } from "../modules/catalog/queries.js";
 import { useDebounce } from "../lib/hooks.js";
 import { Loading, EmptyState } from "../components/ui.jsx";
+import { useReadySignal } from "../motion/navigation.js";
+import { useBookAtmosphere } from "../atmosphere/store.js";
 
 const NovelContext = createContext(null);
 export const useNovel = () => useContext(NovelContext);
@@ -25,6 +27,9 @@ export function NovelLayout() {
   const [ceilingInit, setCeilingInit] = useState(false);
   const [stats, setStats] = useState(null);
   const debCeiling = useDebounce(ceiling, 250);
+  // Hold route transitions until the book is on screen; tint the room with it.
+  useReadySignal(`novel:${novelId}`, !!novel);
+  useBookAtmosphere(novel);
 
   // Default the ceiling to trusted read progress once the novel loads.
   useEffect(() => {

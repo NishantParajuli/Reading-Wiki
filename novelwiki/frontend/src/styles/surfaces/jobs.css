@@ -1,0 +1,16 @@
+/* ============================================================
+   Jobs — background work
+   Surface styles owned by modules/work. Shared primitives live in
+   components.css; tokens in tokens.css.
+   ============================================================ */
+/* ===================== Jobs ===================== */
+.jobs-novel-group { margin-bottom: 18px; }
+.jobs-novel-head { display: flex; align-items: center; gap: 10px; padding: 4px 2px 10px; }
+.jobs-novel-head .cover { width: 30px; border-radius: 5px; }
+.jobs-novel-head b { font-size: var(--text-md); }
+.job-error-detail {
+  font-family: var(--mono); font-size: var(--text-xs); line-height: 1.5; color: var(--danger);
+  background: var(--danger-soft); border-radius: 8px; padding: 10px 12px; margin: 4px 10px 10px;
+  white-space: pre-wrap; word-break: break-word; position: relative;
+}
+

@@ -1,0 +1,50 @@
+/* ============================================================
+   Profile & Account
+   Surface styles owned by modules/identity (Profile, Account*), acquisition NovelpiaCookies. Shared primitives live in
+   components.css; tokens in tokens.css.
+   ============================================================ */
+/* ===================== Profile / Account ===================== */
+.profile-head { display: flex; gap: 20px; align-items: center; padding: 22px; }
+.profile-head-body { min-width: 0; flex: 1; }
+.profile-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
+@media (max-width: 640px) { .profile-stats { grid-template-columns: repeat(2, 1fr); } }
+
+.acct-layout { display: grid; grid-template-columns: 210px 1fr; gap: 26px; align-items: start; margin-top: 18px; }
+@media (max-width: 767px) { .acct-layout { grid-template-columns: 1fr; } }
+.acct-nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 76px; }
+@media (max-width: 767px) { .acct-nav { flex-direction: row; overflow-x: auto; position: static; padding-bottom: 4px; } }
+.acct-nav-item {
+  display: flex; align-items: center; gap: 10px; border: none; background: none; text-align: left;
+  color: var(--ink-2); padding: 9px 12px; border-radius: 10px; font-size: var(--text-md); font-weight: 600;
+  white-space: nowrap;
+}
+.acct-nav-item:hover { background: var(--surface-2); color: var(--ink); }
+.acct-nav-item.active { background: var(--accent-soft); color: var(--accent-ink); }
+.acct-card { padding: 20px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+.acct-ok { font-size: var(--text-sm); color: var(--ok); font-weight: 600; }
+.acct-err { font-size: var(--text-sm); color: var(--danger); font-weight: 600; }
+.source-account { min-width: 0; }
+.source-account-heading { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.source-account-heading h2 { margin: 0; font-size: var(--text-xl); }
+.source-account-copy { margin: 0; font-size: var(--text-sm); line-height: 1.6; }
+.source-account-status, .source-cookie-form { display: flex; flex-direction: column; gap: 12px; }
+.source-cookie-form { margin-top: 4px; }
+.source-cookie-form textarea { width: 100%; min-width: 0; resize: vertical; }
+.source-account summary { cursor: pointer; font-weight: 600; font-size: var(--text-sm); }
+.source-cookie-help ol { padding-left: 24px; font-size: var(--text-sm); line-height: 1.7; }
+.source-cookie-dates { margin: 12px 0; display: grid; gap: 8px; font-size: var(--text-sm); }
+.source-cookie-dates > div { display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: space-between; }
+.source-cookie-dates dt { font-weight: 600; }
+.source-cookie-dates dd { margin: 0; color: var(--muted); }
+.source-recovery-links { margin-top: 8px; gap: 8px 16px; font-family: var(--sans); font-size: var(--text-sm); white-space: normal; }
+.acct-quota-top { display: flex; justify-content: space-between; font-size: var(--text-sm); margin-bottom: 4px; }
+
+.accent-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.accent-swatch {
+  width: 36px; height: 36px; border-radius: 11px; cursor: pointer;
+  border: 2.5px solid transparent; box-shadow: var(--shadow-1); padding: 0;
+}
+.accent-swatch.on { border-color: var(--ink); }
+
+.mini-rail { display: flex; gap: 12px; overflow-x: auto; padding: 4px 2px 12px; scroll-snap-type: x proximity; }
+.mini-rail .rail-card { flex: 0 0 112px; }

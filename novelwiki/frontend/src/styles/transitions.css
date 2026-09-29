@@ -1,0 +1,110 @@
+/* ============================================================
+   View transitions — how the app moves between routes.
+   <html data-vt="…"> is set by motion/navigation.js for the duration of a
+   transition. Persistent chrome (the island, reader controls) is named so it
+   stays put while the page content changes beneath it.
+   ============================================================ */
+
+::view-transition-group(*) {
+  animation-duration: 520ms;
+  animation-timing-function: var(--ease-out);
+}
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: 420ms; }
+
+/* ---------- page: the default route change ---------- */
+html[data-vt="page"]::view-transition-old(root) { animation: vt-out 260ms var(--ease-in) both; }
+html[data-vt="page"]::view-transition-new(root) { animation: vt-in 560ms var(--ease-out) 40ms both; }
+
+/* ---------- pop: back/forward — the reverse gesture ---------- */
+html[data-vt="pop"]::view-transition-old(root) { animation: vt-out-down 240ms var(--ease-in) both; }
+html[data-vt="pop"]::view-transition-new(root) { animation: vt-in-up 500ms var(--ease-out) 30ms both; }
+
+/* ---------- tabs within a section / a novel ---------- */
+html:is([data-vt="tab"], [data-vt="novel-tab"])::view-transition-old(root) { animation: vt-fade-out 180ms var(--ease-in) both; }
+html:is([data-vt="tab"], [data-vt="novel-tab"])::view-transition-new(root) { animation: vt-soft-in 360ms var(--ease-out) 40ms both; }
+
+@keyframes vt-out { to { opacity: 0; transform: scale(0.985); filter: blur(3px); } }
+@keyframes vt-in { from { opacity: 0; transform: translateY(22px) scale(1.008); filter: blur(6px); } }
+@keyframes vt-out-down { to { opacity: 0; transform: translateY(12px) scale(0.99); filter: blur(3px); } }
+@keyframes vt-in-up { from { opacity: 0; transform: translateY(-14px) scale(0.995); filter: blur(5px); } }
+@keyframes vt-fade-out { to { opacity: 0; } }
+@keyframes vt-soft-in { from { opacity: 0; transform: translateY(10px); } }
+
+/* ---------- entering a book: the room recedes, the page rises ---------- */
+html[data-vt="enter-reader"]::view-transition-old(root) { animation: vt-recede 620ms var(--ease-in-out) both; }
+html[data-vt="enter-reader"]::view-transition-new(root) { animation: vt-open-book 820ms var(--ease-out) 120ms both; }
+html[data-vt="exit-reader"]::view-transition-old(root) { animation: vt-close-book 380ms var(--ease-in) both; }
+html[data-vt="exit-reader"]::view-transition-new(root) { animation: vt-return 640ms var(--ease-out) 60ms both; }
+
+@keyframes vt-recede { to { opacity: 0; transform: scale(1.06); filter: blur(10px) brightness(0.8); } }
+@keyframes vt-open-book { from { opacity: 0; transform: translateY(4%) scale(0.965); filter: blur(8px); } }
+@keyframes vt-close-book { to { opacity: 0; transform: translateY(3%) scale(0.97); filter: blur(6px); } }
+@keyframes vt-return { from { opacity: 0; transform: scale(1.04); filter: blur(8px); } }
+
+/* ---------- chapters: the tide washes the next page in ----------
+   The new page is revealed by a mask with a wave-shaped edge that sweeps
+   across; the old page slides back a little and dims (parallax depth). */
+html:is([data-vt="chapter-next"], [data-vt="chapter-prev"])::view-transition-new(root) {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 100' preserveAspectRatio='none'%3E%3Cpath d='M300 0H150C160 8 142 17 150 25C158 33 140 42 150 50C160 58 142 67 150 75C158 83 140 92 150 100H300Z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 100' preserveAspectRatio='none'%3E%3Cpath d='M300 0H150C160 8 142 17 150 25C158 33 140 42 150 50C160 58 142 67 150 75C158 83 140 92 150 100H300Z'/%3E%3C/svg%3E");
+  -webkit-mask-size: 300% 100%;
+  mask-size: 300% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  animation: vt-wash-next 900ms var(--ease-in-out) both;
+}
+html[data-vt="chapter-prev"]::view-transition-new(root) {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 100' preserveAspectRatio='none'%3E%3Cpath d='M0 0H150C140 8 158 17 150 25C142 33 160 42 150 50C140 58 158 67 150 75C142 83 160 92 150 100H0Z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 100' preserveAspectRatio='none'%3E%3Cpath d='M0 0H150C140 8 158 17 150 25C142 33 160 42 150 50C140 58 158 67 150 75C142 83 160 92 150 100H0Z'/%3E%3C/svg%3E");
+  animation: vt-wash-prev 900ms var(--ease-in-out) both;
+}
+html[data-vt="chapter-next"]::view-transition-old(root) { animation: vt-page-back 900ms var(--ease-in-out) both; }
+html[data-vt="chapter-prev"]::view-transition-old(root) { animation: vt-page-fore 900ms var(--ease-in-out) both; }
+
+@keyframes vt-wash-next {
+  from { -webkit-mask-position: 0% 0; mask-position: 0% 0; }
+  to { -webkit-mask-position: 100% 0; mask-position: 100% 0; }
+}
+@keyframes vt-wash-prev {
+  from { -webkit-mask-position: 100% 0; mask-position: 100% 0; }
+  to { -webkit-mask-position: 0% 0; mask-position: 0% 0; }
+}
+@keyframes vt-page-back { to { transform: translateX(-6%); filter: brightness(0.72) blur(1px); } }
+@keyframes vt-page-fore { to { transform: translateX(6%); filter: brightness(0.72) blur(1px); } }
+
+/* ---------- theme: a circle of the new light spreads from the switch ---------- */
+html[data-vt="theme"] * { view-transition-name: none !important; }
+html[data-vt="theme"]::view-transition-old(root) { animation: none; z-index: 1; }
+html[data-vt="theme"]::view-transition-new(root) {
+  z-index: 2;
+  animation: vt-theme 760ms var(--ease-in-out) both;
+}
+@keyframes vt-theme {
+  from { clip-path: circle(0 at var(--vt-x, 90%) var(--vt-y, 5%)); }
+  to { clip-path: circle(var(--vt-r, 150vmax) at var(--vt-x, 90%) var(--vt-y, 5%)); }
+}
+
+/* ---------- shared elements ---------- */
+::view-transition-group(hero-cover) {
+  animation-duration: 700ms;
+  animation-timing-function: cubic-bezier(0.2, 0.9, 0.15, 1);
+  z-index: 50;
+}
+::view-transition-old(hero-cover),
+::view-transition-new(hero-cover) {
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-cover);
+}
+::view-transition-group(island),
+::view-transition-group(dock) { animation-duration: 420ms; z-index: 60; }
+::view-transition-group(reader-top),
+::view-transition-group(reader-bottom),
+::view-transition-group(reader-rail) { z-index: 70; animation-duration: 300ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) { animation: none !important; }
+}

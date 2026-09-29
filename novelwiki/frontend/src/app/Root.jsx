@@ -5,8 +5,9 @@
    after they sign back in.
    ============================================================ */
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MotionConfig } from "motion/react";
 
 import { authApi } from "../modules/identity/api.js";
 import { setUnauthorizedHandler } from "../shared/api/http.js";
@@ -23,12 +24,15 @@ import { Chapters, Reader } from "../modules/reading/index.js";
 import { Manage } from "../modules/catalog/index.js";
 import { CodexBrowser, EntityPage, Ask } from "../modules/codex/index.js";
 import { Admin } from "../modules/admin/index.js";
+import { createTransitionHistory, installCoverMorph } from "../motion/navigation.js";
+import { installPointerFX } from "../motion/pointerFX.js";
 
 /* ---------- Auth context ---------- */
 const AuthContext = createContext({ user: null });
 export const useAuth = () => useContext(AuthContext);
 
 /* ---------- Theme context ---------- */
+export const DEFAULT_ACCENT_H = 192;
 const ThemeContext = createContext({ theme: "light" });
 export const useTheme = () => useContext(ThemeContext);
 
@@ -39,19 +43,35 @@ function ThemeProvider({ children }) {
     return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
   const [accentHue, setAccentHue] = useState(() => {
-    const h = parseInt(localStorage.getItem("nw-accent-h") || "", 10);
-    return Number.isFinite(h) && h >= 0 && h <= 360 ? h : 165;
+    let h = NaN;
+    try {
+      h = parseInt(localStorage.getItem("nw-accent-h") || "", 10);
+      // 165 was the previous design's implicit default (never a chosen swatch):
+      // move those readers onto the sea-glass default once.
+      if (h === 165 && localStorage.getItem("nw-design") !== "tideglass-2") h = NaN;
+      localStorage.setItem("nw-design", "tideglass-2");
+    } catch { /* storage unavailable */ }
+    return Number.isFinite(h) && h >= 0 && h <= 360 ? h : DEFAULT_ACCENT_H;
   });
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("nw-theme", theme);
+    try { localStorage.setItem("nw-theme", theme); } catch { /* storage unavailable */ }
+    const meta = document.querySelectorAll('meta[name="theme-color"]');
+    meta.forEach(m => m.setAttribute("content", theme === "dark" ? "#0a0f1c" : "#f8f6f1"));
   }, [theme]);
   useEffect(() => {
     document.documentElement.style.setProperty("--accent-h", accentHue);
-    localStorage.setItem("nw-accent-h", String(accentHue));
+    try { localStorage.setItem("nw-accent-h", String(accentHue)); } catch { /* storage unavailable */ }
   }, [accentHue]);
   const value = useMemo(() => ({ theme, setTheme, accentHue, setAccentHue }), [theme, accentHue]);
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+
+/* Every navigation runs through one transition-aware history (see motion/navigation.js). */
+const history = typeof window !== "undefined" ? createTransitionHistory() : null;
+if (typeof window !== "undefined") {
+  installPointerFX();
+  installCoverMorph();
 }
 
 const queryClient = new QueryClient({
@@ -168,8 +188,8 @@ function Gate() {
 
   if (state.loading) {
     return (
-      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-        <div className="spinner lg" aria-label="Loading" />
+      <div className="boot-screen" role="status" aria-label="Loading">
+        <span className="boot-orb" aria-hidden="true" />
       </div>
     );
   }
@@ -214,17 +234,19 @@ function Gate() {
 export function Root() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <ToastProvider>
-          <CiteProvider>
-            <BrowserRouter>
-              <HashRedirectShim />
-              <ScrollToTop />
-              <Gate />
-            </BrowserRouter>
-          </CiteProvider>
-        </ToastProvider>
-      </ThemeProvider>
+      <MotionConfig reducedMotion="user">
+        <ThemeProvider>
+          <ToastProvider>
+            <CiteProvider>
+              <HistoryRouter history={history}>
+                <HashRedirectShim />
+                <ScrollToTop />
+                <Gate />
+              </HistoryRouter>
+            </CiteProvider>
+          </ToastProvider>
+        </ThemeProvider>
+      </MotionConfig>
     </QueryClientProvider>
   );
 }

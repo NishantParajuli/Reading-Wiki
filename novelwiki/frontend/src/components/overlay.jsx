@@ -3,23 +3,42 @@
    All trap focus, close on Escape/backdrop, and restore focus on close.
    ============================================================ */
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { prefersReducedMotion } from "../motion/navigation.js";
 import { Icon } from "./Icon.jsx";
 import { Button } from "./ui.jsx";
 import { useDismissable, useFocusTrap } from "../lib/hooks.js";
 import { experienceApi } from "../modules/experience/api.js";
 
+/* Close with a short exit animation when the dialog itself initiates it
+   (Escape, backdrop). Parents that unmount directly simply skip the exit. */
+function useAnimatedClose(onClose, busy, duration = 210) {
+  const [closing, setClosing] = useState(false);
+  const request = useCallback(() => {
+    if (busy) return;
+    if (prefersReducedMotion()) { onClose(); return; }
+    setClosing(true);
+  }, [busy, onClose]);
+  useEffect(() => {
+    if (!closing) return undefined;
+    const timer = setTimeout(onClose, duration);
+    return () => clearTimeout(timer);
+  }, [closing, onClose, duration]);
+  return [closing, request];
+}
+
 export function Dialog({ title, icon, danger, wide, onClose, children, busy }) {
   const trapRef = useFocusTrap(true);
+  const [closing, requestClose] = useAnimatedClose(onClose, busy);
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape" && !busy) onClose(); };
+    const onKey = (e) => { if (e.key === "Escape" && !busy) requestClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  }, [busy, requestClose]);
   return (
-    <div className="modal-scrim" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div ref={trapRef} className={"card modal-card" + (wide ? " wide" : "")} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
+    <div className={"modal-scrim" + (closing ? " is-closing" : "")} onClick={(e) => { if (e.target === e.currentTarget && !busy) requestClose(); }}>
+      <div ref={trapRef} className={"modal-card" + (wide ? " wide" : "")} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
         {(title || icon) && (
-          <div className="row" style={{ alignItems: "flex-start", marginBottom: 12 }}>
+          <div className="row" style={{ alignItems: "center", gap: 14, marginBottom: 16 }}>
             {icon && <span className={danger ? "modal-danger-icon" : "modal-accent-icon"}><Icon name={icon} size={19} /></span>}
             <h3 className="modal-title grow">{title}</h3>
           </div>
@@ -175,7 +194,7 @@ export function Popover({ open, onClose, trigger, align = "right", className = "
       {trigger}
       {open && (
         <div ref={panelRef} className={["popover", className].filter(Boolean).join(" ")}
-             style={{ top: "calc(100% + 8px)", [align]: 0, ...style }}>
+             style={{ top: "calc(100% + 10px)", [align]: 0, "--pop-origin": align === "left" ? "top left" : "top right", ...style }}>
           {children}
         </div>
       )}
@@ -197,17 +216,18 @@ export function MenuItem({ icon, danger, selected, children, ...rest }) {
 
 export function Drawer({ onClose, title, children }) {
   const trapRef = useFocusTrap(true);
+  const [closing, requestClose] = useAnimatedClose(onClose, false, 230);
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => { if (e.key === "Escape") requestClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [requestClose]);
   return (
-    <div className="drawer-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className={"drawer-scrim" + (closing ? " is-closing" : "")} onClick={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
       <div ref={trapRef} className="drawer" role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}>
         <div className="drawer-head">
           <b>{title}</b>
-          <button className="icon-btn plain" aria-label="Close" onClick={onClose}><Icon name="x" size={16} /></button>
+          <button className="icon-btn plain" aria-label="Close" onClick={requestClose}><Icon name="x" size={17} /></button>
         </div>
         <div className="drawer-body">{children}</div>
       </div>

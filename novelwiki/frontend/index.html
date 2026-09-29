@@ -5,27 +5,35 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Tideglass — your reading library</title>
   <meta name="description" content="Your novels — translated, narrated, spoiler-safe." />
-  <meta name="theme-color" content="#f5f1e8" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#211d17" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f8f6f1" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0a0f1c" media="(prefers-color-scheme: dark)" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <script>
-    // Apply the saved theme before first paint so dark-mode users never see a white flash.
+    // Apply the saved theme + accent before first paint so nobody sees a flash.
     (function () {
+      var root = document.documentElement;
       try {
         var t = localStorage.getItem("nw-theme");
         if (t !== "light" && t !== "dark") {
           t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
         }
-        document.documentElement.setAttribute("data-theme", t);
+        root.setAttribute("data-theme", t);
         var h = parseInt(localStorage.getItem("nw-accent-h") || "", 10);
-        if (!isNaN(h)) document.documentElement.style.setProperty("--accent-h", h);
+        // 165 was the previous design's implicit default; it becomes sea glass (192).
+        if (h === 165 && localStorage.getItem("nw-design") !== "tideglass-2") h = NaN;
+        if (!isNaN(h)) root.style.setProperty("--accent-h", h);
       } catch (e) {
-        document.documentElement.setAttribute("data-theme", "light");
+        root.setAttribute("data-theme", "dark");
       }
     })();
   </script>
+  <style>
+    /* First paint, before the stylesheet arrives: the right sea, no white flash. */
+    html[data-theme="dark"], html[data-theme="dark"] body { background: #0a0f1c; }
+    html[data-theme="light"], html[data-theme="light"] body { background: #f8f6f1; }
+  </style>
 </head>
 <body>
   <div id="root"></div>
