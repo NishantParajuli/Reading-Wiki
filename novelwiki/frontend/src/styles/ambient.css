@@ -41,7 +41,7 @@
 
 /* The aura: a 24×36 canvas scaled ~60× — the upscale does the blurring. */
 .ambient-aura {
-  position: absolute; inset: 0;
+  position: absolute; inset: -12%;
   -webkit-mask-image: radial-gradient(120% 78% at 50% -6%, #000 18%, rgb(0 0 0 / 0.55) 44%, transparent 78%);
   mask-image: radial-gradient(120% 78% at 50% -6%, #000 18%, rgb(0 0 0 / 0.55) 44%, transparent 78%);
 }

@@ -49,10 +49,12 @@ const scroll = Number(opt("scroll", 0));
 const signedOut = !!opt("signed-out", false);
 const reduced = !!opt("reduced", false);
 const clickSel = opt("click", null);
+const clickFrames = Number(opt("click-frames", 0));
 const accent = opt("accent", null);
 mkdirSync(out, { recursive: true });
 
-const server = await createServer({ root, logLevel: "error", server: { port, strictPort: true, host: "127.0.0.1" } });
+// A cache per port keeps concurrent showcase servers from racing on dep optimization.
+const server = await createServer({ root, logLevel: "error", cacheDir: resolve(root, `node_modules/.vite-showcase-${port}`), server: { port, strictPort: true, host: "127.0.0.1" } });
 await server.listen();
 const base = `http://127.0.0.1:${port}`;
 
@@ -110,7 +112,16 @@ try {
         }
         await page.waitForTimeout(wait);
         if (scroll) { await page.evaluate((y) => window.scrollTo(0, y), scroll); await page.waitForTimeout(700); }
-        if (clickSel) { try { await page.locator(String(clickSel)).first().click({ timeout: 3000 }); await page.waitForTimeout(900); } catch (e) { console.error(`click failed: ${e.message}`); } }
+        if (clickSel) {
+          try {
+            await page.locator(String(clickSel)).first().click({ timeout: 3000 });
+            for (let f = 0; f < clickFrames; f++) {
+              await page.waitForTimeout(every);
+              await page.screenshot({ path: `${out}/${slug}-click-f${String(f).padStart(2, "0")}.png` });
+            }
+            await page.waitForTimeout(900);
+          } catch (e) { console.error(`click failed: ${e.message}`); }
+        }
         await page.screenshot({ path: `${out}/${slug}.png`, fullPage: full });
         console.log(`${out}/${slug}.png`);
       }

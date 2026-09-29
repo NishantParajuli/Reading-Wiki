@@ -33,6 +33,7 @@ import { springs } from "../motion/index.js";
 import { transitionTheme } from "../motion/navigation.js";
 
 import { CommandPalette } from "./CommandPalette.jsx";
+import { RouteBoundary } from "../app/RouteBoundary.jsx";
 
 const NAV = [
   { to: "/", icon: "home", label: "Home", end: true },
@@ -328,7 +329,7 @@ export function Shell() {
         {!online && <div className="offline-banner" role="status"><Icon name="alert" size={14} /> You're offline — changes won't save.</div>}
         {novelId != null && <NovelCapsule novelId={novelId} novel={novel} />}
         <main className="grow" id="main-content" tabIndex={-1}>
-          <Outlet />
+          <RouteBoundary resetKey={location.pathname}><Outlet /></RouteBoundary>
         </main>
       </div>
 

@@ -15,15 +15,11 @@ import { CiteProvider } from "../lib/markdown.jsx";
 import { ToastProvider, useToast } from "../components/toast.jsx";
 import { Shell } from "../layouts/Shell.jsx";
 import { NovelLayout } from "../layouts/NovelLayout.jsx";
-import { AuthScreen, Profile, Account } from "../modules/identity/index.js";
-import { Home } from "../modules/experience/index.js";
-import { Library, Discover, Overview } from "../modules/catalog/index.js";
-import { Jobs } from "../modules/work/index.js";
-import { ImportView } from "../modules/acquisition/index.js";
-import { Chapters, Reader } from "../modules/reading/index.js";
-import { Manage } from "../modules/catalog/index.js";
-import { CodexBrowser, EntityPage, Ask } from "../modules/codex/index.js";
-import { Admin } from "../modules/admin/index.js";
+import {
+  AuthScreen, Profile, Account, Home, Library, Discover, Overview, Jobs, ImportView,
+  Chapters, Reader, Manage, CodexBrowser, EntityPage, Ask, Admin, preloadScreens,
+} from "./lazyScreens.js";
+import { RouteBoundary } from "./RouteBoundary.jsx";
 import { createTransitionHistory, installCoverMorph } from "../motion/navigation.js";
 import { installPointerFX } from "../motion/pointerFX.js";
 
@@ -117,7 +113,7 @@ function ScrollToTop() {
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/n/:novelId/read/:number" element={<Reader />} />
+      <Route path="/n/:novelId/read/:number" element={<RouteBoundary><Reader /></RouteBoundary>} />
       <Route element={<Shell />}>
         <Route path="/" element={<Home />} />
         <Route path="/library" element={<Library />} />
@@ -147,6 +143,7 @@ function AppRoutes() {
 }
 
 function AuthedApp({ user, setUser, onLogout }) {
+  useEffect(() => { preloadScreens(); }, []);
   const value = useMemo(() => ({
     user,
     onUserUpdate: setUser,
@@ -205,7 +202,7 @@ function Gate() {
       return <Navigate to="/login" replace />;
     }
     return (
-      <AuthScreen
+      <RouteBoundary><AuthScreen
         onAuthed={(u) => {
           setState({ loading: false, user: u });
           queryClient.clear();
@@ -213,7 +210,7 @@ function Gate() {
           sessionStorage.removeItem("nw-return-to");
           navigate(dest === "/login" ? "/" : dest, { replace: true });
         }}
-      />
+      /></RouteBoundary>
     );
   }
 

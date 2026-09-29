@@ -27,10 +27,12 @@ import { fmtChapter, minutesLeft, clamp } from "../../lib/utils.js";
 
 import {
   AUTOSCROLL_PX_PER_SEC, AudioPlayer, EndOfChapterCard,
-  RichContent, loadReaderPrefs,
+  RichContent, loadReaderPrefs, readerFontFamily,
 } from "../../modules/reading/ReaderParts.jsx";
-import { ReaderToolbar } from "./ReaderToolbar.jsx";
+import { ChapterOpening, ReaderFooter, ReaderToolbar } from "./ReaderToolbar.jsx";
 import { useNarrationGuide } from "./useNarrationGuide.js";
+import { useReadySignal } from "../../motion/navigation.js";
+import { useBookAtmosphere } from "../../atmosphere/store.js";
 
 export function Reader() {
   const { novelId: novelIdParam, number: numberParam } = useParams();
@@ -48,6 +50,7 @@ export function Reader() {
 
   const [ch, setCh] = useState(null);
   const [status, setStatus] = useState("loading");
+  const [loadedFor, setLoadedFor] = useState(null);
   const [prefs, setPrefs] = useState(() => loadReaderPrefs(user));
   const [showSettings, setShowSettings] = useState(false);
   const [showTools, setShowTools] = useState(false);
@@ -64,6 +67,9 @@ export function Reader() {
   const [tocError, setTocError] = useState(null);
   const scrollSaved = useRef(0);
   const lastScrollY = useRef(0);
+  // The first chapter shown in this visit gets the full arrival choreography.
+  const arrivedRef = useRef(null);
+  if (arrivedRef.current == null && ch) arrivedRef.current = ch.number;
 
   const listen = sp.get("listen") === "1";
   const {
@@ -71,6 +77,9 @@ export function Reader() {
   } = useNarrationGuide({ ch, novelId, number, chrome });
 
   useTitle(ch ? `Ch. ${fmtChapter(number)}` : null, novel ? novel.title : null);
+  // Hold chapter transitions until this chapter is on screen; tint with the book.
+  useReadySignal(`chapter:${novelId}:${number}`, loadedFor === `${novelId}:${number}`);
+  useBookAtmosphere(novel);
 
   const openReader = useCallback((n, opts = {}) => {
     navigate(`/n/${novelId}/read/${n}${opts.listen ? "?listen=1" : ""}`);
@@ -103,6 +112,7 @@ export function Reader() {
         if (cancel) return;
         setCh(c);
         setStatus("ok");
+        setLoadedFor(`${novelId}:${number}`);
         const resume = prog && Number(prog.last_chapter) === Number(number) ? (prog.scroll_pct || 0) : 0;
         readingApi.setProgress(novelId, { last_chapter: Number(number), scroll_pct: resume }).catch(() => {});
         scrollSaved.current = Date.now();
@@ -119,6 +129,8 @@ export function Reader() {
           const applyScroll = () => {
             const h = document.documentElement;
             window.scrollTo({ top: resume * (h.scrollHeight - h.clientHeight) });
+            // Restoring your place is not "scrolling down": keep the chrome.
+            lastScrollY.current = window.scrollY;
           };
           // Double rAF: first commits the DOM, second measures it.
           requestAnimationFrame(() => requestAnimationFrame(() => { if (!cancel) applyScroll(); }));
@@ -133,7 +145,7 @@ export function Reader() {
           }, 0);
         }
       })
-      .catch(e => { if (!cancel) { setStatus(e.status === 404 ? "notfound" : "error"); } });
+      .catch(e => { if (!cancel) { setStatus(e.status === 404 ? "notfound" : "error"); setLoadedFor(`${novelId}:${number}`); } });
     return () => { cancel = true; };
   }, [novelId, number, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -169,7 +181,7 @@ export function Reader() {
       const dy = y - lastScrollY.current;
       if (Math.abs(dy) > 12) {
         if (dy > 0 && y > 160 && !showSettings && !showTools && !showToc
-          && !document.activeElement?.closest(".reader-bar, .audio-bar")) setChrome(false);
+          && !document.activeElement?.closest(".reader-bar, .audio-dock")) setChrome(false);
         else if (dy < 0) setChrome(true);
         lastScrollY.current = y;
       }
@@ -248,12 +260,12 @@ export function Reader() {
     finally { setBookmarkBusy(false); }
   }
 
-  const fontFamily = prefs.font === "serif" ? "var(--serif)" : "var(--sans)";
+  const fontFamily = readerFontFamily(prefs.font);
   const colStyle = { fontFamily, fontSize: prefs.size, lineHeight: prefs.line };
   const widthCls = { narrow: "w-narrow", normal: "w-normal", wide: "w-wide", full: "w-full", ultra: "w-full" }[prefs.width] || "w-normal";
 
   const tapToggle = (e) => {
-    if (e.target.closest("button, a, input, select, textarea, .chapter-illustrations, .reader-settings, .translate-tools, .drawer, .audio-bar, .popover")) return;
+    if (e.target.closest("button, a, input, select, textarea, .chapter-illustrations, .reader-settings, .translate-tools, .drawer, .audio-dock, .popover, .reader-capsule")) return;
     if (showSettings) { setShowSettings(false); return; }
     if (showTools) { setShowTools(false); return; }
     setChrome(c => !c);
@@ -268,8 +280,9 @@ export function Reader() {
   };
 
   return (
-    <div ref={readerRef} className={"reader tone-" + prefs.tone + (chrome ? "" : " chrome-hidden")} onClick={tapToggle} onFocusCapture={() => setChrome(true)}>
-      <div className="reader-rail" aria-hidden><div style={{ width: "100%", transform: `scaleX(${readPct})` }} /></div>
+    <div ref={readerRef} className={`reader tone-${prefs.tone} reader-tone-${prefs.tone}` + (chrome ? "" : " chrome-hidden")} onClick={tapToggle} onFocusCapture={() => setChrome(true)}>
+      <div className="reader-glow" aria-hidden="true" />
+      <div className="reader-rail" aria-hidden><div style={{ transform: `scaleX(${readPct})` }} /></div>
 
       <ReaderToolbar chrome={chrome} setChrome={setChrome} novel={novel} novelId={novelId}
         number={number} total={total} ch={ch} status={status} bookmark={bookmark}
@@ -302,19 +315,17 @@ export function Reader() {
       )}
 
       {status === "ok" && ch && (
-        <div className={"reader-col reader-fade-in " + widthCls} style={colStyle} key={ch.number}>
-          <h1 className="reader-title">{ch.title || `Chapter ${fmtChapter(ch.number)}`}</h1>
-          <div className="reader-chapnum">Chapter {fmtChapter(ch.number)}</div>
-          {ch.provenance && <ProvenanceBadges provenance={ch.provenance} className="reader-prov" />}
-          {(ch.overlay || ch.overlay_conflict) && (
-            <div style={{ textAlign: "center", marginBottom: 12 }}>
+        <div className={"reader-col " + (arrivedRef.current === ch.number ? "reader-arrive " : "reader-turn ") + widthCls} style={colStyle} key={ch.number}>
+          <ChapterOpening ch={ch} minsTotal={ch.word_count ? minutesLeft(ch.word_count, 0) : null}>
+            {ch.provenance && <ProvenanceBadges provenance={ch.provenance} className="reader-prov" />}
+            {(ch.overlay || ch.overlay_conflict) && (
               <Chip tone={ch.overlay_conflict ? "danger" : "accent"} icon={ch.overlay_conflict ? "alert" : "edit"}
-                    style={{ cursor: "pointer" }}
+                    className="reader-overlay-chip" style={{ cursor: "pointer" }}
                     onClick={e => { e.stopPropagation(); setShowTools(true); }}>
                 {ch.overlay_conflict ? "Update available" : "Your translation"}
               </Chip>
-            </div>
-          )}
+            )}
+          </ChapterOpening>
           {(!ch.content && !ch.rich_html) ? (
             <div className="reader-raw-note card">
               <Icon name="alert" size={18} className="muted" />
@@ -346,19 +357,10 @@ export function Reader() {
         </div>
       )}
 
-      {/* footer position line */}
+      {/* floating footer: previous / where you are / next */}
       {status === "ok" && ch && (
-        <div className={"reader-foot" + (chrome ? "" : " hidden")} onFocusCapture={() => setChrome(true)}>
-          <button className="reader-chapter-nav" disabled={ch.prev == null} onClick={() => openReader(ch.prev, { listen })} aria-label="Previous chapter">
-            <Icon name="arrowLeft" size={16} /><span>Previous</span>
-          </button>
-          <div className="reader-position"><span>{Math.round(readPct * 100)}% read</span>
-            {minsLeft != null && <span>About {minsLeft} min left</span>}
-          </div>
-          <button className="reader-chapter-nav" disabled={ch.next == null} onClick={markDoneAndNext} aria-label="Next chapter">
-            <span>Next chapter</span><Icon name="arrowRight" size={16} />
-          </button>
-        </div>
+        <ReaderFooter chrome={chrome} setChrome={setChrome} ch={ch} readPct={readPct} minsLeft={minsLeft}
+                      onPrev={() => openReader(ch.prev, { listen })} onNext={markDoneAndNext} />
       )}
 
       {coach && status === "ok" && (
