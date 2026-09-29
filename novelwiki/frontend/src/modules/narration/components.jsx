@@ -1,6 +1,8 @@
 /* ============================================================
    Narration — the shared VoicePicker and the whole-book NarrateBookControl
    (deduplicates the old reader/novel voice UIs).
+   VoicePicker's trigger keeps `.voice-pill` / `.vp-name`, its menu
+   `.voice-menu` / `.vm-meta`: the Reader's audio bar styles those names.
    ============================================================ */
 import React, { useEffect, useRef, useState } from "react";
 import { experienceApi } from "../experience/api.js";
@@ -22,12 +24,13 @@ export function VoicePicker({ voices, value, onChange, defaultVoice, preferredVo
   const covByVoice = coverage ? new Map(coverage.map(v => [v.voice_id, v])) : null;
   return (
     <Popover open={open} onClose={() => setOpen(false)} className="voice-menu" trigger={
-      <button className="voice-pill" aria-expanded={open} onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }} title="Narrator voice">
+      <button type="button" className="voice-pill" aria-expanded={open} onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }} title="Narrator voice">
         <Icon name="headphones" size={13} />
         <span className="vp-name">{current ? (current.name || current.id) : "Voice"}</span>
         <Icon name="chevronDown" size={12} />
       </button>
     }>
+      <p className="menu-label">Narrator</p>
       {(voices || []).map(v => {
         const meta = ttsVoiceMeta(v);
         const cov = covByVoice && covByVoice.get(v.id);
@@ -38,8 +41,13 @@ export function VoicePicker({ voices, value, onChange, defaultVoice, preferredVo
         return (
           <MenuItem key={v.id} selected={v.id === value}
                     onClick={(e) => { e.stopPropagation(); setOpen(false); onChange(v.id); }}>
-            {v.name || v.id}
-            {(meta || badges) && <span className="vm-meta">{[meta, badges].filter(Boolean).join(" · ")}</span>}
+            <span className="vm-voice">
+              <span className="vm-orb" aria-hidden="true">{(v.name || v.id || "?").trim().charAt(0).toUpperCase()}</span>
+              <span className="vm-text">
+                <span className="vm-name">{v.name || v.id}</span>
+                {(meta || badges) && <span className="vm-meta">{[meta, badges].filter(Boolean).join(" · ")}</span>}
+              </span>
+            </span>
           </MenuItem>
         );
       })}
@@ -49,7 +57,7 @@ export function VoicePicker({ voices, value, onChange, defaultVoice, preferredVo
 
 /* Whole-book narration: pick a narrator + range, queue a bounded cancellable
    batch (cost-confirmed), show live progress. */
-export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChange }) {
+export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChange, compact = false }) {
   const [open, setOpen] = useState(false);
   const [voices, setVoices] = useState(null);   // null=loading | [] offline
   const [voice, setVoice] = useState(null);
@@ -160,25 +168,39 @@ export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChan
   const selectedVoice = (voices || []).find(v => v.id === voice);
   const coverageByVoice = new Map(((audioCoverage && audioCoverage.voices) || []).map(v => [v.voice_id, v]));
   const selectedCoverage = coverageByVoice.get(voice) || { have: 0 };
+  const prose = audioCoverage && audioCoverage.prose_chapters;
+  const coveredPct = prose ? Math.round(((selectedCoverage.have || 0) / prose) * 100) : 0;
 
   return (
-    <Popover open={open} onClose={() => setOpen(false)} align="left" className="narrate-panel" trigger={
-      <Button variant="ghost" icon="headphones" aria-expanded={open} onClick={() => setOpen(o => !o)}>Narrate book</Button>
+    <Popover open={open} onClose={() => { if (!pendingStart) setOpen(false); }} align="left" className="narrate-panel" trigger={
+      <Button variant="ghost" icon="wave" size={compact ? "sm" : undefined} className={"nh-pill narrate-trigger" + (running ? " is-running" : "")}
+              aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <span className="nh-pill-text">Narrate book</span>
+        {running && <><span className="narrate-live" aria-hidden="true" /><span className="sr-only"> (in progress)</span></>}
+      </Button>
     }>
-      <div onClick={e => e.stopPropagation()}>
-        <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
-          <div className="field" style={{ flex: 1, minWidth: 130 }}>
+      <div onClick={e => e.stopPropagation()} className="narrate-body">
+        <div className="narrate-head">
+          <span className="narrate-mark" aria-hidden="true"><Icon name="wave" size={17} /></span>
+          <div>
+            <p className="narrate-title">Narrate this book</p>
+            <p className="narrate-sub">Pick a narrator and a range of chapters.</p>
+          </div>
+        </div>
+
+        <div className="narrate-grid">
+          <div className="field narrate-voice">
             <span>Narrator</span>
             <VoicePicker voices={voices} value={voice} onChange={setVoice}
                          defaultVoice={defaultVoice} preferredVoice={prefVoice}
                          coverage={(audioCoverage && audioCoverage.voices) || null}
-                         proseChapters={audioCoverage && audioCoverage.prose_chapters} />
+                         proseChapters={prose} />
           </div>
-          <label className="field" style={{ flex: "0 0 76px" }}>
+          <label className="field narrate-range">
             <span>From Ch.</span>
             <input value={startCh} onChange={e => setStartCh(e.target.value)} placeholder={minCh || "1"} inputMode="numeric" />
           </label>
-          <label className="field" style={{ flex: "0 0 76px" }}>
+          <label className="field narrate-range">
             <span>To Ch.</span>
             <input value={endCh} onChange={e => setEndCh(e.target.value)} placeholder="end" inputMode="numeric" />
           </label>
@@ -186,36 +208,47 @@ export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChan
 
         {selectedVoice && (
           <div className="voice-detail">
-            <span className="voice-name">{selectedVoice.name || selectedVoice.id}</span>
-            <span className="mono">{selectedVoice.id}</span>
-            {ttsVoiceMeta(selectedVoice) && <span>{ttsVoiceMeta(selectedVoice)}</span>}
-            {prefVoice === selectedVoice.id && <Chip tone="accent">preferred</Chip>}
-            {defaultVoice === selectedVoice.id && <Chip>default</Chip>}
-            {audioCoverage && <span>{selectedCoverage.have || 0}/{audioCoverage.prose_chapters} chapters narrated</span>}
-            {(selectedVoice.description || selectedVoice.note) && <span className="voice-note">{selectedVoice.description || selectedVoice.note}</span>}
+            <div className="voice-detail-top">
+              <span className="voice-orb" aria-hidden="true">{(selectedVoice.name || selectedVoice.id).trim().charAt(0).toUpperCase()}</span>
+              <span className="voice-detail-id">
+                <span className="voice-name">{selectedVoice.name || selectedVoice.id}</span>
+                <span className="voice-meta"><span className="mono">{selectedVoice.id}</span>{ttsVoiceMeta(selectedVoice) && <> · {ttsVoiceMeta(selectedVoice)}</>}</span>
+              </span>
+              <span className="voice-badges">
+                {prefVoice === selectedVoice.id && <Chip tone="accent">preferred</Chip>}
+                {defaultVoice === selectedVoice.id && <Chip>default</Chip>}
+              </span>
+            </div>
+            {prose != null && (
+              <div className="voice-cover">
+                <ProgressBar size="xs" tone="ok" value={coveredPct} label={`${selectedVoice.name || selectedVoice.id} coverage`} />
+                <span>{selectedCoverage.have || 0}/{prose} chapters narrated</span>
+              </div>
+            )}
+            {(selectedVoice.description || selectedVoice.note) && <p className="voice-note">{selectedVoice.description || selectedVoice.note}</p>}
           </div>
         )}
 
         {!running && est && (
-          <div className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 10 }}>
+          <p className="narrate-est">
             {est.estimated_units === 0
               ? "Every chapter in this range is already narrated in this voice."
               : `~${est.estimated_units} chapter${est.estimated_units === 1 ? "" : "s"} to narrate` +
                 (est.capped ? " (capped this batch)" : "") +
                 (est.unlimited ? "" : ` · ${est.remaining}/${est.limit} quota left this month`)}
-          </div>
+          </p>
         )}
 
-        <div className="row" style={{ gap: 8, marginTop: 10 }}>
+        <div className="narrate-actions">
           {running
             ? <Button variant="ghost" className="is-danger" icon="x" onClick={cancel}>Cancel</Button>
             : <Button variant="primary" icon="play" disabled={!voice} onClick={() => setPendingStart(narrationParams())}>Start narrating</Button>}
         </div>
 
         {job && (
-          <div style={{ marginTop: 12 }}>
-            <ProgressBar size="sm" value={pct} label="Narration progress" />
-            <div className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 6 }}>
+          <div className="narrate-progress">
+            <ProgressBar size="sm" value={pct} label="Narration progress" live={!!running} />
+            <div className="narrate-progress-text">
               {`${prog.done || 0} / ${prog.total || 0} narrated`}
               {prog.skipped ? ` · ${prog.skipped} skipped` : ""}
               {stopped === "quota" ? " · stopped: monthly quota reached"
@@ -225,12 +258,14 @@ export function NarrateBookControl({ novelId, novel, user, audioCoverage, onChan
             </div>
           </div>
         )}
-        {job && job.status === "failed" && job.error && <div className="acct-err" style={{ marginTop: 8 }}>{job.error}</div>}
-        {msg && !job && <div className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 8 }}>{msg}</div>}
-        <p className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 10, marginBottom: 0 }}>
+        {job && job.status === "failed" && job.error && <div className="acct-err narrate-err" role="alert">{job.error}</div>}
+        {msg && !job && <p className="narrate-msg" role="status">{msg}</p>}
+        <p className="narrate-note">
           Generates audio on the server and caches it for everyone. Capped per batch; re-run to continue a long book.
         </p>
       </div>
+      {/* Dialogs portal to <body>, clear of the popover's backdrop-filter.
+          The panel stays open while it's up. */}
       {pendingStart && (
         <CostConfirmDialog
           novelId={novelId} action="audiobook" params={pendingStart}

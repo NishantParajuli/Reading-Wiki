@@ -1,80 +1,50 @@
 /* ============================================================
-   Novel hero + URL-synced tabs (§6.6) — shared by Overview / Chapters /
-   Manage. Reader-facing actions up top; operator tooling lives in Manage.
+   Novel hero — the book's own world, shared by Overview (full) and
+   Chapters / Manage (compact). Section navigation lives in the shell's
+   novel capsule; this is the book itself:
+     · a floating jacket (tilt + glare) glowing in the cover's colours, with
+       a still reflection on the water beneath it. It carries the
+       `hero-cover` view-transition name, so a clicked card's jacket flies
+       straight into it — and from the full hero into the compact one.
+     · display title (word-by-word rise), italic author, an editorial spec
+       strip, the synopsis with a height-tide expand
+     · Continue / Start reading with a progress ring; glass secondary pills
+     · the tideline: reading progress across the whole book
+   Arrival choreography depends on how we got here (see useArrival).
    ============================================================ */
-import React, { useEffect, useState } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
-import { catalogApi } from "../../modules/catalog/api.js";
-import { readingApi } from "../../modules/reading/api.js";
+import { catalogApi } from "./api.js";
 import { useAuth } from "../../App.jsx";
 import { useNovel } from "../../layouts/NovelLayout.jsx";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, Chip, Cover, ProgressBar } from "../../components/ui.jsx";
-import { Popover, MenuItem, ConfirmDialog } from "../../components/overlay.jsx";
-import { ProvenanceBadges } from "../../components/ProvenanceBadges.jsx";
+import { Button, Cover, ProgressRing } from "../../components/ui.jsx";
+import { ConfirmDialog } from "../../components/overlay.jsx";
 import { useToast } from "../../components/toast.jsx";
+import { TextReveal } from "../../motion/TextReveal.jsx";
 import { NarrateBookControl } from "../narration/index.js";
 import { ShelfControl } from "./tags.jsx";
+import {
+  ExpandableText, HeroFacts, NovelKebab, Tideline,
+  fmtNum, tagLine, titleScale, useArrival, useBookmarksQuery,
+} from "./NovelHeroParts.jsx";
 import { useAudioCoverageQuery } from "../../modules/narration/queries.js";
+import { useChaptersQuery } from "../../modules/reading/queries.js";
 import { useInvalidate } from "../../shared/query/useInvalidate.js";
-import { TRANSLATION_TYPE_LABELS, VIS_LABELS } from "../../lib/constants.js";
-import { fmtChapter, relativeTime } from "../../lib/utils.js";
 
-function NovelKebab({ novel, canEdit, onDelete }) {
-  const [open, setOpen] = useState(false);
-  const navigate = useNavigate();
-  const { toast } = useToast();
-  const qc = useQueryClient();
-
-  async function removeFromLibrary() {
-    setOpen(false);
-    try {
-      await catalogApi.removeFromLibrary(novel.id);
-      qc.invalidateQueries({ queryKey: ["novels"] });
-      toast(`Removed “${novel.title}” from your library.`, { tone: "ok" });
-      navigate("/library");
-    } catch (e) {
-      toast(e.message || "Couldn't remove it.", { tone: "danger" });
-    }
-  }
-
-  return (
-    <Popover open={open} onClose={() => setOpen(false)} trigger={
-      <button className="icon-btn" aria-label="More actions" aria-expanded={open} onClick={() => setOpen(o => !o)}>
-        <Icon name="more" size={17} sw={2.4} />
-      </button>
-    }>
-      {canEdit && <MenuItem icon="edit" onClick={() => { setOpen(false); navigate(`/n/${novel.id}/manage`); }}>Edit novel</MenuItem>}
-      <MenuItem icon="link" onClick={() => {
-        setOpen(false);
-        navigator.clipboard.writeText(window.location.origin + `/n/${novel.id}`)
-          .then(() => toast("Link copied.", { tone: "ok" }))
-          .catch(() => toast("Couldn't copy the link.", { tone: "danger" }));
-      }}>Copy link</MenuItem>
-      <MenuItem icon="x" onClick={removeFromLibrary}>Remove from library</MenuItem>
-      {canEdit && (
-        <>
-          <div className="menu-sep" />
-          <MenuItem icon="trash" danger onClick={() => { setOpen(false); onDelete(); }}>Delete novel…</MenuItem>
-        </>
-      )}
-    </Popover>
-  );
-}
-
-export function NovelHeader() {
+export function NovelHeader({ compact = false }) {
   const { novel, novelId, reloadNovel } = useNovel();
   const { user } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
   const invalidate = useInvalidate();
-  const [descOpen, setDescOpen] = useState(false);
+  const arrival = useArrival();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [inboxCount, setInboxCount] = useState(0);
   const { data: audioCoverage } = useAudioCoverageQuery(novelId);
+  const { data: toc } = useChaptersQuery(novelId);
+  const { data: bookmarks } = useBookmarksQuery(novelId);
 
   const canEdit = !!novel.can_edit;
   const progress = novel.progress || {};
@@ -83,20 +53,16 @@ export function NovelHeader() {
   const hasChapters = (novel.chapter_count || 0) > 0;
   const hasAudio = !!(audioCoverage && audioCoverage.chapters && audioCoverage.chapters.length > 0);
   const maxRead = progress.max_chapter_read || 0;
-  const newCount = novel.max_chapter != null && maxRead > 0 ? Math.max(0, Math.round(novel.max_chapter - maxRead)) : 0;
   const pct = novel.max_chapter ? Math.round(Math.min(100, (maxRead / novel.max_chapter) * 100)) : 0;
-  const tt = novel.translation_type ? TRANSLATION_TYPE_LABELS[novel.translation_type] : null;
+  const startTitle = (toc || []).find(c => Number(c.number) === Number(startAt));
+  const eyebrow = tagLine(novel);
 
-  // Pending-inbox badge on the Manage tab (owner/admin only).
-  useEffect(() => {
-    if (!canEdit) return;
-    let cancel = false;
-    Promise.all([
-      readingApi.contributions(novelId).catch(() => []),
-      catalogApi.tagSuggestions(novelId).catch(() => []),
-    ]).then(([c, t]) => { if (!cancel) setInboxCount((c || []).length + (t || []).length); });
-    return () => { cancel = true; };
-  }, [novelId, canEdit]);
+  // Tab switches inside the same book keep the hero still (the view
+  // transition morphs it); every other arrival gets the full choreography.
+  const animate = arrival !== "novel-tab";
+  const coverIn = arrival === "direct";
+  const rise = (i) => (animate ? { className: "rise", style: { "--i": i } } : { className: "", style: undefined });
+  const cls = (base, i) => { const r = rise(i); return { className: [base, r.className].filter(Boolean).join(" "), style: r.style }; };
 
   async function doDelete() {
     setDeleting(true);
@@ -112,69 +78,87 @@ export function NovelHeader() {
     }
   }
 
+  const TitleTag = animate
+    ? <TextReveal as="h1" className={`nh-title ${titleScale(novel.title)}`} text={novel.title} delay={compact ? 60 : 160} step={compact ? 45 : 75} />
+    : <h1 className={`nh-title ${titleScale(novel.title)}`}>{novel.title}</h1>;
+
   return (
-    <>
-      <div className="novel-hero">
-        {novel.cover_url && <div className="novel-hero-backdrop" style={{ backgroundImage: `url(${JSON.stringify(novel.cover_url)})` }} aria-hidden />}
-        <Cover src={novel.cover_url} title={novel.title} />
-        <div className="novel-hero-body">
-          <h1 className="novel-hero-title">{novel.title}</h1>
-          {novel.author && <p className="novel-hero-author">{novel.author}</p>}
-          <ProvenanceBadges provenance={novel.provenance} />
-          <div className="novel-hero-chips">
-            <Chip className="mono">{novel.chapter_count} chapters</Chip>
-            {novel.max_chapter != null && <Chip className="mono">ch. {fmtChapter(novel.min_chapter)}–{fmtChapter(novel.max_chapter)}</Chip>}
-            {novel.original_language && novel.original_language !== "en" && <Chip>{novel.original_language}</Chip>}
-            {tt && <Chip tone="accent">{tt}</Chip>}
-            {novel.visibility !== "private" && <Chip tone="info">{VIS_LABELS[novel.visibility]}</Chip>}
+    <header className={"nh" + (compact ? " nh--compact" : " nh--full")} data-arrival={arrival}>
+      <div className="nh-stage">
+        <div className={"nh-art" + (coverIn ? " is-entering" : "")}>
+          <span className="nh-glow" aria-hidden="true" />
+          <div className="nh-cover-float">
+            <Cover src={novel.cover_url} title={novel.title} author={novel.author} tilt={compact ? 7 : 9} vtName="hero-cover" className="nh-cover" />
           </div>
-          {novel.description && (
-            <>
-              <p className={"novel-desc" + (descOpen ? "" : " clamped")}>{novel.description}</p>
-              {novel.description.length > 180 && (
-                <button className="linkish" onClick={() => setDescOpen(o => !o)}>{descOpen ? "Less" : "More"}</button>
-              )}
-            </>
+          {!compact && (
+            <div className="nh-reflection" aria-hidden="true">
+              <Cover src={novel.cover_url} title={novel.title} author={novel.author} />
+            </div>
           )}
-          <div className="novel-hero-actions">
+        </div>
+
+        <div className="nh-body">
+          {!compact && eyebrow.length > 0 && (
+            <p {...cls("nh-eyebrow", 0)}>
+              {eyebrow.map((t, i) => <span key={t}>{i > 0 && <i aria-hidden="true" />}{t}</span>)}
+            </p>
+          )}
+          {TitleTag}
+          {novel.author && <p {...cls("nh-author", 2)}><span className="nh-by">by</span> {novel.author}</p>}
+
+          <HeroFacts novel={novel} animate={animate} compact={compact} baseIndex={3} />
+
+          {!compact && novel.description && (
+            <ExpandableText text={novel.description} lines={4} {...cls("", 8)} />
+          )}
+
+          <div {...cls("nh-actions", compact ? 6 : 9)}>
             {hasChapters && (
-              <Button variant="primary" size="lg" icon="book" onClick={() => navigate(`/n/${novelId}/read/${startAt}`)}>
-                {started ? `Continue · Ch. ${fmtChapter(startAt)}` : "Start reading"}
+              <Button variant="primary" size={compact ? undefined : "lg"} className="nh-cta" iconRight="arrowRight"
+                      onClick={() => navigate(`/n/${novelId}/read/${startAt}`)}>
+                <span className="nh-cta-ring" aria-hidden="true">
+                  {started
+                    ? <ProgressRing value={pct} size={compact ? 28 : 34} stroke={2.4}>{compact ? null : `${pct}%`}</ProgressRing>
+                    : <Icon name="bookOpen" size={compact ? 15 : 17} />}
+                </span>
+                <span className="nh-cta-text">
+                  <span className="nh-cta-label">{started ? `Continue · Ch. ${fmtNum(startAt)}` : "Start reading"}</span>
+                  {!compact && startTitle && startTitle.title && <span className="nh-cta-sub">{startTitle.title}</span>}
+                </span>
               </Button>
             )}
             {hasChapters && hasAudio && (
-              <Button variant="ghost" icon="headphones" onClick={() => navigate(`/n/${novelId}/read/${startAt}?listen=1`)}>Listen</Button>
+              <Button variant="ghost" icon="headphones" size={compact ? "sm" : undefined} className="nh-pill"
+                      onClick={() => navigate(`/n/${novelId}/read/${startAt}?listen=1`)}><span className="nh-pill-text">Listen</span></Button>
             )}
             {novel.codex_enabled && (
-              <Button variant="ghost" icon="compass" onClick={() => navigate(`/n/${novelId}/codex`)}>Codex</Button>
+              <Button variant="ghost" icon="compass" size={compact ? "sm" : undefined} className="nh-pill"
+                      onClick={() => navigate(`/n/${novelId}/codex`)}><span className="nh-pill-text">Codex</span></Button>
             )}
-            {hasChapters && <NarrateBookControl novelId={novelId} novel={novel} user={user} audioCoverage={audioCoverage} onChange={() => invalidate(["audio-coverage", novelId])} />}
+            {hasChapters && (
+              <NarrateBookControl novelId={novelId} novel={novel} user={user} audioCoverage={audioCoverage}
+                                  compact={compact} onChange={() => invalidate(["audio-coverage", novelId])} />
+            )}
+          </div>
+
+          <div {...cls("nh-utility", compact ? 7 : 1)}>
             <ShelfControl novel={novel} reloadNovel={reloadNovel} />
             <NovelKebab novel={novel} canEdit={canEdit} onDelete={() => setConfirmDelete(true)} />
           </div>
-          {started && (
-            <div className="novel-progress-line">
-              <ProgressBar size="xs" value={pct} label="Reading progress" />
-              <span>{pct}% read{newCount > 0 ? ` · ${newCount} new since you last read` : ""}</span>
+
+          {compact && hasChapters && (
+            <div {...cls("nh-tide", 8)}>
+              <Tideline novel={novel} bookmarks={bookmarks} toc={toc} compact animate={animate} />
             </div>
           )}
         </div>
       </div>
 
-      <nav className="novel-tabs" aria-label="Novel sections">
-        <NavLink to={`/n/${novelId}`} end className={({ isActive }) => "novel-tab" + (isActive ? " active" : "")}>
-          <Icon name="book" size={15} /> Overview
-        </NavLink>
-        <NavLink to={`/n/${novelId}/chapters`} className={({ isActive }) => "novel-tab" + (isActive ? " active" : "")}>
-          <Icon name="list" size={15} /> Chapters
-        </NavLink>
-        {canEdit && (
-          <NavLink to={`/n/${novelId}/manage`} className={({ isActive }) => "novel-tab" + (isActive ? " active" : "")}>
-            <Icon name="sliders" size={15} /> Manage
-            {inboxCount > 0 && <span className="tab-count">{inboxCount}</span>}
-          </NavLink>
-        )}
-      </nav>
+      {!compact && hasChapters && (
+        <div {...cls("nh-tide", 10)}>
+          <Tideline novel={novel} bookmarks={bookmarks} toc={toc} animate={animate} />
+        </div>
+      )}
 
       {confirmDelete && (
         <ConfirmDialog
@@ -198,6 +182,6 @@ export function NovelHeader() {
           }
         />
       )}
-    </>
+    </header>
   );
 }
