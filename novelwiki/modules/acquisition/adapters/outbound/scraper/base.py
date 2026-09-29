@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from typing import AsyncIterator
+from collections.abc import Awaitable, Callable
 from urllib.parse import urldefrag, urljoin, urlsplit, urlunsplit
 import lxml.html
 from curl_cffi.requests import AsyncSession
@@ -198,6 +199,10 @@ class ScrapeContext:
     source_host: str | None = None
     allowed_hosts: set[str] = field(default_factory=set)
     require_same_host: bool = True
+    account_cookies: list[dict] = field(default_factory=list, repr=False)
+    resume_after_checkpoint: bool = False
+    cancel_check: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
+    report_stage: Callable[[str], Awaitable[None]] | None = field(default=None, repr=False)
 
     def _fetch_kwargs(self, headers: dict | None = None) -> dict:
         return {
@@ -252,6 +257,7 @@ class BaseAdapter:
     default_language: str = "en"
     allowed_hosts: list[str] = []
     start_url_hint: str = "Paste the first chapter URL to start reading from."
+    resume_after_checkpoint: bool = False
 
     async def crawl(self, ctx: ScrapeContext) -> AsyncIterator[ChapterData]:
         raise NotImplementedError()

@@ -12,7 +12,8 @@
 - **Adapter** — per-site scraping technique under
   `modules/acquisition/adapters/outbound/scraper/`, registered by `adapters.py`.
   The [supported-sites reference](supported-sites.md) lists exact keys, accepted novel
-  or chapter URLs, default languages, archive-password setup, and current limits.
+  or chapter URLs, default languages, archive-password and account-cookie setup, and
+  current limits.
   Each adapter owns navigation and yields normalized chapter text. New site = subclass
   `BaseAdapter` (or `_PagedHtmlAdapter`) + register in `ADAPTERS`; its metadata then
   appears in the UI via `list_adapters()` and `GET /api/adapters`.
@@ -25,10 +26,12 @@
    `scrape <novel_id> --max 50` runs it directly. Scraping consumes no quota.
 2. **Resume point** — the runner (`scraper/runner.py`) asks Reading for the source's
    `resume_url`: the URL of its highest-numbered stored chapter, or `start_url` on first
-   run. It reopens that chapter to discover current next navigation. Archive checkpoints
-   identify a prose section in the downloaded book. The adapter's limit includes one extra
-   checkpoint on resume, so requesting one new chapter can still make progress. Force
-   mode uses `start_url` again.
+   run. Most adapters reopen that chapter to discover current next navigation. Archive
+   checkpoints identify a prose section in the downloaded book. Inclusive resumes include
+   one extra checkpoint in the adapter limit, so requesting one new chapter can still
+   make progress. Novelpia Global stores non-secret novel/order/chapter coordinates in
+   its viewer URL and asks the API for the next episode directly; it neither rereads
+   saved prose nor adds an extra chapter to the limit. Force mode uses `start_url` again.
 3. **Loop** per chapter: safe-fetch → adapter yields `ChapterData` (number, title, text,
    URL, optional raw HTML) → **`upsert_ingested_chapter`** through Reading's ingestion
    capability (computes the global number from the offset; sets `original_text` vs
@@ -40,9 +43,39 @@
 4. **Stop conditions** — no next link, `--max` reached, cancel requested, or a
    **premium wall** detected (stops cleanly with the number of stored chapters). A later
    scrape can continue if the site makes more chapters publicly available. Scraping does
-   not inherit a reader's browser login. Fetch failures, missing expected content, and
-   broken navigation fail the job rather than being reported as a premium boundary.
+   not automatically inherit a reader's browser login. Novelpia Global uses explicitly
+   saved per-user cookies; when configured, its browser sidecar tries to complete a normal
+   ad gate once per episode. Unresolved login/ad/unlock requirements fail with recovery
+   instructions; already ingested chapters are retained. Fetch failures, missing
+   expected content, and broken navigation fail the job rather than being reported as
+   a premium boundary.
    A completed run updates the source's `last_scraped_at` timestamp.
+
+## Account-backed sources
+
+Novelpia Global uses the requesting user's saved account cookies from **Settings →
+Source accounts**. The durable scrape handler passes the job's `user_id` explicitly to
+the runner; there is no fallback to a source or novel owner's credentials. The runner
+loads them only for `global-novelpia`, and passes them through the in-memory crawl
+context. Credentials are absent from source config and job payloads. CLI/system scrapes
+without a requesting user do not inherit an account session.
+
+The adapter refreshes its access token, reads episode metadata and the content parts
+returned by the official API, normalizes prose, and follows the published next episode.
+Only HTTPS numeric `/novel/{id}` and `/viewer/{id}` start URLs on
+`global.novelpia.com` are accepted. Authentication, ad, and chapter-unlock errors fail
+explicitly rather than silently ending a book or saving an error page as chapter text.
+For episode-metadata ad gates (`NOVEL_ERROR` codes `0008`/`0010`), the optional browser
+client reports **Watching Novelpia ad**, sends the episode ID and requester cookies to
+the private sidecar, and waits for the site's normal countdown/Continue flow. One attempt
+is allowed per episode; the subsequent API retry refreshes the access token and must
+independently grant access. The browser never supplies prose for ingestion. Purchase
+locks are not sent to the browser. A busy sidecar gets a bounded wait of at most 30
+seconds; disabled/unavailable services, timeouts, rejected logins, and unresolved gates
+retain the manual recovery path. Cancellation closes the client request and the browser
+context rather than leaving a detached ad attempt. The importer does not buy chapters. See
+[supported sites](supported-sites.md#novelpia-global-account-access) for setup/recovery
+and [security](../operations/security.md) for credential storage.
 
 ## Safety: `safe_fetch.py` (the SSRF boundary)
 

@@ -118,8 +118,38 @@ test("translation conflict tooling remains reachable", async ({ page }) => {
   await mockApi(page);
   await page.goto("/n/7/read/1");
   await page.getByRole("button", { name: /edit translation/i }).click();
-  await expect(page.getByPlaceholder("Chapter translation…")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Chapter translation" })).toBeVisible();
 });
+
+for (const [layout, viewport] of [["desktop", { width: 1440, height: 1000 }], ["mobile", { width: 390, height: 844 }]]) {
+  test(`translation workspace is spacious and protects drafts on ${layout}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await page.addInitScript(() => localStorage.setItem("nw-theme", "dark"));
+    const content = Array.from({ length: 18 }, (_, index) => `Paragraph ${index + 1}. The tide withdrew from the glass shore, revealing a path that had not been there the night before. Mira waited until the water settled before taking her first step.`).join("\n\n");
+    await mockApi(page, { chapterData: { ...chapter, content, can_edit_base: true } });
+    await page.goto("/n/7/read/1");
+    await page.getByRole("button", { name: "Edit translation", exact: true }).click();
+    const editor = page.getByRole("dialog", { name: "Edit chapter translation" });
+    const textarea = editor.getByRole("textbox", { name: "Chapter translation" });
+    await expect(editor).toBeVisible();
+    const bounds = await textarea.boundingBox();
+    expect(bounds.width).toBeGreaterThan(layout === "desktop" ? 500 : 330);
+    expect(bounds.height).toBeGreaterThan(layout === "desktop" ? 500 : 300);
+    await expect(editor.getByRole("button", { name: "Save for everyone" })).toBeInViewport();
+    await textarea.fill("An unsaved revision of the chapter.\n\nA second paragraph for the reading preview.");
+    if (layout === "mobile") {
+      await editor.getByRole("button", { name: "Preview", exact: true }).click();
+      await expect(editor.getByRole("region", { name: "Reading preview" })).toBeVisible();
+      await editor.getByRole("button", { name: "Edit", exact: true }).click();
+    }
+    await page.screenshot({ path: testInfo.outputPath(`translation-editor-${layout}.png`) });
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("alertdialog", { name: "Discard your unsaved changes?" })).toBeVisible();
+    await page.getByRole("button", { name: "Keep editing" }).click();
+    await expect(textarea).toHaveValue("An unsaved revision of the chapter.\n\nA second paragraph for the reading preview.");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  });
+}
 
 test("import upload and review surface is operational", async ({ page }) => {
   await mockApi(page);

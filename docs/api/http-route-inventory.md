@@ -6,7 +6,7 @@
 > [http-api.md](http-api.md). After changing routes, run
 > `uv run python scripts/contracts.py --update` and update this table in the same change.
 
-Current snapshot: **122 routes**. FastAPI-generated documentation routes and the
+Current snapshot: **130 routes**. FastAPI-generated documentation routes and the
 Platform health endpoint are included; the SPA catch-all is not an HTTP contract row.
 
 | Method | Exact path | FastAPI endpoint name |
@@ -90,6 +90,8 @@ Platform health endpoint are included; the SPA catch-all is not an HTTP contract
 | `POST` | `/api/novels/{novel_id}/chapter/{number}/resolve` | `api_resolve_overlay` |
 | `POST` | `/api/novels/{novel_id}/chapter/{number}/self-translate` | `api_self_translate` |
 | `GET` | `/api/novels/{novel_id}/chapters` | `api_list_chapters` |
+| `GET` | `/api/novels/{novel_id}/chapters/{chapter}/illustrations` | `illustrations` |
+| `POST` | `/api/novels/{novel_id}/chapters/{chapter}/illustrations` | `generate_illustrations` |
 | `POST` | `/api/novels/{novel_id}/codex/build` | `api_codex_build` |
 | `GET` | `/api/novels/{novel_id}/contributions` | `api_list_contributions` |
 | `POST` | `/api/novels/{novel_id}/contributions/{contribution_id}/accept` | `api_accept_contribution` |
@@ -107,6 +109,9 @@ Platform health endpoint are included; the SPA catch-all is not an HTTP contract
 | `POST` | `/api/novels/{novel_id}/glossary/seed` | `api_seed_glossary` |
 | `DELETE` | `/api/novels/{novel_id}/glossary/{term_id}` | `api_delete_glossary` |
 | `GET` | `/api/novels/{novel_id}/health` | `api_novel_health` |
+| `GET` | `/api/novels/{novel_id}/illustrations` | `illustration_range_info` |
+| `POST` | `/api/novels/{novel_id}/illustrations` | `generate_illustration_range` |
+| `GET` | `/api/novels/{novel_id}/illustrations/{art_id}/image` | `illustration_image` |
 | `DELETE` | `/api/novels/{novel_id}/library` | `api_remove_from_library` |
 | `POST` | `/api/novels/{novel_id}/library` | `api_add_to_library` |
 | `POST` | `/api/novels/{novel_id}/merge-entities` | `trigger_merge` |
@@ -124,6 +129,9 @@ Platform health endpoint are included; the SPA catch-all is not an HTTP contract
 | `POST` | `/api/novels/{novel_id}/tag-suggestions/{suggestion_id}/reject` | `api_reject_tag_suggestion` |
 | `POST` | `/api/novels/{novel_id}/translate` | `api_translate` |
 | `PATCH` | `/api/novels/{novel_id}/visibility` | `api_set_visibility` |
+| `DELETE` | `/api/settings/novelpia-cookies` | `delete_cookies` |
+| `GET` | `/api/settings/novelpia-cookies` | `cookie_status` |
+| `PUT` | `/api/settings/novelpia-cookies` | `replace_cookies` |
 | `GET` | `/api/tts/jobs/{job_id}` | `api_tts_job` |
 | `POST` | `/api/tts/jobs/{job_id}/cancel` | `api_cancel_tts_job` |
 | `GET` | `/api/tts/voices` | `api_tts_voices` |

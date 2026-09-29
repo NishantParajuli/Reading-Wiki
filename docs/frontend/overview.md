@@ -37,10 +37,10 @@ src/
 │   ├── experience/          #    Home (continue reading/listening, activity), queries
 │   ├── catalog/             #    Library, Discover, Overview, Manage(+Panels),
 │   │                        #    AddNovelDialog, NovelHeader, tags
-│   ├── reading/             #    Reader(+Parts/Toolbar), Chapters, toc, queries
-│   ├── acquisition/         #    ImportView(+Parts/History) — upload/plan-review/commit
+│   ├── reading/             #    Reader(+Parts/Toolbar), TranslationTools, Chapters, toc, queries
+│   ├── acquisition/         #    ImportView(+Parts/History), NovelpiaCookies
 │   ├── translation/         #    glossary + translate API bindings
-│   ├── codex/               #    Browser, Entity, Ask, CeilingControl, presentation
+│   ├── codex/               #    Browser, Entity, Ask, CeilingControl, ChapterIllustrations
 │   ├── narration/           #    audio transport components + queries
 │   ├── work/                #    Jobs page, JobRow
 │   └── admin/               #    Admin dashboard (+Panels)
@@ -76,6 +76,25 @@ Signed-in, inside `Shell` (desktop sidebar, breadcrumb bar, mobile bottom tabs, 
 | `/u/:username` · `/account(/:section)` · `/admin(/:tab)` | profile · account/quota settings · admin dashboard |
 | `/n/:novelId` (NovelLayout tabs) | `index` Overview · `chapters` · `manage` · `codex` · `codex/e/:entityId` · `ask` |
 | `/n/:novelId/read/:number` | the Reader — **full-bleed, outside Shell** |
+
+**Settings → Source accounts** (`/account/sources`) renders the Acquisition slice's
+`NovelpiaCookies` through its public export. Users paste an EditThisCookie JSON array,
+save or replace their own login cookies, and remove a saved connection. The field is
+never populated from stored values, clears after successful saving/removal, and is not
+persisted in browser storage. The screen shows cookie names/expiry dates and the last
+update, with loading/retry and save-error feedback. Replacement and removal remain
+available when saved status cannot be read, including after an encryption-key change.
+“Cookies saved” reports local storage status, not a live Novelpia login check; the page
+explains that the site's plan and ad requirements still apply. Expiry dates are storage deadlines, not guaranteed
+session lifetimes. The account API returns metadata only. Choosing Novelpia Global in
+Add novel or Add source also shows a Source accounts link; it opens in a new tab so the
+unfinished novel/source form is preserved. During automatic ad completion, Jobs shows
+**Watching Novelpia ad** or **Waiting for Novelpia browser**. Recognized Novelpia errors
+in expanded failed Jobs details and Manage health offer **Open chapter on Novelpia**
+for an official numeric viewer URL, or **Update Novelpia cookies** for login errors.
+These links open in a new tab, preserving the current screen. Arbitrary error URLs are
+not converted into links.
+
 
 ## Reading room and library
 
@@ -132,7 +151,7 @@ a status message.
   their query definitions in `queries.js`; invalidation goes through
   `shared/query/useInvalidate.js` so mutations refresh exactly the affected keys
   (e.g. a translate job start invalidates activity + chapter lists).
-- Job-progress surfaces (Jobs page, import view, audiobook status) poll their endpoints
+- Job-progress surfaces (Jobs page, import view, audiobook status, chapter illustrations) poll their endpoints
   while a job is active.
 - The Import screen accepts multi-file EPUB/PDF selection. Each file remains an
   independently reviewable job; ready jobs can be folded into a new series or appended
@@ -159,7 +178,7 @@ a status message.
 The Reader is the product's core surface: themes + accent hue (persisted, `data-theme`
 on the root, CSS token-driven), column width, auto-scroll, scroll-position recovery,
 volume-grouped TOC (`toc.jsx`), bookmarks, per-chapter translation editing (overlay
-editor + base-vs-mine diff via `lib/diff.jsx`), provenance badges, the audiobook
+and shared-text editing), provenance badges, the audiobook
 transport (narration slice), and codex citation popovers (`lib/markdown.jsx` renders
 answer markdown with `CiteProvider` so `[c:…]` markers open evidence popovers). Shared
 anchored popovers, including the narrator picker, preserve their preferred alignment when
@@ -183,6 +202,55 @@ Saved typography, width, spacing, and auto-scroll preferences are validated befo
 unavailable browser storage does not prevent the reader from opening. Bookmark mutation
 failures show a message, and failed table-of-contents requests offer retry.
 Auto-scroll pauses while reader settings, translation tools, or contents are open.
+
+**Translation workspace.** `reading/TranslationTools.jsx`, re-exported from
+`ReaderParts.jsx`, opens a portaled, focus-trapped dialog. Desktop shows the chapter
+editor beside a live plain-text reading preview; mobile switches between Edit and
+Preview. The chapter title, sharing scope, word count, unsaved state, and persistent
+save footer remain visible. Ctrl/Cmd+S saves. Closing through Escape, the close button,
+or the backdrop asks before discarding a changed draft; browser reload warns while a
+draft is dirty or a write is in progress. Failed saves preserve the draft. Closing
+restores focus and the reader's scroll position.
+
+Shared edits, personal overlays, conflict merge/keep/base choices, retranslation,
+contribution, and reverting a personal copy retain their existing endpoints.
+Contribution requires saved, conflict-free text; replacing a dirty draft through
+retranslation or conflict resolution is guarded. Reverting confirms deletion of the
+personal copy. The dedicated `TranslationTools.css` scopes this workspace's layout.
+
+**Chapter illustrations.** `codex/ChapterIllustrations.jsx` loads available art when
+its chapter opens, while its generation controls remain collapsed after the prose.
+Scenes appear at the opening, after an anchored passage, or at the end of the story,
+independently of whether the controls are open. Plain prose retains its original
+paragraph and narration indices; rich HTML keeps its sanitized markup and narration
+spans, inserting React figures into dedicated slots outside the text. Unknown or
+ambiguous anchors are omitted rather than inserted at an unrelated passage. Shared
+illustrations are hidden while a personal translation or conflict overlay is displayed.
+
+Eligible owners/admins choose **Luminous anime** (soft-cel anime, the default) or
+**Painterly** (semi-realistic painted illustration) and explicitly generate. These are
+the only two selectable styles, each with a short description. AI selects one to three
+scenes; there is no image-count field. Each chapter initially selects Luminous anime,
+even if it only has Painterly art. The style selector switches inline scenes and
+reference sheets together. Historical Celestial/Ink images remain accessible under
+**Earlier illustrations**, without reintroducing those styles into the selector. Character
+sheets remain under a disclosure, and full-size links use authenticated image endpoints.
+Opening the chapter or controls never starts generation. Generate again requests a fresh
+set while retaining the current art during processing.
+
+**Manage → Illustrate ahead.** The novel management screen accepts an inclusive first
+and final chapter and one of the same two styles, defaulting to Luminous anime.
+Existing illustrations in that style and its current revision are skipped by default; the explicit replacement checkbox requests regeneration. The background range
+job processes chapters in order to carry character designs forward. Its status survives
+navigation, reports waiting/failure/completion, and links to Jobs for progress and
+cancellation. Preparing upcoming chapters does not mark them read or reveal their art
+before the reader's trusted chapter boundary permits it.
+
+Both illustration surfaces poll every five seconds only while work is queued, running,
+or waiting for the provider, and stop on terminal state. Errors preserve completed art
+and expose a retry or refresh action. Navigation discards late responses so another
+chapter or novel's state cannot appear in the new view. Source, generation, and viewing
+boundaries are described in [chapter illustrations](../pipelines/chapter-illustrations.md).
 
 The reader fetches a chapter when the reader navigates to it. It does not prefetch the
 next chapter's authenticated content endpoint, because that endpoint records a trusted
@@ -226,6 +294,17 @@ completed build.
   reload recovery while cached audio and forced regeneration coexist.
 - `src/modules/codex/spoilerBoundary.test.jsx` — stale browse/profile/Ask results are
   hidden across ceiling changes, including delayed responses.
+- `src/modules/codex/ChapterIllustrations.test.jsx` — explicit generation, active-job
+  polling/recovery, unavailable access, preserved galleries, and discarded late responses
+  after chapter navigation. `e2e/illustrations.spec.js` exercises desktop/mobile controls, range generation, and inline placement
+  and verifies opening the panel does not generate images.
+- `src/modules/reading/TranslationTools.test.jsx` — shared/personal editing, conflict
+  actions, draft protection, keyboard save, failed-write recovery, and contribution/revert
+  controls. Editor browser scenarios in `e2e/critical-paths.spec.js` cover desktop/mobile
+  space, preview switching, and draft protection.
+- `src/modules/acquisition/NovelpiaCookies.test.jsx` — saved/expired status, JSON
+  validation, successful replacement and field clearing, removal, request failures, and
+  replacement/removal recovery after unreadable saved status.
 - `src/modules/acquisition/ImportView.test.jsx` — commit/OCR polling resumes, previous
   reviews stay hidden while a selected job loads, and a series commit cannot save retained
   edits under a newly selected volume; `src/modules/reading/readerPrefs.test.js`

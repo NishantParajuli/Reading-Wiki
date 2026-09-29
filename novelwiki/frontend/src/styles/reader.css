@@ -250,11 +250,3 @@
   .reader-fade-in { animation: reader-fade var(--dur-3) ease; }
   @keyframes reader-fade { from { opacity: 0; } to { opacity: 1; } }
 }
-
-/* translation tools popover */
-.translate-tools { position: absolute; right: 0; top: calc(100% + 8px); width: min(460px, 92vw); z-index: 65;
-  padding: 14px; box-shadow: var(--shadow-pop); max-height: 76vh; overflow-y: auto; }
-@media (max-width: 640px) {
-  .translate-tools { position: fixed; right: 0; left: 0; top: auto; bottom: 0; width: 100%;
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0; max-height: 80vh; }
-}

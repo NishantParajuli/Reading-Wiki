@@ -132,6 +132,23 @@ screen or novel metadata.
 | `SCRAPER_REQUIRE_SAME_HOST` | `true` | binds crawls (incl. redirects/CDN hops) to the source host; adapters declare known extra hosts via `allowed_hosts` |
 | `SCRAPER_ALLOWED_HOST_OVERRIDES` | `""` | comma-separated deployment-level extra hosts (prefer adapter-local lists) |
 
+### Novelpia ad browser
+
+| Setting | Default | Notes |
+|---|---|---|
+| `NOVELPIA_BROWSER_ENABLED` | `false` | permits one normal browser ad-completion attempt per gated episode; requires the optional sidecar |
+| `NOVELPIA_BROWSER_URL` | `http://localhost:8079` | private browser service; Compose sets `http://novelpia-browser:8079` |
+| `NOVELPIA_BROWSER_TOKEN` | `""` | service-specific auth token, falling back to `SIDECAR_AUTH_TOKEN`; sent as `X-Tideglass-Sidecar-Token` |
+| `NOVELPIA_BROWSER_TIMEOUT_SECONDS` | 75 | browser attempt deadline, validated between 15 and 90 seconds |
+
+The Compose web environment defaults the integration to enabled when the variable is
+unset, but `.env.example` explicitly sets it to `false`; change that to `true` to opt
+in after copying the template. The `novelpia-browser` profile must also be started. Setting `NOVELPIA_BROWSER_ENABLED=false`
+disables attempts without changing saved source cookies or existing chapters. Missing
+or unavailable browser infrastructure leaves the manual chapter/ad recovery path. See
+[deployment](deployment.md#novelpia-ad-browser-optional) for the private network and
+proxy topology.
+
 ## File import
 
 | Setting | Default | Notes |
@@ -182,7 +199,7 @@ screen or novel metadata.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `SESSION_SECRET` | `dev-insecure-change-me` | HMAC-signs OAuth state; use a long random value in prod. Rotation invalidates in-flight OAuth state, not stored sessions or email tokens; revoke session rows to sign users out |
+| `SESSION_SECRET` | `dev-insecure-change-me` | HMAC-signs OAuth state and derives user-bound Fernet keys for Novelpia cookie storage; use a long random value in prod. The development default cannot store website cookies. Rotation invalidates in-flight OAuth state and requires replacing saved Novelpia cookies, but does not invalidate Tideglass sessions or email tokens; preserve this secret with encrypted-credential backups |
 | `SESSION_COOKIE` / `CSRF_COOKIE` | `tg_session` / `tg_csrf` | |
 | `SESSION_TTL_DAYS` | 30 | |
 | `ALLOWED_ORIGINS` | `http://localhost:8001,http://localhost:8000` | explicit CORS list (credentialed requests forbid `*`) |
@@ -264,19 +281,19 @@ authenticated real-CLI canary passes against the pinned binary. Validated at boo
 ## OpenAI Codex App Server backend
 
 Dormant unless `OPENAI_CODEX_ENABLED=true` and an admin grants a user one or more
-`openai_codex_workloads`. Extraction additionally requires
+`openai_codex_workloads`. Extraction and chapter illustrations additionally require
 `OPENAI_CODEX_CODEX_ENABLED=true`. Authentication is the official `codex login` ChatGPT session
 owned by the dedicated worker user, not an application API key. See the
 [operator runbook](../openai-codex-operator-runbook.md).
 
 | Setting | Default | Notes |
 |---|---|---|
-| `OPENAI_CODEX_ENABLED` / `OPENAI_CODEX_CODEX_ENABLED` | `false` / `false` | provider-wide and extraction-only kill switches |
+| `OPENAI_CODEX_ENABLED` / `OPENAI_CODEX_CODEX_ENABLED` | `false` / `false` | provider-wide and Codex extraction/illustration kill switches |
 | `OPENAI_CODEX_BINARY` / `OPENAI_CODEX_MIN_VERSION` / `OPENAI_CODEX_BINARY_SHA256` | `~/.local/bin/codex` / `0.146.0` / empty in code | official executable, minimum protocol version, optional integrity pin; `.env.example` pins the tested launcher, and `~` expands to the worker service user's home |
 | `OPENAI_CODEX_WORK_DIR` | `~/.local/share/novelwiki/openai-codex-jobs` | private story-bearing run workspaces outside checkout/public roots; `~` expands to the worker service user's home |
 | `OPENAI_CODEX_CREDENTIAL_DIR` | `~/.codex` | official auth source under the worker service user's home; only `auth.json` is linked into per-run state, never parsed by NovelWiki |
-| `OPENAI_CODEX_MODEL_TRANSLATE` / `OPENAI_CODEX_MODEL_CODEX` | `gpt-5.6-terra` / `gpt-5.6-luna` | Terra is reserved for translation while Luna is preferred for high-volume extraction, verification, disambiguation, and smoke tests; preflight requires both in App Server `model/list` |
-| `OPENAI_CODEX_REASONING_TRANSLATE` / `OPENAI_CODEX_REASONING_CODEX` | `xhigh` / `xhigh` | enforced model policy: Terra and Luna must use `xhigh`; other model families may use low, medium, high, xhigh, or max |
+| `OPENAI_CODEX_MODEL_TRANSLATE` / `OPENAI_CODEX_MODEL_CODEX` | `gpt-5.6-terra` / `gpt-6-luna` | Terra is reserved for translation while Luna is preferred for high-volume extraction, verification, disambiguation, and smoke tests; preflight requires both in App Server `model/list` |
+| `OPENAI_CODEX_REASONING_TRANSLATE` / `OPENAI_CODEX_REASONING_CODEX` | `xhigh` / `xhigh` | enforced model policy: GPT-6 Luna accepts `xhigh` or `max`; legacy Luna and Terra retain `xhigh`; other model families may use low, medium, high, xhigh, or max |
 | `OPENAI_CODEX_TURN_TIMEOUT_SECONDS` / `OPENAI_CODEX_KILL_GRACE_SECONDS` | 1200 / 10 | turn deadline and process-group termination grace |
 | `OPENAI_CODEX_STDOUT_MAX_BYTES` / `OPENAI_CODEX_STDERR_MAX_BYTES` / `OPENAI_CODEX_WORKSPACE_MAX_BYTES` | 16 MiB / 1 MiB / 128 MiB | JSONL, diagnostic-tail, and workspace caps |
 | `OPENAI_CODEX_TRANSLATE_BATCH_CHAPTERS` / `OPENAI_CODEX_TRANSLATE_BATCH_MAX_CHARS` | 3 / 120000 | per-turn translation bound |
@@ -285,6 +302,14 @@ owned by the dedicated worker user, not an application API key. See the
 | `OPENAI_CODEX_SUCCESS_RETENTION_HOURS` / `OPENAI_CODEX_FAILURE_RETENTION_HOURS` | 24 / 168 | private workspace retention |
 | `OPENAI_CODEX_CONTRACT_VERSION` | `1.3.10` | host prompt/schema contract recorded on every run and heartbeat; 1.3.10 emits artifact schema 2.2 with separate primary/verification context budgets, compact lossless draft transport, exact lexical evidence locality, verified-only bounded contiguous-anchor canonicalization, safe regular plural and possessive-number matching, semantic verifier repair, bounded evidence/claim-alignment/duplicate-thread recovery, one strongly connected verifier-reviewed thread-topic override, and durable retry progress while retaining pipeline-2.1 database rows and the Luna/xhigh policy |
 | `OPENAI_CODEX_WORKER_HEALTH_TTL_SECONDS` | 90 | heartbeat staleness for capabilities/admin health |
+
+Chapter illustrations share the `codex_extract` grant and these enable switches, but
+their context-decision/planner/rendering model is fixed to `gpt-6-luna` with `max` effort. The ordinary
+translation/extraction model settings do not change it. The renderer checks the model's
+MAX capability before a turn; no alternate model or API fallback is selected. Each image
+is bounded to 16 MiB/24 million pixels and stored in PostgreSQL, while temporary image
+workspaces are removed immediately instead of waiting for the normal retention sweep.
+See [chapter illustrations](../pipelines/chapter-illustrations.md).
 
 ## Minimal production checklist
 

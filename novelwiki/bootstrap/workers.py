@@ -245,7 +245,10 @@ def build_openai_codex_worker_registry() -> WorkerRegistry:
 
         return await execute_agy_codex_job(job, preflight, CodexContext())
 
+    from novelwiki.bootstrap.illustrations import execute_illustration_job
+
     registry = WorkerRegistry()
+    registry.register("codex_illustrate", execute_illustration_job)
     registry.register("translate", translation)
     registry.register("codex_build", codex)
     registry.register("openai_codex_smoke", smoke)

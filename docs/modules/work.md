@@ -1,7 +1,7 @@
 # Work module (`novelwiki/modules/work/`)
 
 **Responsibility:** the **generic durable-job system** — the one queue behind scrapes,
-codex builds, translation batches, and the AGY/OpenAI Codex admin smoke tests. Work owns scheduling
+codex builds, chapter illustrations, translation batches, and the AGY/OpenAI Codex admin smoke tests. Work owns scheduling
 with idempotent dedupe, atomic leased claiming, heartbeats and crash recovery, retries,
 cooperative cancellation, provider-wait parking, and exactly-once quota settlement.
 The operational walkthrough is
@@ -29,7 +29,7 @@ what a scrape is. Handlers are registered by Bootstrap
 
 ## The job row (see [database-schema.md](../data/database-schema.md) for every column)
 
-Key fields: `kind` (`scrape` | `codex_build` | `translate` | `agy_smoke` | `openai_codex_smoke`), `status`
+Key fields: `kind` (`scrape` | `codex_build` | `codex_illustrate` | `translate` | `agy_smoke` | `openai_codex_smoke`), `status`
 (`queued` | `running` | `waiting_provider` | `done` | `failed` | `canceled`), `stage` +
 `progress` (live UI), `options` (kind-specific args), `idempotency_key` (partial-unique
 over **active** statuses — a repeated click dedupes onto the running job instead of

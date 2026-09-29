@@ -1,0 +1,56 @@
+.chapter-illustrations { margin-top: var(--space-7); border-block: 1px solid var(--border); font: 400 var(--text-md, 15px)/1.55 var(--sans); color: var(--ink); }
+.chapter-illustrations-heading { margin: 0; font: inherit; }
+.chapter-illustrations-toggle { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; padding: 24px 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: 400 24px/1.2 var(--serif); }
+.chapter-illustrations-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--radius-sm); }
+.chapter-illustrations-toggle:hover { color: var(--accent); }
+.chapter-illustrations-toggle > svg { flex-shrink: 0; transition: transform var(--dur-1); }
+.chapter-illustrations-toggle > svg.is-open { transform: rotate(180deg); }
+.chapter-illustrations-subtitle { display: block; margin-top: 6px; font: 400 var(--text-sm, 13px)/1.5 var(--sans); color: var(--muted); }
+.chapter-illustrations-body { padding-bottom: 24px; }
+.chapter-illustrations-intro { max-width: 64ch; margin: 0 0 24px; color: var(--muted); }
+.chapter-art { margin: 0; min-width: 0; }
+.chapter-art + .chapter-art { margin-top: 28px; }
+.chapter-art-image { display: block; overflow: hidden; border-radius: var(--radius); background: var(--surface); }
+.chapter-art-image:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.chapter-art img { display: block; width: 100%; height: auto; max-height: 80vh; object-fit: contain; }
+.chapter-art figcaption { padding-top: 12px; }
+.chapter-art figcaption strong { font-weight: 600; }
+.chapter-art figcaption p { margin: 4px 0 0; color: var(--muted); }
+.chapter-art-notes, .chapter-art-references { margin-top: 18px; }
+.chapter-art-notes summary, .chapter-art-references > summary { padding-block: 8px; min-height: 42px; cursor: pointer; }
+.chapter-art-references > summary { font-weight: 600; }
+.chapter-art-references > summary span { color: var(--muted); font-weight: 400; }
+.chapter-art-reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding-top: 12px; }
+.chapter-art-reference-grid .chapter-art { margin: 0; }
+.chapter-art-form { margin-top: 24px; }
+.chapter-art-fields { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.chapter-illustrations-body > .chapter-art-fields { margin-bottom: 24px; }
+.chapter-art-fields label { display: grid; gap: 6px; flex: 1 1 140px; font-size: var(--text-sm); font-weight: 600; }
+.chapter-art-fields select { width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: 400 var(--text-md)/1.4 var(--sans); }
+.chapter-art-fields select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chapter-art-fields select:disabled { opacity: .55; cursor: not-allowed; }
+.chapter-art-note { margin: 10px 0 0; font-size: var(--text-sm); color: var(--muted); }
+.chapter-art-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 20px; color: var(--muted); }
+.chapter-art-progress .btn-spinner { border-color: var(--border); border-top-color: var(--accent); }
+.chapter-art-error { margin: 12px 0; color: var(--danger); }
+.chapter-art-error p { margin: 0 0 8px; }
+.chapter-art-missing { padding: 24px; background: var(--surface); color: var(--muted); }
+.chapter-illustrations a { color: var(--accent); text-underline-offset: 3px; }
+.chapter-illustrations :is(p, figcaption) { overflow-wrap: anywhere; }
+@media (max-width: 540px) {
+  .chapter-art-reference-grid { grid-template-columns: 1fr; }
+  .chapter-art-fields .btn { width: 100%; }
+  .chapter-illustrations-toggle { font-size: 22px; }
+}
+
+.chapter-art-inline { margin-block: var(--space-6) var(--space-7); color: var(--ink); font: 400 var(--text-sm)/1.5 var(--sans); text-align: left; }
+.chapter-art-inline img { aspect-ratio: 3 / 2; }
+.reader-text .chapter-art-inline figcaption p { margin: 4px 0 0; text-indent: 0; text-align: left; color: var(--muted); }
+.reader-text .chapter-art-inline figcaption p::first-letter { all: unset; }
+.chapter-art-inline + .chapter-art-inline { margin-top: var(--space-6); }
+.illustration-range > p { max-width: 75ch; margin: 0 0 var(--space-5); }
+.illustration-range .chapter-art-fields label { flex: 1 1 130px; }
+.chapter-art-fields input[type="number"] { width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: 400 var(--text-md)/1.4 var(--sans); }
+.chapter-art-fields input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.illustration-range-replace { display: flex; align-items: start; gap: 9px; margin-top: 18px; font-size: var(--text-sm); }
+.illustration-range-replace input { flex-shrink: 0; margin-top: 3px; accent-color: var(--accent); }

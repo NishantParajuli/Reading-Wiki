@@ -1,7 +1,7 @@
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -182,6 +182,11 @@ class Settings(BaseSettings):
     # Comma-separated hostnames adapters may fetch in addition to the source host.
     # Prefer adapter-local allowlists for known APIs; use this only for deployment overrides.
     SCRAPER_ALLOWED_HOST_OVERRIDES: str = ""
+    # Optional isolated browser for Novelpia's ordinary ad countdown/Continue flow.
+    NOVELPIA_BROWSER_ENABLED: bool = False
+    NOVELPIA_BROWSER_URL: str = "http://localhost:8079"
+    NOVELPIA_BROWSER_TOKEN: str = ""
+    NOVELPIA_BROWSER_TIMEOUT_SECONDS: int = Field(default=75, ge=15, le=90)
 
     # ── File import (EPUB/PDF ingestion) ──
     # Heavy artifacts live on disk; the DB holds pointers + the editable plan.
@@ -282,11 +287,11 @@ class Settings(BaseSettings):
         Path.home() / ".local" / "share" / "novelwiki" / "openai-codex-jobs"
     )
     OPENAI_CODEX_CREDENTIAL_DIR: str = str(Path.home() / ".codex")
-    # Current model roles: Luna/xhigh for high-volume Codex work, Terra/xhigh
-    # for translation.  The validator below keeps the deployment from silently
-    # weakening either role through an environment override.
+    # Current model roles: GPT-6 Luna/xhigh for Codex work, Terra/xhigh for
+    # translation. GPT-6 Luna also supports max for explicitly deeper work.
+    # The validator prevents either role from silently weakening below xhigh.
     OPENAI_CODEX_MODEL_TRANSLATE: str = "gpt-5.6-terra"
-    OPENAI_CODEX_MODEL_CODEX: str = "gpt-5.6-luna"
+    OPENAI_CODEX_MODEL_CODEX: str = "gpt-6-luna"
     OPENAI_CODEX_REASONING_TRANSLATE: str = "xhigh"
     OPENAI_CODEX_REASONING_CODEX: str = "xhigh"
     OPENAI_CODEX_TURN_TIMEOUT_SECONDS: int = 1200
@@ -360,8 +365,9 @@ class Settings(BaseSettings):
 
     # ── Multi-user / auth ──────────────────────────────────────────────────
     # Server-side opaque sessions backed by a DB table; the browser only holds an
-    # httpOnly+Secure cookie. SESSION_SECRET signs OAuth state — set a long random
-    # value in prod (a changed secret invalidates all sessions).
+    # httpOnly+Secure cookie. SESSION_SECRET signs OAuth state and derives encrypted
+    # website-cookie keys. Rotation requires replacing saved website cookies, but
+    # does not revoke Tideglass session rows. Set a long random value in prod.
     SESSION_SECRET: str = "dev-insecure-change-me"
     SESSION_COOKIE: str = "tg_session"
     CSRF_COOKIE: str = "tg_csrf"
@@ -538,14 +544,15 @@ class Settings(BaseSettings):
         for model_field, effort_field in model_effort_policy:
             model = getattr(self, model_field).strip().lower()
             effort = getattr(self, effort_field)
-            required_effort = (
-                "xhigh"
-                if model.endswith(("-luna", "-terra"))
-                else None
+            allowed_efforts = (
+                {"xhigh", "max"} if model == "gpt-6-luna"
+                else {"xhigh"} if model.endswith(("-luna", "-terra"))
+                else valid_efforts
             )
-            if required_effort is not None and effort != required_effort:
+            if effort not in allowed_efforts:
+                required = " or ".join(repr(value) for value in sorted(allowed_efforts))
                 raise ValueError(
-                    f"{effort_field} must be {required_effort!r} when "
+                    f"{effort_field} must be {required} when "
                     f"{model_field} selects {model!r}"
                 )
         return self

@@ -1,7 +1,7 @@
 # OpenAI Codex App Server operator runbook
 
-This optional backend runs translation and NovelWiki Codex extraction against an official
-ChatGPT Codex subscription. It is dormant until both the global switch and an explicit
+This optional backend runs translation, NovelWiki Codex extraction, and opt-in chapter
+illustrations against an official ChatGPT Codex subscription. It is dormant until both the global switch and an explicit
 per-user workload grant are enabled. It does not use `OPENAI_API_KEY` and never copies a
 ChatGPT token into NovelWiki settings or PostgreSQL.
 
@@ -60,10 +60,30 @@ Only after that succeeds should an admin grant `translate_batch` to a pilot user
 `OPENAI_CODEX_CODEX_ENABLED=true` separately before granting `codex_extract`.
 
 The supported quality/latency policy is enforced at application startup: high-volume Codex,
-verification, disambiguation, and smoke workloads use `gpt-5.6-luna` at `xhigh`; translation
+verification, disambiguation, and smoke workloads use `gpt-6-luna` at `xhigh`; translation
 uses `gpt-5.6-terra` at `xhigh`. Luna is the preferred/default Codex role. An environment
-override that selects Luna/Terra with weaker effort is rejected. Production Codex builds also
+override that selects Luna/Terra with weaker effort is rejected. GPT-6 Luna additionally
+accepts `max` for an explicit deeper-reasoning configuration; legacy Luna/Terra retain
+their `xhigh` policy. Production Codex builds also
 run the separate Luna/xhigh verification child by default.
+
+## Recover after a Codex CLI update
+
+An npm/CLI update can change the executable behind `OPENAI_CODEX_BINARY` while leaving its
+configured SHA-256 pin unchanged. The dedicated service can remain running but its
+preflight reports `openai_codex_version_unsupported` with a hash-mismatch message; it
+does not claim extraction, translation, or illustration jobs while unhealthy.
+
+Verify the intended official installation with `codex --version` and
+`sha256sum "$(readlink -f ~/.local/bin/codex)"`. Update
+`OPENAI_CODEX_BINARY_SHA256` in the deployment environment to the verified new digest,
+then run the non-consuming preflight above. Keep the pin enabled. Restart
+`novelwiki-openai-codex-worker.service` after preflight passes so the process loads the
+updated configuration. When changing a model or other shared settings, also recreate
+the web container with the updated environment. Confirm a fresh healthy heartbeat
+before requesting new work; restarting a healthy worker can resume already queued jobs.
+
+## Extraction contract
 
 Extraction contract `1.3.10` emits artifact schema `2.2`. Every material claim carries a short
 contiguous verbatim `evidence_text` anchor from one cited current-chapter chunk. The host proves literal
@@ -119,11 +139,45 @@ translation or extraction validators and atomic commit workflows run.
 Workspaces live below `OPENAI_CODEX_WORK_DIR`, outside the checkout and public asset root,
 with mode `0700`. Do not point this setting at `ASSET_DIR`, the repository, or a shared path.
 
+## Native chapter illustrations
+
+The reader's opt-in illustration control and Manage's **Illustrate ahead** range control
+schedule `codex_illustrate` on this worker. A range is one durable job over up to 1,000
+translated story chapters, processed sequentially with per-chapter checkpoints.
+It shares the `codex_extract` grant and `OPENAI_CODEX_CODEX_ENABLED` switch, requires
+owner/admin edit access, and uses the connected ChatGPT subscription for both art planning
+and native image generation. It never uses an image API key or falls back to metered API
+generation. No monthly Codex-build unit is reserved.
+
+The initial context decision, illustration planner, and rendering turns are fixed to
+`gpt-6-luna` with `max` reasoning, independently of the ordinary extraction model/effort
+settings. Before each
+operation the renderer confirms Luna is available and its model catalog advertises MAX.
+A missing model/effort fails explicitly rather than silently selecting a different model.
+The native-image turn remains isolated and stops at the first completed image event;
+translation and extraction retain their existing tool-free structured-output contract.
+
+For rollout, start with one short, already readable shared chapter. AI selects one to
+three scene images; new character sheets can add up to four image turns per chapter.
+Two tool-free planning turns first decide whether recent context is needed, then plan
+scenes. Existing complete art is skipped in a range unless replacement is explicitly
+requested. Saved plans and chapter-scoped image-slot checkpoints make retries resume
+completed work. Use Jobs for progress/cancellation; canceling retains completed images.
+Image quota failures park in `waiting_provider`; restore capacity before retrying. Chapter/source changes
+require a fresh request instead of publishing stale images. These limits and the reader
+workflow are detailed in [chapter illustrations](pipelines/chapter-illustrations.md).
+
+PNG bytes are stored in PostgreSQL (`codex_art`), up to 16 MiB per image; account for
+them in database backup/storage sizing. They are served through authenticated chapter-
+bounded endpoints with private no-store caching. Temporary native-image workspaces and
+their isolated `CODEX_HOME` are removed after each operation; the durable plan, images,
+and safe execution status remain in the database.
+
 ## Incidents and rollback
 
 - Stop new work: set `OPENAI_CODEX_ENABLED=false` and restart settings consumers. Queued
   jobs remain explicit and consume nothing.
-- Contain extraction only: set `OPENAI_CODEX_CODEX_ENABLED=false`; translation remains
+- Contain extraction and illustration generation: set `OPENAI_CODEX_CODEX_ENABLED=false`; translation remains
   available.
 - Stop the process: `systemctl --user stop novelwiki-openai-codex-worker.service`.
 - Provider quota/capacity failures park in `waiting_provider`; use the admin retry action

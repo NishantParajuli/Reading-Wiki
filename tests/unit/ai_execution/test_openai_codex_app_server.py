@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -76,6 +77,32 @@ def test_validate_binary_expands_service_user_home(tmp_path, monkeypatch):
 
     assert path == executable
     assert len(digest) == 64
+
+
+def test_cli_upgrade_requires_an_explicit_pin_refresh(tmp_path, monkeypatch):
+    executable = tmp_path / "codex"
+    original = b"#!/bin/sh\nprintf 'codex-cli 0.146.0\\n'\n"
+    upgraded = b"#!/bin/sh\nprintf 'codex-cli 0.157.1\\n'\n"
+    executable.write_bytes(upgraded)
+    executable.chmod(0o700)
+    monkeypatch.setattr(
+        "novelwiki.modules.ai_execution.adapters.outbound.openai_codex.preflight.settings.OPENAI_CODEX_BINARY",
+        str(executable),
+    )
+    monkeypatch.setattr(
+        "novelwiki.modules.ai_execution.adapters.outbound.openai_codex.preflight.settings.OPENAI_CODEX_BINARY_SHA256",
+        hashlib.sha256(original).hexdigest(),
+    )
+    with pytest.raises(AgyError, match="hash differs") as caught:
+        validate_binary()
+    assert caught.value.code == "openai_codex_version_unsupported"
+
+    expected = hashlib.sha256(upgraded).hexdigest()
+    monkeypatch.setattr(
+        "novelwiki.modules.ai_execution.adapters.outbound.openai_codex.preflight.settings.OPENAI_CODEX_BINARY_SHA256",
+        expected,
+    )
+    assert validate_binary() == (executable, expected)
 
 
 @pytest.mark.parametrize(

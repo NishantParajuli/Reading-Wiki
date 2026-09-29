@@ -1,13 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Illustration } from "../codex/index.js";
+import { prepareIllustratedHtml } from "./illustrationPlacement.js";
 import { useNavigate } from "react-router-dom";
 
 import { identityApi } from "../identity/api.js";
 import { narrationApi } from "../narration/api.js";
-import { readingApi } from "./api.js";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, Chip, EmptyState, Loading, SegmentedControl } from "../../components/ui.jsx";
+import { Button, SegmentedControl } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
-import { DiffView } from "../../lib/diff.jsx";
 import { VoicePicker, readTtsPrefs } from "../narration/index.js";
 import { clamp, fmtChapter } from "../../lib/utils.js";
 import { activeNarrationChunk } from "./narrationGuide.js";
@@ -105,97 +106,7 @@ export function ReaderSettings({ prefs, setPrefs, onClose }) {
   );
 }
 
-/* ---------- Translation tools ---------- */
-export function TranslationTools({ novelId, ch, onClose, onChanged }) {
-  const [draft, setDraft] = useState(ch.content || "");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState(null);
-
-  const canEditBase = !!ch.can_edit_base;
-  const hasOverlay = !!ch.overlay;
-  const conflict = !!ch.overlay_conflict;
-  const isOwner = !!ch.is_owner;
-
-  const run = (fn, reload = true) => async () => {
-    setBusy(true); setMsg(null);
-    try {
-      const r = await fn();
-      if (reload) { onChanged(); } else { setBusy(false); }
-      return r;
-    } catch (e) {
-      setMsg({ ok: false, text: e.message || "Something went wrong." });
-      setBusy(false);
-    }
-  };
-
-  const saveBase = run(() => readingApi.editBaseContent(novelId, ch.number, draft));
-  const saveMine = run(() => readingApi.saveOverlay(novelId, ch.number, draft));
-  const selfTranslate = run(() => readingApi.selfTranslate(novelId, ch.number));
-  const revert = run(() => readingApi.deleteOverlay(novelId, ch.number));
-  const resolveMine = run(() => readingApi.resolveOverlay(novelId, ch.number, "mine"));
-  const resolveBase = run(() => readingApi.resolveOverlay(novelId, ch.number, "base"));
-  const resolveMerge = run(() => readingApi.resolveOverlay(novelId, ch.number, "merge", draft));
-
-  async function offer() {
-    setBusy(true); setMsg(null);
-    try {
-      const r = await readingApi.contribute(novelId, ch.number);
-      if (r.status === "auto_merged") { onChanged(); return; }
-      setMsg({ ok: true, text: "Sent to the owner for review." });
-      setBusy(false);
-    } catch (e) { setMsg({ ok: false, text: e.message || "Couldn't offer this edit." }); setBusy(false); }
-  }
-
-  return (
-    <div className="translate-tools card" onClick={e => e.stopPropagation()}>
-      <div className="row" style={{ marginBottom: 10 }}>
-        <b className="grow">{canEditBase ? "Edit translation (shared)" : "Your translation"}</b>
-        <button className="icon-btn plain" aria-label="Close" onClick={onClose}><Icon name="x" size={16} /></button>
-      </div>
-
-      {conflict && (
-        <div className="tt-conflict">
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>The shared base changed since your version.</div>
-          <p className="muted" style={{ fontSize: "var(--text-xs)", margin: "0 0 8px" }}>
-            Keep yours, switch to the latest base, or edit below and Save to merge.
-          </p>
-          {ch.base_content && (
-            <DiffView oldText={ch.base_content} newText={ch.content || ""} oldLabel="Latest base" newLabel="Your version" />
-          )}
-          <div className="row" style={{ gap: 8, marginTop: 8 }}>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={resolveMine}>Keep mine</Button>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={resolveBase}>Use latest base</Button>
-          </div>
-        </div>
-      )}
-
-      <textarea className="tt-textarea" value={draft} disabled={busy} aria-label="Chapter translation"
-                onChange={e => setDraft(e.target.value)} rows={12} placeholder="Chapter translation…" />
-
-      {msg && <div className={msg.ok ? "acct-ok" : "acct-err"} style={{ marginTop: 8 }}>{msg.text}</div>}
-
-      <div className="row wrap" style={{ gap: 8, marginTop: 10 }}>
-        {canEditBase
-          ? <Button variant="primary" disabled={busy || !draft.trim()} onClick={saveBase}>Save for everyone</Button>
-          : conflict
-            ? <Button variant="primary" disabled={busy || !draft.trim()} onClick={resolveMerge}>Save merged</Button>
-            : <Button variant="primary" disabled={busy || !draft.trim()} onClick={saveMine}>Save my version</Button>}
-        {ch.has_original && (
-          <Button variant="ghost" icon="refresh" disabled={busy} onClick={selfTranslate}
-                  title="Re-translate this raw chapter into your own copy (uses quota)">
-            Re-translate for me
-          </Button>
-        )}
-        {hasOverlay && !canEditBase && !isOwner && (
-          <Button variant="ghost" icon="send" disabled={busy} onClick={offer} title="Offer your version to the owner">
-            Offer to owner
-          </Button>
-        )}
-        {hasOverlay && <Button variant="ghost" className="is-danger" disabled={busy} onClick={revert}>Revert to original</Button>}
-      </div>
-    </div>
-  );
-}
+export { TranslationTools } from "./TranslationTools.jsx";
 
 /* ---------- Audio player ---------- */
 export function AudioPlayer({
@@ -586,15 +497,26 @@ export function EndOfChapterCard({ ch, novelId, onNext, onPrev }) {
 }
 
 /* ---------- Reader ---------- */
-export function RichContent({ html }) {
+const NO_ILLUSTRATIONS = [];
+export function RichContent({ html, illustrations = NO_ILLUSTRATIONS }) {
+  const proseRef = useRef(null);
+  const prepared = useMemo(() => prepareIllustratedHtml(html, illustrations), [html, illustrations]);
+  const [portals, setPortals] = useState([]);
+  useLayoutEffect(() => {
+    setPortals(prepared.targets.flatMap(({ index, scene }) => {
+      const node = proseRef.current?.querySelector(`[data-illustration-slot="${index}"]`);
+      return node ? [{ node, scene }] : [];
+    }));
+  }, [prepared]);
   const [lightbox, setLightbox] = useState(null);
   const onClick = (e) => {
     const img = e.target.closest("img");
-    if (img && img.src) { e.stopPropagation(); setLightbox(img.src); }
+    if (img && img.src && !img.closest(".chapter-art")) { e.stopPropagation(); setLightbox(img.src); }
   };
   return (
     <>
-      <div className="reader-text reader-rich" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />
+      <div ref={proseRef} className="reader-text reader-rich" onClick={onClick} dangerouslySetInnerHTML={{ __html: prepared.html }} />
+      {portals.map(({ node, scene }) => createPortal(<Illustration item={scene} inline />, node, scene.id))}
       {lightbox && (
         <div className="lightbox-scrim" onClick={(e) => { e.stopPropagation(); setLightbox(null); }}>
           <img src={lightbox} alt="" />

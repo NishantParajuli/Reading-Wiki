@@ -28,6 +28,8 @@ Operator procedures: [../agy-operator-runbook.md](../agy-operator-runbook.md) an
   implement `translate_batch` and `codex_extract`; extraction additionally requires that
   provider's default-off Codex kill switch. For the other four workloads, selection remains
   on API and an explicit subscription request is rejected even if the policy stores the name.
+  OpenAI Codex also maps `codex_illustrate` jobs to the existing `codex_extract` grant;
+  this native-image feature is not implemented by AGY or API workers.
 - **Contracts** (`application/contracts.py`): the shared subscription-run manifest dataclasses —
   `InputManifest`/`OutputManifest`/`ArtifactRef`, `ExtractionPayload`,
   `DisambiguationPayload`, `TranslationMeta`, `PreflightResult`.
@@ -147,6 +149,13 @@ admin panel and `/auth/me` capability), orphan-run detection, resumable-run quer
   only the official `auth.json` while disabling persisted history and web search.
 - **`smoke.py`** implements the explicitly consuming, rate-limited admin readiness turn and
   always terminalizes its run record as completed, failed, or canceled with `finished_at`.
+- **`illustration_runner.py` / `images.py`** provide separate `gpt-6-luna`/`max` art
+  context-decision, scene-planning, and native image turns, injected into Codex's illustration worker. Planning
+  uses structured JSON without tools; rendering attaches bounded reference PNGs and
+  permits native image generation while retaining disabled shell/unified execution and
+  isolated account state. The first completed image is validated and returned, then the
+  session closes. Codex stores final PNGs; AI Execution owns per-operation run records
+  and removes temporary image workspaces. [Pipeline](../pipelines/chapter-illustrations.md).
 
 ## The dedicated host worker (`adapters/inbound/worker.py`)
 
@@ -158,7 +167,8 @@ heartbeat, queue backend, credential state, and global kill switch. The AGY unit
 the corresponding official login, and the web/API worker never touches either CLI. Loop:
 preflight → heartbeat task → **reap verified orphan process groups** → claim
 (`claim_next` with the process's provider backend, gated by its global switch and
-per-user concurrency) → `_reauthorize` → dispatch to provider codex/translation handlers →
+per-user concurrency) → `_reauthorize` → dispatch to provider codex/translation handlers
+(plus OpenAI Codex illustrations) →
 on provider-capacity failures park as `waiting_provider`
 (provider-specific retry interval); on permanent failure with `fallback_to_api` allowed,
 `_fallback_to_api` re-points the job at the API backend (refunding the subscription

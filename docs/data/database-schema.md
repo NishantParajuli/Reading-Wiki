@@ -3,7 +3,7 @@
 > **Source of truth:** `novelwiki/db/schema.py` — a list of idempotent DDL statements
 > applied on every startup (and via `python -m novelwiki.db.schema`). The normalized DDL
 > is contract-frozen in `tests/contracts/snapshots/schema.json`. This page documents all
-> **47 tables**, grouped by owning module, with the reasoning behind the non-obvious
+> **51 tables**, grouped by owning module, with the reasoning behind the non-obvious
 > columns. Single-writer ownership is enforced by the architecture checker
 > ([../architecture/enforcement.md](../architecture/enforcement.md)).
 
@@ -147,6 +147,19 @@ Reader-proposed status tags for shared novels: `novel_id`, `from_user_id`,
 
 ## Acquisition-owned
 
+### `acquisition_account_cookies`
+
+Per-user website authentication, currently `provider = 'novelpia-global'` only.
+Composite PK `(user_id, provider)`, `user_id` FK to `users` with cascade deletion,
+`ciphertext TEXT` (Fernet-encrypted normalized cookie list), `updated_at TIMESTAMPTZ`.
+The key derives from `SESSION_SECRET` and the owning user ID; ciphertext cannot be
+moved to another user or installation and remain usable. Values never live in source
+configuration or job options. A save atomically replaces the user's previous export;
+delete removes the row. Only `TKEY`, `LOGINKEY`, and `USERKEY` are retained from an
+export, alongside cookie domain/path/expiry. Settings responses contain metadata only.
+Rotating `SESSION_SECRET` requires replacing these saved cookies; preserve the secret
+when restoring encrypted rows from backup.
+
 ### `sources`
 
 A novel's ingestion sources. `novel_id`, `adapter` (a
@@ -232,7 +245,7 @@ Per-novel name/term consistency anchor. `UNIQUE (novel_id, source_term)`;
 `notes`, **`locked`** (user-pinned
 renderings the auto-glossary never overwrites).
 
-## Codex-owned (19 tables — every generated row is ceiling-safe)
+## Codex-owned (22 tables — story-derived rows carry their chapter boundary)
 
 ### `chunks`
 
@@ -357,6 +370,61 @@ Ask answers, cached per ceiling: `UNIQUE (novel_id, query_hash, chapter_ceiling)
 normalized question; `answer_md`, `evidence_ids`. Only answers whose citations are a
 subset of those evidence ids are written.
 
+### `codex_art`
+
+Generated character references and chapter scenes. `id UUID PK`, novel FK (cascade
+delete), `chapter NUMERIC`, `kind` (`reference`|`scene`), optional stable `character_key`,
+`title`, `caption`, and `style` (`luminous`|`painterly`, with historical
+`celestial`/`ink` values retained). `source_hash` identifies the
+source chapter title/text; `metadata JSONB` stores prompts, artistic design notes, scene
+evidence, exact reference IDs, model/effort, batch/index information, and the style
+revision (`soft-cel-anime-v2` or `painterly-v1` for new work). Scene placement
+stores `position` (`start`/`after`/`end`), an exact chapter `anchor` for `after`, and its
+resolved character `offset`; older rows may omit it. `image BYTEA`
+stores a validated PNG capped at 16 MiB. `job_id` references Work (SET NULL on deletion);
+`UNIQUE(job_id, slot)` makes reference/scene checkpoints idempotent. Reads check chapter
+access and current source validity before returning metadata or bytes. New scenes and
+reference sheets retain selected prior-context chapter/hash pairs in metadata `sources`;
+changes to those chapters invalidate dependent art. Historical style revisions remain
+readable but cannot seed current-generation references or satisfy new generation reuse.
+
+A character name change creates a new reference row at the chapter establishing the
+name, retaining the original `character_key` and copying its PNG bytes. Its metadata
+adds `aliases` (retained old names and observed aliases), `name_evidence` (an exact
+chapter quotation), and `sources` (upstream chapter/hash pairs for the original sheet
+and earlier name revisions). The `name:<character_key>` job slot makes this checkpoint
+idempotent. Source checks include these upstream hashes. Reference retrieval chooses
+the latest eligible story chapter per key, then the latest creation time within that
+chapter; it matches titles, keys, and saved aliases without exposing later names to
+earlier chapters. Existing rows without alias or source-history metadata remain valid.
+
+### `codex_art_plans`
+
+Durable illustration plan keyed by `job_id` (FK to Work, cascade delete), with `plan
+JSONB` and `created_at`. A single-chapter plan includes chosen scene briefs, optional
+`name_updates`, the context decision (0–3 preceding chapters and a 0–9,000 character text
+budget), supplied bounded context, exact prior reference IDs used by scenes or name
+updates, and a style revision, so a retry resumes the same compositions and identities.
+Resuming an older Luminous plan after the soft-cel style revision requires a fresh request.
+
+For range jobs, the parent contains only `novel_id`, first `chapter`, `through_chapter`,
+and `mode: "range"`. Range invalidation accounts for `through_chapter`; renumbering checks
+the entire saved range. Deleting the parent cascades to all chapter plans below.
+
+### `codex_art_chapter_plans`
+
+Chapter-specific plans for range jobs. Composite primary key `(job_id, chapter)`;
+`job_id BIGINT` references `codex_art_plans(job_id)` with `ON DELETE CASCADE`,
+`chapter NUMERIC`, `plan JSONB`, and `created_at TIMESTAMPTZ`. Each row carries the same
+context, scenes, name updates, and pinned reference revisions as a single-chapter plan.
+Inserts retain the first checkpoint on conflict. Saving checks/locks the parent so an
+invalidated range cannot recreate its plans. Individual rows avoid repeatedly loading
+or rewriting the plans of every previously processed chapter.
+
+Art image slots retain their `chapter:<number>:` prefix to keep checkpoints distinct
+within the shared job. Both plan tables and `codex_art` belong in PostgreSQL backups,
+not the imported-asset directory. See [chapter illustrations](../pipelines/chapter-illustrations.md).
+
 ## Narration-owned
 
 ### `tts_jobs`
@@ -381,7 +449,7 @@ per (novel, chapter, voice, version)) because `user_id` is nullable.
 
 ### `jobs`
 
-The generic durable-job queue (scrape / codex_build / translate / subscription smoke tests).
+The generic durable-job queue (scrape / codex_build / codex_illustrate / translate / subscription smoke tests).
 `backend_requested` accepts `auto`, `api`, `agy`, or `openai_codex`; `execution_backend` stores
 the immutable resolved provider. Fields in
 four groups:

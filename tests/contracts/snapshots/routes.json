@@ -395,6 +395,16 @@
     "path": "/api/novels/{novel_id}/chapters"
   },
   {
+    "method": "GET",
+    "name": "illustrations",
+    "path": "/api/novels/{novel_id}/chapters/{chapter}/illustrations"
+  },
+  {
+    "method": "POST",
+    "name": "generate_illustrations",
+    "path": "/api/novels/{novel_id}/chapters/{chapter}/illustrations"
+  },
+  {
     "method": "POST",
     "name": "api_codex_build",
     "path": "/api/novels/{novel_id}/codex/build"
@@ -480,6 +490,21 @@
     "path": "/api/novels/{novel_id}/health"
   },
   {
+    "method": "GET",
+    "name": "illustration_range_info",
+    "path": "/api/novels/{novel_id}/illustrations"
+  },
+  {
+    "method": "POST",
+    "name": "generate_illustration_range",
+    "path": "/api/novels/{novel_id}/illustrations"
+  },
+  {
+    "method": "GET",
+    "name": "illustration_image",
+    "path": "/api/novels/{novel_id}/illustrations/{art_id}/image"
+  },
+  {
     "method": "DELETE",
     "name": "api_remove_from_library",
     "path": "/api/novels/{novel_id}/library"
@@ -563,6 +588,21 @@
     "method": "PATCH",
     "name": "api_set_visibility",
     "path": "/api/novels/{novel_id}/visibility"
+  },
+  {
+    "method": "DELETE",
+    "name": "delete_cookies",
+    "path": "/api/settings/novelpia-cookies"
+  },
+  {
+    "method": "GET",
+    "name": "cookie_status",
+    "path": "/api/settings/novelpia-cookies"
+  },
+  {
+    "method": "PUT",
+    "name": "replace_cookies",
+    "path": "/api/settings/novelpia-cookies"
   },
   {
     "method": "GET",

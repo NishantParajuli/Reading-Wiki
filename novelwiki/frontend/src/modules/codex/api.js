@@ -31,5 +31,9 @@ export const codexApi = {
   resolve: (id, name, ceiling) => getJSON(`${novel(id)}/entity/resolve?name=${encodeURIComponent(name)}&ceiling=${ceiling}`),
   ask: (id, question, ceiling) => postJSONStream(`${novel(id)}/ask`, { question, ceiling }),
   codexBuild: (id, body) => postJSON(`${novel(id)}/codex/build`, body || {}),
+  illustrations: (id, chapter) => getJSON(`${novel(id)}/chapters/${chapter}/illustrations`),
+  generateIllustrations: (id, chapter, body) => postJSON(`${novel(id)}/chapters/${chapter}/illustrations`, body),
+  illustrationRange: (id) => getJSON(`${novel(id)}/illustrations`),
+  generateIllustrationRange: (id, body) => postJSON(`${novel(id)}/illustrations`, body),
   mergeEntities: (id, body) => postJSON(`${novel(id)}/merge-entities`, body),
 };

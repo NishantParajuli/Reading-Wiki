@@ -1,10 +1,10 @@
 # HTTP API reference
 
 > **Source of truth:** the contract snapshot `tests/contracts/snapshots/routes.json`
-> (122 routes) and `openapi.json` (schemas). A live instance serves interactive docs at
+> (130 routes) and `openapi.json` (schemas). A live instance serves interactive docs at
 > `/docs` (Swagger) and `/redoc`, and the raw spec at `/openapi.json`. This page is the
 > annotated map: every route family, grouped by owning module, plus the cross-cutting
-> rules. For the literal 122-row method/path/endpoint-name list, use
+> rules. For the literal 130-row method/path/endpoint-name list, use
 > [http-route-inventory.md](http-route-inventory.md).
 
 ## Cross-cutting rules
@@ -28,10 +28,13 @@ and stamps it on audit events.
 401/403 auth, 404 not found, 409 conflict/already-active-job, 402/429 quota and rate
 limits (429 carries `Retry-After` where applicable), 422 validation.
 
-**Spoiler bounding.** Every codex read takes an optional `ceiling` query/body parameter,
+**Spoiler bounding.** Codex knowledge reads take an optional `ceiling` query/body parameter,
 but the server clamps it to the caller's **trusted** ceiling (server-observed
-`max_chapter_read`; owners/admins may see the full span). Sending a bigger number does
-not unlock anything.
+`max_chapter_read`, including owners/admins; the first stored chapter is the fallback
+without progress). Sending a bigger number does
+not unlock anything. Illustration gallery and PNG reads use their stored/requested
+chapter boundary against the same trusted progress. Owners/admins may queue future
+illustrations through the Manage range endpoint without unlocking them or advancing progress.
 
 ---
 
@@ -128,6 +131,27 @@ invalid Unicode, while their existing nullable fields remain nullable. Updates v
 all supplied fields before renumbering chapters. Creating a novel with an invalid nested
 source returns `422` and leaves no novel, source, or library entry behind.
 
+Account cookies: `GET|PUT|DELETE /api/settings/novelpia-cookies` operate only on the
+signed-in user's Novelpia connection. PUT accepts exactly `{"cookies": [...]}`, where
+the array is an EditThisCookie-style export (1–100 entries). The request is capped at
+64 KiB (`413`); malformed JSON or invalid login-cookie data returns `422` without
+echoing credential values. Only `TKEY`, `LOGINKEY`, and `USERKEY` are retained, `TKEY`
+is required, and accepted login-cookie domains are `novelpia.com`, `.novelpia.com`, or
+`global.novelpia.com` with root path `/`. Other cookie names are discarded. PUT replaces
+the saved set; DELETE removes it. Mutation requests require the usual CSRF protection.
+All successful responses contain only `configured`, `usable`, `updated_at`, and
+`cookies: [{name, domain, expires_at}]` and use `Cache-Control: no-store`. `usable`
+means a TKEY exists with no known past storage expiry, not that Novelpia has verified
+the login or granted chapter access. No endpoint returns stored cookie values.
+
+The `global-novelpia` scrape adapter uses the requesting job user's saved cookies,
+including when an admin scrapes another owner's novel. Sources and jobs do not store
+cookie values. With the optional browser service enabled, an ad gate gets one normal
+browser completion attempt per episode followed by an independent API access retry.
+Unresolved login/ad/unlock requirements fail with a recovery instruction while retaining
+chapters already saved; completing the requirement on Novelpia and
+retrying resumes ingestion. See [Novelpia setup](../pipelines/supported-sites.md#novelpia-global-account-access).
+
 Upload: `POST /api/import/upload` (≤ `MAX_UPLOAD_MB`) · chunked:
 `POST /api/import/upload/init` → `PUT /api/import/upload/{job}/chunk` (contiguous,
 capped) → `POST …/complete` (streamed hash verify) · `GET …/status` ·
@@ -169,6 +193,44 @@ hard failures return a safe, uncached insufficient-evidence answer, while citati
 alone does not discard an otherwise grounded answer; optional heartbeat NDJSON) ·
 `POST /api/novels/{id}/codex/build` (durable build job; reserves a `codex_builds` unit) ·
 `POST /api/novels/{id}/merge-entities` (owner/admin duplicate repair).
+
+Chapter art uses `GET|POST /api/novels/{id}/chapters/{chapter}/illustrations`,
+`GET|POST /api/novels/{id}/illustrations`, and
+`GET /api/novels/{id}/illustrations/{art_id}/image`. The chapter list returns `items`,
+`can_generate`, `unavailable_reason`, and the requester's latest matching job as `active_job`
+(including failed/canceled states; `null` if absent or completed). Items contain kind,
+title, caption, style, source chapter, prompt/design notes, evidence, optional placement
+(`position: "start"|"after"|"end"`, exact `anchor`, character `offset`), and authenticated
+image URL. The image route returns `image/png` with `Cache-Control: private, no-store`;
+all art reads verify novel/chapter access and source freshness.
+
+Single-chapter generation accepts
+`{count: null, style: "luminous"|"painterly", force: false}`. Omitted or `null`
+count lets AI choose one to three images; integers 1–3 remain accepted for legacy clients.
+The default style is Luminous anime (`luminous`, soft-cel rendering); `painterly`
+selects Painterly, a semi-realistic painted direction. New requests reject historical `celestial` and `ink` styles.
+Generation requires editable chapter access and the granted,
+available OpenAI Codex backend. It returns `job_id`, with `created` for newly scheduled
+or deduplicated work, or `already_created: true` when current art is reused. Reuse
+requires the current style revision; older Luminous artwork cannot satisfy a new
+soft-cel anime request.
+
+Manage's `GET /api/novels/{id}/illustrations` requires owner/admin edit access and returns
+`can_generate`, `unavailable_reason`, and the latest range job in `active_job`, including
+`done` so Manage can show completion. This differs from the chapter gallery, which clears
+completed jobs to `null`. The response reveals no chapter text or art. `POST` accepts `{from_chapter: 25, to_chapter: 100, style: "luminous", force: false}`.
+Bounds are inclusive, finite nonnegative chapter numbers; the upper bound must not precede
+the lower. It returns `job_id`, `created`, and `chapter_count`, scheduling one durable job
+over at most 1,000 existing translated story chapters/interludes, including fractional
+chapter numbers. Missing/untranslated and
+non-story chapters are skipped; valid complete art in the chosen style is skipped unless
+`force` is true. Owners/admins may schedule ahead of reading, but image access remains
+bounded by trusted reading progress. Each included chapter is limited to 150,000 text
+characters. No eligible text returns 404; invalid ranges/counts return 422.
+
+Denied access returns 403, changed source returns 409, unavailable provider returns 503,
+and active-job limit exhaustion returns 429. There is no API fallback or monthly
+Codex-build reservation. [Illustration pipeline](../pipelines/chapter-illustrations.md).
 
 ## Narration (`/api`, auth)
 

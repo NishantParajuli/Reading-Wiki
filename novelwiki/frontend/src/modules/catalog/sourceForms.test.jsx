@@ -11,6 +11,7 @@ const adapters = [
   { name: "english", label: "English source", default_language: "en", start_url_hint: "Paste a chapter URL." },
   { name: "korean", label: "Korean source", default_language: "ko", start_url_hint: "Paste a novel catalogue URL." },
   { name: "raw-fucknovelpia", label: "Raw archive source", default_language: "ko", start_url_hint: "Paste a novel URL and enter the ZIP password." },
+  { name: "global-novelpia", label: "Novelpia Global", default_language: "en", start_url_hint: "Paste a Novelpia novel URL." },
 ];
 
 beforeEach(() => {
@@ -69,6 +70,17 @@ describe.each(cases)("$label form", ({ Component, submit, api, setup }) => {
     fireEvent.change(screen.getByLabelText("Website"), { target: { value: "english" } });
     expect(screen.getByLabelText("Language")).toHaveValue("en");
     expect(screen.getByLabelText("Raw (needs translation)")).not.toBeChecked();
+  });
+
+  it("links Novelpia cookie setup in another tab to preserve the current source form", async () => {
+    open();
+    await screen.findByRole("option", { name: "Novelpia Global" });
+    fireEvent.change(screen.getByLabelText("Website"), { target: { value: "global-novelpia" } });
+    const link = screen.getByRole("link", { name: "Add or update Novelpia cookies in Settings" });
+    expect(link).toHaveAttribute("href", "/account/sources");
+    expect(link).toHaveAttribute("target", "_blank");
+    fireEvent.change(screen.getByLabelText("Website"), { target: { value: "english" } });
+    expect(screen.queryByRole("link", { name: "Add or update Novelpia cookies in Settings" })).not.toBeInTheDocument();
   });
 
   it("requires an archive password and does not send it to another adapter", async () => {

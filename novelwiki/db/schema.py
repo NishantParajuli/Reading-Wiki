@@ -925,7 +925,7 @@ DDL_QUERIES = [
     """
     CREATE TABLE IF NOT EXISTS jobs (
       id               BIGSERIAL PRIMARY KEY,
-      kind             TEXT NOT NULL,                -- scrape|codex_build|translate|agy_smoke|openai_codex_smoke
+      kind             TEXT NOT NULL,                -- scrape|codex_build|codex_illustrate|translate|agy_smoke|openai_codex_smoke
       novel_id         BIGINT REFERENCES novels(id) ON DELETE CASCADE,
       user_id          BIGINT REFERENCES users(id) ON DELETE SET NULL,  -- requester (quota owner)
       status           TEXT NOT NULL DEFAULT 'queued',                  -- queued|running|done|failed|canceled
@@ -1060,10 +1060,60 @@ DDL_QUERIES = [
     "CREATE INDEX IF NOT EXISTS audit_events_event_idx ON audit_events (event, created_at DESC);",
     "CREATE INDEX IF NOT EXISTS audit_events_user_idx ON audit_events (user_id, created_at DESC);",
     "CREATE INDEX IF NOT EXISTS audit_events_novel_idx ON audit_events (novel_id, created_at DESC);",
+    """
+    CREATE TABLE IF NOT EXISTS codex_art (
+      id UUID PRIMARY KEY,
+      novel_id BIGINT NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+      chapter NUMERIC NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('reference','scene')),
+      character_key TEXT,
+      title TEXT NOT NULL,
+      caption TEXT NOT NULL DEFAULT '',
+      style TEXT NOT NULL CHECK(style IN ('luminous','painterly','celestial','ink')),
+      source_hash TEXT NOT NULL,
+      metadata JSONB NOT NULL DEFAULT '{}',
+      image BYTEA NOT NULL CHECK(octet_length(image) BETWEEN 1 AND 16777216),
+      job_id BIGINT REFERENCES jobs(id) ON DELETE SET NULL,
+      slot TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(job_id,slot)
+    );
+    """,
+    # Retain historical styles while adding the selectable painterly direction.
+    "ALTER TABLE codex_art DROP CONSTRAINT IF EXISTS codex_art_style_check;",
+    "ALTER TABLE codex_art ADD CONSTRAINT codex_art_style_check "
+    "CHECK(style IN ('luminous','painterly','celestial','ink'));",
+    "CREATE INDEX IF NOT EXISTS codex_art_novel_chapter_idx ON codex_art(novel_id,chapter);",
+    """CREATE TABLE IF NOT EXISTS codex_art_plans (
+      job_id BIGINT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+      plan JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );""",
+    """CREATE TABLE IF NOT EXISTS codex_art_chapter_plans (
+      job_id BIGINT NOT NULL REFERENCES codex_art_plans(job_id) ON DELETE CASCADE,
+      chapter NUMERIC NOT NULL,
+      plan JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(job_id,chapter)
+    );""",
+
+    """
+    CREATE TABLE IF NOT EXISTS acquisition_account_cookies (
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK (provider = 'novelpia-global'),
+      ciphertext TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(user_id, provider)
+    );
+    """,
 ]
 
 # Tables in dependency order (children first) — used by reset_db to drop cleanly.
 ALL_TABLES = [
+    "acquisition_account_cookies",
+    "codex_art_chapter_plans",
+    "codex_art_plans",
+    "codex_art",
     "audit_events",
     "ai_worker_heartbeats",
     "ai_execution_runs",

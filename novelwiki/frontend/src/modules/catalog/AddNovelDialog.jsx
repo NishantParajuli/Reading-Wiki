@@ -59,6 +59,9 @@ export function AddNovelDialog({ onCreated, onClose }) {
           <input type="url" value={startUrl} onChange={e => setStartUrl(e.target.value)} placeholder="https://…" aria-describedby={hintId} required disabled={busy} />
         </label>
         <p id={hintId} className="muted" style={{ margin: 0, fontSize: "var(--text-xs)" }}>{source.selected?.start_url_hint || "Use a supported novel or chapter URL for this website."}</p>
+        {source.adapter === "global-novelpia" && <p className="source-account-copy">
+          <a href="/account/sources" target="_blank" rel="noreferrer">Add or update Novelpia cookies in Settings</a> (opens in a new tab).
+        </p>}
         {source.adapter === "raw-fucknovelpia" && <label className="field">
           <span>ZIP password</span>
           <input type="password" autoComplete="off" value={archivePassword} onChange={e => setArchivePassword(e.target.value)} required disabled={busy} />

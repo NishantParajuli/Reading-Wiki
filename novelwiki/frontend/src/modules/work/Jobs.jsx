@@ -7,6 +7,7 @@ import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { acquisitionApi } from "../../modules/acquisition/api.js";
+import { NovelpiaRecoveryLinks } from "../acquisition/index.js";
 import { narrationApi } from "../../modules/narration/api.js";
 import { workApi } from "../../modules/work/api.js";
 import { Icon } from "../../components/Icon.jsx";
@@ -111,6 +112,7 @@ export function Jobs() {
                         {failed && isOpen && (
                           <div className="job-error-detail">
                             {job.error}
+                            <NovelpiaRecoveryLinks kind={job.kind} error={job.error} />
                             <Button size="sm" variant="ghost" style={{ position: "absolute", top: 8, right: 8 }}
                                     onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(job.error).then(() => toast("Error copied.", { tone: "ok" })); }}>
                               Copy

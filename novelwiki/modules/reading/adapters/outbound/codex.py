@@ -5,7 +5,7 @@ async def _narrative_part_chapters(connection, novel_id: int, part_label: str | 
     rows = await connection.fetch(
         """
         SELECT number FROM chapters
-        WHERE novel_id=$1 AND content IS NOT NULL
+        WHERE novel_id=$1 AND content ~ '[^[:space:]]'
           AND COALESCE(kind,'chapter')=ANY($2::text[])
           AND part_label IS NOT DISTINCT FROM $3
         ORDER BY number;
@@ -53,6 +53,37 @@ class PostgresReadingCodexGateway:
             )
         return result
 
+    async def illustration_snapshot(self, novel_id: int, chapter: float) -> dict | None:
+        """Art needs one shared chapter, without expanding the novel's chapter index."""
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                "SELECT title,content,COALESCE(kind,'chapter') kind FROM chapters "
+                "WHERE novel_id=$1 AND number=$2;",
+                novel_id, chapter,
+            )
+        return dict(row) if row else None
+
+    async def previous_illustration_context(
+        self, novel_id: int, chapter: float, limit: int, max_chars: int
+    ) -> list[dict]:
+        """Read only bounded tails of preceding narrative chapters for art continuity."""
+        limit, max_chars = min(3, max(0, limit)), min(9000, max(0, max_chars))
+        if not limit or not max_chars:
+            return []
+        per_chapter = max_chars // limit
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                "SELECT number AS chapter,left(COALESCE(title,''),200) AS title,"
+                "right(content,$4) AS text,"
+                "encode(sha256(convert_to(COALESCE(title,'') || E'\\n' || content,'UTF8')),'hex') AS source_hash "
+                "FROM chapters "
+                "WHERE novel_id=$1 AND number<$2 AND content ~ '[^[:space:]]' "
+                "AND COALESCE(kind,'chapter')=ANY($5::text[]) "
+                "ORDER BY number DESC LIMIT $3;",
+                novel_id, chapter, limit, per_chapter, ["chapter", "interlude"],
+            )
+        return [dict(row) for row in rows]
+
     async def chapter_numbers(
         self, novel_id: int, start: float | None = None, end: float | None = None,
         require_content: bool = False, narrative_only: bool = False,
@@ -62,7 +93,7 @@ class PostgresReadingCodexGateway:
                 "SELECT number FROM chapters WHERE novel_id=$1 "
                 "AND ($2::numeric IS NULL OR number>=$2) "
                 "AND ($3::numeric IS NULL OR number<=$3) "
-                "AND (NOT $4 OR NULLIF(btrim(content),'') IS NOT NULL) "
+                "AND (NOT $4 OR content ~ '[^[:space:]]') "
                 "AND (NOT $5 OR COALESCE(kind,'chapter')=ANY($6::text[])) "
                 "ORDER BY number;",
                 novel_id, start, end, require_content, narrative_only,

@@ -23,12 +23,34 @@ uv run pytest -q tests
 ```
 
 Website extraction fixtures live under `tests/unit/modules/acquisition/`: existing
-adapters, new translation sites, Novelpia/RAW archives, runner resume/error handling,
+adapters, new translation sites, Novelpia/RAW archives, per-user account-cookie
+validation/encryption and write-only settings, runner resume/error handling,
 and the diagnostic CLI. They use synthetic text and do not make live website requests.
 For a bounded check against an actual website without importing its text or requiring
 PostgreSQL, use `uv run python try_adapter.py ADAPTER URL --max 2`. See
 [supported sites](pipelines/supported-sites.md#check-a-source-without-importing-it) for
-accepted URLs, archive-password input, exit codes, and the scope of live verification.
+accepted URLs, archive-password input, the Novelpia-only `--cookies-file` option, exit
+codes, and the scope of live verification. `test_global_novelpia.py` covers API session
+refresh, multipart prose, chapter navigation, and access-gate failures with synthetic
+responses. Account-cookie tests cover validation, encryption/user isolation, metadata-only
+HTTP responses, and request-user selection; live credentials are never fixtures. The
+PostgreSQL-backed `novelwiki/eval/novelpia_account_tests.py` verifies persistence across
+pool reload, authenticated session/CSRF isolation, encryption-key rotation recovery,
+and deletion with the owning user; run it through the disposable backend test launcher.
+
+Novelpia ad automation has separate provider-free tests. Run the Node sidecar suite with
+`npm ci --prefix sidecar-novelpia && npm test --prefix sidecar-novelpia` with Node 22+; its
+`browser.test.mjs` and `server.test.mjs` cover request validation, ordinary browser
+completion signals, request isolation, authentication, limits, and cancellation without
+using real account credentials. `tests/unit/acquisition/test_novelpia_egress.py` exercises
+CONNECT parsing, destination validation, DNS pinning, and transport limits. These tests
+belong alongside the scraper/client regression tests, not a real ad-viewing loop.
+`tests/unit/modules/acquisition/test_novelpia_browser_client.py` covers bounded busy
+retries, RPC validation, cookie forwarding, and cancellation; the Global adapter suite
+covers one automatic attempt followed by an independent API retry and manual fallback.
+The optional Compose profile also needs a real browser launch through its restricted
+proxy for deployment qualification; a healthy RPC listener alone does not prove that
+Chromium can launch or that a site's ad can finish.
 
 AGY contract/runner/workload suites use `novelwiki/eval/fake_agy.py` and do not consume
 subscription capacity. The authenticated CLI canary is opt-in because it makes real model
@@ -68,6 +90,24 @@ rate-limited model turn. Run it once during rollout, then qualify representative
 and extraction chapters before enabling either global switch for general use; see the
 [OpenAI Codex operator runbook](openai-codex-operator-runbook.md).
 
+Illustration regressions are also provider-free: `tests/unit/codex/test_illustrations.py`
+covers strict scene plans, name-update identity/evidence validation, source/reference
+boundaries, gallery selection, and resumable worker behavior.
+`tests/unit/codex/test_illustration_planning.py` covers automatic scene counts,
+context decisions before history retrieval, bounded summary/tail context, prior-context
+source invalidation, legacy fixed counts, and exact placement anchors;
+`tests/unit/ai_execution/test_openai_codex_images.py` covers bounded
+native-image results; `tests/unit/platform/test_illustration_routes.py` prevents the
+production SPA catch-all from shadowing the image APIs. Frontend component tests and
+`e2e/illustrations.spec.js` cover explicit generation, polling, and desktop/mobile controls.
+Real image qualification consumes subscription capacity and is separate from these tests.
+`novelwiki/eval/illustration_tests.py` adds disposable-database coverage for grant and
+chapter authorization, deduplicated scheduling, complete galleries, source/reference
+invalidation, and protected PNG responses. Its character-name regressions check that
+renames reuse the original pixels across retries, retain old names and new aliases for
+large-cast retrieval, respect earlier chapters, resist out-of-order generation, and
+remain dependent on the original sheet's source text.
+
 `agy_workload_tests.py::test_chapter_1200_context_stays_bounded_and_ignores_historical_fact_bloat`
 is the provider-free long-book qualification. It creates a synthetic LOTM-shaped chapter/volume
 layout, 500 entities, temporal state, threads, and more than 20,000 historical facts in the
@@ -94,6 +134,10 @@ real-model questions across early, middle, late, negative-answer, identity-revea
 cases remain a release qualification rather than something inferred from unit tests.
 
 ## Complete local release checks
+
+The real-backend browser launcher uses its own frontend on port 4174 and refuses to
+reuse an existing server. Mocked browser tests use port 4173. This prevents the real
+suite from inheriting a development proxy that targets a different database.
 
 Install Python dependencies with `uv sync --frozen`. Frontend and browser checks also
 need the locked npm dependencies and Chromium; the sequence below includes that setup.
@@ -159,6 +203,19 @@ connections have a five-second timeout. Its child app clears provider API keys a
 SMTP configuration and disables AGY, OpenAI Codex, and new TTS generation; the browser
 qualification uses cached/provider-free fixtures, including ordinary imports and cached
 audio, without using production provider credentials.
+
+## CI image gates
+
+`.github/workflows/quality.yml` runs backend and frontend checks plus a separate
+**Novelpia browser and egress** job. That job uses Node 22, installs the locked sidecar
+dependencies, runs the provider-free Node tests, and builds both new Docker images.
+The deployment-candidate job requires it alongside backend, frontend, and the production
+web image. CI does not use real Novelpia cookies or attempt live ads.
+
+A successful workflow remains a **web-only** automatic deployment candidate. The local
+deploy agent updates and rolls back only web; browser/proxy updates require their explicit
+Compose rebuild and separate qualification described in the
+[release runbook](release-runbook.md#optional-novelpia-browser-rollout).
 
 ## Backup and restore rehearsal
 

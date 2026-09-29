@@ -11,7 +11,7 @@ def test_openai_codex_defaults_use_required_reasoning_policy():
 
     assert configured.OPENAI_CODEX_MODEL_TRANSLATE == "gpt-5.6-terra"
     assert configured.OPENAI_CODEX_REASONING_TRANSLATE == "xhigh"
-    assert configured.OPENAI_CODEX_MODEL_CODEX == "gpt-5.6-luna"
+    assert configured.OPENAI_CODEX_MODEL_CODEX == "gpt-6-luna"
     assert configured.OPENAI_CODEX_REASONING_CODEX == "xhigh"
     assert configured.CODEX_CONTEXT_MAX_TOKENS == 48_000
     assert configured.CODEX_VERIFY_CONTEXT_MAX_TOKENS == 64_000
@@ -34,11 +34,30 @@ def test_openai_codex_defaults_use_required_reasoning_policy():
             },
             "OPENAI_CODEX_REASONING_TRANSLATE must be 'xhigh'",
         ),
+        (
+            {
+                "OPENAI_CODEX_MODEL_CODEX": "gpt-6-luna",
+                "OPENAI_CODEX_REASONING_CODEX": "medium",
+            },
+            "OPENAI_CODEX_REASONING_CODEX must be 'max' or 'xhigh'",
+        ),
     ],
 )
 def test_openai_codex_rejects_weakened_luna_or_terra_effort(overrides, message):
     with pytest.raises(ValidationError, match=message):
         Settings(_env_file=None, **overrides)
+
+
+@pytest.mark.parametrize("effort", ["xhigh", "max"])
+def test_gpt_6_luna_accepts_supported_high_quality_reasoning(effort):
+    configured = Settings(
+        _env_file=None,
+        OPENAI_CODEX_MODEL_CODEX="gpt-6-luna",
+        OPENAI_CODEX_REASONING_CODEX=effort,
+    )
+    assert configured.OPENAI_CODEX_REASONING_CODEX == effort
+    assert configured.OPENAI_CODEX_MODEL_TRANSLATE == "gpt-5.6-terra"
+    assert configured.OPENAI_CODEX_REASONING_TRANSLATE == "xhigh"
 
 
 def test_verifier_context_cap_cannot_be_smaller_than_primary_cap():

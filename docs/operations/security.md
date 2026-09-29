@@ -12,8 +12,9 @@
   `COOKIE_SECURE`) carries a random token; the DB stores only its hash; deletion =
   instant revocation (logout, ban, admin "revoke sessions"). Expiry is fixed at creation
   using `SESSION_TTL_DAYS` (30 by default); reads update `last_seen_at`, not expiry.
-  `SESSION_SECRET` signs OAuth state only. Rotating it invalidates in-flight OAuth
-  handshakes; sessions and email tokens use unkeyed SHA-256 hashes and remain valid.
+  `SESSION_SECRET` signs OAuth state and derives per-user website-cookie encryption
+  keys. Rotating it invalidates in-flight OAuth handshakes and requires replacing saved
+  Novelpia cookies; sessions and email tokens use unkeyed SHA-256 hashes and remain valid.
   Revoke the relevant session rows when existing logins must be invalidated.
 - Email verification and password reset use single-use, expiring, hashed tokens.
 - Registration, password changes/resets, and email verification use database transactions
@@ -51,6 +52,10 @@
 - Assets: only avatars and the SPA are public static; novel images, import previews,
   and audio stream through permission-checked routes. Experience rewrites historical
   public URLs onto those routes. Eval: `asset_security_tests.py`.
+- Codex-generated art is stored as bounded PostgreSQL bytes and served through its own
+  authenticated image route, with chapter-ceiling and source-validity checks and private
+  no-store caching. It never uses the public static asset mount. Generation additionally
+  requires owner/admin edit access and a granted, available OpenAI Codex backend.
 
 ## SSRF & scraping (Acquisition)
 
@@ -69,6 +74,66 @@ path, and symlink checks; the scraper does not extract files or stage images. Th
 ZIP password is stored in `sources.config` JSONB and omitted from reader-facing novel source
 metadata. It is not built into the application or included in chapter text/checkpoint URLs.
 Supported formats and limits: [supported sites](../pipelines/supported-sites.md).
+
+### Novelpia Global account cookies
+
+Authenticated Settings routes accept bounded (64 KiB, at most 100 entries) browser
+cookie exports and retain only `TKEY`, `LOGINKEY`, and `USERKEY` from the exact allowed
+Novelpia domains. The export must contain `TKEY`; duplicate login names, non-root
+paths, invalid expiries, and invalid cookie characters are rejected with fixed messages
+that do not echo values. Unrelated analytics, preferences, and temporary CloudFront
+grants are discarded. Metadata-only responses use `Cache-Control: no-store`.
+
+Credentials are encrypted with Fernet in `acquisition_account_cookies`. A
+namespace-separated HMAC-derived key binds encryption to `SESSION_SECRET` and the
+user ID. The known development secret is rejected when saving/opening credentials.
+Database backups therefore require the same private secret to restore these rows;
+changing it requires a fresh cookie export. This protects database-only disclosure,
+not compromise of an application host that also holds its encryption key.
+
+Only the user ID recorded on the scrape job selects credentials. The runner never
+borrows a novel owner's or administrator's saved account, and does not load cookies
+for other adapters. CLI scrapes without a requesting account have no saved credentials.
+Cookie expiry metadata is a local hint, not proof that Novelpia still accepts the
+session. Replacing/deleting cookies affects subsequent loads; it does not revoke an
+already-running request or the remote Novelpia login itself.
+
+### Novelpia ad browser
+
+The optional browser service receives only the scrape requester's normalized login
+cookies and a numeric episode ID, through a token-authenticated private endpoint.
+The web client disables redirects and ambient HTTP proxies for this RPC; it does not
+send credentials to a chapter-supplied service URL. The sidecar requires a private token
+of at least 24 characters and has no unauthenticated bypass. It caps bodies at 64 KiB,
+validates cookies and episode IDs, and allows only one active operation.
+
+Browser pages run in fresh, disposable contexts, without persistent cookie/profile
+volumes, request-body logging, screenshots, or tracing. The browser process receives a
+minimal environment without application/service secrets. Main-frame navigation is
+restricted to the requested official viewer; popups, downloads, and service workers
+are blocked. Chromium runs non-root with its sandbox enabled, all container capabilities
+dropped, and a checked-in seccomp profile permitting the sandbox namespace operations;
+it requires host support for unprivileged user namespaces. Cancellation, disconnection,
+and timeouts close the browser.
+
+Browser automation does not call Python `safe_fetch`, so Compose supplies a separate
+network boundary: the browser has only an internal network, and its public-only CONNECT
+proxy has the separate egress network. The proxy validates DNS results, rejects
+private/reserved destinations, and connects to the validated public address; it does not
+forward arbitrary plaintext HTTP requests. CONNECT permits port 443 only and rejects
+the whole DNS answer if any address is non-public, including IPv4-mapped/transition
+IPv6. Limits include 96 connections, 8 KiB headers, 5-second DNS resolution, 10-second
+connection setup, 30-second idle timeout, 120-second tunnel lifetime, and 64 MiB total
+bidirectional tunnel bytes. Sidecar/proxy ports are never published.
+Browser request interception is defense in depth, not the sole SSRF protection. Keep
+this network isolation when deploying outside Compose.
+
+The browser waits through the real countdown and clicks the site's normal Continue
+control. It does not skip timers, fabricate reward requests, or buy content. A browser
+`completed` response is only a retry signal: the HTTP adapter independently refreshes
+authentication and verifies chapter access before accepting any prose. See
+[ADR 016](../architecture/adr-016-isolated-novelpia-ad-browser.md) and the
+[private API](../api/novelpia-browser.md).
 
 ## Upload hardening (Acquisition)
 
@@ -93,6 +158,12 @@ HTML is sanitized (nh3). Eval:
   through `ASK_REQUIRE_VERIFIED` and `ENTITY_PROFILE_SYNTH_REQUIRE_VERIFIED`.
 - Provider budgets: persistent Gemini daily counter; jobs pause (`ocr_paused`,
   `waiting_provider`) instead of hammering providers.
+- Illustration generation is explicitly requested and governed by subscription
+  grants/concurrency and provider capacity. AI chooses one to three scenes and at most
+  four new character sheets per chapter. A Manage request may include up to 1,000 translated
+  story chapters, processed sequentially in one durable job. Owner/admin preparation ahead
+  of reading does not advance trusted progress or bypass image-read ceilings. It does not reserve a monthly Codex-build unit or permit metered API
+  fallback. Reading/listing art never starts a provider turn.
 - Estimates before spend (`/cost-estimate`), explicit reserve/refund accounting with
   exactly-once settlement. Eval: `ai_cost_controls_tests.py`,
   `durable_jobs_tests.py`.
@@ -131,7 +202,7 @@ a ChatGPT subscription account, and requires the configured models to appear in
 `model/list`. NovelWiki links that credential into a new private per-run `CODEX_HOME`
 without parsing it; persisted history, analytics, and web search are disabled.
 
-Each task uses a fresh ephemeral App Server thread over bounded stdio JSONL with
+Translation/extraction use fresh ephemeral App Server threads over bounded stdio JSONL with
 `approvalPolicy=never`, a read-only sandbox, network access disabled, and no
 MCP/apps/plugins/skills/subagents or external files. The model returns a strict
 Structured Outputs object; the host normalizes it, injects trusted source identity,
@@ -143,6 +214,14 @@ hashes. Eval: `tests/unit/ai_execution/test_openai_codex_app_server.py`,
 `tests/unit/ai_execution/test_openai_codex_smoke.py`,
 `tests/unit/platform/test_openai_codex_model_policy.py`. Ops:
 [../openai-codex-operator-runbook.md](../openai-codex-operator-runbook.md).
+
+Native illustration rendering is an explicit separate session, not a relaxation of
+those structured extraction/translation contracts. Shell/unified execution remain
+disabled; the session receives the art brief and private staged reference images,
+accepts the first completed native image event, and closes. Host checks enforce the
+PNG signature, decodability, 16 MiB limit, 24-million-pixel bound, and workspace-contained
+paths before storage. Temporary rendering workspaces and isolated account state are
+removed after the operation. [Illustration lifecycle](../pipelines/chapter-illustrations.md).
 
 ## The spoiler boundary (product security)
 

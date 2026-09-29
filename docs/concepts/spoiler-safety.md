@@ -7,7 +7,7 @@
 ## The rule
 
 > When a reader's ceiling is chapter **N**, no information from any chapter **> N** may
-> appear in any codex entry, stat, Q&A answer, or recap — ever.
+> appear in any codex entry, stat, Q&A answer, recap, or generated illustration — ever.
 
 Two design commitments follow:
 
@@ -32,9 +32,10 @@ without advancing the reader's progress.
 Resolution: every spoiler-sensitive use case starts with
 `CeilingPort.resolve(novel_id, principal, requested)` →
 `CeilingContext` (`modules/codex/application/dto.py`):
-`effective = min(requested slider value, trusted max_chapter_read)`, with owners/admins
-allowed the full chapter span (it's their text). The UI slider is a convenience to look
-*backwards*; it can never look forward.
+`effective = min(requested slider value, trusted max_chapter_read)`, bounded to the
+stored chapter span. With no saved progress, the first stored chapter is the fallback.
+Owners and administrators use the same reading boundary as other readers. The UI slider
+is a convenience to look *backwards*; it cannot unlock unread future chapters.
 
 ## The enforcement points (defense in depth)
 
@@ -49,6 +50,7 @@ allowed the full chapter span (it's their text). The UI slider is a convenience 
 | **Forward-only extraction** | chapters are extracted ascending; facts/transitions are chapter-stamped; chapter/checkpoint/volume memory carries exact through/source hashes and contains only grounded children ≤ K |
 | **Bounded context** | extraction sees selected pre-chapter entities/current state, three recent summaries, completed hierarchical memory, relevant open threads, and current chunks; the full entity table is never put in a prompt |
 | **Recap** | same trusted ceiling, same cache keying (`(novel, ceiling)`), same filtered evidence |
+| **Illustrations** | planning context and reusable character sheets are bounded by the target chapter; Manage can prepare future chapters without advancing progress, while gallery and authenticated PNG routes retain the allowed reading ceiling and source freshness |
 
 ## Adjacent integrity guards (same philosophy)
 

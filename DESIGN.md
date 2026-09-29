@@ -263,9 +263,20 @@ navigation, a focus trap, and an explicit loading/failure message.
 
 A slim accent rail marks scroll progress at the viewport edge. Reader chrome can
 recede during reading and returns on interaction or keyboard focus. The footer gives
-previous/next actions and reading position; settings and translation tools become
-bottom panels on narrow screens. Narration highlights the active text while retaining
-the reader's typography and tone.
+previous/next actions and reading position; settings become bottom panels on narrow
+screens. Translation editing opens a spacious desktop dialog with side-by-side text
+and reading preview, becoming a full-height Edit/Preview workspace on mobile. Its
+save controls remain outside the scrolling prose area. Narration highlights the
+active text while retaining the reader's typography and tone.
+
+Optional chapter illustrations appear between prose blocks at the opening, an anchored
+passage, or the ending. Generation controls follow the prose in a collapsed disclosure,
+with character reference sheets under a separate disclosure. Scene images keep the
+reading column’s width and use quiet sans-serif captions. Manage includes an
+“Illustrate ahead” range form in the existing management grid. The illustration styles belong to this feature; surrounding
+controls retain the existing paper, ink, and forest visual system. See the
+[reader surface brief](.impeccable/surfaces/novelwiki-frontend-src-modules-reading-reader-jsx.md)
+for its composition and interaction rules.
 
 ## Do's and Don'ts
 

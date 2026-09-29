@@ -42,7 +42,7 @@ def configure_finalization_uow(factory) -> None:
     global _finalization_uow_factory
     _finalization_uow_factory = factory
 
-KINDS = ("scrape", "codex_build", "translate", "agy_smoke", "openai_codex_smoke")
+KINDS = ("codex_illustrate", "scrape", "codex_build", "translate", "agy_smoke", "openai_codex_smoke")
 TRIGGER_STATUSES = ("queued",)
 ACTIVE_STATUSES = ("queued", "running", "waiting_provider")
 TERMINAL_STATUSES = ("done", "failed", "canceled")

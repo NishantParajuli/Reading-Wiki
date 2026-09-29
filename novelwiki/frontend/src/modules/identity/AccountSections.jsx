@@ -14,6 +14,7 @@ export const SECTIONS = [
   { id: "audio", label: "Audio", icon: "headphones" },
   { id: "security", label: "Security", icon: "shield" },
   { id: "linked", label: "Linked accounts", icon: "link" },
+  { id: "sources", label: "Source accounts", icon: "book" },
   { id: "usage", label: "Usage", icon: "database" },
 ];
 

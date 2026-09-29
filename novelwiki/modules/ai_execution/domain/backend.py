@@ -62,4 +62,5 @@ def workload_for_job_kind(kind: str) -> Workload | None:
     return {
         "translate": Workload.TRANSLATE_BATCH,
         "codex_build": Workload.CODEX_EXTRACT,
+        "codex_illustrate": Workload.CODEX_EXTRACT,
     }.get(kind)

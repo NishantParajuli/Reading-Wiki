@@ -52,7 +52,7 @@ def test_diagnostic_uses_safe_context_and_prints_no_prose(monkeypatch, capsys):
 
 
 def test_diagnostic_redacts_password_from_failure(monkeypatch, capsys):
-    async def fail(*args):
+    async def fail(*args, **kwargs):
         raise ValueError("Could not decrypt using test-secret")
 
     monkeypatch.setenv("TEST_ARCHIVE_PASSWORD", "test-secret")
@@ -86,3 +86,29 @@ def test_diagnostic_distinguishes_locked_boundary_from_empty_result(monkeypatch,
     output = capsys.readouterr()
     assert ("Premium/locked boundary" in output.out) == locked
     assert ("No chapters were found" in output.err) != locked
+
+
+def test_diagnostic_cookie_file_is_normalized_and_values_redacted(monkeypatch, capsys, tmp_path):
+    import json
+    cookie_file = tmp_path / 'cookies.json'
+    cookie_file.write_text(json.dumps([{'name': 'TKEY', 'value': 'synthetic-cookie-secret',
+                                      'domain': '.novelpia.com', 'session': True}]))
+    async def fail(*args, account_cookies):
+        assert account_cookies[0]['name'] == 'TKEY'
+        raise ValueError('Failure involving synthetic-cookie-secret')
+    monkeypatch.setattr(try_adapter, 'probe', fail)
+    assert try_adapter.main(['global-novelpia', 'https://global.novelpia.com/novel/4053',
+                             '--cookies-file', str(cookie_file)]) == 1
+    error = capsys.readouterr().err
+    assert 'synthetic-cookie-secret' not in error
+    assert '[redacted]' in error
+
+
+def test_diagnostic_rejects_malformed_cookie_file_without_echo(tmp_path, capsys):
+    cookie_file = tmp_path / 'cookies.json'
+    cookie_file.write_text('synthetic-secret-invalid-json')
+    assert try_adapter.main(['global-novelpia', 'https://global.novelpia.com/novel/4053',
+                             '--cookies-file', str(cookie_file)]) == 1
+    error = capsys.readouterr().err
+    assert 'synthetic-secret' not in error
+    assert 'valid Novelpia cookie export' in error

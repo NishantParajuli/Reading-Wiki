@@ -1,6 +1,8 @@
 # Filesystem layout
 
-The database holds state and pointers; heavy bytes live on disk. Every filesystem root
+The database holds state and pointers; imported assets and audio live on disk. Generated
+Codex illustrations are the exception: their bounded PNG bytes live in `codex_art.image`
+and are included in database backups. Every filesystem root
 has **one owner module** (same rule as tables). In Docker, everything under `./data` is
 the named volume `novelwiki_data` mounted at `/app/data` — it must persist across image
 rebuilds.
@@ -81,6 +83,10 @@ sidecar-tts/voices/              narrator reference clips (voice cloning prompts
   previews through `GET /api/assets/import-jobs/{job_id}/{filename}` (job ownership);
   narration through `GET …/audio.opus` (readable-check + Range support). Experience
   projections rewrite any historical public URL onto these routes.
+- **Generated chapter art:** `GET /api/novels/{novel_id}/illustrations/{art_id}/image`
+  streams PostgreSQL bytes after novel/chapter/source checks, with private no-store
+  caching. It has no public asset-directory counterpart. Temporary image-rendering
+  workspaces use the isolated Codex work root and are removed when that operation ends.
 
 ## Lifecycle & cleanup
 

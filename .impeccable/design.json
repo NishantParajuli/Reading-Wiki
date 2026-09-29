@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-22T14:39:57.722386+00:00",
+  "generatedAt": "2026-09-27T12:26:20.824153Z",
   "title": "Design System: Tideglass",
   "extensions": {
     "colorMeta": {
@@ -431,6 +431,14 @@
       {
         "name": "compact-reader",
         "value": "540px"
+      },
+      {
+        "name": "translation-footer-stack",
+        "value": "980px"
+      },
+      {
+        "name": "translation-fullscreen",
+        "value": "760px"
       }
     ],
     "focus": [

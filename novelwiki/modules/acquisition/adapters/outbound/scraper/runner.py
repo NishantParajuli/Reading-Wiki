@@ -44,6 +44,8 @@ async def scrape_source(
     expected_novel_id: int | None = None,
     cancel_check: Callable[[], Awaitable[None]] | None = None,
     *,
+    credential_user_id: int | None = None,
+    report_stage: Callable[[str], Awaitable[None]] | None = None,
     runtime,
 ) -> int:
     """Scrapes one source into its novel's global chapter sequence using the source's
@@ -106,6 +108,13 @@ async def scrape_source(
             logger.info("Resuming source %s from its last saved chapter.", source_id)
     logger.info("Scraping source %s (novel %s, adapter '%s').", source_id, source["novel_id"], source["adapter"])
 
+    resume_after_checkpoint = bool(resume and getattr(adapter, "resume_after_checkpoint", False))
+    account_cookies = []
+    if source["adapter"] == "global-novelpia" and credential_user_id is not None:
+        # Credentials belong to the actor who scheduled this job, never a novel's
+        # owner, another administrator, or an ambient host/browser account.
+        account_cookies = await runtime.account_cookies(int(credential_user_id))
+
     scraped_count = 0
     previous_number = None
     async with AsyncSession(headers=HEADERS) as session:
@@ -113,14 +122,18 @@ async def scrape_source(
             start_url=start_url,
             session=session,
             config=source["config"],
-            # The saved checkpoint is inclusive: let the adapter also reach the
-            # first unread chapter when the requested limit is one.
-            max_chapters=(max_chapters + int(bool(resume))
+            # Most checkpoints are inclusive. Account-backed adapters can skip
+            # directly to the next chapter without spending another read/ad grant.
+            max_chapters=(max_chapters + int(bool(resume) and not resume_after_checkpoint)
                           if max_chapters is not None else None),
             stop_on_premium=True,
             source_host=source_host,
             allowed_hosts=allowed_hosts,
             require_same_host=settings.SCRAPER_REQUIRE_SAME_HOST,
+            account_cookies=account_cookies,
+            resume_after_checkpoint=resume_after_checkpoint,
+            cancel_check=cancel_check,
+            report_stage=report_stage,
         )
         try:
             if cancel_check is not None:
@@ -168,6 +181,8 @@ async def scrape_novel(
     max_chapters: int | None = None,
     cancel_check: Callable[[], Awaitable[None]] | None = None,
     *,
+    credential_user_id: int | None = None,
+    report_stage: Callable[[str], Awaitable[None]] | None = None,
     runtime,
     scrape_source_operation=None,
 ) -> int:
@@ -188,6 +203,8 @@ async def scrape_novel(
             expected_novel_id=novel_id,
             cancel_check=cancel_check,
             runtime=runtime,
+            credential_user_id=credential_user_id,
+            report_stage=report_stage,
         )
     return total
 

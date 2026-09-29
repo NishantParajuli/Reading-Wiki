@@ -115,7 +115,7 @@ def main() -> int:
             "DATABASE_URL": database_url,
             "DB_SUPERUSER_URL": superuser_url,
             "COOKIE_SECURE": "false",
-            "ALLOWED_ORIGINS": "http://127.0.0.1:4173",
+            "ALLOWED_ORIGINS": "http://127.0.0.1:4174",
             "PUBLIC_BASE_URL": "http://127.0.0.1:8011",
             "IMPORT_DIR": str(data_root / "imports"),
             "IMPORT_INCOMING_DIR": str(data_root / "imports" / "incoming"),

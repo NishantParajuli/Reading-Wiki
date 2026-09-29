@@ -17,6 +17,7 @@ from novelwiki.modules.acquisition.adapters.outbound.scraper.base import (
     _visit_url, parse_chapter_number,
 )
 from novelwiki.modules.acquisition.adapters.outbound.scraper.novelpia import FuckNovelpiaAdapter
+from novelwiki.modules.acquisition.adapters.outbound.scraper.global_novelpia import GlobalNovelpiaAdapter
 from novelwiki.modules.acquisition.adapters.outbound.scraper.raw_archive import RawFuckNovelpiaAdapter
 from novelwiki.modules.acquisition.adapters.outbound.scraper.translation_sites import (
     AzureChroniclesAdapter, DreamyTranslationsAdapter, PenguinSquadAdapter,
@@ -630,6 +631,7 @@ class Novel543Adapter(_PagedHtmlAdapter):
 
 # ── Adapter registry ──────────────────────────────────────────────────────
 ADAPTERS: dict[str, type[BaseAdapter]] = {
+    "global-novelpia": GlobalNovelpiaAdapter,
     "fenrirealm": FenriRealmAdapter,
     "readhive": ReadhiveAdapter,
     "boti-translations": BotiTranslationAdapter,

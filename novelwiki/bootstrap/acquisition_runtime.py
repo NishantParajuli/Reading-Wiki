@@ -6,6 +6,11 @@ from __future__ import annotations
 def build_acquisition_runtime():
 
     class Runtime:
+        async def account_cookies(self, user_id):
+            from novelwiki.bootstrap.account_cookies import build_account_cookie_repository
+            cookies, _updated_at = await (await build_account_cookie_repository()).read(user_id)
+            return cookies
+
         async def import_repository(self):
             from novelwiki.bootstrap.acquisition import build_import_worker_repository
             return await build_import_worker_repository()

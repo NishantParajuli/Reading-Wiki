@@ -38,12 +38,12 @@ export const PROVENANCE_ORDER = ["scraped", "imported", "ocr", "translated", "us
 
 // Activity / job vocabulary (shared by Home strip, Jobs page, novel Manage tab).
 export const ACT_KIND_LABEL = {
-  scrape: "Scrape", codex_build: "Codex build", translate: "Translation",
+  scrape: "Scrape", codex_build: "Codex build", codex_illustrate: "Illustration", translate: "Translation",
   agy_smoke: "AGY smoke", openai_codex_smoke: "OpenAI Codex smoke",
   import: "Import", tts: "Narration",
 };
 export const ACT_KIND_ICON = {
-  scrape: "spider", codex_build: "brain", translate: "globe",
+  scrape: "spider", codex_build: "brain", codex_illustrate: "sparkles", translate: "globe",
   agy_smoke: "cpu", import: "upload", tts: "headphones",
 };
 // status → chip tone
@@ -70,6 +70,7 @@ export function activityProgress(job) {
     return s;
   }
   if (job.kind === "codex_build" && p.steps != null) return `step ${p.step || 0}/${p.steps}${p.stage ? ` — ${p.stage}` : ""}`;
+  if (job.kind === "codex_illustrate") return p.stage || job.stage || "Waiting to begin";
   if (job.kind === "scrape" && p.scraped != null) return `${p.scraped} chapters scraped`;
   return job.stage || "";
 }

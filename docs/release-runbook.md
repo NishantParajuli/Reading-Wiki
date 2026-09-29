@@ -19,6 +19,30 @@
    and validate counts/health before reopening traffic. Do not use destructive down migrations as
    rollback.
 
+## Optional Novelpia browser rollout
+
+This feature adds optional services, not a new public route or table. In addition to
+the normal web-image gates, run the browser Node suite, proxy tests, and Acquisition
+client/ad-gate tests from [testing](testing.md). Record the tested browser and proxy
+image digests alongside the web image; the web-only deploy timer does not build or
+replace them.
+
+Follow [deployment](operations/deployment.md#novelpia-ad-browser-optional) to configure
+the private service token, enable setting, and isolated Compose profile. Verify the
+browser container has only the internal network, only the proxy has the egress network,
+and neither publishes host ports. Qualify an actual browser launch through the proxy;
+RPC health alone is insufficient. An account-backed canary should observe the real ad
+flow and then independently retrieve the permitted prose through the HTTP adapter.
+Also verify cancellation closes the browser and a failed ad leaves the manual recovery
+link and previously saved chapters intact. Keep secrets and downloaded prose out of
+release logs and fixtures.
+
+To disable the integration, set `NOVELPIA_BROWSER_ENABLED=false` and recreate web.
+Existing chapters and encrypted account cookies remain intact; gated imports use manual
+recovery. Stop the optional browser/proxy services after in-flight attempts finish or
+are canceled. If rolling back their code, retain their network isolation and restore the
+matching recorded image/configuration pair; do not expose ports to diagnose a failure.
+
 ## Codex v2.1 quality-contract rollout
 
 Use this controlled path once for any production novel that has pre-v2.1 Codex data.

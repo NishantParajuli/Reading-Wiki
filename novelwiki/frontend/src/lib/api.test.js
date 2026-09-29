@@ -65,6 +65,20 @@ describe("HTTP compatibility transport", () => {
     expect(options.headers).toEqual({ Accept: "application/json" });
   });
 
+  it("keeps Novelpia cookie writes on the authenticated settings endpoint with CSRF", async () => {
+    const cookies = [{ name: "TKEY", domain: ".novelpia.com", value: "synthetic-token" }];
+    await acquisitionApi.updateNovelpiaCookies(cookies);
+    expect(fetch).toHaveBeenLastCalledWith("/api/settings/novelpia-cookies", expect.objectContaining({
+      method: "PUT", credentials: "include", body: JSON.stringify({ cookies }),
+      headers: expect.objectContaining({ "X-Tideglass-CSRF": "reader-token" }),
+    }));
+    await acquisitionApi.deleteNovelpiaCookies();
+    expect(fetch).toHaveBeenLastCalledWith("/api/settings/novelpia-cookies", expect.objectContaining({
+      method: "DELETE", credentials: "include",
+      headers: expect.objectContaining({ "X-Tideglass-CSRF": "reader-token" }),
+    }));
+  });
+
   it("re-gates on non-auth 401 but not login failures", async () => {
     const unauthorized = vi.fn();
     setUnauthorizedHandler(unauthorized);

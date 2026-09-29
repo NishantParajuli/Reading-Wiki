@@ -13,7 +13,7 @@ TABLE_OWNERS = {
     "provider_budget": "ai_execution", "ai_execution_runs": "ai_execution",
     "ai_worker_heartbeats": "ai_execution", "novels": "catalog",
     "library_entries": "catalog", "tag_suggestions": "catalog", "sources": "acquisition",
-    "import_jobs": "acquisition", "assets": "acquisition", "chapters": "reading",
+    "acquisition_account_cookies": "acquisition", "import_jobs": "acquisition", "assets": "acquisition", "chapters": "reading",
     "reading_progress": "reading", "bookmarks": "reading", "chapter_overlays": "reading",
     "contributions": "reading", "translation_glossary": "translation", "chunks": "codex",
     "entities": "codex", "entity_descriptions": "codex", "entity_aliases": "codex",
@@ -23,7 +23,7 @@ TABLE_OWNERS = {
     "relationship_state_transitions": "codex", "plot_threads": "codex",
     "plot_thread_updates": "codex", "extraction_contexts": "codex",
     "extraction_state": "codex", "wiki_cache": "codex",
-    "query_cache": "codex", "tts_jobs": "narration", "chapter_audio": "narration",
+    "codex_art_chapter_plans": "codex", "codex_art": "codex", "codex_art_plans": "codex", "query_cache": "codex", "tts_jobs": "narration", "chapter_audio": "narration",
     "jobs": "work",
 }
 

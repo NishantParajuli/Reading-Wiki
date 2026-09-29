@@ -1,0 +1,72 @@
+/* A focused translation workbench with a full-height reading preview. */
+.translation-editor-scrim { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; padding: clamp(12px, 2.5vw, 32px); background: rgb(12 20 17 / 0.65); }
+.translation-editor { display: flex; flex-direction: column; width: min(1440px, 100%); height: min(960px, calc(100dvh - 48px)); min-height: 0; color: var(--ink); background: var(--surface); border-radius: 12px; box-shadow: 0 20px 70px rgb(0 0 0 / 0.24); overflow: hidden; font-family: var(--sans); }
+.translation-editor-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 24px 28px 16px; }
+.translation-editor-head h2 { margin: 0; font: 400 clamp(1.6rem, 2.6vw, 2.1rem)/1.15 var(--serif); letter-spacing: -0.02em; }
+.translation-chapter-name { margin: 7px 0 0; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.translation-editor-head .icon-btn { flex-shrink: 0; width: 40px; height: 40px; }
+.translation-editor-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 24px; padding: 0 28px 17px; border-bottom: 1px solid var(--border); font-size: var(--text-sm); }
+.translation-editor-context p { flex: 1; min-width: 220px; margin: 0; color: var(--muted); }
+.translation-draft-state { color: var(--ink-2); white-space: nowrap; }
+.translation-editor-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; overscroll-behavior: contain; }
+.translation-panes { flex: 1; min-height: 260px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.translation-edit-pane, .translation-preview-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.translation-edit-pane { border-right: 1px solid var(--border); }
+.translation-pane-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 16px 28px; font-size: var(--text-sm); }
+.translation-pane-head h3, .translation-pane-head label { font: 600 var(--text-sm)/1.4 var(--sans); margin: 0; }
+.translation-pane-head span { color: var(--muted); font-size: var(--text-xs); }
+.translation-textarea { display: block; flex: 1; width: calc(100% - 32px); min-height: 0; margin: 0 16px 16px; padding: 16px 18px; resize: none; border: 1px solid var(--border); border-radius: 6px; font: 400 17px/1.75 var(--sans); color: var(--ink); background: var(--bg); tab-size: 2; overscroll-behavior: contain; }
+.translation-textarea:focus { border-color: var(--accent-ink); outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+.translation-textarea:disabled { opacity: 0.78; }
+.translation-preview-pane { background: var(--bg); }
+.translation-preview { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px clamp(24px, 3vw, 52px) 32px; font: 400 20px/1.75 var(--serif); overflow-wrap: anywhere; }
+.translation-preview p { max-width: 65ch; margin: 0 auto 1.2em; white-space: pre-line; }
+.translation-editor-foot { padding: 16px 24px; border-top: 1px solid var(--border); background: var(--surface); }
+.translation-footer-actions { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.translation-secondary-actions, .translation-save-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.translation-save-actions { flex-shrink: 0; }
+.translation-save-hint { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; margin: 12px 0 0; font-size: var(--text-xs); color: var(--muted); }
+.translation-save-hint span { white-space: nowrap; }
+.translation-feedback { margin: 0 0 12px; font-size: var(--text-sm); color: var(--ink-2); }
+.translation-feedback.error { color: var(--danger); }
+.translation-feedback.success { color: var(--accent-ink); }
+.translation-conflict { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 14px 28px; background: var(--warn-soft); border-bottom: 1px solid var(--border); font-size: var(--text-sm); }
+.translation-conflict p { color: var(--ink-2); margin: 4px 0 0; }
+.translation-conflict-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.translation-comparison { flex-shrink: 0; max-height: 32dvh; overflow: auto; padding: 16px 24px; border-bottom: 1px solid var(--border); }
+.translation-comparison .diff-view { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.translation-confirm-scrim { position: fixed; inset: 0; z-index: 410; display: grid; place-items: center; padding: 20px; background: rgb(12 20 17 / 0.64); }
+.translation-confirm { width: min(460px, 100%); padding: 28px; color: var(--ink); background: var(--surface); border-radius: 12px; box-shadow: 0 16px 50px rgb(0 0 0 / 0.2); }
+.translation-confirm h3 { margin: 0; font: 500 1.65rem/1.2 var(--serif); }
+.translation-confirm p { margin: 14px 0 22px; font-size: var(--text-sm); line-height: 1.6; color: var(--ink-2); }
+.translation-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.translation-mobile-views { display: none; }
+@media (max-width: 980px) {
+  .translation-footer-actions { align-items: stretch; flex-direction: column; }
+  .translation-save-actions { justify-content: flex-end; }
+}
+@media (max-width: 760px) {
+  .translation-editor-scrim { padding: 0; }
+  .translation-editor { width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; }
+  .translation-editor-head { padding: max(16px, env(safe-area-inset-top)) 16px 12px; gap: 12px; }
+  .translation-editor-head h2 { font-size: 1.65rem; }
+  .translation-editor-context { padding: 0 16px 12px; font-size: var(--text-xs); gap: 6px; }
+  .translation-editor-context p { min-width: 0; flex-basis: 100%; }
+  .translation-mobile-views { display: block; padding: 12px 16px 0; }
+  .translation-panes { display: block; min-height: 180px; height: 100%; }
+  .translation-edit-pane, .translation-preview-pane { height: 100%; }
+  .translation-edit-pane { border: none; }
+  .translation-editor-body.view-edit .translation-preview-pane, .translation-editor-body.view-preview .translation-edit-pane { display: none; }
+  .translation-pane-head { padding: 12px 18px; }
+  .translation-textarea { padding: 14px; margin-bottom: 12px; font-size: 16px; line-height: 1.65; }
+  .translation-preview { padding: 12px 24px 24px; font-size: 19px; }
+  .translation-editor-foot { padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
+  .translation-save-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .translation-secondary-actions { gap: 4px; }
+  .translation-secondary-actions .btn { min-height: 36px; padding-inline: 8px; font-size: 12px; }
+  .translation-save-hint { font-size: 11px; margin-top: 8px; }
+  .translation-save-hint span { display: none; }
+  .translation-conflict { padding: 12px 16px; font-size: 12px; }
+  .translation-comparison { padding: 12px 16px; }
+  .translation-comparison .diff-view { grid-template-columns: minmax(0, 1fr); }
+}
