@@ -51,7 +51,7 @@ export function AddNovelDialog({ onCreated, onClose }) {
 
         <label className="field nf-title-field">
           <span>Title</span>
-          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. I Was Trapped in a Bad Ending…" required disabled={busy} />
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Lord of the Mysteries" required disabled={busy} />
         </label>
 
         <fieldset className="nf-group">
@@ -103,7 +103,7 @@ export function AddNovelDialog({ onCreated, onClose }) {
         </div>
 
         {err && <div className="nf-alert" role="alert"><Icon name="alert" size={15} /><span>{err}</span></div>}
-        <div className="nf-actions is-end">
+        <div className="nf-actions is-end nf-foot">
           <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button type="submit" variant="primary" icon="check" loading={busy} disabled={!source.ready}>Add to library</Button>
         </div>

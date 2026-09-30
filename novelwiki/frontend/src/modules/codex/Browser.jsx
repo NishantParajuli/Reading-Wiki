@@ -23,9 +23,11 @@ const FILTERS = [
   { id: "character", label: "Characters", icon: "user" },
   { id: "location", label: "Places", icon: "mapPin" },
   { id: "faction", label: "Factions", icon: "users" },
+  { id: "organization", label: "Organizations", icon: "users", optional: true },
   { id: "item", label: "Items", icon: "gem" },
   { id: "concept", label: "Concepts", icon: "spark" },
 ];
+const ORG = "organization";
 
 function EntityCard({ entity, index, surfacing, surfaceIndex, to, ceiling }) {
   const desc = entity.blurb || "No description recorded yet.";
@@ -59,11 +61,14 @@ function EntityCard({ entity, index, surfacing, surfaceIndex, to, ceiling }) {
   );
 }
 
-function FilterPills({ value, onChange }) {
+/* Organizations only appear as a filter when the book has some (they are rarer
+   than the other types); the pill stays while it is the one selected. */
+function FilterPills({ value, onChange, withOrgs }) {
   const group = useId();
+  const shown = FILTERS.filter(f => !f.optional || withOrgs || value === f.id);
   return (
     <div className="cx-filters" role="group" aria-label="Filter entries by type">
-      {FILTERS.map(f => {
+      {shown.map(f => {
         const on = value === f.id;
         return (
           <button key={f.id} type="button" aria-pressed={on} className={"cx-filter" + (on ? " active" : "")} onClick={() => onChange(f.id)}>
@@ -161,6 +166,7 @@ export function CodexBrowser() {
   const [error, setError] = useState(null);
   const [loadedKey, setLoadedKey] = useState(null);
   const [retryKey, setRetryKey] = useState(0);
+  const [hasOrgs, setHasOrgs] = useState(false);
   useTitle("Codex", novel.title);
 
   const debQ = useDebounce(q, 300);
@@ -179,6 +185,11 @@ export function CodexBrowser() {
     codexApi.listEntities(novelId, debCeiling, { type, q: debQ.trim() || null })
       .then(rows => {
         if (cancel) return;
+        // The whole list at this boundary says whether organizations exist;
+        // a narrower search can only confirm that some do.
+        const orgs = rows.some(r => r.type === ORG);
+        if (!type && !debQ.trim()) setHasOrgs(orgs);
+        else if (!type && orgs) setHasOrgs(true);
         const sorted = [...rows].sort((a, b) => a.name.localeCompare(b.name));
         const newIds = new Set(sorted.map(r => r.id));
         const last = seen.current;
@@ -250,7 +261,7 @@ export function CodexBrowser() {
                  aria-label="Search the codex" type="search" enterKeyHint="search" />
           {q && <button type="button" className="icon-btn plain" aria-label="Clear" onClick={() => setQ("")}><Icon name="x" size={13} /></button>}
         </div>
-        <FilterPills value={filter} onChange={setFilter} />
+        <FilterPills value={filter} onChange={setFilter} withOrgs={hasOrgs} />
       </div>
 
       {visibleError && <EmptyState icon="alert" title="The codex couldn't load" body={visibleError}

@@ -6,7 +6,10 @@
        buttons that open a source popover; tokens NOT in the map were dropped
        by the server as beyond-ceiling, so we omit them silently (the spoiler
        boundary already did its job server-side).
-   - mode "prose": tokens render as small, non-clickable footnote markers.
+   - mode "prose": tokens become small, non-clickable chapter markers
+       ("ch. 12") when the token or `chapterOf(kind, id)` names a chapter;
+       otherwise the internal id means nothing to a reader and the marker is
+       dropped. A marker that repeats the one just before it is dropped too.
    ============================================================ */
 import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -149,7 +152,25 @@ export function Cite({ n, cite }) {
 // (group 1 = kind, 2 = id) and chapter-first `[Ch.1, id 3]` (group 3 = id, kind
 // defaults to chunk since digests are chunk-keyed). Other brackets are left as text.
 const _CITE_RE = /\[(?:(chunk|fact|rel|relationship|event)s?\s+(\d+)|[^\]]*?\bid\s*(\d+))[^\]]*\]/gi;
+const _CITE_CH_RE = /\b(?:chapter|ch)\.?\s*(\d+(?:\.\d+)?)/i;
 const _INLINE_RE = /(\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*|_([^_]+)_)/g;
+
+/* The chapter a prose citation points at: named in the token, else resolved. */
+function citeChapter(token, kind, id, chapterOf) {
+  const named = _CITE_CH_RE.exec(token);
+  if (named) return named[1];
+  const resolved = chapterOf ? chapterOf(kind, id) : null;
+  return resolved == null || resolved === "" ? null : String(resolved);
+}
+
+function StaticCite({ chapter }) {
+  return (
+    <sup className="cite static" title={`Chapter ${chapter}`}>
+      <span aria-hidden="true">ch. {chapter}</span>
+      <span className="sr-only"> (chapter {chapter})</span>
+    </sup>
+  );
+}
 
 function renderInline(text, keyBase) {
   if (!text) return [];
@@ -170,9 +191,10 @@ function renderInline(text, keyBase) {
 }
 
 function renderSegment(text, opts, keyBase) {
-  const { mode = "prose", citeMap = {}, state } = opts || {};
+  const { mode = "prose", citeMap = {}, state, chapterOf } = opts || {};
   const out = [];
   let last = 0, m, i = 0;
+  let prev = null;   // the last prose marker: { chapter, end }
   _CITE_RE.lastIndex = 0;
   while ((m = _CITE_RE.exec(text)) !== null) {
     if (m.index > last) out.push(...renderInline(text.slice(last, m.index), `${keyBase}-t${i}`));
@@ -180,6 +202,7 @@ function renderSegment(text, opts, keyBase) {
     if (kind === "relationship") kind = "rel";
     const rid = m[2] || m[3];
     const key = `${kind}:${rid}`;
+    const end = m.index + m[0].length;
     if (mode === "answer") {
       const cite = citeMap[key];
       if (cite) {
@@ -188,7 +211,15 @@ function renderSegment(text, opts, keyBase) {
         out.push(<Cite key={`${keyBase}-c${i}`} n={num} cite={cite} />);
       } // else: dropped beyond ceiling → omit token entirely
     } else {
-      out.push(<sup key={`${keyBase}-c${i}`} className="cite static" title={`${kind} ${rid}`}>{rid}</sup>);
+      const chapter = citeChapter(m[0], kind, rid, chapterOf);
+      const repeat = prev && prev.chapter === chapter && !text.slice(prev.end, m.index).trim();
+      if (chapter != null && !repeat) {
+        out.push(<StaticCite key={`${keyBase}-c${i}`} chapter={chapter} />);
+      } else if (typeof out[out.length - 1] === "string" && /^[\s.,;:!?)\]]*$/.test(text.slice(end, end + 1))) {
+        // Nothing shown: don't leave a stray space before the punctuation.
+        out[out.length - 1] = out[out.length - 1].replace(/\s+$/, "");
+      }
+      if (chapter != null) prev = { chapter, end };
     }
     i++;
     last = _CITE_RE.lastIndex;
@@ -232,9 +263,10 @@ export function renderMarkdown(md, opts) {
   return nodes;
 }
 
-// Synthesized prose (codex entry): non-clickable footnote markers.
-export function Markdown({ text, className = "prose" }) {
-  return <div className={className}>{renderMarkdown(text, { mode: "prose" })}</div>;
+// Synthesized prose (codex entry): non-clickable chapter markers. `chapterOf(kind, id)`
+// resolves tokens that don't name their chapter (e.g. "[Fact 29]") from known records.
+export function Markdown({ text, className = "prose", chapterOf }) {
+  return <div className={className}>{renderMarkdown(text, { mode: "prose", chapterOf })}</div>;
 }
 
 // Cited answer body: clickable, numbered citations from the /ask citations array.

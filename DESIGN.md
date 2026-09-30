@@ -209,7 +209,9 @@ designed at 390px with no horizontal page overflow.
   toasts are frosted glass with spring entrances and animated exits; focus is
   trapped and restored. Toasts drain a tide line as they time out and can be flicked
   away. In Pearl, the palette and dialogs are near-opaque so they read cleanly over
-  the scrim.
+  the scrim. Popovers open toward the larger room between the header and the phone
+  dock; the Codex gauge and Narrate panel become sheets above the dock on phones.
+  Menus follow the ARIA menu pattern and hand focus back to their button.
 - **Focus** is a glowing accent ring (`--ring`) that follows each control's shape and
   outranks component shadows; bare links get softened corners.
 - **Status colours** in Pearl are deep enough to pass AA as text on their own soft

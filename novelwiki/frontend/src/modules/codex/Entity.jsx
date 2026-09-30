@@ -182,6 +182,16 @@ export function EntityPage() {
     };
   });
 
+  // Entry citations that name only a fact or relationship still point at a chapter.
+  const citedChapter = new Map([
+    ...knownFacts.map(f => [`fact:${f.id}`, f.ch]),
+    ...relItems.map(r => [`rel:${r.id}`, r.ch]),
+  ]);
+  const chapterOf = (kind, citeId) => {
+    const ch = citedChapter.get(`${kind}:${citeId}`);
+    return ch == null ? null : fmtChapter(ch);
+  };
+
   const bookMax = codexMeta && (codexMeta.bookMax == null ? codexMeta.max : codexMeta.bookMax);
   const moreToCome = codexMeta && (bookMax == null || ceiling < bookMax);
   const entityPath = (otherId) => `/n/${novelId}/codex/e/${otherId}`;
@@ -217,7 +227,7 @@ export function EntityPage() {
                 <h2 id="cx-entry-title" className="section-eyebrow"><Icon name="feather" size={13} sw={2} /> Codex entry</h2>
                 <span className="cx-panel-note">As of Ch. {fmtChapter(ceiling)}</span>
               </header>
-              <Markdown text={profile.rendered_md} className="prose cx-entry-prose" />
+              <Markdown text={profile.rendered_md} className="prose cx-entry-prose" chapterOf={chapterOf} />
             </section>
           )}
 

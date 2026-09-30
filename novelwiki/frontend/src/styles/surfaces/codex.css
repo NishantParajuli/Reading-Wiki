@@ -62,6 +62,17 @@
     linear-gradient(180deg, transparent 55%, color-mix(in oklch, var(--accent) 8%, transparent)),
     var(--surface-float);
 }
+/* Phones: no room beside the pill, so the gauge rises as a sheet above the
+   dock. Popover leaves a fixed panel to place itself; no ancestor on the
+   Codex pages sets a transform or filter that would trap it. */
+@media (max-width: 767px) {
+  .popover.cx-gauge-panel {
+    position: fixed; width: auto; overflow-y: auto; transform-origin: bottom center;
+    left: 12px !important; right: 12px !important; top: auto !important;
+    bottom: calc(92px + env(safe-area-inset-bottom)) !important;
+    max-height: calc(100dvh - 190px) !important;
+  }
+}
 .cx-gauge { display: flex; flex-direction: column; gap: 15px; padding: 18px 20px 18px; text-align: left; }
 .cx-gauge-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .cx-gauge-reading { min-width: 0; }
@@ -177,6 +188,17 @@ input[type="range"].slider.cx-gauge-range:disabled { opacity: 0.5; cursor: not-a
     radial-gradient(38% 55% at 16% 28%, color-mix(in oklch, var(--atmo-glow) 90%, transparent), transparent 72%),
     radial-gradient(34% 46% at 86% 12%, color-mix(in oklch, var(--accent) 9%, transparent), transparent 70%);
 }
+/* The hero glows run past their boxes; fade every edge so no rectangle shows. */
+.cx-browser::before, .cx-dossier-aura {
+  -webkit-mask-image:
+    linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent),
+    linear-gradient(180deg, transparent, #000 24%, #000 72%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent),
+    linear-gradient(180deg, transparent, #000 24%, #000 72%, transparent);
+  mask-composite: intersect;
+}
 .cx-hero {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 24px 40px;
   margin: clamp(6px, 2vw, 22px) 0 clamp(28px, 4vw, 44px);
@@ -230,7 +252,7 @@ input[type="range"].slider.cx-gauge-range:disabled { opacity: 0.5; cursor: not-a
 }
 .cx-to-end {
   position: absolute; left: 12px; transform: translateY(-50%);
-  font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); white-space: nowrap;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-2); white-space: nowrap;
   transition: opacity var(--dur-3);
 }
 .cx-to-end.is-top { top: 0; }
@@ -603,13 +625,16 @@ a.cx-card:hover .cx-card-go { color: var(--accent-ink); background: var(--accent
 .cx-dossier { display: grid; grid-template-columns: minmax(0, 1fr) 348px; gap: clamp(20px, 2.6vw, 32px); align-items: start; }
 .cx-dossier-main, .cx-dossier-side { min-width: 0; }
 .cx-dossier-side { display: flex; flex-direction: column; gap: 18px; position: sticky; top: 150px; }
+/* A short window can't hold the whole side column under the capsule; let it
+   scroll with the page so "Ask about…" is never out of reach. */
+@media (min-width: 961px) and (max-height: 940px) { .cx-dossier-side { position: static; } }
 .cx-dossier-pending { opacity: 0.8; }
 .cx-dossier-status { margin: 0 0 26px; }
 .cx-entry-skeleton { display: flex; flex-direction: column; gap: 14px; padding: 30px; }
 .cx-side-skeleton { display: flex; flex-direction: column; gap: 12px; padding: 22px; }
 .cx-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .cx-panel-head .section-eyebrow { margin: 0; }
-.cx-panel-note { font-family: var(--font-mono); font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cx-panel-note { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* the codex entry — typeset like a page, with a drop cap */
 .cx-entry {
@@ -632,10 +657,13 @@ a.cx-card:hover .cx-card-go { color: var(--accent-ink); background: var(--accent
 .prose.cx-entry-prose h2, .prose.cx-entry-prose h3 { font-weight: 440; color: var(--ink); }
 .prose.cx-entry-prose h2 { font-size: 22px; margin-top: 1.4em; }
 .prose.cx-entry-prose li::marker { color: var(--tc, var(--accent-ink)); }
+/* Entry prose names the chapter a line comes from ("ch. 12"), never an internal id. */
 .prose .cite.static {
-  font-size: 9.5px; padding: 1px 4px; margin-left: 2px; color: var(--faint);
-  background: transparent; border-color: var(--border-2); opacity: 0.85;
+  vertical-align: 0.14em; line-height: 1; white-space: nowrap;
+  font-size: 0.64em; letter-spacing: 0; padding: 2px 7px; margin-left: 0.2em; border-radius: 999px;
+  color: var(--muted); background: color-mix(in oklch, var(--ink) 5%, transparent); border-color: var(--border);
 }
+.prose .cite.static:hover { color: var(--muted); background: color-mix(in oklch, var(--ink) 5%, transparent); }
 
 /* what's known — a tideline of facts by chapter */
 .cx-known { margin-top: 22px; padding: clamp(22px, 2.6vw, 30px) clamp(18px, 3vw, 34px) clamp(18px, 2.4vw, 26px); border-radius: 24px; }
@@ -712,7 +740,7 @@ a.cx-rel:hover .cx-rel-go { color: var(--accent-ink); transform: translateX(3px)
 .cx-cn-halo { fill: color-mix(in oklch, var(--tc, var(--accent)) 14%, transparent); }
 .cx-cn-dot { fill: color-mix(in oklch, var(--tc, var(--accent)) 28%, var(--surface-solid)); stroke: var(--tc, var(--accent)); stroke-width: 1.2; }
 .cx-cn-letter { fill: var(--ink); font-family: var(--font-display); font-size: 14px; font-weight: 560; text-anchor: middle; pointer-events: none; }
-.cx-cn-label { fill: var(--ink-2); font-family: var(--font-ui); font-size: 13.5px; font-weight: 540; pointer-events: none; }
+.cx-cn-label { fill: var(--ink-2); font-family: var(--font-ui); font-size: 15px; font-weight: 540; pointer-events: none; }
 .cx-cn-node.is-link { cursor: pointer; }
 .cx-cn-node.is-link:hover .cx-cn-pop { transform: scale(1.14); }
 .cx-cn-node.is-link:hover .cx-cn-link { stroke: var(--tc, var(--accent)); stroke-width: 2; }
@@ -744,7 +772,8 @@ a.cx-rel:hover .cx-rel-go { color: var(--accent-ink); transform: translateX(3px)
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--bg) 75%, transparent), 0 0 12px var(--accent-glow);
 }
 .cx-tlist-item.is-future .cx-tlist-dot { background: color-mix(in oklch, var(--bg) 60%, transparent); border: 1.5px dashed var(--faint); box-shadow: none; }
-.cx-tlist-item.is-future { opacity: 0.66; }
+.cx-tlist-item.is-future .cx-tlist-dot { opacity: 0.66; }
+.cx-tlist-item.is-future .cx-tlist-text { color: var(--muted); }
 .cx-tlist-ch { display: block; font-family: var(--font-mono); font-size: 11px; color: var(--muted); letter-spacing: 0.01em; }
 .cx-tlist-text { display: block; margin-top: 3px; font-size: 14px; line-height: 1.5; color: var(--ink-2); }
 .cx-tlist-empty { font-size: var(--text-sm); color: var(--muted); padding-bottom: 12px; }
@@ -845,10 +874,11 @@ a.cx-rel:hover .cx-rel-go { color: var(--accent-ink); transform: translateX(3px)
 }
 .cx-ask-field:focus-within { border-color: color-mix(in oklch, var(--accent) 60%, transparent); box-shadow: inset 0 1px 0 var(--hairline-hi), 0 0 0 4px var(--accent-soft), var(--shadow-2); }
 .cx-ask-shell:focus-within .cx-ask-glow { opacity: 0.45; transform: scale(1); }
+/* The field breathes twice as it takes focus, then holds still beside the words. */
 @media (prefers-reduced-motion: no-preference) {
-  .cx-ask-shell:focus-within .cx-ask-glow { animation: cx-breathe 5s var(--ease-in-out) 0.6s infinite; }
+  .cx-ask-shell:focus-within .cx-ask-glow { animation: cx-breathe 4s var(--ease-in-out) 0.6s 2; }
 }
-@keyframes cx-breathe { 0%, 100% { opacity: 0.34; transform: scale(0.99); } 50% { opacity: 0.62; transform: scale(1.012); } }
+@keyframes cx-breathe { 0%, 100% { opacity: 0.45; transform: scale(1); } 50% { opacity: 0.62; transform: scale(1.012); } }
 .cx-ask-glyph { align-self: center; display: grid; place-items: center; color: var(--accent-ink); padding-bottom: 1px; }
 .cx-ask-field textarea {
   flex: 1; min-width: 0; min-height: 46px; max-height: 188px; resize: none; overflow-y: auto;
@@ -859,7 +889,7 @@ a.cx-rel:hover .cx-rel-go { color: var(--accent-ink); transform: translateX(3px)
 .cx-ask-field textarea:focus-visible { box-shadow: none; }
 .cx-ask-field textarea::placeholder { color: var(--muted); }
 .cx-ask-submit.btn { min-height: 46px; padding: 0 22px; }
-.cx-ask-hint { margin: 10px 0 0; text-align: center; font-size: var(--text-xs); color: var(--faint); }
+.cx-ask-hint { margin: 10px 0 0; text-align: center; font-size: var(--text-xs); color: var(--muted); }
 .cx-ask-hint kbd { font-size: 10px; }
 @media (hover: none) { .cx-ask-hint { display: none; } }
 .cx-ask.is-asking .cx-ask-hint { visibility: hidden; }
@@ -922,7 +952,7 @@ a.cx-rel:hover .cx-rel-go { color: var(--accent-ink); transform: translateX(3px)
 .cx-waiting-copy { min-width: 0; flex: 1; }
 .cx-waiting-label { font-family: var(--font-display); font-variation-settings: "SOFT" 60; font-size: 21px; font-weight: 440; letter-spacing: -0.012em; }
 .cx-waiting-sub { margin-top: 5px; color: var(--muted); font-size: var(--text-sm); line-height: 1.55; }
-.cx-elapsed { align-self: flex-start; font-family: var(--font-mono); font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.cx-elapsed { align-self: flex-start; font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* the answer */
 .cx-answer {
@@ -1097,6 +1127,13 @@ a.cx-rel:hover .cx-rel-go { color: var(--accent-ink); transform: translateX(3px)
   .cx-dossier-side { position: static; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; }
   .cx-dossier-side .cx-ask-about { grid-column: 1 / -1; }
 }
+/* Narrow windows: the type filters (seven with Organizations) scroll sideways
+   rather than pushing the page wider. */
+@media (max-width: 960px) {
+  .cx-filters { overflow-x: auto; scrollbar-width: none; scroll-padding: 0 12px; }
+  .cx-filters::-webkit-scrollbar { display: none; }
+  .cx-filter { gap: 6px; padding: 0 12px; }
+}
 @media (max-width: 860px) {
   .cx-hero { grid-template-columns: minmax(0, 1fr); align-items: start; }
   .cx-hero-side { align-items: flex-start; padding-bottom: 0; }
@@ -1113,11 +1150,9 @@ a.cx-rel:hover .cx-rel-go { color: var(--accent-ink); transform: translateX(3px)
   .cx-toolbar { flex-direction: column; align-items: stretch; gap: 12px; margin-bottom: 24px; }
   .search-box.cx-search { max-width: none; flex: 0 0 auto; }
   .cx-filters {
-    overflow-x: auto; scrollbar-width: none; scroll-padding: 0 12px;
     -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent);
     mask-image: linear-gradient(90deg, #000 88%, transparent);
   }
-  .cx-filters::-webkit-scrollbar { display: none; }
   .cx-filter { min-height: 36px; padding: 0 13px; }
   .cx-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .cx-card { padding: 18px 18px 14px; gap: 12px; }
@@ -1164,6 +1199,11 @@ a.cx-rel:hover .cx-rel-go { color: var(--accent-ink); transform: translateX(3px)
   .cx-elapsed { display: none; }
   .answer-body { font-size: 17px; line-height: 1.72; }
   .answer-foot { flex-direction: column; align-items: flex-start; }
+}
+/* Touch: the type filters and the search's clear button grow to a finger target. */
+@media (pointer: coarse) {
+  .cx-filter { min-height: 40px; }
+  .search-box.cx-search .icon-btn { width: 40px; height: 40px; }
 }
 @media (max-width: 420px) {
   .cx-gauge { padding: 18px 16px 16px; gap: 16px; }

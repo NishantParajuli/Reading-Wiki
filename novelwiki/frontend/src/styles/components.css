@@ -573,10 +573,9 @@ img.avatar-user { background: var(--bg-3); }
 .toast-close:hover { color: var(--ink); background: color-mix(in oklch, var(--ink) 8%, transparent); }
 @media (pointer: coarse) {
   .toast-close { min-width: 40px; min-height: 40px; }
-  .linkish { padding-block: 10px; margin-block: -10px; }
+  .linkish { padding-block: 12px; margin-block: -12px; }
   /* compact controls keep their look but grow to a comfortable finger target */
-  .btn.sm, .tabs > .tab { min-height: 40px; }
-  .seg > button { min-height: 38px; }
+  .btn.sm, .tabs > .tab, .seg > button { min-height: 40px; }
 }
 .toast-timer {
   position: absolute; left: 14px; right: 14px; bottom: 0; height: 2px; border-radius: 2px;
@@ -1021,6 +1020,7 @@ kbd, .kbd {
               background-color var(--dur-2) var(--ease-out), box-shadow var(--dur-3) var(--ease-out),
               transform var(--dur-3) var(--ease-spring);
 }
+@media (pointer: coarse) { .filter-chip { min-height: 40px; } }
 .filter-chip > svg { color: var(--muted); transition: color var(--dur-2), transform var(--dur-3) var(--ease-spring); }
 .filter-chip:hover { color: var(--ink); border-color: color-mix(in oklch, var(--ink) 24%, transparent); background: color-mix(in oklch, var(--ink) 7%, transparent); }
 .filter-chip:active { transform: scale(0.96); }

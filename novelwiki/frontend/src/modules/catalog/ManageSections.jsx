@@ -91,9 +91,9 @@ function BackendSelect({ value, onChange, agy, openai }) {
     <label className="field mc-backend">
       <span>AI backend</span>
       <select value={value} onChange={e => onChange(e.target.value)}>
-        <option value="auto">Auto — follow admin policy</option>
-        {agy && <option value="agy">Antigravity — local subscription queue</option>}
-        {openai && <option value="openai_codex">OpenAI Codex — ChatGPT subscription queue</option>}
+        <option value="auto">Auto — admin policy</option>
+        {agy && <option value="agy">Antigravity — local queue</option>}
+        {openai && <option value="openai_codex">OpenAI Codex — ChatGPT plan</option>}
         <option value="api">API — provider usage</option>
       </select>
     </label>

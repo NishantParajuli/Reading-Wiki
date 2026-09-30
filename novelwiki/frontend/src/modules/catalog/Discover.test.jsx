@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MotionGlobalConfig } from "motion/react";
@@ -96,6 +96,29 @@ describe("Discover", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Search the shared library" }), { target: { value: "salt" } });
     await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("q=salt"));
     await waitFor(() => expect(discover).toHaveBeenLastCalledWith(expect.objectContaining({ q: "salt", has_codex: true })));
+  });
+
+  it("offers filters as real menus: grouped choices, the current one checked", async () => {
+    vi.spyOn(experienceApi, "discover").mockResolvedValue({ items: shared, total: 4, offset: 0, limit: 60 });
+    renderDiscover("/discover?tag=fantasy");
+    await screen.findByRole("link", { name: "Emberfall" });
+    const language = screen.getByRole("button", { name: "Language" });
+    expect(language).toHaveAttribute("aria-haspopup", "menu");
+    fireEvent.click(language);
+    const menu = screen.getByRole("menu", { name: "Language" });
+    expect(within(menu).getAllByRole("menuitemradio").map(el => el.textContent)).toEqual(["English", "Japanese", "Korean", "Chinese"]);
+    expect(within(menu).getAllByRole("menuitemradio")[0]).toHaveFocus();
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Korean" }));
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("lang=ko"));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(language).toHaveFocus();
+    // the grouped genre menu names its groups and checks the active tag
+    fireEvent.click(screen.getByRole("button", { name: /^Genre:/ }));
+    const genre = screen.getByRole("menu", { name: "Genre" });
+    expect(within(genre).getByRole("group", { name: "Genre" })).toBeInTheDocument();
+    const fantasy = within(genre).getByRole("menuitemradio", { name: "Fantasy" });
+    expect(fantasy).toHaveAttribute("aria-checked", "true");
+    expect(fantasy).toHaveFocus();
   });
 
   it("pages with Load more and shows the totals", async () => {

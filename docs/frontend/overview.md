@@ -49,7 +49,8 @@ src/
 │   │                        #    Parts/Sections/Appearance/Reading/Usage), api.js
 │   ├── experience/          #    Home (+MoonPhase), NotFound, queries
 │   ├── catalog/             #    Library, Discover, Overview, Manage(+Sections/Kit/
-│   │                        #    Panels), AddNovelDialog, NovelHeader(+HeroParts), tags
+│   │                        #    Panels), AddNovelDialog, NovelHeader(+HeroParts), tags,
+│   │                        #    useMenu
 │   ├── reading/             #    Reader(+Parts/Toolbar/Settings), TranslationTools, Chapters,
 │   │                        #    toc, queries
 │   ├── acquisition/         #    ImportView(+Basin/Detail/Review/Parts/History),
@@ -215,20 +216,24 @@ Escape clears); four sorts and a grid/list toggle are remembered in `localStorag
 (`nw-lib-tab`, `nw-lib-view`, `nw-lib-sort`). On desktop the toolbar docks under the
 island while scrolling. The header summarises real figures only: the number of books
 and chapters read (the sum of `max_chapter_read`). Covers tilt toward the pointer;
-Resume/Start and the shelf menu rise on hover or focus and stay visible on touch — the
-cover link, resume link and shelf menu are separate controls. Reading state is a slim
+Resume/Start and the shelf menu rise on hover or focus, and on touch screens sit beneath
+the jacket as 40px buttons that never cover its lettering — the cover link, resume link
+and shelf menu are separate controls. Sort, shelf and filter menus follow the ARIA menu
+pattern (the checked item takes focus; arrows, Home/End and a letter move; Escape or a
+choice returns focus to the button; Tab leaves). Reading state is a slim
 progress line with the resume chapter and last-read time, a gold "N unread" tab when
 `new_chapters` > 0, and "Finished" on the Completed shelf. Changing shelf, search or
 sort re-flows the books with layout animation (the first 48 animate) and switching
-grid/list flies each cover to its new place. Lingering on a book with a mouse tints the
+grid/list flies each cover to its new place; under reduced motion books are simply there. Lingering on a book with a mouse tints the
 room with its cover (`useBookAtmosphere`; off under reduced motion). Loading shows
 skeleton covers and signals route readiness; a failed load shows "Your library couldn't
 load" with Try again; an empty library offers three ways in (add from the web, import a
-file, browse Discover); empty shelves and searches offer a way back. Shelf moves and
+file, browse Discover) and hides the shelf tabs, search and sort until it has a book; empty shelves and searches offer a way back. Shelf moves and
 removals update optimistically with rollback and Undo.
 
 Discover presents the shared library as a front page. Search is debounced into `?q=`;
-filter pills with menus (language, translation, genre/status tag, freshness), toggles
+filter pills with menus (language, translation, genre/status tag, freshness; the current
+choice is checked and choosing it again clears it), toggles
 (has Codex, has audio) and the sort live in the URL (`lang`, `tr`, `tag`, `fresh`,
 `codex`, `audio`, `sort`). On phones the filters open in a bottom sheet showing the live
 result count. While browsing — no search or filter, sorted by recency or freshness — the
@@ -270,28 +275,32 @@ Novel pages share one hero (`catalog/NovelHeader.jsx` + `NovelHeroParts.jsx`): f
 on Overview, compact on Chapters and Manage, with the jacket morphing between the two on
 tab switches. It shows the title in large display type scaled to its length, the author,
 a fact strip (chapters, range, language, edition, visibility), the synopsis (clamped, with
-More/Less), the shelf control and the ⋯ menu (type-to-confirm delete), and actions:
+More/Less), the shelf control and the ⋯ menu (type-to-confirm delete; first in keyboard order,
+matching their top-right place — phones show them last and keep Tab in visual order
+with `reading-flow` where supported), and actions:
 **Continue · Ch. N** with a progress ring and that chapter's title, or **Start reading**;
-**Listen** only when audio exists; **Codex**; **Narrate book**. A tideline spans the whole
+**Listen** only when audio exists; **Codex**; **Narrate book** (a popover; a sheet above
+the dock on phones). A tideline spans the whole
 book with the read part lit, a "You are here" marker, bookmarks as gold pins and volume
-ticks, and reads "N% read · N unread" ("caught up" when nothing is left; "Not started
+ticks (arriving within about 1.3 s), and reads "N% read · N unread" ("caught up" when nothing is left; "Not started
 yet" before the first chapter); it is a progressbar with a spoken summary. Section navigation lives in
 the shell's novel capsule. Overview lists the latest chapters (unread dots, a "Reading"
-tag on the current one) and bookmarks (removal is optimistic with rollback and an error
+tag on the current one, and an **All N chapters** link) and bookmarks (removal is optimistic with rollback and an error
 toast), beside a column with Codex counts (shown only when stats for the current
 boundary have loaded), tags with **Suggest tags**, and sources with provenance.
 Chapters has a sticky glass bar with search ("Search chapters") and sort, a **You're on
 Ch. N** locator that opens the right volume and centres and focuses the current chapter,
 and **Go to #** ("Jump to chapter number"), which says "No chapter X in this book" when
 the number is missing. Volumes open with a height animation and a read meter, and the
-open volume's header pins under the bar where CSS scroll-state queries are supported.
+open volume's header pins under the bar where CSS scroll-state queries are supported;
+on short landscape screens both scroll with the list.
 The reader's contents drawer opens on the current chapter the same way. Manage is a
 sequence of numbered sections with jump links: **Inbox** (only when something is
 waiting), Content, Processing (a three-step pipeline: fetch, translate raws, build the
 Codex), Illustrations, Sharing & details (radio cards for visibility and reader edits),
-Activity & health, Glossary and Danger zone. Jobs, health and glossary each show
+Activity & health, Glossary and Danger zone. Jobs (running, queued and waiting counted separately), health and glossary each show
 loading, empty, and failed-with-retry states, and accepting or rejecting an inbox item
-refreshes the capsule's Manage badge. Add novel is a glass sheet; Add and Edit source
+refreshes the capsule's Manage badge. Add novel is a glass sheet whose Cancel/Add footer stays in view; Add and Edit source
 open inline beneath the source list.
 
 Import (`/import`) puts a glass drop basin and the **Recent imports** shelf in a left
@@ -571,19 +580,22 @@ confused with the reader's spoiler ceiling. Chunking or embedding alone does not
 completed build.
 
 The Codex treats the boundary as a water line. Its trigger is a glass pill ("Bounded to
-Ch. N") with a small orb filled to the boundary's depth; the popover rolls the chapter
+Ch. N") with a small orb filled to the boundary's depth; the popover (a sheet above the dock on phones) rolls the chapter
 numeral and keeps the exact-chapter form, a tide-staff slider, the revealed count and
 **Follow my reading**. The browser counts real `/stats` figures up, lists entities as
-cards (links, so they open in a new tab) with type-tinted orbs, and ends in a frosted
+cards (links, so they open in a new tab) with type-tinted orbs under type filters (**Organizations** only when the book has some), and ends in a frosted
 "still under the tide" panel over redacted placeholders with **Continue reading**. When
 the boundary rises, newly revealed cards surface with ripples and a "New" chip; "new" is
 measured against the list the reader last saw, so a fresh visit does not flag entries.
 An entity dossier opens with a large orb (it flies in from the card on repeat visits),
-identity reveals, the entry in the reading face, "What's known" as a chapter-grouped
+identity reveals, the entry in the reading face (citations name their chapter, "ch. 12", resolved through the
+entity's facts and relationships when the token doesn't say, and are dropped when only an
+internal id is known), "What's known" as a chapter-grouped
 tideline, relationships with a small connections map drawn only from returned
 relationships, and **Show through Ch. N** when the entity lies beyond a lowered
 boundary; its loading hero shows the clicked name only when it was listed at the same
-boundary. Ask's question field is multi-line (Enter sends, Shift+Enter adds a line);
+boundary. Below 940px of height the dossier's side column scrolls with the page, so
+**Ask about…** stays reachable. Ask's question field is multi-line (Enter sends, Shift+Enter adds a line);
 answers reveal line by line (instantly under reduced motion) with the whole text in the
 DOM. Citations are numbered keyboard buttons whose source popover follows its chip on
 scroll and closes on Escape (returning focus), an outside click or focus moving away;
@@ -630,8 +642,12 @@ a numbered sources list sits under each answer.
   type-to-confirm delete, tab routes and panel naming, the usage chart hidden behind its
   table, moderation, global jobs, worker health and the confirmed smoke test.
 - `src/modules/catalog/Library.test.jsx` + `Discover.test.jsx` — shelves, search, sorts and
-  saved views, optimistic shelf moves with undo, URL-synced filters, paging, optimistic
-  add with rollback, and honest error states.
+  saved views, the menus' ARIA roles and keyboard pattern, an empty library without
+  controls, optimistic shelf moves with undo, URL-synced filters, paging, optimistic add
+  with rollback, and honest error states.
+- `src/modules/codex/Browser.test.jsx` — the Organizations filter; `src/lib/markdown.test.jsx`
+  — entry citations name a chapter or are dropped; `src/modules/catalog/managePanels.test.jsx`
+  — the jobs meta counts.
 - `src/components/ui.test.jsx` + `overlay.test.jsx` — tab keyboard pattern, focusable
   loading buttons that ignore presses and form submits, popover focus return, and
   popover viewport positioning.

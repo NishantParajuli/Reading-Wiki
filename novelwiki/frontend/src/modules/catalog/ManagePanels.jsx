@@ -122,10 +122,17 @@ export function NovelJobs({ novelId }) {
     finally { setBusyId(null); }
   };
 
-  const active = (jobs || []).filter(j => ["queued", "running", "waiting_provider"].includes(j.status)).length;
+  // Say what is actually happening: running, queued and waiting are different.
+  const tally = { running: 0, queued: 0, waiting_provider: 0 };
+  (jobs || []).forEach(j => { if (j.status in tally) tally[j.status] += 1; });
+  const activeLabel = [
+    tally.running && `${tally.running} running`,
+    tally.queued && `${tally.queued} queued`,
+    tally.waiting_provider && `${tally.waiting_provider} waiting`,
+  ].filter(Boolean).join(" · ");
   return (
     <ManageCard icon="layers" title="Background jobs" className="mc-jobs"
-      meta={active > 0 && <span className="mc-live"><span className="mc-live-dot" aria-hidden="true" />{active} running</span>}>
+      meta={activeLabel ? <span className="mc-live"><span className="mc-live-dot" aria-hidden="true" />{activeLabel}</span> : null}>
       {jobs == null ? (
         <div className="mc-skel">{[0, 1, 2].map(i => <Skeleton key={i} height={44} />)}</div>
       ) : failed && jobs.length === 0 ? (

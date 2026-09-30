@@ -85,7 +85,9 @@ export function RelationshipCards({ items, pathFor, stateFor }) {
 }
 
 /* A small radial map around the entity. It repeats the relationship list
-   visually (the list above stays the accessible, complete source). */
+   visually (the list above stays the accessible, complete source). The view
+   box is wide enough for a full (truncated) label beside the outermost nodes,
+   so no name is cut at the card's edge. */
 export function Constellation({ entity, items, onOpen }) {
   const radius = 84;
   const { nodes, total } = constellation(items, { max: 8, radius });
@@ -96,7 +98,7 @@ export function Constellation({ entity, items, onOpen }) {
   return (
     <figure className="card cx-constellation rise" style={{ "--i": 6 }}>
       <figcaption className="cx-side-title"><Icon name="spark" size={13} sw={2} /> Connections</figcaption>
-      <svg className="cx-cn-svg" viewBox="-178 -124 356 250" role="img"
+      <svg className="cx-cn-svg" viewBox="-214 -124 428 250" role="img"
            aria-label={`Relationship map for ${entity.name}: ${summary}${more > 0 ? `; and ${more} more` : ""}.`}>
         <circle className="cx-cn-orbit" r={radius} />
         <circle className="cx-cn-orbit is-inner" r={radius * 0.56} />

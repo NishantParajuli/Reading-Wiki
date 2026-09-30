@@ -11,7 +11,9 @@
                 toggling the view flies every cover to its new place.
    · SearchField / SortMenu / Tally / skeletons.
    Motion: cards rise from a soft blur in a capped cascade, FLIP when the
-   shelf, search or sort changes, and sink into the tide when they leave.
+   shelf, search or sort changes, and sink into the tide when they leave;
+   under reduced motion they are simply there. Sort and shelf menus are
+   real menus (see useMenu.js).
    ============================================================ */
 import React, { forwardRef, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -22,6 +24,7 @@ import { MenuItem, Popover } from "../../components/overlay.jsx";
 import { animate, ease, motion, springs, useReducedMotion } from "../../motion/index.js";
 import { SHELF_LABELS, SHELF_ORDER } from "../../lib/constants.js";
 import { fmtChapter, relativeTime } from "../../lib/utils.js";
+import { menuItemProps, useMenu } from "./useMenu.js";
 
 /* Items past this index render without motion: huge libraries stay light. */
 export const MOTION_CAP = 48;
@@ -61,12 +64,13 @@ export const bodyVariants = {
   show: (c) => ({ opacity: 1, y: 0, transition: { duration: 0.6, ease: ease.out, delay: c.delay + 0.1 } }),
 };
 
-/** Motion props for one grid/list item (none past the cap). */
-export function itemMotion(animated, layoutDependency) {
+/** Motion props for one grid/list item (none past the cap). Under reduced
+    motion items are simply there: no fade or blur in, no sinking out. */
+export function itemMotion(animated, layoutDependency, reduced = false) {
   if (!animated) return {};
   return {
     layout: "position", layoutDependency, variants: itemVariants,
-    initial: "hidden", animate: "show", exit: "exit",
+    initial: reduced ? false : "hidden", animate: "show", exit: reduced ? undefined : "exit",
     transition: { layout: springs.layout },
   };
 }
@@ -186,10 +190,11 @@ export function useSlashFocus(ref) {
 /* ---------- sort ---------- */
 export function SortMenu({ value, options, onChange, label = "Sort by", className = "" }) {
   const [open, setOpen] = useState(false);
+  const { close, triggerProps, menuProps } = useMenu(open, setOpen, label);
   const current = options.find(o => o.id === value) || options[0];
   return (
     <Popover open={open} onClose={() => setOpen(false)} className="tg-sort-pop" trigger={
-      <button type="button" className={["tg-sort", className].filter(Boolean).join(" ")} aria-haspopup="true" aria-expanded={open}
+      <button type="button" className={["tg-sort", className].filter(Boolean).join(" ")} {...triggerProps}
               onClick={() => setOpen(o => !o)}>
         <SortGlyph />
         <span className="sr-only">{label}: </span>
@@ -197,37 +202,43 @@ export function SortMenu({ value, options, onChange, label = "Sort by", classNam
         <Icon name="chevronDown" size={13} className="tg-sort-caret" />
       </button>
     }>
-      <div className="menu-label">{label}</div>
-      {options.map(o => (
-        <MenuItem key={o.id} selected={o.id === current.id} onClick={() => { setOpen(false); onChange(o.id); }}>
-          {o.label}
-        </MenuItem>
-      ))}
+      <div {...menuProps}>
+        <div className="menu-label" aria-hidden="true">{label}</div>
+        {options.map(o => (
+          <MenuItem key={o.id} {...menuItemProps(o.id === current.id)} selected={o.id === current.id}
+                    onClick={() => { close(); onChange(o.id); }}>
+            {o.label}
+          </MenuItem>
+        ))}
+      </div>
     </Popover>
   );
 }
 
 /* ---------- shelf menu ---------- */
 function ShelfMenu({ n, open, onOpenChange, onMove, onRemove, variant = "cover" }) {
+  const { close, triggerProps, menuProps } = useMenu(open, onOpenChange, `Shelf for ${n.title}`);
   return (
     <Popover open={open} onClose={() => onOpenChange(false)} className="shelf-pop" trigger={
       <button type="button" className={variant === "row" ? "icon-btn plain lib-row-menu" : "shelf-act shelf-act-menu"}
-              aria-label="Shelf menu" aria-haspopup="true" aria-expanded={open}
+              aria-label="Shelf menu" {...triggerProps}
               onClick={() => onOpenChange(!open)}>
         <Icon name="more" size={17} sw={2.6} />
       </button>
     }>
-      <div className="menu-label">Shelf</div>
-      {SHELF_ORDER.map(s => (
-        <MenuItem key={s} icon={SHELF_ICON[s]} selected={n.shelf === s}
-                  onClick={() => { onOpenChange(false); onMove(n, n.shelf === s ? "" : s); }}>
-          {SHELF_LABELS[s]}
+      <div {...menuProps}>
+        <div className="menu-label" aria-hidden="true">Shelf</div>
+        {SHELF_ORDER.map(s => (
+          <MenuItem key={s} icon={SHELF_ICON[s]} {...menuItemProps(n.shelf === s)} selected={n.shelf === s}
+                    onClick={() => { close(); onMove(n, n.shelf === s ? "" : s); }}>
+            {SHELF_LABELS[s]}
+          </MenuItem>
+        ))}
+        <div className="menu-sep" role="separator" />
+        <MenuItem icon="x" danger {...menuItemProps()} onClick={() => { close(); onRemove(n); }}>
+          Remove from library
         </MenuItem>
-      ))}
-      <div className="menu-sep" />
-      <MenuItem icon="x" danger onClick={() => { onOpenChange(false); onRemove(n); }}>
-        Remove from library
-      </MenuItem>
+      </div>
     </Popover>
   );
 }
@@ -276,6 +287,7 @@ export const ShelfCard = forwardRef(function ShelfCard(
   { n, index, q, animated, morph, layoutDependency, onMove, onRemove, onFocusBook }, ref,
 ) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const reduced = useReducedMotion();
   const started = n.last_chapter != null;
   const resumeCh = started ? n.last_chapter : (n.min_chapter || 1);
   const canRead = (Number(n.chapter_count) || 0) > 0;
@@ -288,7 +300,7 @@ export const ShelfCard = forwardRef(function ShelfCard(
     : {};
   return (
     <Tag ref={ref} className={"shelf-card" + (menuOpen ? " is-menu-open" : "")} data-vt-card=""
-         {...itemMotion(animated, layoutDependency)} {...hover}>
+         {...itemMotion(animated, layoutDependency, reduced)} {...hover}>
       {/* Text first for keyboard and screen readers; CSS lifts the jacket above it. */}
       <Body className="shelf-card-body" {...(animated ? { variants: bodyVariants, custom: c } : {})}>
         <Link className="shelf-card-title" to={`/n/${n.id}`}><Highlight text={n.title} q={q} /></Link>
@@ -329,6 +341,7 @@ export const ShelfRow = forwardRef(function ShelfRow(
   { n, index, q, animated, morph, layoutDependency, onMove, onRemove }, ref,
 ) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const reduced = useReducedMotion();
   const started = n.last_chapter != null;
   const resumeCh = started ? n.last_chapter : (n.min_chapter || 1);
   const canRead = (Number(n.chapter_count) || 0) > 0;
@@ -338,7 +351,7 @@ export const ShelfRow = forwardRef(function ShelfRow(
   const bodyMotion = animated ? { variants: rowBodyVariants, custom: c } : {};
   return (
     <Tag ref={ref} className={"lib-row" + (menuOpen ? " is-menu-open" : "")} data-vt-card=""
-         {...itemMotion(animated, layoutDependency)}>
+         {...itemMotion(animated, layoutDependency, reduced)}>
       <div className="lib-row-cover">
         <CoverMorph id={n.id} on={animated}>
           <Cover src={n.cover_url} title={n.title} author={n.author} />

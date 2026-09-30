@@ -110,7 +110,7 @@ describe("Library", () => {
     await waitFor(() => expect(titles(container)).toHaveLength(3));
     const card = [...container.querySelectorAll(".shelf-card")].find(el => el.textContent.includes("The Glass Tide"));
     fireEvent.click(within(card).getByRole("button", { name: "Shelf menu" }));
-    fireEvent.click(within(card).getByRole("button", { name: /Completed/ }));
+    fireEvent.click(within(card).getByRole("menuitemradio", { name: /Completed/ }));
     expect(update).toHaveBeenCalledWith(7, { shelf: "completed" });
     expect(await screen.findByText("Moved to Completed.")).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Undo" })); });
@@ -126,7 +126,7 @@ describe("Library", () => {
     await waitFor(() => expect(titles(container)).toEqual(["The Glass Tide"]));
     const card = container.querySelector(".shelf-card");
     fireEvent.click(within(card).getByRole("button", { name: "Shelf menu" }));
-    fireEvent.click(within(card).getByRole("button", { name: /To read/ }));
+    fireEvent.click(within(card).getByRole("menuitemradio", { name: /To read/ }));
     expect(await screen.findByText("Shelf is read-only")).toBeInTheDocument();
     await waitFor(() => expect(titles(container)).toEqual(["The Glass Tide"]));
   });
@@ -139,11 +139,62 @@ describe("Library", () => {
     await waitFor(() => expect(titles(container)).toHaveLength(3));
     const card = [...container.querySelectorAll(".shelf-card")].find(el => el.textContent.includes("The Clockwork Sea"));
     fireEvent.click(within(card).getByRole("button", { name: "Shelf menu" }));
-    fireEvent.click(within(card).getByRole("button", { name: "Remove from library" }));
+    fireEvent.click(within(card).getByRole("menuitem", { name: "Remove from library" }));
     await waitFor(() => expect(titles(container)).not.toContain("The Clockwork Sea"));
     expect(await screen.findByText(/Removed “The Clockwork Sea” from your library/)).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Undo" })); });
     expect(add).toHaveBeenCalledWith(9);
+  });
+
+  it("marks the shelf menu's choices and the current shelf", async () => {
+    vi.spyOn(catalogApi, "novels").mockResolvedValue(books);
+    const { container } = renderLibrary();
+    await waitFor(() => expect(titles(container)).toHaveLength(3));
+    const card = [...container.querySelectorAll(".shelf-card")].find(el => el.textContent.includes("The Glass Tide"));
+    const trigger = within(card).getByRole("button", { name: "Shelf menu" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    fireEvent.click(trigger);
+    const menu = within(card).getByRole("menu", { name: "Shelf for The Glass Tide" });
+    expect(trigger).toHaveAttribute("aria-controls", menu.id);
+    expect(within(menu).getByRole("menuitemradio", { name: /Reading/ })).toHaveAttribute("aria-checked", "true");
+    expect(within(menu).getByRole("menuitemradio", { name: /Completed/ })).toHaveAttribute("aria-checked", "false");
+    // the current shelf takes focus when the menu opens
+    expect(within(menu).getByRole("menuitemradio", { name: /Reading/ })).toHaveFocus();
+  });
+
+  it("works the sort menu from the keyboard and hands focus back", async () => {
+    vi.spyOn(catalogApi, "novels").mockResolvedValue(books);
+    const { container } = renderLibrary();
+    await waitFor(() => expect(titles(container)).toHaveLength(3));
+    const trigger = screen.getByRole("button", { name: /Sort by/ });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const menu = screen.getByRole("menu", { name: "Sort by" });
+    const items = within(menu).getAllByRole("menuitemradio");
+    expect(items.map(el => el.textContent)).toEqual(["Recently read", "Recently updated", "Title", "Progress"]);
+    expect(items[0]).toHaveFocus();
+    expect(items.every(el => el.tabIndex === -1)).toBe(true);
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(items[1]).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "End" });
+    expect(items[3]).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "t" });
+    expect(items[2]).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    // reopen on the last item, choose it, and focus returns to the trigger
+    fireEvent.keyDown(trigger, { key: "ArrowUp" });
+    const last = within(screen.getByRole("menu", { name: "Sort by" })).getByRole("menuitemradio", { name: "Progress" });
+    expect(last).toHaveFocus();
+    fireEvent.click(last);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(JSON.parse(localStorage.getItem("nw-lib-sort"))).toBe("progress");
+    expect(trigger).toHaveAccessibleName("Sort by: Progress");
   });
 
   it("switches to the list view and remembers it", async () => {
@@ -160,6 +211,10 @@ describe("Library", () => {
     vi.spyOn(catalogApi, "novels").mockResolvedValue([]);
     renderLibrary();
     expect(await screen.findByRole("heading", { name: "No novels yet" })).toBeInTheDocument();
+    // nothing to sort yet: no shelves, search or sort, only the ways in
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Search your library" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Sort by/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Browse shared library/ })).toHaveAttribute("href", "/discover");
     fireEvent.click(screen.getByRole("button", { name: /Import a book/ }));
     expect(screen.getByTestId("where")).toHaveTextContent("/import");

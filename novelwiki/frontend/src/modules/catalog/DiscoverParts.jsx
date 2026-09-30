@@ -7,8 +7,9 @@
    · DiscoverCard   a jacket on the shared shelf with feature tags (Codex,
                     Audio, translation, language) and an Add action that
                     turns into "In library".
-   · FilterBar      glass pills with popover menus (desktop) and a filter
-                    sheet on phones; everything mirrors the URL.
+   · FilterBar      glass pills with popover menus (desktop; real menus, see
+                    useMenu.js) and a filter sheet on phones; everything
+                    mirrors the URL. Under reduced motion nothing fades in.
    Nothing here invents data: labels, counts and blurbs are the server's own.
    ============================================================ */
 import React, { forwardRef, useState } from "react";
@@ -17,12 +18,13 @@ import { Link } from "react-router-dom";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, Cover } from "../../components/ui.jsx";
 import { Dialog, MenuItem, Popover } from "../../components/overlay.jsx";
-import { ease, motion, springs } from "../../motion/index.js";
+import { ease, motion, springs, useReducedMotion } from "../../motion/index.js";
 import {
   GENRE_TAGS, STATUS_TAG_LABELS, STATUS_TAG_RADIO_GROUPS, TRANSLATION_TYPE_LABELS,
 } from "../../lib/constants.js";
 import { coverHues } from "../../lib/utils.js";
 import { bodyVariants, itemMotion, stageVariants } from "./LibraryParts.jsx";
+import { menuItemProps, useMenu } from "./useMenu.js";
 
 export const LANGS = [["en", "English"], ["ja", "Japanese"], ["ko", "Korean"], ["zh", "Chinese"]];
 export const TRANSLATIONS = [["translated", "Translated"], ["raws", "Raws"], ["raws+translated", "Raws + Translated"]];
@@ -129,8 +131,9 @@ const sideVariants = {
 
 function FeatureHero({ n, added, onAdd, label }) {
   const meta = metaLine(n);
+  const reduced = useReducedMotion();
   return (
-    <motion.article className="disc-hero" data-vt-card="" variants={heroVariants} initial="hidden" animate="show" style={hueStyle(n)}>
+    <motion.article className="disc-hero" data-vt-card="" variants={heroVariants} initial={reduced ? false : "hidden"} animate="show" style={hueStyle(n)}>
       <div className="disc-hero-light" aria-hidden="true">
         {n.cover_url && <img className="disc-hero-backdrop" src={n.cover_url} alt="" decoding="async" />}
       </div>
@@ -161,8 +164,9 @@ function FeatureHero({ n, added, onAdd, label }) {
 
 function FeatureSide({ n, index, added, onAdd }) {
   const meta = metaLine(n);
+  const reduced = useReducedMotion();
   return (
-    <motion.article className="disc-side" data-vt-card="" custom={index} variants={sideVariants} initial="hidden" animate="show" style={hueStyle(n)}>
+    <motion.article className="disc-side" data-vt-card="" custom={index} variants={sideVariants} initial={reduced ? false : "hidden"} animate="show" style={hueStyle(n)}>
       <div className="disc-side-light" aria-hidden="true">
         {n.cover_url && <img className="disc-side-backdrop" src={n.cover_url} alt="" decoding="async" loading="lazy" />}
       </div>
@@ -202,6 +206,7 @@ export function FeaturedStrip({ items, label, addedIds, onAdd }) {
 export const DiscoverCard = forwardRef(function DiscoverCard(
   { n, delay, rise = 0, added, onAdd, animated, layoutDependency }, ref,
 ) {
+  const reduced = useReducedMotion();
   const Tag = animated ? motion.li : "li";
   const Stage = animated ? motion.div : "div";
   const Body = animated ? motion.div : "div";
@@ -211,7 +216,7 @@ export const DiscoverCard = forwardRef(function DiscoverCard(
   return (
     <Tag ref={ref} className={"shelf-card disc-card" + (added ? " is-added" : "") + (animated ? "" : " rise")}
          style={animated ? undefined : { "--i": rise }} data-vt-card=""
-         {...itemMotion(animated, layoutDependency)}>
+         {...itemMotion(animated, layoutDependency, reduced)}>
       {/* Text first for keyboard and screen readers; CSS lifts the jacket above it. */}
       <Body className="shelf-card-body" {...(animated ? { variants: bodyVariants, custom: c } : {})}>
         <Link className="shelf-card-title" to={`/n/${n.id}`}>{n.title}</Link>
@@ -234,35 +239,39 @@ export const DiscoverCard = forwardRef(function DiscoverCard(
 });
 
 /* ---------- filters ---------- */
+/* Choosing the checked option again clears the filter. */
 function MenuOptions({ options, value, onPick }) {
   return options.map(([v, l]) => (
-    <MenuItem key={v} selected={value === v} onClick={() => onPick(value === v ? "" : v)}>{l}</MenuItem>
+    <MenuItem key={v} {...menuItemProps(value === v)} selected={value === v} onClick={() => onPick(value === v ? "" : v)}>{l}</MenuItem>
   ));
 }
 
 function FilterPill({ label, icon, value, options, groups, onChange }) {
   const [open, setOpen] = useState(false);
+  const { close, triggerProps, menuProps } = useMenu(open, setOpen, label);
   const all = groups ? groups.flatMap(g => g.options) : options;
   const selected = all.find(([v]) => v === value);
-  const pick = (v) => { setOpen(false); onChange(v); };
+  const pick = (v) => { close(); onChange(v); };
   return (
     <div className={"disc-pill" + (value ? " is-on" : "")}>
       <Popover open={open} onClose={() => setOpen(false)} align="left" className={"disc-pop" + (groups ? " is-grouped" : "")} trigger={
-        <button type="button" className={"filter-chip" + (value ? " on" : "")} aria-haspopup="true" aria-expanded={open}
+        <button type="button" className={"filter-chip" + (value ? " on" : "")} {...triggerProps}
                 onClick={() => setOpen(o => !o)}>
           <Icon name={icon} size={14} />
           {selected ? <><span className="sr-only">{label}: </span>{selected[1]}</> : label}
           {!value && <Icon name="chevronDown" size={13} />}
         </button>
       }>
-        {groups
-          ? groups.map(g => (
-            <div className="disc-pop-group" key={g.label}>
-              <div className="menu-label">{g.label}</div>
-              <MenuOptions options={g.options} value={value} onPick={pick} />
-            </div>
-          ))
-          : <MenuOptions options={options} value={value} onPick={pick} />}
+        <div className="disc-menu" {...menuProps}>
+          {groups
+            ? groups.map(g => (
+              <div className="disc-pop-group" key={g.label} role="group" aria-label={g.label}>
+                <div className="menu-label" aria-hidden="true">{g.label}</div>
+                <MenuOptions options={g.options} value={value} onPick={pick} />
+              </div>
+            ))
+            : <MenuOptions options={options} value={value} onPick={pick} />}
+        </div>
       </Popover>
       {value && (
         <button type="button" className="disc-pill-clear" aria-label={`Clear ${label}`} onClick={() => onChange("")}>

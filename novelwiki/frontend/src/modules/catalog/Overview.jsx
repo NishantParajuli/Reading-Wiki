@@ -239,7 +239,7 @@ export function Overview() {
                 <div className="ov-section-head">
                   <h2 id="ov-latest" className="section-title">Latest chapters</h2>
                   <Link className="linkish" to={`/n/${novelId}/chapters`}>
-                    All {fmtNum(novel.chapter_count)} <Icon name="arrowRight" size={13} />
+                    All {fmtNum(novel.chapter_count)} {novel.chapter_count === 1 ? "chapter" : "chapters"} <Icon name="arrowRight" size={13} />
                   </Link>
                 </div>
                 <LatestChapters novel={novel} novelId={novelId} />

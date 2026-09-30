@@ -22,6 +22,7 @@ import { Popover, MenuItem } from "../../components/overlay.jsx";
 import { useToast } from "../../components/toast.jsx";
 import { NumberTicker } from "../../motion/NumberTicker.jsx";
 import { STATUS_TAG_LABELS, TRANSLATION_TYPE_LABELS, VIS_LABELS } from "../../lib/constants.js";
+import { menuItemProps, useMenu } from "./useMenu.js";
 
 /* ---------- arrival ---------- */
 /** "direct" (first paint / hard load), or the view-transition type that
@@ -183,13 +184,14 @@ export function Tideline({ novel, bookmarks, toc, compact, animate }) {
     .map(b => ({ id: b.id, chapter: Number(b.chapter), note: b.note }))
     .sort((a, b) => a.chapter - b.chapter);
 
-  // Pins that arrive with late data pop in without waiting out the fill.
+  // Pins land just after your place (see .tl-mark in novel.css); pins that
+  // arrive with late data pop in without waiting out the fill.
   const bornAt = useRef(Date.now());
   const pinDelays = useRef(new Map());
   const pinDelay = (key, i) => {
     if (!pinDelays.current.has(key)) {
       const sinceArrival = Date.now() - bornAt.current;
-      pinDelays.current.set(key, Math.max(0, 1700 - sinceArrival) + i * 110);
+      pinDelays.current.set(key, Math.max(0, 850 - sinceArrival) + Math.min(i, 6) * 60);
     }
     return `${pinDelays.current.get(key)}ms`;
   };
@@ -237,12 +239,14 @@ export function Tideline({ novel, bookmarks, toc, compact, animate }) {
 /* ---------- overflow menu ---------- */
 export function NovelKebab({ novel, canEdit, onDelete }) {
   const [open, setOpen] = useState(false);
+  const { close, triggerProps, menuProps } = useMenu(open, setOpen, "More actions");
   const navigate = useNavigate();
   const { toast } = useToast();
   const qc = useQueryClient();
+  const item = menuItemProps();
 
   async function removeFromLibrary() {
-    setOpen(false);
+    close();
     try {
       await catalogApi.removeFromLibrary(novel.id);
       qc.invalidateQueries({ queryKey: ["novels"] });
@@ -255,25 +259,27 @@ export function NovelKebab({ novel, canEdit, onDelete }) {
 
   return (
     <Popover open={open} onClose={() => setOpen(false)} className="nh-menu" trigger={
-      <button type="button" className="icon-btn nh-kebab" aria-label="More actions" aria-expanded={open}
+      <button type="button" className="icon-btn nh-kebab" aria-label="More actions" {...triggerProps}
               onClick={() => setOpen(o => !o)}>
         <Icon name="more" size={18} sw={2.4} />
       </button>
     }>
-      {canEdit && <MenuItem icon="edit" onClick={() => { setOpen(false); navigate(`/n/${novel.id}/manage`); }}>Edit novel</MenuItem>}
-      <MenuItem icon="link" onClick={() => {
-        setOpen(false);
-        navigator.clipboard.writeText(window.location.origin + `/n/${novel.id}`)
-          .then(() => toast("Link copied.", { tone: "ok" }))
-          .catch(() => toast("Couldn't copy the link.", { tone: "danger" }));
-      }}>Copy link</MenuItem>
-      <MenuItem icon="x" onClick={removeFromLibrary}>Remove from library</MenuItem>
-      {canEdit && (
-        <>
-          <div className="menu-sep" />
-          <MenuItem icon="trash" danger onClick={() => { setOpen(false); onDelete(); }}>Delete novel…</MenuItem>
-        </>
-      )}
+      <div {...menuProps}>
+        {canEdit && <MenuItem icon="edit" {...item} onClick={() => { close(); navigate(`/n/${novel.id}/manage`); }}>Edit novel</MenuItem>}
+        <MenuItem icon="link" {...item} onClick={() => {
+          close();
+          navigator.clipboard.writeText(window.location.origin + `/n/${novel.id}`)
+            .then(() => toast("Link copied.", { tone: "ok" }))
+            .catch(() => toast("Couldn't copy the link.", { tone: "danger" }));
+        }}>Copy link</MenuItem>
+        <MenuItem icon="x" {...item} onClick={removeFromLibrary}>Remove from library</MenuItem>
+        {canEdit && (
+          <>
+            <div className="menu-sep" role="separator" />
+            <MenuItem icon="trash" danger {...item} onClick={() => { close(); onDelete(); }}>Delete novel…</MenuItem>
+          </>
+        )}
+      </div>
     </Popover>
   );
 }

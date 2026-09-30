@@ -103,6 +103,13 @@ export function NovelHeader({ compact = false }) {
               {eyebrow.map((t, i) => <span key={t}>{i > 0 && <i aria-hidden="true" />}{t}</span>)}
             </p>
           )}
+          {/* First in the DOM so Tab follows the eye: the shelf and ⋯ sit top-right
+              on wide screens (CSS places them); phones show them last and let
+              reading-flow keep Tab in visual order where supported. */}
+          <div {...cls("nh-utility", compact ? 7 : 1)}>
+            <ShelfControl novel={novel} reloadNovel={reloadNovel} />
+            <NovelKebab novel={novel} canEdit={canEdit} onDelete={() => setConfirmDelete(true)} />
+          </div>
           {TitleTag}
           {novel.author && <p {...cls("nh-author", 2)}><span className="nh-by">by</span> {novel.author}</p>}
 
@@ -139,11 +146,6 @@ export function NovelHeader({ compact = false }) {
               <NarrateBookControl novelId={novelId} novel={novel} user={user} audioCoverage={audioCoverage}
                                   compact={compact} onChange={() => invalidate(["audio-coverage", novelId])} />
             )}
-          </div>
-
-          <div {...cls("nh-utility", compact ? 7 : 1)}>
-            <ShelfControl novel={novel} reloadNovel={reloadNovel} />
-            <NovelKebab novel={novel} canEdit={canEdit} onDelete={() => setConfirmDelete(true)} />
           </div>
 
           {compact && hasChapters && (

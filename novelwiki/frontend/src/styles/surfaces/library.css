@@ -64,20 +64,20 @@ mark.lib-hit {
 }
 
 .lib-summary {
+  display: flex; flex-wrap: wrap; column-gap: 1.24em; row-gap: 2px;
   font-family: var(--font-display); font-optical-sizing: auto; font-style: italic;
   font-variation-settings: "SOFT" 90, "WONK" 0;
   font-size: clamp(1.06rem, 1.5vw, 1.26rem); line-height: 1.45; color: var(--muted);
+  /* each phrase carries its dot in the gap before it; a phrase that wraps to a
+     new line takes its dot off the left edge, where this clips it */
+  clip-path: inset(-0.5em -1em -0.5em 0);
 }
 .lib-summary b {
   font-style: normal; font-weight: 460; color: var(--ink);
   font-variation-settings: "SOFT" 30; font-variant-numeric: tabular-nums lining-nums;
 }
-.lib-summary-part { white-space: nowrap; }
-.lib-summary-sep { display: inline-block; margin: 0 0.62em; font-style: normal; color: var(--faint); }
-@media (max-width: 380px) {
-  .lib-summary { display: flex; flex-direction: column; gap: 2px; }
-  .lib-summary-sep { display: none; }
-}
+.lib-summary-part { position: relative; white-space: nowrap; }
+.lib-summary-sep { position: absolute; right: 100%; width: 1.24em; text-align: center; font-style: normal; color: var(--faint); }
 .lib-summary.is-quiet { color: var(--muted); }
 
 /* ---------- the glass toolbar (docks under the island) ---------- */
@@ -201,14 +201,23 @@ mark.lib-hit {
 .shelf-act-menu:active { transform: scale(0.92); transition-duration: 90ms; }
 .shelf-act:focus-visible { border-radius: var(--radius-full); }
 .shelf-pop { min-width: 216px; }
-/* touch: always present, gathered into a small cluster in the corner so the
-   jacket's own lettering stays readable */
+/* touch: always present, in a row beneath the jacket — full finger targets
+   that never cover its lettering. Off the art, they take the page's own
+   sea-glass colours instead of the moonlight worn on covers. */
 @media (hover: none) {
-  .shelf-card-actions { left: auto; gap: 6px; }
+  .shelf-card-actions { position: static; margin-top: 12px; justify-content: space-between; gap: 8px; }
   .shelf-act { opacity: 1; transform: none; }
-  .shelf-act-read { width: 34px; padding: 0; justify-content: center; }
-  .shelf-act-read > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .shelf-act-read > svg { translate: 1px 0; }
+  .shelf-act-read, .shelf-act-read:hover {
+    height: 40px; padding: 0 16px 0 13px;
+    color: var(--accent-ink); background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 30%, transparent);
+  }
+  .shelf-act-menu, .shelf-act-menu:hover {
+    width: 40px; height: 40px; color: var(--ink-2);
+    background: color-mix(in oklch, var(--ink) 6%, transparent); border-color: var(--border-2); box-shadow: none;
+  }
+  .shelf-act-menu[aria-expanded="true"] { background: color-mix(in oklch, var(--ink) 12%, transparent); }
+  .shelf-card-lift::after { bottom: 30px; }
 }
 
 .shelf-card-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 0 2px; }
@@ -420,12 +429,18 @@ mark.lib-hit {
 @media (max-width: 420px) {
   .shelf-card-title { font-size: 16px; }
   .shelf-card-author { font-size: 13px; }
+}
+/* narrow windows with a mouse: the hover actions tuck tighter into the corner */
+@media (max-width: 420px) and (hover: hover) {
   .shelf-card-actions { right: 8px; bottom: 8px; }
   .shelf-act-read { height: 32px; }
   .shelf-act-menu { width: 32px; height: 32px; }
 }
-@media (max-width: 420px) and (hover: none) {
-  .shelf-act-read { width: 32px; }
+/* touch: finger-sized targets on coarse pointers */
+@media (pointer: coarse) {
+  .tg-search-clear.icon-btn { width: 40px; height: 40px; }
+  .lib-view.seg > button { min-height: 40px; min-width: 40px; justify-content: center; }
+  .lib-row-actions .icon-btn { width: 40px; height: 40px; }
 }
 
 /* ===================== Discover ===================== */
@@ -458,10 +473,15 @@ mark.lib-hit {
 }
 .disc-pill-clear:hover { background: var(--accent); color: var(--on-accent); scale: 1.08; }
 .disc-pill-clear:focus-visible { border-radius: 50%; }
+/* touch: finger-sized pills, and the × reaches past its small circle */
+@media (pointer: coarse) {
+  .disc-filters .filter-chip { min-height: 40px; }
+  .disc-pill-clear::before { content: ""; position: absolute; inset: -6px; border-radius: 50%; }
+}
 .disc-pop { min-width: 230px; }
-.disc-pop.is-grouped {
-  width: min(470px, calc(100vw - 24px));
-  display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr); gap: 2px 8px;
+.disc-pop.is-grouped { width: min(470px, calc(100vw - 24px)); }
+.disc-pop.is-grouped .disc-menu {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 2px 8px;
 }
 .disc-pop.is-grouped .disc-pop-group:last-child {
   grid-column: 2; grid-row: 1 / span 2;
@@ -560,9 +580,11 @@ mark.lib-hit {
   color: var(--accent-ink);
 }
 .disc-kicker-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+/* a couple of pulses as the front page arrives, then still beside the words */
 @media (prefers-reduced-motion: no-preference) {
-  .disc-kicker-dot { animation: busy-dot 2.8s var(--ease-in-out) infinite; }
+  .disc-kicker-dot { animation: kicker-pulse 2.4s var(--ease-in-out) 0.8s 2; }
 }
+@keyframes kicker-pulse { 0%, 100% { opacity: 1; scale: 1; } 50% { opacity: 0.4; scale: 0.8; } }
 .disc-hero-title {
   margin: 0; max-width: 16ch;
   font-family: var(--font-display); font-optical-sizing: auto; font-variation-settings: "SOFT" 30, "WONK" 0;
@@ -606,7 +628,8 @@ mark.lib-hit {
   position: absolute; left: -16%; top: -40%; width: 64%; height: 180%; max-width: none; object-fit: cover;
   filter: blur(42px) saturate(1.4); opacity: 0.4;
 }
-[data-theme="light"] .disc-side-backdrop { opacity: 0.26; }
+/* Pearl: a quieter wash, so muted text over the jacket's light stays ≥ 4.5:1 */
+[data-theme="light"] .disc-side-backdrop { opacity: 0.12; }
 .disc-side-cover { display: block; width: clamp(88px, 7.6vw, 112px); }
 .disc-side-cover .cover { width: 100%; }
 .disc-side-copy { min-width: 0; }
@@ -705,6 +728,20 @@ mark.lib-hit {
   border-color: color-mix(in oklch, var(--ok) 38%, transparent); cursor: default;
 }
 .disc-add-hero .add-glyph { width: 18px; height: 18px; }
+/* touch: Add sits beneath the jacket (see the shelf's touch actions) in the
+   page's sea-glass colours, finger-sized */
+@media (hover: none) {
+  .disc-card-actions { justify-content: flex-start; }
+  .disc-add.is-cover, .disc-add.is-cover:not(.is-added):hover {
+    color: var(--accent-ink); background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 28%, transparent);
+  }
+  .disc-add.is-cover.is-added {
+    color: color-mix(in oklch, var(--ok) 72%, var(--ink)); background: var(--ok-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--ok) 34%, transparent);
+  }
+}
+@media (pointer: coarse) { .disc-add, .disc-add.is-side { height: 40px; } }
 @media (prefers-reduced-motion: no-preference) {
   .disc-add.is-added, .disc-add-hero.is-added { animation: add-pop 680ms var(--ease-bounce); }
   .disc-add.is-added::after, .disc-add-hero.is-added::after {
@@ -789,12 +826,13 @@ mark.lib-hit {
   .disc-sort .tg-sort-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .disc-sort .tg-sort-caret { display: none; }
   .disc-filters { display: none; }
+  /* a scrolling row clips vertically too: pad it so focus rings stay whole */
   .disc-mfilters {
     display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
-    margin: 0 calc(-1 * var(--gutter)); padding: 2px var(--gutter) 4px;
+    margin: -4px calc(-1 * var(--gutter)) -2px; padding: 6px var(--gutter) 6px;
   }
   .disc-mfilters::-webkit-scrollbar { display: none; }
-  .disc-mfilters .filter-chip { flex-shrink: 0; }
+  .disc-mfilters .filter-chip { flex-shrink: 0; min-height: 40px; }
   .disc-mfilters-count {
     display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
     background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;

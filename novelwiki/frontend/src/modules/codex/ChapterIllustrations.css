@@ -310,9 +310,10 @@
   box-shadow: 0 0 12px -2px var(--accent-glow);
   transition: left 600ms var(--ease-out), width 600ms var(--ease-out);
 }
-.irs-ends { display: flex; justify-content: space-between; margin-top: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
+.irs-ends { display: flex; justify-content: space-between; margin-top: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
 .illustration-range-replace { margin-top: 16px; align-items: flex-start; }
 .illustration-range-replace input[type="checkbox"] { margin-top: 1px; }
+@media (pointer: coarse) { .illustration-range-replace { min-height: 40px; } }
 @media (max-width: 760px) {
   .illustration-range-grid { grid-template-columns: minmax(0, 1fr); }
   .illustration-range-grid .btn { width: 100%; }

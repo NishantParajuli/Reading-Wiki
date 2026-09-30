@@ -91,7 +91,7 @@ export function Chapters() {
         <div className="chx-toolbar" role="search" aria-label="Chapters">
           <div className="search-box chx-search">
             <Icon name="search" size={16} />
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by title or number…" aria-label="Search chapters" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Title or number…" aria-label="Search chapters" />
             {q && <button type="button" className="icon-btn plain" aria-label="Clear" onClick={() => setQ("")}><Icon name="x" size={13} /></button>}
           </div>
           {q && <span className="chx-matches mono" role="status">{fmt(filtered.length)} match{filtered.length === 1 ? "" : "es"}</span>}

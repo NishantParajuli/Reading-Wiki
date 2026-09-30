@@ -191,6 +191,7 @@ export function Library() {
   }
 
   const ready = !isLoading && !isError;
+  const empty = ready && all.length === 0;
   const summary = isLoading
     ? <span className="lib-summary is-quiet">Gathering your shelves…</span>
     : ready && (all.length
@@ -198,10 +199,12 @@ export function Library() {
         <span className="lib-summary">
           <span className="lib-summary-part"><b><Tally value={all.length} /></b> {all.length === 1 ? "book" : "books"} on your shelves</span>
           {chaptersRead > 0 && (
-            <>
+            // The dot travels with the second phrase, so a wrap never leaves it dangling.
+            <span className="lib-summary-part">
               <span className="lib-summary-sep" aria-hidden="true">·</span>
-              <span className="lib-summary-part"><b><Tally value={chaptersRead} /></b> {chaptersRead === 1 ? "chapter" : "chapters"} read</span>
-            </>
+              <span className="sr-only">, </span>
+              <b><Tally value={chaptersRead} /></b> {chaptersRead === 1 ? "chapter" : "chapters"} read
+            </span>
           )}
         </span>
       )
@@ -277,21 +280,25 @@ export function Library() {
           </>
         } />
 
-      <section className="lib-controls rise" style={{ "--i": 5 }} aria-label="Library tools">
-        <Tabs className="lib-shelves" tabs={LIBRARY_TABS.map(t => ({ ...t, count: novels ? counts[t.id] : undefined }))}
-              value={tab} onChange={setTab} label="Shelves" idBase="lib" />
-        <div className="lib-tools">
-          <SearchField ref={searchRef} className="lib-search" value={q} onChange={setQ}
-                       placeholder="Search your library…" label="Search your library" shortcut />
-          <SortMenu value={sort} options={SORTS} onChange={setSort} className="lib-sort" />
-          <SegmentedControl fit ariaLabel="View" value={view} onChange={setView} className="lib-view"
-            options={[{ value: "grid", icon: "grid", title: "Grid" }, { value: "list", icon: "list", title: "List" }]} />
-        </div>
-      </section>
+      {/* Shelves, search and sort only once there are books to sort (or while
+          they load); an empty library leads with its three ways in. */}
+      {!empty && (
+        <section className="lib-controls rise" style={{ "--i": 5 }} aria-label="Library tools">
+          <Tabs className="lib-shelves" tabs={LIBRARY_TABS.map(t => ({ ...t, count: novels ? counts[t.id] : undefined }))}
+                value={tab} onChange={setTab} label="Shelves" idBase="lib" />
+          <div className="lib-tools">
+            <SearchField ref={searchRef} className="lib-search" value={q} onChange={setQ}
+                         placeholder="Search your library…" label="Search your library" shortcut />
+            <SortMenu value={sort} options={SORTS} onChange={setSort} className="lib-sort" />
+            <SegmentedControl fit ariaLabel="View" value={view} onChange={setView} className="lib-view"
+              options={[{ value: "grid", icon: "grid", title: "Grid" }, { value: "list", icon: "list", title: "List" }]} />
+          </div>
+        </section>
+      )}
 
-      <p className="lib-status" role="status"><span className="lib-status-dot" aria-hidden="true" />{status}</p>
+      <p className={"lib-status" + (empty ? " sr-only" : "")} role="status"><span className="lib-status-dot" aria-hidden="true" />{status}</p>
 
-      <div className="lib-stage" role="tabpanel" id="lib-panel" aria-labelledby={`lib-tab-${tab}`}
+      <div className="lib-stage" {...(empty ? {} : { role: "tabpanel", id: "lib-panel", "aria-labelledby": `lib-tab-${tab}` })}
            aria-busy={isLoading || undefined}>{body}</div>
 
       {adding && (
