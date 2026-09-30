@@ -2,24 +2,61 @@
    Overlays — Dialog, ConfirmDialog, CostConfirmDialog, Popover, Menu, Drawer.
    All trap focus, close on Escape/backdrop, and restore focus on close.
    ============================================================ */
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { prefersReducedMotion } from "../motion/navigation.js";
 import { Icon } from "./Icon.jsx";
 import { Button } from "./ui.jsx";
 import { useDismissable, useFocusTrap } from "../lib/hooks.js";
 import { experienceApi } from "../modules/experience/api.js";
 
+/* Dialogs and drawers render at the top of the page, so a glass or animated
+   ancestor (backdrop-filter, transform) can never trap or clip them. A
+   surface with its own theme tokens (the reader's tones) hosts them instead. */
+const OverlayHost = createContext(null);
+
+export function OverlayHostProvider({ hostRef, children }) {
+  return <OverlayHost.Provider value={hostRef}>{children}</OverlayHost.Provider>;
+}
+
+/** Render `node` where overlays belong: the nearest OverlayHostProvider's
+    element, else <body>. For custom floating panels that must escape glass. */
+export function useOverlayPortal() {
+  const hostRef = useContext(OverlayHost);
+  return (node) => createPortal(node, (hostRef && hostRef.current) || document.body);
+}
+
+/* Close with a short exit animation when the dialog itself initiates it
+   (Escape, backdrop). Parents that unmount directly simply skip the exit. */
+function useAnimatedClose(onClose, busy, duration = 210) {
+  const [closing, setClosing] = useState(false);
+  const request = useCallback(() => {
+    if (busy) return;
+    if (prefersReducedMotion()) { onClose(); return; }
+    setClosing(true);
+  }, [busy, onClose]);
+  useEffect(() => {
+    if (!closing) return undefined;
+    const timer = setTimeout(onClose, duration);
+    return () => clearTimeout(timer);
+  }, [closing, onClose, duration]);
+  return [closing, request];
+}
+
 export function Dialog({ title, icon, danger, wide, onClose, children, busy }) {
   const trapRef = useFocusTrap(true);
+  const portal = useOverlayPortal();
+  const [closing, requestClose] = useAnimatedClose(onClose, busy);
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape" && !busy) onClose(); };
+    const onKey = (e) => { if (e.key === "Escape" && !busy) requestClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
-  return (
-    <div className="modal-scrim" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div ref={trapRef} className={"card modal-card" + (wide ? " wide" : "")} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
+  }, [busy, requestClose]);
+  return portal(
+    <div className={"modal-scrim" + (closing ? " is-closing" : "")} onClick={(e) => { if (e.target === e.currentTarget && !busy) requestClose(); }}>
+      <div ref={trapRef} className={"modal-card" + (wide ? " wide" : "")} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
         {(title || icon) && (
-          <div className="row" style={{ alignItems: "flex-start", marginBottom: 12 }}>
+          <div className="row" style={{ alignItems: "center", gap: 14, marginBottom: 16 }}>
             {icon && <span className={danger ? "modal-danger-icon" : "modal-accent-icon"}><Icon name={icon} size={19} /></span>}
             <h3 className="modal-title grow">{title}</h3>
           </div>
@@ -44,7 +81,7 @@ export function ConfirmDialog({ title, body, confirmLabel = "Delete", cancelLabe
       {requireText && (
         <label className="field" style={{ marginTop: 12 }}>
           <span>Type <b>{requireText}</b> to confirm</span>
-          <input value={typed} onChange={e => setTyped(e.target.value)} autoFocus placeholder={requireText} spellCheck={false} />
+          <input value={typed} onChange={e => setTyped(e.target.value)} placeholder={requireText} spellCheck={false} />
         </label>
       )}
       <div className="row" style={{ gap: 10, marginTop: 18, justifyContent: "flex-end" }}>
@@ -128,6 +165,21 @@ export function CostConfirmDialog({ novelId, action, params, title, actionLabel 
 /* Anchored popover: relative-positioned wrapper + absolutely-positioned card.
    Dismisses on outside click / Escape. `align` = left|right. The preferred
    alignment is clamped to the viewport so wide menus cannot render off-screen. */
+/* The panel is its own component so its cleanup runs while it still holds
+   focus: closing with Escape or choosing an item hands focus back to the
+   trigger instead of dropping it to <body>. A click elsewhere has already
+   moved focus, so nothing is stolen then. */
+function PopoverPanel({ panelRef, returnFocus, className, style, children }) {
+  useLayoutEffect(() => () => {
+    const panel = panelRef.current;
+    if (panel && panel.contains(document.activeElement)) {
+      const target = returnFocus();
+      if (target) target.focus({ preventScroll: true });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return <div ref={panelRef} className={className} style={style}>{children}</div>;
+}
+
 export function Popover({ open, onClose, trigger, align = "right", className = "", children, style }) {
   const ref = useDismissable(open, onClose);
   const panelRef = useRef(null);
@@ -135,6 +187,11 @@ export function Popover({ open, onClose, trigger, align = "right", className = "
     const anchor = ref.current;
     const panel = panelRef.current;
     if (!anchor || !panel) return;
+    // A panel restyled as a fixed sheet (phones) places itself.
+    if (getComputedStyle(panel).position === "fixed") {
+      panel.style.left = panel.style.top = panel.style.bottom = panel.style.maxHeight = "";
+      return;
+    }
 
     const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
     const panelWidth = panel.offsetWidth;
@@ -148,6 +205,25 @@ export function Popover({ open, onClose, trigger, align = "right", className = "
 
     panel.style.left = `${viewportLeft - anchorRect.left}px`;
     panel.style.right = "auto";
+
+    // Room below ends at the phone dock (or the viewport); room above at the
+    // header and the novel capsule. Open toward the larger room when the
+    // panel doesn't fit below, and cap its height to the room it gets.
+    const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+    const dock = document.querySelector(".dock");
+    const floor = dock && getComputedStyle(dock).display !== "none" ? dock.getBoundingClientRect().top : viewportHeight;
+    const ceiling = Math.max(0, ...[".shell-top:not(.is-hidden)", ".novel-capsule"].map(sel => {
+      const el = document.querySelector(sel);
+      const box = el && el.getBoundingClientRect();
+      return box && box.bottom <= anchorRect.top ? box.bottom : 0;
+    }));
+    const below = floor - anchorRect.bottom - 10 - gutter;
+    const above = anchorRect.top - 10 - Math.max(gutter, ceiling + 6);
+    const up = panel.scrollHeight > below && above > below;
+    panel.style.top = up ? "auto" : "calc(100% + 10px)";
+    panel.style.bottom = up ? "calc(100% + 10px)" : "auto";
+    panel.style.maxHeight = `${Math.max(160, up ? above : below)}px`;
+    panel.style.setProperty("--pop-origin", `${up ? "bottom" : "top"} ${align === "left" ? "left" : "right"}`);
   }, [align, ref]);
 
   useLayoutEffect(() => {
@@ -170,14 +246,16 @@ export function Popover({ open, onClose, trigger, align = "right", className = "
     };
   }, [open, positionPanel, ref]);
 
+  const returnFocus = () => ref.current && ref.current.querySelector("[aria-expanded], button, a[href]");
   return (
     <div className="usermenu" ref={ref} style={{ position: "relative", display: "inline-block" }}>
       {trigger}
       {open && (
-        <div ref={panelRef} className={["popover", className].filter(Boolean).join(" ")}
-             style={{ top: "calc(100% + 8px)", [align]: 0, ...style }}>
+        <PopoverPanel panelRef={panelRef} returnFocus={returnFocus}
+                      className={["popover", className].filter(Boolean).join(" ")}
+                      style={{ top: "calc(100% + 10px)", [align]: 0, "--pop-origin": align === "left" ? "top left" : "top right", ...style }}>
           {children}
-        </div>
+        </PopoverPanel>
       )}
     </div>
   );
@@ -197,17 +275,19 @@ export function MenuItem({ icon, danger, selected, children, ...rest }) {
 
 export function Drawer({ onClose, title, children }) {
   const trapRef = useFocusTrap(true);
+  const portal = useOverlayPortal();
+  const [closing, requestClose] = useAnimatedClose(onClose, false, 230);
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => { if (e.key === "Escape") requestClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return (
-    <div className="drawer-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+  }, [requestClose]);
+  return portal(
+    <div className={"drawer-scrim" + (closing ? " is-closing" : "")} onClick={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
       <div ref={trapRef} className="drawer" role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}>
         <div className="drawer-head">
           <b>{title}</b>
-          <button className="icon-btn plain" aria-label="Close" onClick={onClose}><Icon name="x" size={16} /></button>
+          <button className="icon-btn plain" aria-label="Close" onClick={requestClose}><Icon name="x" size={17} /></button>
         </div>
         <div className="drawer-body">{children}</div>
       </div>

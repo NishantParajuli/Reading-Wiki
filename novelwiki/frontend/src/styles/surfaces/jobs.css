@@ -1,0 +1,282 @@
+/* ============================================================
+   Jobs — the live operations view, owned by modules/work.
+   Groups per novel; each job row carries a kind glyph, a status orb
+   (pulsing while the server works, steady once settled), a liquid progress
+   bar, time and actions. JobRow (.jr) is shared with the novel Manage tab
+   and lays itself out by its own width (container queries).
+   Tokens: tokens.css · primitives: components.css.
+   ============================================================ */
+
+/* ---------- header: live counters + tabs ---------- */
+.jobs-summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.jobs-stat {
+  --orb: var(--accent);
+  display: inline-flex; align-items: center; gap: 9px;
+  min-height: 42px; padding: 0 16px 0 14px; border-radius: var(--radius-full);
+  background: color-mix(in oklch, var(--surface-2) 70%, transparent);
+  border: 1px solid var(--border); box-shadow: inset 0 1px 0 var(--hairline-hi);
+  font-size: var(--text-sm); font-weight: 540; color: var(--muted);
+}
+.jobs-stat.is-queued { --orb: color-mix(in oklch, var(--ink) 60%, transparent); }
+.jobs-stat.is-waiting, .jobs-stat.is-attention { --orb: var(--warn); }
+.jobs-stat-orb { width: 8px; height: 8px; border-radius: 50%; background: var(--orb); box-shadow: 0 0 10px var(--orb); flex-shrink: 0; }
+.jobs-stat-num {
+  display: inline-block; font-family: var(--font-display); font-variation-settings: "SOFT" 40;
+  font-size: 21px; font-weight: 470; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .jobs-stat-num { animation: jobs-tick 560ms var(--ease-out) backwards; }
+  .jobs-stat.is-working .jobs-stat-orb { animation: jobs-breathe 2s var(--ease-in-out) infinite; }
+}
+@keyframes jobs-tick { from { transform: translateY(-55%); opacity: 0; filter: blur(3px); } }
+@keyframes jobs-breathe { 50% { transform: scale(0.72); opacity: 0.65; } }
+
+.jobs-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 22px; }
+.jobs-live {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 7px 15px 7px 13px; border-radius: var(--radius-full);
+  font-size: var(--text-sm); font-weight: 580; color: var(--accent-ink);
+  background: var(--accent-soft); border: 1px solid color-mix(in oklch, var(--accent) 26%, transparent);
+}
+.jobs-live i {
+  position: relative; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 10px var(--accent-glow);
+}
+.jobs-live i::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%;
+  border: 1px solid var(--accent); opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .jobs-live { animation: fade-in var(--dur-3) var(--ease-out) backwards; }
+  .jobs-live i::after { animation: jr-ring 1.9s var(--ease-out) infinite; }
+}
+
+/* ---------- groups per novel ---------- */
+.jobs-panel { min-width: 0; }
+.jobs-groups { display: flex; flex-direction: column; gap: 18px; }
+.jobs-group {
+  position: relative; min-width: 0;
+  display: grid; grid-template-columns: minmax(220px, 288px) minmax(0, 1fr);
+  border-radius: var(--radius-lg); background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 var(--hairline-hi), var(--shadow-1);
+}
+.jobs-group-head {
+  position: relative; min-width: 0;
+  padding: 18px 20px; border-right: 1px solid var(--border);
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  background: linear-gradient(100deg, color-mix(in oklch, var(--ink) 3%, transparent), transparent 80%);
+  transition: background-color var(--dur-2) var(--ease-out);
+}
+.jobs-group-id {
+  position: sticky; top: 96px;
+  display: flex; align-items: flex-start; gap: 14px; min-width: 0; border-radius: 12px;
+}
+.jobs-group-cover { width: 44px; flex-shrink: 0; }
+.jobs-group-cover .cover { width: 44px; box-shadow: var(--shadow-1); transition: transform var(--dur-4) var(--ease-spring), box-shadow var(--dur-3); }
+.jobs-group-id:hover .jobs-group-cover .cover { transform: translateY(-2px) rotate(-3deg); box-shadow: var(--shadow-2); }
+.jobs-group-orb {
+  width: 44px; height: 44px; border-radius: 14px; flex-shrink: 0;
+  display: grid; place-items: center; color: var(--accent-ink);
+  background: var(--accent-soft); border: 1px solid color-mix(in oklch, var(--accent) 24%, transparent);
+  box-shadow: inset 0 1px 0 var(--hairline-hi);
+}
+.jobs-group-titles { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding-top: 2px; }
+.jobs-group-title {
+  display: inline-flex; align-items: flex-start; gap: 6px; min-width: 0;
+  font-family: var(--font-display); font-optical-sizing: auto; font-variation-settings: "SOFT" 40;
+  font-size: var(--text-lg); font-weight: 500; letter-spacing: -0.012em; line-height: 1.22;
+  color: var(--ink); text-decoration: none; overflow-wrap: anywhere;
+}
+a.jobs-group-title::after { content: ""; position: absolute; inset: -4px; border-radius: 14px; }
+a.jobs-group-title:focus-visible { box-shadow: none; }
+.jobs-group-id:has(a.jobs-group-title:focus-visible) { box-shadow: var(--ring); }
+.jobs-group-title.is-static { font-weight: 480; color: var(--ink-2); }
+.jobs-group-go { flex-shrink: 0; margin-top: 3px; color: var(--accent-ink); opacity: 0; transform: translate(-4px, 3px); transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-3) var(--ease-spring); }
+.jobs-group-id:hover .jobs-group-go, .jobs-group-id:focus-within .jobs-group-go { opacity: 1; transform: none; }
+.jobs-group-author { font-family: var(--font-display); font-style: italic; font-variation-settings: "SOFT" 80; font-size: var(--text-sm); color: var(--muted); }
+.jobs-group-sub { margin-top: 4px; font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.jobs-rows { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 6px; }
+.jobs-row { position: relative; border-radius: 16px; transition: background-color var(--dur-2) var(--ease-out); }
+.jobs-row + .jobs-row::before {
+  content: ""; position: absolute; top: 0; left: 64px; right: 14px; height: 1px;
+  background: var(--border); pointer-events: none;
+}
+.jobs-row.is-expandable > div:first-child { cursor: pointer; }
+.jobs-row.is-open { background: color-mix(in oklch, var(--danger) 5%, transparent); }
+.jobs-row.is-open + .jobs-row::before { opacity: 0; }
+.jobs-skel-row { display: flex; align-items: center; gap: 14px; padding: 14px; }
+
+/* ---------- the error panel (failed rows) ---------- */
+.jobs-error-clip { overflow: hidden; }
+.jobs-error {
+  position: relative; overflow: hidden;
+  margin: 0 12px 12px 66px; border-radius: 14px;
+  background: color-mix(in oklch, var(--bg-2) 78%, transparent);
+  border: 1px solid color-mix(in oklch, var(--danger) 24%, var(--border));
+  box-shadow: var(--shadow-inset);
+}
+.jobs-error::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--danger); box-shadow: 0 0 14px var(--danger);
+}
+.jobs-error-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px 7px 16px; border-bottom: 1px solid var(--border);
+}
+.jobs-error-tag {
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--danger); padding: 2px 8px; border-radius: 6px; background: var(--danger-soft);
+}
+.jobs-error-ref {
+  flex: 1 1 auto; min-width: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.jobs-error-copy { min-height: 30px; flex-shrink: 0; }
+.jobs-error-text {
+  margin: 0; padding: 12px 16px 14px; max-height: 280px; overflow: auto;
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; color: var(--ink-2);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.jobs-error .recovery-links { margin: -2px 0 0; padding: 0 16px 14px; }
+
+@media (max-width: 860px) {
+  .jobs-group { grid-template-columns: minmax(0, 1fr); }
+  .jobs-group-head { padding: 14px 16px 12px; border-right: 0; border-bottom: 1px solid var(--border); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+  .jobs-group-id { position: static; align-items: center; }
+  .jobs-group-cover { width: 34px; }
+  .jobs-group-cover .cover { width: 34px; }
+  .jobs-group-orb { width: 38px; height: 38px; border-radius: 12px; }
+  .jobs-group-author { display: none; }
+  .jobs-group-sub { margin-top: 0; }
+}
+@media (max-width: 640px) {
+  .jobs-summary {
+    width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 0;
+    padding: 4px; border-radius: 18px;
+    background: color-mix(in oklch, var(--surface-2) 60%, transparent);
+    border: 1px solid var(--border); box-shadow: inset 0 1px 0 var(--hairline-hi);
+  }
+  .jobs-stat {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "orb num" "label label";
+    align-items: center; column-gap: 7px; row-gap: 3px;
+    min-height: 0; padding: 8px 10px; border: 0; border-radius: 14px; background: transparent; box-shadow: none;
+  }
+  .jobs-stat + .jobs-stat { box-shadow: -1px 0 0 var(--border); border-radius: 0; }
+  .jobs-stat-orb { grid-area: orb; }
+  .jobs-stat-num { grid-area: num; font-size: 19px; }
+  .jobs-stat > span:last-child { grid-area: label; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .jobs-live { padding: 4px 2px; background: transparent; border-color: transparent; }
+  .jobs-rows { padding: 4px; }
+  .jobs-row + .jobs-row::before { left: 58px; }
+  .jobs-error { margin: 0 8px 10px; }
+  .jobs-bar { margin-bottom: 18px; }
+}
+
+/* ============================================================
+   JobRow (.jr) — shared with the novel Manage tab.
+   ============================================================ */
+.job-row.jr {
+  position: relative; display: block; min-height: 0; padding: 0; gap: 0;
+  border-radius: 14px; font-size: var(--text-sm);
+  container-type: inline-size;
+  --orb-c: var(--faint);
+}
+.jr.is-working { --orb-c: var(--accent); }
+.jr.is-queued { --orb-c: color-mix(in oklch, var(--ink) 58%, transparent); }
+.jr.is-waiting, .jr.is-attention { --orb-c: var(--warn); }
+.jr.is-done { --orb-c: var(--ok); }
+.jr.is-failed { --orb-c: var(--danger); }
+.jobs-row .job-row.jr:hover { background: transparent; }
+.jobs-row:not(.is-open):hover { background: color-mix(in oklch, var(--ink) 4%, transparent); }
+
+.jr-grid {
+  display: grid; align-items: center; column-gap: 14px;
+  grid-template-columns: 38px minmax(0, 1fr) minmax(130px, 210px) auto;
+  grid-template-areas: "glyph main progress aside";
+  padding: 12px 10px 12px 14px;
+}
+.jr-glyph {
+  grid-area: glyph; width: 38px; height: 38px; border-radius: 12px;
+  display: grid; place-items: center; color: var(--ink-2);
+  background: color-mix(in oklch, var(--ink) 5%, transparent);
+  border: 1px solid var(--border); box-shadow: inset 0 1px 0 var(--hairline-hi);
+  transition: color var(--dur-3) var(--ease-out), background-color var(--dur-3), border-color var(--dur-3), box-shadow var(--dur-3);
+}
+.jr.is-working .jr-glyph {
+  color: var(--accent-ink); background: var(--accent-soft);
+  border-color: color-mix(in oklch, var(--accent) 28%, transparent);
+  box-shadow: 0 0 22px -8px var(--accent-glow), inset 0 1px 0 var(--hairline-hi);
+}
+.jr.is-failed .jr-glyph { color: var(--danger); background: var(--danger-soft); border-color: color-mix(in oklch, var(--danger) 24%, transparent); }
+.jr.is-attention .jr-glyph, .jr.is-waiting .jr-glyph { color: var(--warn); }
+.jr.is-canceled .jr-glyph { opacity: 0.6; }
+
+.jr-main { grid-area: main; min-width: 0; }
+.jr-top { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; min-width: 0; }
+.jr-kind { font-size: var(--text-md); font-weight: 640; letter-spacing: -0.006em; color: var(--ink); }
+.jr-status { display: inline-flex; align-items: center; gap: 7px; font-size: var(--text-xs); font-weight: 620; color: var(--orb-c); }
+.jr.is-working .jr-status { color: var(--accent-ink); }
+.jr.is-queued .jr-status, .jr.is-canceled .jr-status, .jr.is-idle .jr-status { color: var(--muted); }
+.jr-orb {
+  position: relative; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--orb-c); box-shadow: 0 0 10px var(--orb-c);
+}
+.jr.is-canceled .jr-orb, .jr.is-idle .jr-orb { box-shadow: none; }
+.jr-orb::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%;
+  border: 1px solid var(--orb-c); opacity: 0;
+}
+.jr-backend { min-height: 20px; padding: 1px 8px; font-size: 11px; }
+.jr-desc {
+  margin: 3px 0 0; font-size: var(--text-sm); color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.jr.is-working .jr-desc { color: var(--ink-2); }
+.jr-err { margin: 3px 0 0; font-size: var(--text-xs); color: var(--danger); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.jr-meta { margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.jr-progress { grid-area: progress; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.jr-progress .progress-track { flex: 1 1 auto; min-width: 0; }
+.jr-pct { min-width: 34px; text-align: right; font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.jr.is-queued .jr-progress .progress-fill { background: color-mix(in oklch, var(--ink) 30%, transparent); box-shadow: none; }
+
+.jr-aside { grid-area: aside; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.jr-time { min-width: 60px; text-align: right; font-size: var(--text-xs); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.jr-actions { display: inline-flex; align-items: center; gap: 2px; }
+/* "Needs you" imports: the way back to the step that waits (Review / Approve OCR) */
+.jr-review { margin-right: 4px; white-space: nowrap; }
+.jr-actions .icon-btn { width: 34px; height: 34px; }
+.jr-actions .icon-btn[aria-label="Cancel"]:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
+.jr-disclose svg { transition: transform var(--dur-3) var(--ease-spring); }
+.jr-disclose.is-open { color: var(--danger); }
+.jr-disclose.is-open svg { transform: rotate(180deg); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .jr.is-working .jr-orb::after { animation: jr-ring 1.8s var(--ease-out) infinite; }
+  .jr.is-queued .jr-orb, .jr.is-waiting .jr-orb { animation: jr-breathe 2.8s var(--ease-in-out) infinite; }
+  .jr-orb.is-settling { animation: jr-settle 700ms var(--ease-bounce); }
+  .jr-orb.is-settling::after { animation: jr-ring 900ms var(--ease-out) 1; }
+}
+@keyframes jr-ring { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(1.7); opacity: 0; } }
+@keyframes jr-breathe { 50% { opacity: 0.45; transform: scale(0.8); } }
+@keyframes jr-settle { from { transform: scale(1.9); } }
+
+@container (max-width: 620px) {
+  .jr-grid {
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    grid-template-areas: "glyph main aside" "glyph progress progress";
+    align-items: start; column-gap: 12px;
+    padding: 12px 6px 12px 12px;
+  }
+  .jr-progress { margin-top: 10px; }
+  .jr-aside { flex-direction: column; align-items: flex-end; gap: 2px; }
+  .jr-time { min-width: 0; padding-top: 2px; }
+  .jr-actions .icon-btn { width: 32px; height: 32px; }
+}
+
+/* Touch: row actions grow to a finger-sized target (after the container rules). */
+@media (pointer: coarse) {
+  .jr-actions .icon-btn { width: 40px; height: 40px; }
+}

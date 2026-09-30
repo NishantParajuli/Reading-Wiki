@@ -45,6 +45,7 @@ for (const [layout, viewport] of [["desktop", { width: 1440, height: 1000 }], ["
     await expect(panel.getByLabel("Replace cookies")).toHaveValue("");
     expect(writes).toEqual([{ cookies: [{ name: "TKEY", domain: ".novelpia.com", value: "synthetic-token" }] }]);
     await panel.getByRole("button", { name: "Remove saved cookies" }).click();
+    await page.getByRole("dialog", { name: "Remove saved Novelpia cookies?" }).getByRole("button", { name: "Remove cookies" }).click();
     await expect(panel.getByText("No cookies saved")).toBeVisible();
     await expect(panel.getByLabel("Cookie export")).toHaveValue("");
     unreadable = true;

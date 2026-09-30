@@ -1,31 +1,23 @@
-import React, { useEffect, useRef, useState } from "react";
+/* ============================================================
+   Account sections: Profile (live calling card + avatar upload),
+   Security (password change/set), Linked accounts and Source accounts.
+   Appearance lives in AccountAppearance.jsx, Reading/Audio in
+   AccountReading.jsx, Usage in AccountUsage.jsx.
+   ============================================================ */
+import React, { useId, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { authApi, identityApi } from "./api.js";
-import { useAuth, useTheme } from "../../App.jsx";
-import { Button, Loading, ProgressBar, SegmentedControl, UserAvatar, Chip } from "../../components/ui.jsx";
-import { VoicePicker } from "../narration/index.js";
+import { Group, SectionHead } from "./AccountParts.jsx";
+import { useAuth } from "../../App.jsx";
+import { Icon } from "../../components/Icon.jsx";
+import { Button, Chip, Skeleton, UserAvatar } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
-import { useVoicesQuery } from "../narration/queries.js";
+import { NovelpiaCookies } from "../acquisition/index.js";
 
-export const SECTIONS = [
-  { id: "profile", label: "Profile", icon: "user" },
-  { id: "appearance", label: "Appearance", icon: "sun" },
-  { id: "reading", label: "Reading", icon: "book" },
-  { id: "audio", label: "Audio", icon: "headphones" },
-  { id: "security", label: "Security", icon: "shield" },
-  { id: "linked", label: "Linked accounts", icon: "link" },
-  { id: "sources", label: "Source accounts", icon: "book" },
-  { id: "usage", label: "Usage", icon: "database" },
-];
+export { SECTIONS } from "./AccountNav.jsx";
 
-const ACCENTS = [
-  { hue: 64, name: "Honey" },
-  { hue: 42, name: "Amber" },
-  { hue: 28, name: "Clay" },
-  { hue: 12, name: "Rose" },
-  { hue: 152, name: "Sage" },
-  { hue: 250, name: "Dusk" },
-];
+const BIO_MAX = 600;
 
 export function ProfileSection() {
   const { user, onUserUpdate } = useAuth();
@@ -35,7 +27,10 @@ export function ProfileSection() {
   const [bio, setBio] = useState(user.bio || "");
   const [avatarUrl, setAvatarUrl] = useState(user.avatar_url || null);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
+  const uid = useId();
+  const dirty = displayName !== (user.display_name || "") || username !== (user.username || "") || bio !== (user.bio || "");
 
   async function saveProfile(e) {
     e.preventDefault();
@@ -55,6 +50,7 @@ export function ProfileSection() {
   async function onPickAvatar(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
+    setUploading(true);
     try {
       const r = await identityApi.uploadAvatar(file);
       setAvatarUrl(r.avatar_url);
@@ -62,187 +58,67 @@ export function ProfileSection() {
       toast("Avatar updated.", { tone: "ok" });
     } catch (err) {
       toast(err.message || "Avatar upload failed.", { tone: "danger" });
-    } finally { if (fileRef.current) fileRef.current.value = ""; }
-  }
-
-  return (
-    <form className="card acct-card" onSubmit={saveProfile}>
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>Profile</p>
-      <div className="row" style={{ gap: 14, marginBottom: 8 }}>
-        <UserAvatar url={avatarUrl} name={displayName || username} size={64} />
-        <div>
-          <Button variant="ghost" size="sm" icon="edit" onClick={() => fileRef.current && fileRef.current.click()}>
-            Change avatar
-          </Button>
-          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onPickAvatar} />
-          <div className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 4 }}>PNG/JPG/WebP, under 5 MB.</div>
-        </div>
-      </div>
-      <label className="field">
-        <span>Display name</span>
-        <input value={displayName} onChange={e => setDisplayName(e.target.value)} maxLength={80} />
-      </label>
-      <label className="field">
-        <span>Username</span>
-        <input value={username} onChange={e => setUsername(e.target.value)} placeholder="a–z, 0–9, underscore" />
-      </label>
-      <label className="field">
-        <span>Bio</span>
-        <textarea value={bio} onChange={e => setBio(e.target.value)} rows={3} maxLength={600} />
-      </label>
-      <div className="row">
-        <Button type="submit" variant="primary" loading={saving}>Save profile</Button>
-      </div>
-    </form>
-  );
-}
-
-export function AppearanceSection() {
-  const { theme, setTheme, accentHue, setAccentHue } = useTheme();
-  const { user, onUserUpdate } = useAuth();
-
-  // Accent hue also syncs to the account so it follows the user across devices.
-  function pickAccent(hue) {
-    setAccentHue(hue);
-    if (user) {
-      identityApi.updateMe({ prefs: { appearance: { accent_h: hue } } })
-        .then(u => onUserUpdate && onUserUpdate(u)).catch(() => {});
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
+  const pick = () => fileRef.current && fileRef.current.click();
+  const shownName = displayName.trim() || username || "Your name";
   return (
-    <div className="card acct-card">
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>Appearance</p>
-      <div className="field">
-        <span>Theme</span>
-        <SegmentedControl fit value={theme} onChange={setTheme} ariaLabel="Theme"
-          options={[{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }]} />
-      </div>
-      <div className="field">
-        <span>Accent colour</span>
-        <div className="accent-swatches">
-          {ACCENTS.map(a => (
-            <button key={a.hue} type="button" title={a.name}
-                    aria-label={`Accent: ${a.name}`}
-                    className={"accent-swatch" + (accentHue === a.hue ? " on" : "")}
-                    style={{ background: `oklch(0.74 0.13 ${a.hue})` }}
-                    onClick={() => pickAccent(a.hue)} />
-          ))}
+    <section className="acct-section" aria-labelledby="acct-h-profile">
+      <SectionHead id="acct-h-profile" icon="user" title="Profile"
+                   lead="How you appear to other readers on your public page." />
+      <Group as="form" i={1} className="acct-identity" onSubmit={saveProfile}>
+        <div className="acct-calling">
+          <button type="button" className={"acct-avatar" + (uploading ? " is-busy" : "")} onClick={pick}
+                  tabIndex={-1} aria-hidden="true">
+            <UserAvatar url={avatarUrl} name={shownName} size={96} />
+            <span className="acct-avatar-edit"><Icon name="upload" size={16} /></span>
+          </button>
+          <div className="acct-calling-text">
+            <p className="acct-calling-name">{shownName}</p>
+            <p className="acct-calling-handle">@{username || "username"}</p>
+            <div className="acct-calling-actions">
+              <Button variant="ghost" size="sm" icon="edit" loading={uploading} onClick={pick}>Change avatar</Button>
+              <span className="acct-hint">PNG, JPG or WebP, under 5 MB.</span>
+            </div>
+          </div>
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPickAvatar} />
         </div>
-      </div>
-      <p className="muted" style={{ fontSize: "var(--text-xs)", margin: 0 }}>
-        The reader's sepia and night tones live in the reader's Aa menu.
-      </p>
-    </div>
-  );
-}
 
-export function ReadingSection() {
-  const { user, onUserUpdate } = useAuth();
-  const { toast } = useToast();
-  const synced = (user && user.prefs && user.prefs.reader) || {};
-  const [font, setFont] = useState(synced.font || "serif");
-  const [size, setSize] = useState(synced.size || 19);
-  const [line, setLine] = useState(synced.line || 1.7);
-  const [width, setWidth] = useState(synced.width || "normal");
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    setSaving(true);
-    try {
-      const prefs = { ...synced, font, size, line, width };
-      const u = await identityApi.updateMe({ prefs: { reader: prefs } });
-      try { localStorage.setItem("nw-reader", JSON.stringify({ ...JSON.parse(localStorage.getItem("nw-reader") || "{}"), font, size, line, width })); } catch (e) { /* ignore */ }
-      onUserUpdate && onUserUpdate(u);
-      toast("Reading defaults saved.", { tone: "ok" });
-    } catch (e) {
-      toast(e.message || "Couldn't save.", { tone: "danger" });
-    } finally { setSaving(false); }
-  }
-
-  return (
-    <div className="card acct-card">
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>Reading defaults</p>
-      <div className="field">
-        <span>Font</span>
-        <SegmentedControl fit value={font} onChange={setFont} ariaLabel="Font"
-          options={[{ value: "serif", label: "Serif" }, { value: "sans", label: "Sans" }]} />
-      </div>
-      <div className="field">
-        <span>Size — {size}px</span>
-        <input type="range" className="slider" min={14} max={28} step={1} value={size} onChange={e => setSize(Number(e.target.value))} />
-      </div>
-      <div className="field">
-        <span>Line height — {Number(line).toFixed(1)}</span>
-        <input type="range" className="slider" min={1.3} max={2.2} step={0.1} value={line} onChange={e => setLine(Math.round(Number(e.target.value) * 10) / 10)} />
-      </div>
-      <div className="field">
-        <span>Column width</span>
-        <SegmentedControl value={width} onChange={setWidth} ariaLabel="Column width"
-          options={[{ value: "narrow", label: "Narrow" }, { value: "normal", label: "Normal" }, { value: "wide", label: "Wide" }, { value: "full", label: "Full" }]} />
-      </div>
-      <div className="row">
-        <Button variant="primary" loading={saving} onClick={save}>Save defaults</Button>
-      </div>
-      <p className="muted" style={{ fontSize: "var(--text-xs)", margin: 0 }}>
-        These sync across devices; the reader's Aa menu changes them too.
-      </p>
-    </div>
-  );
-}
-
-export function AudioSection() {
-  const { user, onUserUpdate } = useAuth();
-  const { toast } = useToast();
-  const { data: voicesData } = useVoicesQuery();
-  const tts = (user && user.prefs && user.prefs.tts) || {};
-  const [voice, setVoice] = useState(tts.voice || null);
-  const [speed, setSpeed] = useState(Number(tts.speed) || 1);
-  const [autoplay, setAutoplay] = useState(tts.autoplay !== false);
-  const [saving, setSaving] = useState(false);
-
-  const voices = ((voicesData && voicesData.voices) || []).filter(v => v.ready);
-
-  async function save() {
-    setSaving(true);
-    try {
-      const u = await identityApi.updateMe({ prefs: { tts: { voice, speed, autoplay } } });
-      onUserUpdate && onUserUpdate(u);
-      toast("Audio preferences saved.", { tone: "ok" });
-    } catch (e) {
-      toast(e.message || "Couldn't save.", { tone: "danger" });
-    } finally { setSaving(false); }
-  }
-
-  return (
-    <div className="card acct-card">
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>Audio</p>
-      {voices.length === 0 ? (
-        <p className="muted" style={{ margin: 0, fontSize: "var(--text-sm)" }}>
-          Narration voices are offline right now — preferences appear here when the narrator is available.
-        </p>
-      ) : (
-        <>
-          <div className="field">
-            <span>Preferred narrator</span>
-            <VoicePicker voices={voices} value={voice} onChange={setVoice}
-                         defaultVoice={voicesData && voicesData.default} preferredVoice={voice} />
-          </div>
-          <div className="field">
-            <span>Playback speed — {speed}×</span>
-            <SegmentedControl value={speed} onChange={setSpeed} ariaLabel="Playback speed"
-              options={[0.75, 1, 1.25, 1.5, 1.75, 2].map(s => ({ value: s, label: `${s}×` }))} />
-          </div>
-          <label className="check">
-            <input type="checkbox" checked={autoplay} onChange={e => setAutoplay(e.target.checked)} />
-            Auto-advance to the next chapter when narration ends
+        <div className="acct-fields">
+          <label className="field">
+            <span>Display name</span>
+            <input value={displayName} onChange={e => setDisplayName(e.target.value)} maxLength={80} autoComplete="nickname" />
           </label>
-          <div className="row">
-            <Button variant="primary" loading={saving} onClick={save}>Save audio preferences</Button>
+          <div className="field">
+            <label htmlFor={`${uid}-username`}>Username</label>
+            <span className="acct-affix">
+              <span className="acct-affix-mark" aria-hidden="true">@</span>
+              <input id={`${uid}-username`} value={username} onChange={e => setUsername(e.target.value)} placeholder="a–z, 0–9, underscore"
+                     autoComplete="username" spellCheck={false} />
+            </span>
           </div>
-        </>
-      )}
-    </div>
+          <div className="field acct-span-all">
+            <label htmlFor={`${uid}-bio`}>Bio</label>
+            <textarea id={`${uid}-bio`} value={bio} onChange={e => setBio(e.target.value)} rows={3} maxLength={BIO_MAX}
+                      placeholder="A line or two about what you love to read." aria-describedby={`${uid}-bio-count`} />
+            <span id={`${uid}-bio-count`} className={"field-help acct-count" + (bio.length > BIO_MAX - 40 ? " is-near" : "")}>
+              {bio.length} / {BIO_MAX} characters
+            </span>
+          </div>
+        </div>
+
+        <div className="acct-actions">
+          <Button type="submit" variant="primary" loading={saving}>Save profile</Button>
+          {dirty
+            ? <span className="acct-hint acct-dirty"><span className="acct-dirty-dot" aria-hidden="true" />Unsaved changes</span>
+            : <span className="acct-hint">Public at <Link className="linkish" to={`/u/${encodeURIComponent(user.username)}`}>/u/{user.username}</Link></span>}
+        </div>
+      </Group>
+    </section>
   );
 }
 
@@ -250,7 +126,11 @@ export function SecuritySection({ links, reloadLinks }) {
   const { toast } = useToast();
   const [curPw, setCurPw] = useState("");
   const [newPw, setNewPw] = useState("");
+  const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
+  const uid = useId();
+  const setting = links && !links.has_password;
+  const long = newPw.length >= 8;
 
   async function changePassword(e) {
     e.preventDefault();
@@ -265,74 +145,110 @@ export function SecuritySection({ links, reloadLinks }) {
     } finally { setBusy(false); }
   }
 
+  const status = links == null
+    ? <Skeleton width={120} height={24} style={{ borderRadius: 999 }} />
+    : <Chip tone={links.has_password ? "ok" : "neutral"} icon={links.has_password ? "lock" : "unlock"}>
+        {links.has_password ? "Password sign-in on" : "No password yet"}
+      </Chip>;
+
   return (
-    <form className="card acct-card" onSubmit={changePassword}>
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>{links && !links.has_password ? "Set a password" : "Change password"}</p>
-      {links && links.has_password && (
-        <label className="field">
-          <span>Current password</span>
-          <input type="password" value={curPw} onChange={e => setCurPw(e.target.value)} autoComplete="current-password" />
-        </label>
-      )}
-      <label className="field">
-        <span>New password</span>
-        <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="at least 8 characters" autoComplete="new-password" />
-      </label>
-      <div className="row">
-        <Button type="submit" variant="primary" loading={busy} disabled={newPw.length < 8}>
-          {links && !links.has_password ? "Set password" : "Change password"}
-        </Button>
-      </div>
-    </form>
+    <section className="acct-section" aria-labelledby="acct-h-security">
+      <SectionHead id="acct-h-security" icon="shield" title="Security"
+                   lead="Your password, and what happens to your other sessions when it changes." />
+      <Group as="form" i={1} onSubmit={changePassword} aside={status}
+             title={setting ? "Set a password" : "Change password"}
+             hint={setting
+               ? "You sign in with a linked account today. A password lets you sign in with your email too."
+               : "A passphrase of a few unrelated words is long, and easy to remember."}>
+        <div className="acct-fields">
+          {links && links.has_password && (
+            <label className="field">
+              <span>Current password</span>
+              <input type={reveal ? "text" : "password"} value={curPw} onChange={e => setCurPw(e.target.value)} autoComplete="current-password" />
+            </label>
+          )}
+          <div className="field">
+            <label htmlFor={`${uid}-new`}>New password</label>
+            <span className="acct-affix">
+              <input id={`${uid}-new`} type={reveal ? "text" : "password"} value={newPw} onChange={e => setNewPw(e.target.value)}
+                     autoComplete="new-password" aria-describedby={`${uid}-req`} />
+              <button type="button" className="icon-btn plain acct-reveal" onClick={() => setReveal(r => !r)}
+                      aria-label="Show passwords" aria-pressed={reveal}>
+                <Icon name={reveal ? "eyeOff" : "eye"} size={16} />
+              </button>
+            </span>
+            <span id={`${uid}-req`} className={"acct-req" + (long ? " is-met" : "")}>
+              <Icon name={long ? "circleCheck" : "clock"} size={14} /> At least 8 characters
+            </span>
+          </div>
+        </div>
+        <div className="acct-actions">
+          <Button type="submit" variant="primary" loading={busy} disabled={!long}>
+            {setting ? "Set password" : "Change password"}
+          </Button>
+          <span className="acct-hint">Saving signs out your other devices.</span>
+        </div>
+      </Group>
+    </section>
   );
 }
+
+const PROVIDER_NAMES = { google: "Google", discord: "Discord" };
 
 export function LinkedSection({ links }) {
   const { user } = useAuth();
-  const PROVIDER_NAMES = { google: "Google", discord: "Discord" };
+  const linked = (links && links.linked) || [];
   return (
-    <div className="card acct-card">
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>Linked accounts</p>
-      <div className="muted" style={{ fontSize: "var(--text-sm)" }}>{user.email}</div>
-      <div className="row wrap" style={{ gap: 8 }}>
-        {links && links.linked.length > 0
-          ? links.linked.map(p => <Chip key={p} tone="accent">{PROVIDER_NAMES[p] || p}</Chip>)
-          : <span className="muted" style={{ fontSize: "var(--text-sm)" }}>No external logins linked.</span>}
-      </div>
-    </div>
+    <section className="acct-section" aria-labelledby="acct-h-linked">
+      <SectionHead id="acct-h-linked" icon="link" title="Linked accounts"
+                   lead="The ways you can sign in to Tideglass." />
+      <Group i={1} title="Sign-in methods">
+        <ul className="acct-list">
+          <li className="acct-list-row">
+            <span className="acct-list-mark" aria-hidden="true"><Icon name="user" size={16} /></span>
+            <span className="acct-list-text">
+              <b>Email</b>
+              <span className="muted">{user.email || "No email on file"}</span>
+            </span>
+            {user.email && <Chip tone={user.email_verified ? "ok" : "warn"} icon={user.email_verified ? "check" : "alert"}>
+              {user.email_verified ? "Verified" : "Unverified"}
+            </Chip>}
+          </li>
+          <li className="acct-list-row">
+            <span className="acct-list-mark" aria-hidden="true"><Icon name="lock" size={16} /></span>
+            <span className="acct-list-text">
+              <b>Password</b>
+              <span className="muted">{links == null ? "Checking…" : links.has_password ? "Set — manage it under Security" : "Not set"}</span>
+            </span>
+            {links && <Chip tone={links.has_password ? "ok" : "neutral"}>{links.has_password ? "On" : "Off"}</Chip>}
+          </li>
+          {linked.map(p => (
+            <li key={p} className="acct-list-row">
+              <span className="acct-list-mark is-brand" aria-hidden="true">{(PROVIDER_NAMES[p] || p).charAt(0)}</span>
+              <span className="acct-list-text">
+                <b>{PROVIDER_NAMES[p] || p}</b>
+                <span className="muted">Sign in with your {PROVIDER_NAMES[p] || p} account</span>
+              </span>
+              <Chip tone="accent" icon="link">Linked</Chip>
+            </li>
+          ))}
+        </ul>
+        {links && linked.length === 0 && (
+          <p className="acct-hint acct-list-empty">No external logins linked.</p>
+        )}
+      </Group>
+    </section>
   );
 }
 
-export function UsageSection() {
-  const { user } = useAuth();
-  const [usage, setUsage] = useState(null);
-  useEffect(() => {
-    identityApi.usage().then(setUsage).catch(() => setUsage({ unlimited: true }));
-  }, []);
-
-  const meter = (label, used, limit, help) => (
-    <div>
-      <div className="acct-quota-top"><span>{label}</span><span className="muted mono">{used} / {limit}</span></div>
-      <ProgressBar size="sm" value={limit > 0 ? Math.min(100, (used / limit) * 100) : 0} label={label} />
-      {help && <div className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 3 }}>{help}</div>}
-    </div>
-  );
-
+export function SourcesSection() {
   return (
-    <div className="card acct-card">
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>This month's usage</p>
-      {!usage ? <Loading /> : usage.unlimited ? (
-        <Chip tone="accent">Unlimited (admin)</Chip>
-      ) : (
-        <>
-          {meter("Chapters translated", usage.usage.translated_chapters, usage.limits.translated_chapters, "On-demand reads and batch pre-translation both count.")}
-          {meter("OCR pages", usage.usage.ocr_pages, usage.limits.ocr_pages, "Pages read from scanned PDF imports.")}
-          {meter("Codex builds", usage.usage.codex_builds, usage.limits.codex_builds, "Each build or extension of a novel's codex.")}
-          {usage.limits.tts_chapters != null && meter("Chapters narrated", usage.usage.tts_chapters, usage.limits.tts_chapters, "Chapters synthesized to audio (cached ones are free).")}
-          {!user.email_verified && <div className="acct-err">Verify your email to use translation, OCR & imports.</div>}
-          <p className="muted" style={{ fontSize: "var(--text-xs)", margin: 0 }}>Quotas reset at the start of each month.</p>
-        </>
-      )}
-    </div>
+    <section className="acct-section acct-sources" aria-labelledby="acct-h-sources">
+      <SectionHead id="acct-h-sources" icon="globe" title="Source accounts"
+                   lead="Sign-ins Tideglass uses on your behalf to import chapters from sites that need an account." />
+      <div className="rise" style={{ "--i": 1 }}>
+        <NovelpiaCookies />
+      </div>
+    </section>
   );
 }

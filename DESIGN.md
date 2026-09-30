@@ -1,297 +1,262 @@
 ---
 name: Tideglass
-description: A personal reading room in paper, forest ink, and literary type.
+description: Moonlit sea glass — a night-ocean reading room with luminous glass, literary type and a tide you can read by.
 colors:
-  accent: "oklch(0.40 0.065 165)"
-  accent-soft: "oklch(0.46 0.075 165 / 0.10)"
-  on-accent: "oklch(0.99 0.01 90)"
-  paper: "oklch(0.977 0.008 90)"
-  desk: "oklch(0.947 0.012 90)"
-  surface: "oklch(0.995 0.006 86)"
-  ink: "oklch(0.27 0.015 155)"
-  muted: "oklch(0.49 0.018 85)"
-  border: "oklch(0.9 0.015 80)"
-  directory: "#183d35"
-  directory-ink: "#f1eee3"
-  directory-muted: "#becfc6"
-  directory-active: "#2b5146"
-  success: "oklch(0.62 0.11 155)"
-  warning: "oklch(0.62 0.13 75)"
-  danger: "oklch(0.55 0.16 25)"
-  info: "oklch(0.56 0.1 250)"
-  dark-paper: "oklch(0.195 0.012 62)"
-  dark-surface: "oklch(0.238 0.014 62)"
-  dark-ink: "oklch(0.93 0.012 84)"
-  dark-muted: "oklch(0.7 0.016 76)"
-  dark-border: "oklch(0.32 0.015 66)"
-  dark-accent: "oklch(0.8 0.12 165)"
-  dark-on-accent: "oklch(0.2 0.02 70)"
+  accent-hue: "192 (sea glass; user-selectable)"
+  tide-bg: "oklch(0.155 0.028 262)"
+  tide-bg-2: "oklch(0.128 0.025 262)"
+  tide-surface: "oklch(0.27 0.036 258 / 0.44)"
+  tide-surface-float: "oklch(0.2 0.03 260 / 0.72)"
+  tide-ink: "oklch(0.955 0.01 250)"
+  tide-muted: "oklch(0.72 0.025 252)"
+  tide-border: "oklch(0.86 0.03 250 / 0.1)"
+  tide-accent: "oklch(0.83 0.115 var(--accent-h))"
+  tide-accent-2: "oklch(0.76 0.13 calc(var(--accent-h) + 48))"
+  tide-on-accent: "oklch(0.17 0.035 262)"
+  pearl-bg: "oklch(0.978 0.006 88)"
+  pearl-surface: "oklch(1 0 0 / 0.6)"
+  pearl-ink: "oklch(0.24 0.035 262)"
+  pearl-muted: "oklch(0.49 0.03 260)"
+  pearl-accent: "oklch(0.52 0.1 var(--accent-h))"
+  gold: "oklch(0.87 0.105 82) / oklch(0.6 0.12 72)"
+  ok: "oklch(0.8 0.13 165) / oklch(0.45 0.105 160)"
+  warn: "oklch(0.85 0.13 80) / oklch(0.5 0.115 68)"
+  danger: "oklch(0.72 0.16 22) / oklch(0.5 0.18 25)"
+  info: "oklch(0.79 0.1 240) / oklch(0.5 0.12 250)"
 typography:
   display:
-    fontFamily: '"Newsreader", Georgia, "Times New Roman", serif'
-    fontSize: "clamp(2.25rem, 4vw, 3.25rem)"
-    fontWeight: 400
-    lineHeight: 1.12
-    letterSpacing: "-0.03em"
-  headline:
-    fontFamily: '"Newsreader", Georgia, "Times New Roman", serif'
-    fontSize: "clamp(2rem, 3.5vw, 2.75rem)"
-    fontWeight: 400
-    letterSpacing: "-0.025em"
-  title:
-    fontFamily: '"Newsreader", Georgia, "Times New Roman", serif'
-    fontSize: "1.5rem"
-    fontWeight: 500
-  body:
-    fontFamily: '"Hanken Grotesk", system-ui, -apple-system, sans-serif'
-    fontSize: "0.9375rem"
-    fontWeight: 400
-  label:
-    fontFamily: '"Hanken Grotesk", system-ui, -apple-system, sans-serif'
-    fontSize: "0.8125rem"
-    fontWeight: 600
-  prose:
-    fontFamily: '"Newsreader", Georgia, "Times New Roman", serif'
-    fontSize: "19px"
-    fontWeight: 400
-    lineHeight: 1.7
+    fontFamily: '"Fraunces Variable", Fraunces, Georgia, serif'
+    axes: "opsz auto, SOFT 30–100, WONK 0–1"
+    hero: "clamp(2.9rem, 6.4vw, 5.2rem) / 1.02, weight 380, tracking -0.035em"
+    page-title: "clamp(2.4rem, 4.6vw, 3.6rem) / 1.04, weight 400"
+  ui:
+    fontFamily: '"Geist Variable", Geist, system-ui, sans-serif'
+    body: "0.9375rem"
+    eyebrow: "0.6875rem uppercase, 0.18em tracking, weight 600–650"
+  reading:
+    serif: '"Literata Variable" (default)'
+    classic: '"Fraunces Variable"'
+    sans: '"Geist Variable"'
+    legible: '"Atkinson Hyperlegible Next Variable"'
+    size: "14–28px (default 19px), line height 1.3–2.2 (default 1.7)"
   mono:
-    fontFamily: '"Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace'
-    fontSize: "0.75rem"
+    fontFamily: '"Geist Mono Variable", ui-monospace'
 rounded:
-  sm: "6px"
-  md: "12px"
-  lg: "16px"
+  xs: "6px"
+  sm: "10px"
+  md: "16px"
+  lg: "22px"
+  xl: "30px"
   full: "999px"
-spacing:
-  "1": "4px"
-  "2": "8px"
-  "3": "12px"
-  "4": "16px"
-  "5": "24px"
-  "6": "32px"
-  "7": "48px"
-  "8": "64px"
-components:
-  button-primary:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.on-accent}"
-    rounded: "{rounded.sm}"
-    padding: "10px 18px"
-  button-secondary:
-    backgroundColor: "{colors.accent-soft}"
-    textColor: "oklch(0.36 0.07 165)"
-    rounded: "{rounded.sm}"
-    padding: "10px 18px"
-  button-ghost:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.sm}"
-    padding: "10px 18px"
-  input:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.ink}"
-    rounded: "10px"
-    padding: "10px 12px"
-  card:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.md}"
-    padding: "{spacing.4}"
-  chip:
-    backgroundColor: "oklch(0.978 0.009 84)"
-    textColor: "{colors.muted}"
-    rounded: "{rounded.full}"
-    padding: "3px 10px"
-  directory-item:
-    backgroundColor: "{colors.directory}"
-    textColor: "{colors.directory-muted}"
-    rounded: "5px"
+  cover: "3px 9px 9px 3px"
+motion:
+  ease-out: "cubic-bezier(0.16, 1, 0.3, 1)"
+  ease-in-out: "cubic-bezier(0.65, 0, 0.35, 1)"
+  ease-spring: "linear() soft spring (~1.7% overshoot)"
+  durations: "140 / 240 / 420 / 700 / 1100 ms"
+  springs: "snappy 520/40 · smooth 280/32 · gentle 150/24 · bouncy 430/17 · layout 420/38"
 ---
 
 # Design System: Tideglass
 
 ## Overview
 
-**Creative North Star: "The Personal Reading Room"**
+**Creative north star: "Moonlit sea glass."** Tideglass is a reading room at the
+edge of a night ocean. Deep water fills the background; interface surfaces are
+frosted sea glass that catches light at the edges; titles are set in an expressive
+old-style serif; and the product's central idea — the tide that reveals a story only
+as far as you have read — is present in its motion: arrivals rise out of the water,
+chapters wash in, knowledge beyond your chapter stays beneath the surface.
 
-Tideglass pairs a forest-ink directory with a generous paper desk. Book covers,
-literary headings, and comfortable prose establish the identity; navigation and
-working controls stay compact and legible. The result is calm, tactile, and useful
-for both returning to a story and managing a collection.
+Two themes share one vocabulary:
 
-These are the implemented visual rules, extracted from the current
+- **Tide** (dark) — abyssal navy, moonlight ink, a luminous sea-glass accent.
+- **Pearl** (light) — warm pearl, deep-sea ink, iridescent morning light.
+
+These rules describe the implemented system in
 [tokens](novelwiki/frontend/src/styles/tokens.css),
-[components](novelwiki/frontend/src/styles/components.css), and desktop/mobile
-review captures. [PRODUCT.md](PRODUCT.md) contains product constraints;
+[base](novelwiki/frontend/src/styles/base.css),
+[components](novelwiki/frontend/src/styles/components.css),
+[shell](novelwiki/frontend/src/styles/shell.css),
+[ambient](novelwiki/frontend/src/styles/ambient.css),
+[transitions](novelwiki/frontend/src/styles/transitions.css), the per-surface
+stylesheets in `styles/surfaces/`, and the [reader](novelwiki/frontend/src/styles/reader.css).
+[PRODUCT.md](PRODUCT.md) holds the product constraints; the
 [frontend overview](docs/frontend/overview.md) describes behavior and code ownership.
-Update this reference and its [.impeccable/design.json](.impeccable/design.json) sidecar
-when shared visual decisions change. Individual surface compositions stay in their
-surface briefs.
+Keep this file and its [.impeccable/design.json](.impeccable/design.json) sidecar
+aligned when shared visual decisions change.
 
-**Key Characteristics:**
+**Key characteristics**
 
-- Warm paper backgrounds with a distinct forest navigation area.
-- Serif titles and prose, clear sans-serif controls, restrained monospaced metadata.
-- Consistent book-cover proportions and slim reading-progress indicators.
-- Flat everyday surfaces, visible focus, and limited depth for covers and overlays.
-- Full light/dark themes with preserved reader appearance choices.
+- A living background: a slow WebGL tide (aurora over water, thin caustic light,
+  a faint star field after dark), the focused book's blurred jacket as an aura,
+  and film grain. The whole room takes on the colours of the book you are in.
+- Floating glass chrome: an island header, a novel capsule, a phone dock, and in
+  the reader two receding capsules. Content surfaces are translucent cards without
+  backdrop blur; only floating elements blur what is behind them.
+- Fraunces for everything editorial (titles, numbers, greetings, drop caps), Geist
+  for the interface, Literata for long-form reading.
+- Motion with physics and restraint: springs for anything that moves in space,
+  rising entrances, view transitions between routes, and calm reading surfaces.
+- Full parity between Tide and Pearl; saved accent hue, theme and reader
+  preferences are honoured everywhere.
 
-## Colors
+## Colours
 
-The palette combines warm neutrals and forest ink with semantic status colors. The
-frontmatter records the default light and dark values. Runtime accent colors use
-`--accent-h`, whose default is 165; saved user choices override that default. Use the
-CSS variables in implementation so changing hue or theme updates the complete system.
+All colours are OKLCH tokens in `tokens.css`, redefined per theme. The accent hue
+`--accent-h` defaults to 192 (sea glass) and is a real user setting (Account →
+Appearance offers Sea glass, Lagoon, Abyss, Amethyst, Coral, Lantern and Kelp);
+changing it recolours accents, glows, focus rings, the ambient water and generated
+art. A reader whose saved hue was the previous design's implicit default (165) is
+moved to 192 once; chosen hues are kept.
 
-### Primary
-
-The accent identifies the principal action, links, reading progress, and selected
-controls. Its soft counterpart supports quiet selections and secondary actions.
-Accent text uses the dedicated ink variant for legibility on paper. The directory
-palette is separately defined and remains forest-colored across app themes.
-
-### Neutral
-
-Paper is the page canvas; the desk tone distinguishes the featured reading surface.
-Surface colors support controls, dialogs, and restrained cards. Ink carries content;
-muted text is reserved for supporting information. Borders separate neighboring
-controls and list rows without replacing spacing as the main grouping cue.
-
-The dark theme keeps warm backgrounds and increases accent/text lightness. The reader
-also provides coordinated sepia and night palettes in
-[reader.css](novelwiki/frontend/src/styles/reader.css); they override text, surfaces,
-and borders together.
-
-### Status
-
-Success, warning, danger, and information colors explain state. Keep their text labels
-or icons alongside color. Codex entity-type colors distinguish categories; they do not
-indicate that hidden story information has become available.
+- **Ink ramp:** `--ink` (primary text), `--ink-2`, `--muted` (secondary; ≥ 4.5:1 on
+  both themes), `--faint` (non-essential only).
+- **Surfaces:** `--bg`/`--bg-2`/`--bg-3`, `--surface`/`--surface-2` (translucent
+  cards), `--surface-solid` (opaque inputs/menus), `--surface-float` (frosted
+  floating chrome). Hairlines: `--border`, `--border-2`, and `--hairline-hi` for the
+  lit top edge of glass.
+- **Accent:** `--accent`, `--accent-2` (a companion hue +48° for gradients),
+  `--accent-ink` (accent-coloured text), `--accent-soft` (tints), `--accent-glow`
+  (light), `--on-accent`.
+- **Gold** marks warm, rare moments (unread-chapter counts, sparkles).
+- **Status:** `--ok/--warn/--danger/--info` with `-soft` tints. Status is never
+  conveyed by colour alone.
+- **Atmosphere:** `--atmo-h1/--atmo-h2/--atmo-c` (registered `@property` numbers,
+  so they glide) are set from the focused book's cover; `--atmo-1/2/3/glow` derive
+  from them per theme. Same-origin covers are sampled; covers on other sites (which
+  block pixel reads) and missing covers use a stable hue pair from the title. The
+  aura layer shows the real jacket colours regardless of origin.
 
 ## Typography
 
-Newsreader carries titles, book names, and reading prose. Hanken Grotesk carries
-navigation, forms, descriptions, and actions. Spline Sans Mono supports chapter
-positions, timing, shortcuts, and code-like metadata. Fonts are self-hosted and have
-system fallbacks.
+- **Display — Fraunces Variable** (opsz, SOFT, WONK). Page titles, greetings, book
+  titles, chapter numerals, drop caps and numbers. Soft terminals
+  (`"SOFT" 30–100`) and italic `WONK` for emphasis (the reader's name on Home,
+  "next chapter" titles). Titles reveal word by word (`TextReveal`).
+- **Interface — Geist Variable.** Controls, labels, metadata. Eyebrows are 11px
+  uppercase with 0.18em tracking.
+- **Reading — Literata Variable** by default; the reader may choose Fraunces
+  (classic), Geist (sans) or Atkinson Hyperlegible Next (legible). Size 14–28px,
+  line height 1.3–2.2, measure in `ch`.
+- **Figures — Geist Mono** with tabular numerals.
 
-The display and headline roles create the page hierarchy; section titles are smaller
-and moderately weighted. Small labels support the interface instead of competing
-with a book title. Form labels use normal capitalization. Uppercase remains a limited
-treatment for small category labels and chapter-completion metadata.
-
-The prose role records the default reader settings. Readers can choose serif or sans,
-adjust size and line spacing, and change column width. Preserve those choices when
-refining chrome or typography.
+All fonts are self-hosted variable fonts (`@fontsource-variable`); only the Latin
+subsets a page uses are fetched.
 
 ## Layout
 
-The desktop shell has a sticky directory, a breadcrumb/search bar, and an independently
-flowing content column. The directory is 224px expanded and 76px collapsed; the main
-page container caps at 1380px. Horizontal page padding scales from 20px to 56px. Use the
-shared spacing scale for recurring gaps, with component-specific geometry where the
-implementation already defines it.
+The shell content column is `min(1320px, 100%)` with `clamp(18px, 4vw, 56px)`
+gutters, starting below the floating island. Novel routes add a sticky capsule.
+Below 768px the island is replaced by a floating bottom dock and pages reserve
+space for it. The reader measure is 55/65/80ch or full width. Every screen is
+designed at 390px with no horizontal page overflow.
 
-At 767px and below, primary navigation moves to fixed bottom tabs, the directory is
-hidden, and search remains available as an icon button. Content reserves space for
-the navigation and device safe areas. At 640px and below, the library uses two cover
-columns and page actions wrap. Home's main/aside layout stacks at 1150px; these are
-surface-specific breakpoints, not a universal grid requirement.
+## Material, elevation and depth
 
-The reader fills the viewport outside the shell. Its centered column uses character
-measure: narrow, normal, and wide widths are based on 55ch, 65ch, and 80ch plus the
-column's padding allowance; full width is also available. Horizontal cover rails
-scroll within their own region, while forms and page headings wrap at narrow widths.
+- `.card` — translucent surface, hairline border, lit top edge, soft shadow.
+- `.glass` / floating chrome — `--surface-float` with `backdrop-filter: blur(22px)
+  saturate(1.6)`. Reserved for a handful of floating elements because blurring the
+  animated background is costly. When the page scrolls, a frosted band (tint plus a
+  blur that fades toward the page) softens content sliding under the islands; it sits
+  beneath the novel capsule and sticky toolbars.
+- A `backdrop-filter`, `filter`, `transform` or `view-transition-name` makes an
+  element a containing block (and backdrop root) for what it holds, so overlays portal
+  to the page root and entrance animations fill `backwards` only.
+- Book covers are 2:3 jackets with a spine crease and top sheen; on fine pointers
+  they tilt toward the cursor with a specular glare (`data-tilt`). Cards can catch a
+  cursor-following light on their edges (`data-spotlight`).
+- Books without cover art get generated jackets: one of four abstract motifs
+  (tide under a moon, sea-glass shards, ripples, a horizon) in a hue pair derived
+  from the title, with the real title and author set on top. They are decorative
+  and never imply real artwork.
 
-## Elevation & Depth
+## Motion
 
-Cards and primary buttons are flat at rest. Subtle borders and tonal differences carry
-most grouping; book covers may use ambient depth, and dialogs, popovers, and citation
-panels use the stronger floating shadow. Interactive cards can gain depth on hover.
-The shared shadow definitions, focus ring, and motion values are recorded in the
-sidecar directly from the CSS; do not add shadows to every surface.
-
-Short transitions mark hover, focus, selection, and opening/closing. Page entrance is
-a small movement; reader chapter changes can fade. Reduced-motion preferences reduce
-animation/transition duration and disable smooth scrolling while retaining actions.
-
-## Shapes
-
-Small-radius buttons and icon controls contrast with softly rounded containers. Input
-fields retain their own rounded outline. Chips, avatars, progress tracks, and play
-buttons use circular or pill shapes because those shapes communicate their roles.
-
-Book jackets use a 2:3 proportion and slightly asymmetric corners to suggest a spine.
-Missing covers are flat colored jackets with a title, an inset rule, and no invented
-illustration. Tiny cover slots omit the placeholder title instead of squeezing it into
-unreadable type.
+- **Physics:** springs `snappy`, `smooth`, `gentle`, `bouncy`, `layout` (motion
+  library) and the CSS `--ease-spring` curve. Feedback ≤ 240ms, surfaces ≤ 420ms,
+  heroes ≤ 1.1s.
+- **Arrivals** rise from a soft blur (`.rise` with `--i` stagger, `rise` variant).
+- **Layout** changes (tab lozenges, nav pills, grids that filter or reorder) use
+  shared-layout animation so selections slide rather than jump.
+- **Routes** are View Transitions: a soft rise between pages, a reverse gesture on
+  back/forward, a quick crossfade between tabs, the room receding as you open a book,
+  and a wave-edged tide wash between chapters. The island, reader capsules and
+  progress rail hold still while content changes. A book's jacket flies from any
+  shelf into the novel hero (`hero-cover`). Destinations may hold the old frame for
+  a moment until their data is on screen, so morphs land on real content.
+- **Theme changes** spread from the switch as a circle of the new light.
+- **Ambient water** runs at reduced resolution and ≤ 30fps, pauses when the tab is
+  hidden, and has a user setting (Living water / Still / Off).
+- **Reduced motion:** transitions, entrances, loops and the ambient animation
+  collapse to instant or still; every action and state remains.
+- Reading surfaces stay calm: nothing loops near prose.
 
 ## Components
 
-### Buttons
+- **Buttons** are pills. Primary: accent gradient, lit edge, a sheen that sweeps on
+  hover, a tide ripple from the press point, a slight press scale. Secondary: accent
+  tint. Ghost: glass. Danger: coral. Loading replaces the icon with a spinner and
+  marks the button busy (`aria-busy`, `aria-disabled`) without disabling it, so
+  keyboard focus stays put and repeat presses are ignored. On touch, compact
+  buttons, tabs and segments grow to ~40px.
+- **Fields** are 44px, softly inset; focus adds an accent ring and glow; errors are
+  explained in text.
+- **Segmented controls and tabs** slide a lozenge between options. Tabs follow the
+  ARIA pattern: one Tab stop, and arrows, Home and End move and select.
+- **Progress:** slim glowing bars (with a sheen when live) and progress rings.
+- **Overlays:** dialogs, sheets (phones), popovers, drawers, the command palette and
+  toasts are frosted glass with spring entrances and animated exits; focus is
+  trapped and restored. Toasts drain a tide line as they time out and can be flicked
+  away. In Pearl, the palette and dialogs are near-opaque so they read cleanly over
+  the scrim. Popovers open toward the larger room between the header and the phone
+  dock; the Codex gauge and Narrate panel become sheets above the dock on phones.
+  Menus follow the ARIA menu pattern and hand focus back to their button.
+- **Focus** is a glowing accent ring (`--ring`) that follows each control's shape and
+  outranks component shadows; bare links get softened corners.
+- **Status colours** in Pearl are deep enough to pass AA as text on their own soft
+  tints; Tide's bright set already does.
+- **Empty states** float an icon orb with slow ripple rings, with honest copy and a
+  recovery action.
 
-Primary buttons use accent and on-accent colors without a resting or hover shadow.
-Secondary buttons use the soft accent; ghost buttons use the surface with a fine
-border. The shared button has a 42px minimum height. Hover changes color or brightness;
-disabled controls reduce opacity and use the disabled cursor. Keep an explicit text
-label unless the action is a familiar, accessibly named icon control.
+## Surfaces
 
-### Fields and chips
+- **Home** — the date and a time-of-day greeting under tonight's actual moon phase;
+  the book you are in floats in a spotlight tinted by its jacket (progress ring,
+  chapter, continue/listen); destinations and live background work beside it; rails
+  for the nightstand and the shared library; unread-chapter counts in gold.
+- **Reader** — see the [reader surface brief](.impeccable/surfaces/novelwiki-frontend-src-modules-reading-reader-jsx.md).
+  Five tones (Theme, Paper, Sepia, Dusk, Night), an engraved chapter numeral with a
+  drawn ornament, drop caps with small-caps first lines, floating capsules that
+  recede, a narration dock that becomes a corner mini-player while you read and
+  listen, and an end-of-chapter moment where the tide turns.
+- **Sign-in** — a real-time moonlit sea (dawn in Pearl) with a wordmark that rises out
+  of the waterline; the glass card morphs between modes while the sea keeps moving.
+- **Novel** — a floating jacket over the book's own glow and a tideline across the
+  whole book (your place, bookmarks as gold pins, volume ticks).
+- **Codex** — knowledge beyond your chapter lies under the tide: a tide-gauge
+  boundary, entries that surface as the water drops, and a frosted shelf of what is
+  still hidden.
+- **Import** — a glass basin that fills as books upload, and a tideline stepper.
+- **Lost at sea** — unknown links show a bottle bobbing on the waves and three ways
+  home.
+- Library, Discover, Jobs, Account, Profile and Admin follow the same system; their
+  specifics live with their code and in `docs/frontend/overview.md`.
 
-Fields use a surface fill, a fine outline, and visible labels. Focus changes the border
-and adds a soft accent ring. Errors use explanatory text and a danger outline. Chips
-are compact supplementary metadata, with semantic variants for status; they are not
-substitutes for form labels or primary actions.
-
-### Cards and book covers
-
-General cards use a border and surface fill; their padding variants follow the spacing
-scale. Collection cards give the cover and title prominence. Cover, resume, and shelf
-actions are separate controls. Cover actions appear on hover and keyboard focus and
-remain visible on touch devices.
-
-### Navigation and search
-
-Directory items use muted light text, a lighter forest active surface, and a small
-active marker. Keyboard focus is a light outline against the directory. The paper
-breadcrumb bar retains a clearly reachable search control on desktop and mobile.
-The search palette is a bounded floating surface with grouped results, keyboard
-navigation, a focus trap, and an explicit loading/failure message.
-
-### Reading controls
-
-A slim accent rail marks scroll progress at the viewport edge. Reader chrome can
-recede during reading and returns on interaction or keyboard focus. The footer gives
-previous/next actions and reading position; settings become bottom panels on narrow
-screens. Translation editing opens a spacious desktop dialog with side-by-side text
-and reading preview, becoming a full-height Edit/Preview workspace on mobile. Its
-save controls remain outside the scrolling prose area. Narration highlights the
-active text while retaining the reader's typography and tone.
-
-Optional chapter illustrations appear between prose blocks at the opening, an anchored
-passage, or the ending. Generation controls follow the prose in a collapsed disclosure,
-with character reference sheets under a separate disclosure. Scene images keep the
-reading column’s width and use quiet sans-serif captions. Manage includes an
-“Illustrate ahead” range form in the existing management grid. The illustration styles belong to this feature; surrounding
-controls retain the existing paper, ink, and forest visual system. See the
-[reader surface brief](.impeccable/surfaces/novelwiki-frontend-src-modules-reading-reader-jsx.md)
-for its composition and interaction rules.
-
-## Do's and Don'ts
+## Do's and don'ts
 
 ### Do
 
-- **Do** use shared theme tokens and preserve stored accent and reader preferences.
-- **Do** let book titles, real covers, and comfortable prose carry visual character.
-- **Do** preserve clear focus, keyboard actions, touch access, and reduced-motion behavior.
-- **Do** show loading, empty, and failed states distinctly, with a useful recovery action.
-- **Do** verify desktop, narrow screens, and dark theme after shared visual changes.
+- Use tokens so theme, accent and book atmosphere flow everywhere.
+- Let covers, titles and prose carry the identity; keep controls quiet.
+- Keep focus visible, targets ≥ 40px, keyboard and touch parity, reduced-motion
+  parity, and honest loading/empty/error states with recovery.
+- Verify Tide and Pearl, desktop and 390px mobile after shared changes.
 
 ### Don't
 
-- **Don't** nest a shelf button or resume link inside another book link.
-- **Don't** hide essential cover actions from keyboard or touch users.
-- **Don't** replace semantic status labels with color alone.
-- **Don't** invent statistics, processing stages, or verification claims as decoration.
-- **Don't** apply fixed light-theme colors to theme-aware reading surfaces.
+- Don't add backdrop blur to ordinary cards or long lists.
+- Don't loop animation near reading text or animate large lists continuously.
+- Don't nest interactive controls inside book links.
+- Don't invent statistics, stages or artwork claims for decoration.
+- Don't fix light-theme colours onto theme-aware or reader-tone surfaces.

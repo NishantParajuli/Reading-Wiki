@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { acquisitionApi } from "./api.js";
@@ -11,6 +11,15 @@ const saved = {
   cookies: [{ name: "TKEY", domain: ".novelpia.com", expires_at: "2027-09-27T10:00:00Z" }],
 };
 const exported = [{ name: "TKEY", domain: ".novelpia.com", value: "synthetic-session-secret" }];
+
+/* Removal asks first: open the confirmation and accept it. */
+async function removeAndConfirm() {
+  fireEvent.click(screen.getByRole("button", { name: "Remove saved cookies" }));
+  const dialog = screen.getByRole("dialog", { name: "Remove saved Novelpia cookies?" });
+  expect(acquisitionApi.deleteNovelpiaCookies).not.toHaveBeenCalled();
+  await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "Remove cookies" })));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+}
 
 beforeEach(() => {
   vi.spyOn(acquisitionApi, "novelpiaCookies").mockResolvedValue(empty);
@@ -55,11 +64,23 @@ describe("Novelpia source account settings", () => {
     acquisitionApi.novelpiaCookies.mockResolvedValue(saved);
     await act(async () => render(<NovelpiaCookies />));
     fireEvent.change(screen.getByLabelText("Replace cookies"), { target: { value: JSON.stringify(exported) } });
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove saved cookies" })));
+    await removeAndConfirm();
     expect(acquisitionApi.deleteNovelpiaCookies).toHaveBeenCalledOnce();
     expect(screen.getByRole("status")).toHaveTextContent("removed");
     expect(screen.getByLabelText("Cookie export")).toHaveValue("");
     expect(screen.queryByRole("button", { name: "Remove saved cookies" })).not.toBeInTheDocument();
+  });
+
+  it("keeps saved cookies when the removal is cancelled", async () => {
+    acquisitionApi.novelpiaCookies.mockResolvedValue(saved);
+    await act(async () => render(<NovelpiaCookies />));
+    fireEvent.click(screen.getByRole("button", { name: "Remove saved cookies" }));
+    const dialog = screen.getByRole("dialog", { name: "Remove saved Novelpia cookies?" });
+    expect(dialog).toHaveTextContent("Chapters already imported are kept.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(acquisitionApi.deleteNovelpiaCookies).not.toHaveBeenCalled();
+    expect(screen.getByText("Cookies saved")).toBeVisible();
   });
 
   it("offers retry on a failed status request instead of claiming no saved cookies", async () => {
@@ -93,7 +114,7 @@ describe("Novelpia source account settings", () => {
   it("can remove unreadable cookies without loading or decrypting their values", async () => {
     acquisitionApi.novelpiaCookies.mockRejectedValue(Object.assign(new Error("unreadable"), { status: 422 }));
     await act(async () => render(<NovelpiaCookies />));
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove saved cookies" })));
+    await removeAndConfirm();
     expect(acquisitionApi.deleteNovelpiaCookies).toHaveBeenCalledOnce();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByText("No cookies saved")).toBeVisible();

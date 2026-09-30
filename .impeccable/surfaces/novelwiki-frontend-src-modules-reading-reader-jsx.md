@@ -1,26 +1,50 @@
-# Reader editing and illustrations
+# Reader — reading by the tide
 
-Local extensions of the existing Personal Reading Room world; code-led, preserving Newsreader/Hanken typography, forest accents and paper/night surfaces.
+Tideglass revamp. The owner delegated every visual decision; code-led. The reader is a
+Read surface; its translation editor is an Operate workspace inside it. This replaces
+the earlier "Personal Reading Room" brief (Newsreader/Hanken, forest accents).
 
 ## Direction contract
 
-THESIS: Reading stays quiet; chapter editing earns a protected, spacious workspace and illustration creation is a deliberate optional action.
+THESIS: The page is the room. Chrome floats as frosted sea glass that recedes while you
+read; every tone re-lights the whole room, not just the paper.
 
-FIRST VIEWPORT: The editor gives most of the screen to prose with a desktop preview and visible save controls. Illustrations sit at chosen story beats; their controls follow the chapter text in a calm, collapsible section.
+FIRST VIEWPORT: An engraved chapter numeral with a slow sheen, the title, a drawn
+ornament and reading time, then prose with a drop cap and a small-caps first line.
+Two glass capsules (top: back, contents, book and chapter, position, bookmark, Aa,
+edit; bottom: previous, progress ring with minutes left, next) and a narration dock.
 
-TOPOLOGY: Desktop editor split columns; mobile full-height Edit/Preview tabs. Illustrations occupy reading-width gaps between prose blocks, with character sheets tucked under a disclosure.
+TOPOLOGY: Full-bleed, outside the shell. Settings are a popover under Aa on desktop and
+tablet, a bottom sheet on phones. Illustrations occupy reading-width gaps between
+prose blocks; character sheets stay under a disclosure.
 
-SIGNATURE INTERACTION: Live prose preview while editing; guarded discard preserves unsaved work. Images are generated only on explicit request.
+SIGNATURE INTERACTION: The tide wash between chapters (a wave-edged View Transition),
+the end-of-chapter "tide turns" seal, and a narration dock whose tide line drifts while
+it plays and which shrinks to a corner mini-player while you read and listen.
 
-MOTION: Existing reduced-motion-aware transitions; no decorative entrances obscure controls.
+MOTION: The first chapter of a visit settles in (prose readable within ~0.8s); later
+chapters use the wash. Nothing loops near prose. Reduced motion keeps every state.
 
-TRUTH: Shared versus personal edits are explicit. Art is an interpretation, bounded to this chapter; invented design details are labeled. Generation uses the connected Codex account and may wait or fail.
+TRUTH: Progress, minutes left and positions are real. The seek bar's tide line is
+decorative and carries no audio data. Shared versus personal edits are explicit. Art
+is an interpretation bounded to its chapter; generation is explicit and may wait or
+fail.
 
 ## Implemented surface
 
-The reader remains a Read surface. Its translation editor is an Operate workspace
-within the established Personal Reading Room; neither feature changes the global
-palette, typography, or navigation model.
+### Reading chrome and tones
+
+The capsules carry the view-transition names, so their glass blurs the page beneath
+in every tone; only keyboard focus holds them on screen. Five tones — Theme, Paper,
+Sepia, Dusk, Night — re-map the tokens on `.reader`: page and ink, status colours
+(light tones take Pearl's AA set, dark tones Tide's), gold, atmosphere, scrim, the
+focus ring and the page behind the reader. The Theme swatch shows the app theme.
+Settings (`ReaderSettings.jsx`) move focus to their title, trap Tab, return focus to
+Aa on Escape, and treat tone and font as single-stop radio groups with arrow keys;
+the phone sheet hides Width and fades its scroll edges. Toasts and the first-visit hint
+("Click"/"Tap" by pointer type) rise above the bottom chrome. Rich-chapter pictures open
+in a focus-trapped lightbox dialog. On touch, capsule, dock and settings controls are
+at least 40–44px.
 
 ### Translation workspace
 

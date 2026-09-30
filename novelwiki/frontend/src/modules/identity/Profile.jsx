@@ -1,103 +1,72 @@
-/* Public profile (§6.11) — hero card, stat tiles, cover rails for activity. */
+/* ============================================================
+   Public profile — a moonlit hero (glowing orb, name in display type,
+   bio), count-up figures from the real stats, and shelves of books with
+   tilting jackets. The room takes the colour of what they're reading now.
+   ============================================================ */
 import React, { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
-import { identityApi } from "../../modules/identity/api.js";
-import { useAuth } from "../../App.jsx";
-import { Button, Chip, Cover, EmptyState, Loading, ProgressBar, StatTile, UserAvatar } from "../../components/ui.jsx";
+import { identityApi } from "./api.js";
+import { ProfileHero, ProfileSkeleton, Shelf } from "./ProfileParts.jsx";
+import { Button, EmptyState } from "../../components/ui.jsx";
+import { useBookAtmosphere } from "../../atmosphere/store.js";
 import { useTitle } from "../../lib/hooks.js";
-import { fmtChapter } from "../../lib/utils.js";
-
-function MiniNovelRail({ title, items }) {
-  if (!items || items.length === 0) return null;
-  return (
-    <section style={{ marginTop: 26 }}>
-      <h2 className="section-title">{title}</h2>
-      <div className="rail mini-rail">
-        {items.map(n => {
-          const pct = (n.max_chapter && n.last_chapter != null)
-            ? Math.round(Math.min(100, (n.last_chapter / n.max_chapter) * 100)) : null;
-          return (
-            <Link key={n.id} className="rail-card" to={`/n/${n.id}`} title={n.title}>
-              <Cover src={n.cover_url} title={n.title} />
-              <span className="rail-title">{n.title}</span>
-              {pct != null && <ProgressBar size="xs" value={pct} />}
-              <span className="rail-sub">
-                {n.last_chapter != null ? `Ch. ${fmtChapter(n.last_chapter)}` : n.chapter_count != null ? `${n.chapter_count} ch.` : ""}
-              </span>
-            </Link>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
 
 export function Profile() {
   const { username } = useParams();
-  const { user: currentUser } = useAuth();
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
+  const [attempt, setAttempt] = useState(0);
   useTitle(data ? `@${data.username}` : "Profile");
 
   useEffect(() => {
+    let cancel = false;
     setData(null); setErr(null);
-    identityApi.profile(username).then(setData).catch(e => setErr(e.message || "Couldn't load this profile."));
-  }, [username]);
+    identityApi.profile(username)
+      .then(d => { if (!cancel) setData(d); })
+      .catch(e => { if (!cancel) setErr(e.message || "Couldn't load this profile."); });
+    return () => { cancel = true; };
+  }, [username, attempt]);
+
+  const reading = (data && data.currently_reading) || [];
+  useBookAtmosphere(reading[0] || null);
 
   if (err) {
     return (
       <div className="page page-enter">
-        <EmptyState icon="user" title="Profile unavailable" body={err} />
+        <EmptyState icon="user" title="Profile unavailable" body={err}
+          primaryAction={<Button variant="primary" icon="refresh" onClick={() => setAttempt(a => a + 1)}>Try again</Button>}
+          secondaryAction={<Button variant="ghost" icon="home" onClick={() => navigate("/")}>Go home</Button>} />
       </div>
     );
   }
-  if (data == null) return <div className="page"><Loading label="Loading profile…" /></div>;
+  if (data == null) return <div className="page"><ProfileSkeleton /></div>;
 
-  const joined = data.created_at ? new Date(data.created_at).toLocaleDateString(undefined, { year: "numeric", month: "long" }) : null;
-  const s = data.stats || {};
-  const empty = (data.currently_reading || []).length === 0
-    && (data.recently_finished || []).length === 0
-    && (data.published || []).length === 0;
+  const finished = data.recently_finished || [];
+  const published = data.published || [];
+  const empty = reading.length === 0 && finished.length === 0 && published.length === 0;
 
   return (
     <div className="page page-enter">
-      <div className="profile-head card">
-        <UserAvatar url={data.avatar_url} name={data.display_name} size={84} />
-        <div className="profile-head-body">
-          <div className="row wrap" style={{ gap: 10 }}>
-            <h1 className="serif" style={{ margin: 0, fontSize: "var(--text-2xl)" }}>{data.display_name}</h1>
-            {data.role === "admin" && <Chip tone="accent">Admin</Chip>}
-          </div>
-          <div className="muted">@{data.username}{joined ? ` · joined ${joined}` : ""}</div>
-          {data.bio && <p style={{ color: "var(--ink-2)", lineHeight: 1.55, maxWidth: "60ch", marginTop: 8, marginBottom: 0 }}>{data.bio}</p>}
-          {data.is_self && (
-            <div className="row" style={{ gap: 8, marginTop: 12 }}>
-              <Button variant="ghost" size="sm" icon="gear" onClick={() => navigate("/account")}>Account & settings</Button>
-            </div>
-          )}
-        </div>
+      <div className="pf-page">
+        <ProfileHero data={data} feature={reading[0] || null}
+                     onEdit={() => navigate("/account")} onAppearance={() => navigate("/account/appearance")} />
+        {empty ? (
+          <EmptyState icon="book" title="No public activity yet"
+            body="Reading activity on shared novels shows up here."
+            primaryAction={data.is_self
+              ? <Button variant="primary" icon="compass" onClick={() => navigate("/discover")}>Find something to read</Button>
+              : <Button variant="ghost" icon="compass" onClick={() => navigate("/discover")}>Browse Discover</Button>} />
+        ) : (
+          <>
+            <Shelf id="pf-reading" eyebrow="On the nightstand" title="Currently reading" items={reading} kind="reading" />
+            <Shelf id="pf-finished" eyebrow="Closed covers" title="Recently finished" items={finished} kind="finished" />
+            <Shelf id="pf-published" eyebrow={data.is_self ? "Shared by you" : "Shared"}
+                   title={data.is_self ? "Published by you" : "Published"} items={published} kind="published" />
+          </>
+        )}
       </div>
-
-      <div className="profile-stats">
-        <StatTile value={s.library_count || 0} label="in library" />
-        <StatTile value={s.reading_count || 0} label="reading" />
-        <StatTile value={s.completed_count || 0} label="completed" />
-        <StatTile value={s.chapters_read || 0} label="chapters read" />
-      </div>
-
-      {empty ? (
-        <div style={{ marginTop: 22 }}>
-          <EmptyState icon="book" title="No public activity yet" body="Reading activity on shared novels shows up here." />
-        </div>
-      ) : (
-        <>
-          <MiniNovelRail title="Currently reading" items={data.currently_reading} />
-          <MiniNovelRail title="Recently finished" items={data.recently_finished} />
-          <MiniNovelRail title={data.is_self ? "Published by you" : "Published"} items={data.published} />
-        </>
-      )}
     </div>
   );
 }

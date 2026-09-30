@@ -1,6 +1,6 @@
 import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ImportView } from "./ImportView.jsx";
 import { acquisitionApi } from "./api.js";
@@ -18,12 +18,46 @@ beforeEach(() => {
   vi.spyOn(acquisitionApi, "updateImportPlan").mockResolvedValue({});
 });
 
+function Where() {
+  const { pathname, search } = useLocation();
+  return <output data-testid="where">{pathname + search}</output>;
+}
+
 async function openImport(job = reviewJob) {
   vi.spyOn(acquisitionApi, "importJob").mockResolvedValue(job);
   const result = render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><ImportView /></MemoryRouter>);
   fireEvent.click(await screen.findByRole("button", { name: /A quiet sea Ready to review/ }));
   return result;
 }
+
+describe("import selection in the URL", () => {
+  it("opens the import named by ?job= (the Jobs page links there)", async () => {
+    vi.spyOn(acquisitionApi, "importJob").mockResolvedValue(reviewJob);
+    render(
+      <MemoryRouter initialEntries={["/import?job=5"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <ImportView /><Where />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("button", { name: "Commit" })).toBeInTheDocument();
+    expect(acquisitionApi.importJob).toHaveBeenCalledWith(5);
+    expect(await screen.findByRole("button", { name: /A quiet sea Ready to review/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps ?job= in step with the chosen import", async () => {
+    const next = { ...reviewJob, id: 6, detected_meta: { title: "Next book" } };
+    acquisitionApi.importJobs.mockResolvedValue([reviewJob, next]);
+    vi.spyOn(acquisitionApi, "importJob").mockImplementation(async (id) => (id === 6 ? next : reviewJob));
+    render(
+      <MemoryRouter initialEntries={["/import"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <ImportView /><Where />
+      </MemoryRouter>,
+    );
+    expect(acquisitionApi.importJob).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: /Next book Ready to review/ }));
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/import?job=6"));
+    await waitFor(() => expect(acquisitionApi.importJob).toHaveBeenCalledWith(6));
+  });
+});
 
 describe("import workflow recovery", () => {
   it("refreshes the selected job after committing without requiring reselection", async () => {

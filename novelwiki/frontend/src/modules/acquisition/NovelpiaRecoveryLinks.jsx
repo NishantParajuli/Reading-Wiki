@@ -1,4 +1,5 @@
 import React from "react";
+import { Icon } from "../../components/Icon.jsx";
 
 export function NovelpiaRecoveryLinks({ kind, error }) {
   if (kind !== "scrape" || typeof error !== "string" || !/\bNovelpia\b/i.test(error)) return null;
@@ -8,9 +9,9 @@ export function NovelpiaRecoveryLinks({ kind, error }) {
   const needsCookies = /\b(cookies?|login|session)\b/i.test(error);
   if (!chapter && !needsCookies) return null;
   return (
-    <div className="row wrap source-recovery-links">
-      {chapter && <a href={chapter} target="_blank" rel="noreferrer">Open chapter on Novelpia</a>}
-      {needsCookies && <a href="/account/sources" target="_blank" rel="noreferrer">Update Novelpia cookies</a>}
+    <div className="recovery-links">
+      {chapter && <a href={chapter} target="_blank" rel="noreferrer"><Icon name="external" size={13} />Open chapter on Novelpia</a>}
+      {needsCookies && <a href="/account/sources" target="_blank" rel="noreferrer"><Icon name="lock" size={13} />Update Novelpia cookies</a>}
     </div>
   );
 }

@@ -40,14 +40,18 @@ export function useNarrationGuide({ ch, novelId, number, chrome }) {
       const rects = nodes.map(node => node.getBoundingClientRect());
       const top = Math.min(...rects.map(rect => rect.top));
       const bottom = Math.max(...rects.map(rect => rect.bottom));
+      // Floating chrome: the top capsule covers the top edge; the footer capsule
+      // and the narration dock float over the bottom edge.
       const stickyBottoms = chrome
-        ? Array.from(root.querySelectorAll(".reader-bar:not(.hidden), .audio-bar"))
+        ? Array.from(root.querySelectorAll(".reader-bar:not(.hidden) .reader-capsule"))
           .map(node => node.getBoundingClientRect().bottom)
         : [];
-      const footer = chrome ? root.querySelector(".reader-foot:not(.hidden)") : null;
+      const floorTops = Array.from(root.querySelectorAll(
+        chrome ? ".reader-foot:not(.hidden) .reader-capsule, .audio-dock" : ".audio-dock.is-playing",
+      )).map(node => node.getBoundingClientRect().top).filter(top => top > 0 && top < window.innerHeight);
       const topInset = Math.max(24, ...stickyBottoms.map(value => value + 16));
-      const bottomInset = footer
-        ? Math.max(28, window.innerHeight - footer.getBoundingClientRect().top + 16)
+      const bottomInset = floorTops.length
+        ? Math.max(28, window.innerHeight - Math.min(...floorTops) + 16)
         : 28;
       const safeBottom = window.innerHeight - bottomInset;
       if (top >= topInset && bottom <= safeBottom) return;

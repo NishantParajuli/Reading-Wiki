@@ -52,7 +52,8 @@ database credentials or changing the web container's connection target.
 
 Set `OPENAI_CODEX_ENABLED=true` and restart the web and dedicated worker. The admin health
 panel must show a recent healthy heartbeat. Use the admin **Run consuming smoke test** button
-once; it deliberately starts a small model turn and is rate-limited to one per ten minutes.
+once and confirm with **Run smoke test**; it deliberately starts a small model turn and is
+rate-limited to one per ten minutes.
 Every smoke invocation leaves a terminal `completed`, `failed`, or `canceled`
 `ai_execution_runs` row with `finished_at`, failure metadata, and any available process
 metrics, so the admin failure projection and retention sweep can account for it.

@@ -1,34 +1,70 @@
-/* Entity page — codex entry, facts, relationships, timeline, identity
-   reveals. All data arrives pre-bounded from the server (chapter ≤ ceiling). */
+/* Entity page — a dossier: codex entry, what's known (a tideline of facts),
+   relationships (cards + a constellation drawn only from real relations),
+   timeline, identity reveals. All data arrives pre-bounded from the server
+   (chapter ≤ ceiling). While a request is pending nothing from a previous
+   boundary is shown; the hero may show the name the reader just clicked, but
+   only when it was listed at the very boundary still on screen. */
 import React, { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
-import { codexApi } from "../../modules/codex/api.js";
-import { portraitLabel } from "../../modules/codex/presentation.js";
+import { codexApi } from "./api.js";
+import { monogramName, portraitLabel } from "./presentation.js";
 import { useNovel } from "../../layouts/NovelLayout.jsx";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, Chip, EmptyState, EntityAvatar, Loading, TypeBadge } from "../../components/ui.jsx";
+import { Button, EmptyState, EntityAvatar, TypeBadge } from "../../components/ui.jsx";
+import { TextReveal } from "../../motion/TextReveal.jsx";
 import { Markdown } from "../../lib/markdown.jsx";
 import { CeilingControl } from "./CeilingControl.jsx";
 import { useDebounce, useTitle } from "../../lib/hooks.js";
 import { fmtChapter } from "../../lib/utils.js";
+import { useMorphTarget } from "./parts.jsx";
+import { Constellation, KnownTideline, RelationshipCards, Timeline } from "./EntityParts.jsx";
 
-function FactRow({ fact }) {
+// "Ask about Mira" — but never "Ask about The".
+function askName(name) {
+  const first = String(name || "").split(" ")[0];
+  return /^(the|a|an)$/i.test(first) ? name : first;
+}
+
+/* The hero keeps one stable DOM shape from loading to loaded, so the orb that
+   flew in from the card (and the name already revealed) is never remounted. */
+function Hero({ entity, profile, aliases = [], lede, orbRef, loading }) {
   return (
-    <div className="fact">
-      <div className="fact-chap">ch. {fmtChapter(fact.ch)}</div>
-      <div className="grow">
-        <div className="fact-type">{fact.type || "fact"}</div>
-        <div className="fact-text">{fact.text}</div>
+    <header className={"cx-dossier-hero" + (loading ? " is-loading" : "") + (entity ? ` t-${entity.type}` : "")}>
+      <span className="cx-dossier-aura" aria-hidden="true" />
+      <span className="cx-hero-orb" ref={orbRef}>
+        {entity ? <EntityAvatar entity={{ ...entity, name: monogramName(entity.name) }} lg /> : <span className="skeleton cx-sk-orb-lg" aria-hidden="true" />}
+      </span>
+      <div className="cx-hero-meta">
+        <div className="cx-hero-kicker">
+          {entity ? <TypeBadge type={entity.type} /> : <span className="skeleton text" style={{ width: 96, height: 22 }} aria-hidden="true" />}
+          {profile && <span className="cx-first-seen fade-in">First seen <b>Ch. {fmtChapter(profile.first_seen_chapter)}</b></span>}
+        </div>
+        {entity
+          ? <TextReveal as="h1" className="cx-entity-name" text={entity.name} step={60} />
+          : <span className="skeleton cx-sk-name" aria-hidden="true" />}
+        {loading ? (
+          <span className="skeleton text cx-sk-lede" aria-hidden="true" />
+        ) : (
+          <>
+            {aliases.length > 0 && (
+              <ul className="cx-aliases rise" style={{ "--i": 2 }} aria-label="Also known as">
+                {aliases.map((a, i) => <li key={i} className="cx-alias">{a}</li>)}
+              </ul>
+            )}
+            {lede && <p className="cx-lede rise" style={{ "--i": 3 }}>{lede}</p>}
+          </>
+        )}
       </div>
-    </div>
+    </header>
   );
 }
 
 export function EntityPage() {
-  const { novel, novelId, ceiling, codexMeta } = useNovel();
+  const { novel, novelId, ceiling, setCeiling, codexMeta } = useNovel();
   const { entityId: id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const debCeiling = useDebounce(ceiling, 250);
   const [status, setStatus] = useState("loading");
   const [profile, setProfile] = useState(null);
@@ -41,6 +77,11 @@ export function EntityPage() {
   const requestKey = JSON.stringify([novelId, id, debCeiling]);
   const isCurrent = loadedKey === requestKey && ceiling === debCeiling;
   useTitle(isCurrent && profile ? profile.canonical_name : "Codex", novel.title);
+
+  const navState = location.state || {};
+  const seed = navState.codexEntity;
+  const seedValid = Boolean(seed && String(seed.id) === String(id) && Number(seed.ceiling) === Number(ceiling));
+  const orbRef = useMorphTarget(navState.codexMorph ? location.key : null);
 
   useEffect(() => {
     let cancel = false;
@@ -69,30 +110,51 @@ export function EntityPage() {
     return () => { cancel = true; };
   }, [novelId, id, debCeiling, retryKey]);
 
-  const back = (
-    <Button variant="ghost" size="sm" icon="arrowLeft" onClick={() => navigate(`/n/${novelId}/codex`)}>Codex</Button>
+  const top = (
+    <div className="cx-dossier-top">
+      <Button variant="ghost" size="sm" icon="arrowLeft" onClick={() => navigate(`/n/${novelId}/codex`)}>Codex</Button>
+      <CeilingControl />
+    </div>
   );
 
   if (status === "loading" || !isCurrent) {
-    return <div className="page page-enter">{back}<Loading label="Synthesizing the codex entry…" /></div>;
+    return (
+      <div className="page cx-page cx-entity page-enter">
+        {top}
+        <Hero entity={seedValid ? { id: seed.id, name: seed.name, type: seed.type } : null} orbRef={orbRef} loading />
+        <p className="cx-loading-label cx-dossier-status" role="status"><span className="spinner" aria-hidden="true" />Synthesizing the codex entry…</p>
+        <div className="cx-dossier cx-dossier-pending" aria-hidden="true">
+          <div className="cx-dossier-main">
+            <div className="card cx-entry cx-entry-skeleton">
+              {[92, 100, 84, 96, 58].map((w, i) => <span key={i} className="skeleton text" style={{ width: `${w}%` }} />)}
+            </div>
+          </div>
+          <div className="cx-dossier-side"><div className="card cx-side-skeleton"><span className="skeleton text" style={{ width: "40%" }} /><span className="skeleton text" /><span className="skeleton text" style={{ width: "70%" }} /></div></div>
+        </div>
+      </div>
+    );
   }
   if (status === "notfound") {
+    const canRaise = codexMeta && Number(ceiling) < Number(codexMeta.max);
     return (
-      <div className="page page-enter">
-        {back}
-        <div style={{ marginTop: 16 }}>
+      <div className="page cx-page cx-entity page-enter">
+        {top}
+        <div className="cx-submerged">
           <EmptyState icon="lock" title="This entity hasn't appeared yet"
-            body={`It is first seen in a chapter beyond ${fmtChapter(ceiling)}. Read further to reveal it.`} />
+            body={`It is first seen in a chapter beyond ${fmtChapter(ceiling)}. Read further to reveal it.`}
+            primaryAction={canRaise
+              ? <Button variant="secondary" icon="wave" onClick={() => setCeiling(codexMeta.max)}>Show through Ch. {fmtChapter(codexMeta.max)}</Button>
+              : <Button variant="ghost" icon="arrowLeft" onClick={() => navigate(`/n/${novelId}/codex`)}>Back to the Codex</Button>} />
         </div>
       </div>
     );
   }
   if (status === "error") {
     return (
-      <div className="page page-enter">
-        {back}
-        <div style={{ marginTop: 16 }}><EmptyState icon="x" title="Couldn't load this entry" body={errMsg}
-          primaryAction={<Button variant="secondary" onClick={() => setRetryKey(key => key + 1)}>Try again</Button>} /></div>
+      <div className="page cx-page cx-entity page-enter">
+        {top}
+        <div className="cx-submerged"><EmptyState icon="x" title="Couldn't load this entry" body={errMsg}
+          primaryAction={<Button variant="secondary" icon="refresh" onClick={() => setRetryKey(key => key + 1)}>Try again</Button>} /></div>
       </div>
     );
   }
@@ -120,109 +182,71 @@ export function EntityPage() {
     };
   });
 
+  // Entry citations that name only a fact or relationship still point at a chapter.
+  const citedChapter = new Map([
+    ...knownFacts.map(f => [`fact:${f.id}`, f.ch]),
+    ...relItems.map(r => [`rel:${r.id}`, r.ch]),
+  ]);
+  const chapterOf = (kind, citeId) => {
+    const ch = citedChapter.get(`${kind}:${citeId}`);
+    return ch == null ? null : fmtChapter(ch);
+  };
+
   const bookMax = codexMeta && (codexMeta.bookMax == null ? codexMeta.max : codexMeta.bookMax);
   const moreToCome = codexMeta && (bookMax == null || ceiling < bookMax);
+  const entityPath = (otherId) => `/n/${novelId}/codex/e/${otherId}`;
+  const linkState = (other) => ({ codexEntity: { ...other, ceiling }, codexMorph: true });
 
   return (
-    <div className="page page-enter">
-      <div className="row wrap" style={{ justifyContent: "space-between" }}>
-        {back}
-        <CeilingControl />
-      </div>
-
-      <div className="entity-head" style={{ marginTop: 16 }}>
-        <EntityAvatar entity={entity} lg />
-        <div className="meta">
-          <TypeBadge type={entity.type} />
-          <h1 className="entity-title">{entity.name}</h1>
-          <div className="alias-row">
-            <Chip className="mono">first seen · ch. {fmtChapter(entity.firstSeen)}</Chip>
-            {aliases.map((a, i) => <Chip key={i}>“{a}”</Chip>)}
-          </div>
-          <p className="entity-lede">{desc}</p>
-        </div>
-      </div>
+    <div className="page cx-page cx-entity page-enter">
+      {top}
+      <Hero entity={entity} profile={profile} aliases={aliases} lede={desc} orbRef={orbRef} />
 
       {idl.map((l, i) => (
-        <div key={i} className="card id-banner">
-          <Icon name="link" size={18} style={{ color: "var(--ok)" }} />
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <b className="serif" style={{ fontSize: "var(--text-lg)" }}>Identity revealed</b>
-            <div style={{ fontSize: "var(--text-md)", color: "var(--ink-2)", marginTop: 2 }}>
+        <div key={i} className="cx-identity rise" style={{ "--i": 4 + i }}>
+          <span className="cx-identity-orb" aria-hidden="true"><Icon name="link" size={18} sw={2} /></span>
+          <div className="cx-identity-copy">
+            <b>Identity revealed</b>
+            <p>
               {l.note || `Revealed to be the same as ${l.other_name}.`}{" "}
-              <span className="muted">(ch. {fmtChapter(l.revealed_at_chapter)})</span>
-            </div>
+              <span className="cx-identity-ch">(ch. {fmtChapter(l.revealed_at_chapter)})</span>
+            </p>
           </div>
           <Button variant="ghost" size="sm" iconRight="arrowRight"
-                  onClick={() => navigate(`/n/${novelId}/codex/e/${l.other_id}`)}>
+                  onClick={() => navigate(entityPath(l.other_id))}>
             View {l.other_name}
           </Button>
         </div>
       ))}
 
-      <div className="entity-layout">
-        <div>
+      <div className="cx-dossier">
+        <div className="cx-dossier-main">
           {profile.rendered_md && (
-            <div className="card codex-entry">
-              <p className="section-eyebrow">Codex entry</p>
-              <Markdown text={profile.rendered_md} />
-            </div>
+            <section className={`card cx-entry t-${entity.type} rise`} style={{ "--i": 5 }} aria-labelledby="cx-entry-title">
+              <header className="cx-panel-head">
+                <h2 id="cx-entry-title" className="section-eyebrow"><Icon name="feather" size={13} sw={2} /> Codex entry</h2>
+                <span className="cx-panel-note">As of Ch. {fmtChapter(ceiling)}</span>
+              </header>
+              <Markdown text={profile.rendered_md} className="prose cx-entry-prose" chapterOf={chapterOf} />
+            </section>
           )}
 
-          <div className="card" style={{ padding: "8px 24px" }}>
-            <p className="section-eyebrow" style={{ margin: "18px 0 4px" }}>What's known · ch. ≤ {fmtChapter(ceiling)}</p>
-            {knownFacts.length === 0
-              ? <p className="muted" style={{ padding: "14px 0" }}>No recorded facts at this chapter yet.</p>
-              : knownFacts.map((f, i) => <FactRow key={"k" + i} fact={f} />)}
-          </div>
+          <KnownTideline facts={knownFacts} ceiling={ceiling} />
 
           {relItems.length > 0 && (
-            <div style={{ marginTop: 26 }}>
-              <p className="section-eyebrow">Relationships</p>
-              <div className="card" style={{ padding: 10 }}>
-                {relItems.map((r, i) => (
-                  <button key={i} className={"rel " + (r.withType ? "t-" + r.withType : "")}
-                          onClick={() => r.withId && navigate(`/n/${novelId}/codex/e/${r.withId}`)}>
-                    <EntityAvatar entity={{ type: r.withType || "concept", portrait: "" }} />
-                    <div className="grow">
-                      <div className="rel-type">{r.type}</div>
-                      <div className="rel-name">{r.withName || "Unknown"}</div>
-                      {r.note && <div className="rel-note">{r.note}</div>}
-                    </div>
-                    <Chip className="mono">ch. {fmtChapter(r.ch)}</Chip>
-                    <Icon name="arrowRight" size={16} className="muted" />
-                  </button>
-                ))}
-              </div>
-            </div>
+            <RelationshipCards items={relItems} pathFor={entityPath} stateFor={linkState} />
           )}
         </div>
 
-        <aside>
-          <div className="card side-card">
-            <h4><Icon name="clock" size={13} /> Timeline</h4>
-            <div className="timeline">
-              {tl.length === 0 && <div className="tl-text muted">No timeline yet at this chapter.</div>}
-              {tl.map((t, i) => (
-                <div key={i} className="tl-item">
-                  <div className="tl-dot" />
-                  <div className="tl-chap">Chapter {fmtChapter(t.chapter)}</div>
-                  <div className="tl-text">{t.content}</div>
-                </div>
-              ))}
-              {moreToCome && (
-                <div className="tl-item" style={{ opacity: 0.6 }}>
-                  <div className="tl-dot" style={{ background: "var(--border-2)" }} />
-                  <div className="tl-chap">More to come</div>
-                  <div className="tl-text">Hidden until you read further.</div>
-                </div>
-              )}
-            </div>
-          </div>
-          <Button variant="ghost" full icon="sparkles" style={{ marginTop: 14 }}
-                  onClick={() => navigate(`/n/${novelId}/ask?q=${encodeURIComponent(`Tell me about ${entity.name}.`)}`)}>
-            Ask about {entity.name.split(" ")[0]}
-          </Button>
+        <aside className="cx-dossier-side">
+          {relItems.length > 0 && (
+            <Constellation entity={entity} items={relItems} onOpen={(rel) => rel.withId != null && navigate(entityPath(rel.withId))} />
+          )}
+          <Timeline items={tl} moreToCome={moreToCome} />
+          <Link className="btn btn-ghost full cx-ask-about" to={`/n/${novelId}/ask?q=${encodeURIComponent(`Tell me about ${entity.name}.`)}`}>
+            <Icon name="sparkles" size={16} />
+            Ask about {askName(entity.name)}
+          </Link>
         </aside>
       </div>
     </div>

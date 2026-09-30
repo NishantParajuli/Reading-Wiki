@@ -1,0 +1,79 @@
+/* ============================================================
+   Ambient room — living water, the book's aura, grain.
+   ============================================================ */
+
+@property --atmo-h1 { syntax: "<number>"; inherits: true; initial-value: 192; }
+@property --atmo-h2 { syntax: "<number>"; inherits: true; initial-value: 262; }
+@property --atmo-c { syntax: "<number>"; inherits: true; initial-value: 0.1; }
+
+:root {
+  transition: --atmo-h1 1.6s var(--ease-in-out), --atmo-h2 1.6s var(--ease-in-out), --atmo-c 1.6s var(--ease-in-out);
+}
+
+.ambient {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+  background: var(--bg);
+  contain: strict;
+}
+
+.ambient-canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0;
+  animation: ambient-wake 1.8s var(--ease-out) 0.1s forwards;
+}
+@keyframes ambient-wake { to { opacity: 1; } }
+
+.ambient-fallback {
+  position: absolute; inset: -12%;
+  background:
+    radial-gradient(55% 45% at 18% 8%, color-mix(in oklch, var(--atmo-1) 70%, transparent), transparent 72%),
+    radial-gradient(48% 42% at 86% 14%, color-mix(in oklch, var(--atmo-2) 80%, transparent), transparent 70%),
+    radial-gradient(70% 55% at 50% 112%, color-mix(in oklch, var(--atmo-3) 22%, transparent), transparent 72%),
+    var(--bg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ambient[data-mode="living"] .ambient-fallback { animation: ambient-drift 40s var(--ease-in-out) infinite alternate; }
+}
+@keyframes ambient-drift {
+  from { transform: translate3d(-2%, -1%, 0) rotate(-1deg) scale(1.02); }
+  to { transform: translate3d(2%, 1.5%, 0) rotate(1.2deg) scale(1.06); }
+}
+
+/* The aura: a 24×36 canvas scaled ~60× — the upscale does the blurring. */
+.ambient-aura {
+  position: absolute; inset: -12%;
+  -webkit-mask-image: radial-gradient(120% 78% at 50% -6%, #000 18%, rgb(0 0 0 / 0.55) 44%, transparent 78%);
+  mask-image: radial-gradient(120% 78% at 50% -6%, #000 18%, rgb(0 0 0 / 0.55) 44%, transparent 78%);
+}
+.ambient-aura-layer {
+  position: absolute; inset: 0;
+  opacity: 0;
+  transition: opacity 1.5s var(--ease-in-out);
+}
+.ambient-aura-layer.is-painted { opacity: var(--aura-opacity, 0.42); }
+.ambient-aura-layer.is-leaving { opacity: 0; }
+.ambient-aura-layer canvas {
+  position: absolute; left: 50%; top: -42vh;
+  width: max(150vw, 115vh); height: auto; aspect-ratio: 2 / 3;
+  max-width: none; /* the base reset clamps canvases to their container */
+  transform: translateX(-50%);
+  image-rendering: auto;
+}
+[data-theme="dark"] .ambient-aura-layer { --aura-opacity: 0.4; }
+[data-theme="light"] .ambient-aura-layer { --aura-opacity: 0.34; }
+@media (prefers-reduced-motion: no-preference) {
+  .ambient[data-mode="living"] .ambient-aura { animation: aura-drift 48s var(--ease-in-out) infinite alternate; }
+}
+@keyframes aura-drift {
+  from { transform: translate3d(-3%, 0, 0) rotate(-2deg); }
+  to { transform: translate3d(3%, 2%, 0) rotate(2deg); }
+}
+
+/* Grain: a printed, tactile finish over the water (never over text). */
+.ambient-grain {
+  position: absolute; inset: 0;
+  opacity: var(--grain-opacity);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 1.4 -0.2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 240px 240px;
+}
+[data-theme="light"] .ambient-grain { mix-blend-mode: multiply; }

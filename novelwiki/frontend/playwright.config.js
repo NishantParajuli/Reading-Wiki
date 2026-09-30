@@ -18,5 +18,8 @@ export default defineConfig({
     url: `http://127.0.0.1:${frontendPort}`,
     // Never inherit a developer server's proxy when qualifying a disposable DB.
     reuseExistingServer: !process.env.CI && !realBackend,
+    // Mocked runs: anything a spec doesn't mock fails fast instead of reaching
+    // whatever backend the dev proxy defaults to (locally, a production port).
+    ...(realBackend ? {} : { env: { VITE_API_PROXY: "http://127.0.0.1:9" } }),
   },
 });

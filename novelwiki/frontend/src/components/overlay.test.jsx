@@ -1,5 +1,5 @@
-import React from "react";
-import { render, screen } from "@testing-library/react";
+import React, { useState } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Popover } from "./overlay.jsx";
@@ -42,5 +42,35 @@ describe("Popover viewport positioning", () => {
 
     expect(panel.style.left).toBe("-232px");
     expect(panel.style.right).toBe("auto");
+  });
+});
+
+describe("Popover focus", () => {
+  function Harness() {
+    const [open, setOpen] = useState(false);
+    return (
+      <Popover open={open} onClose={() => setOpen(false)}
+               trigger={<button type="button" aria-expanded={open} onClick={() => setOpen(o => !o)}>Sort</button>}>
+        <button type="button" onClick={() => setOpen(false)}>Newest</button>
+      </Popover>
+    );
+  }
+
+  it("hands focus back to its trigger when Escape closes it from inside", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Sort" }));
+    screen.getByRole("button", { name: "Newest" }).focus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("button", { name: "Newest" })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Sort" }));
+  });
+
+  it("hands focus back to its trigger after choosing an item", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Sort" }));
+    const item = screen.getByRole("button", { name: "Newest" });
+    item.focus();
+    fireEvent.click(item);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Sort" }));
   });
 });

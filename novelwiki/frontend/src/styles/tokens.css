@@ -1,132 +1,228 @@
 /* ============================================================
-   Tideglass reading room — paper, forest ink, and literary typography.
-   Every visual decision in the app derives from this file.
+   Tideglass — "moonlit sea glass".
+   Every colour, type size, radius, shadow and motion curve in the app
+   derives from this file. Two themes share one vocabulary:
+     · Tide  (dark)  — night ocean, moonlight ink, luminous sea glass
+     · Pearl (light) — morning shore, deep-sea ink on warm pearl
+   The accent hue (--accent-h) is a real user setting (Account → Appearance).
+   Book atmosphere (--atmo-*) is set at runtime from the current cover.
    ============================================================ */
 
 :root {
-  /* type */
-  --serif: "Newsreader", Georgia, "Times New Roman", serif;
-  --sans: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
-  --mono: "Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  /* ---------- type families ---------- */
+  --font-display: "Fraunces Variable", "Fraunces", "Iowan Old Style", Georgia, serif;
+  --font-ui: "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-read: "Literata Variable", "Literata", Georgia, "Times New Roman", serif;
+  --font-legible: "Atkinson Hyperlegible Next Variable", "Atkinson Hyperlegible Next", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  /* compatibility aliases used throughout the screens */
+  --serif: var(--font-display);
+  --sans: var(--font-ui);
+  --mono: var(--font-mono);
 
-  /* modular type scale — the only allowed font sizes */
-  --text-xs: 0.75rem;    /* 12 — chips, eyebrows */
-  --text-sm: 0.8125rem;  /* 13 — secondary meta */
-  --text-md: 0.9375rem;  /* 15 — body UI */
-  --text-lg: 1.0625rem;  /* 17 — card titles */
-  --text-xl: 1.5rem;   /* 24 — section headings (serif) */
-  --text-2xl: clamp(2rem, 3.5vw, 2.75rem);   /* 32–44 — page titles (serif) */
-  --text-3xl: clamp(2.25rem, 4vw, 3.25rem); /* hero (serif) */
+  /* ---------- type scale ---------- */
+  --text-2xs: 0.6875rem;                      /* 11 — micro labels */
+  --text-xs: 0.75rem;                         /* 12 — chips, eyebrows */
+  --text-sm: 0.8125rem;                       /* 13 — secondary meta */
+  --text-md: 0.9375rem;                       /* 15 — body UI */
+  --text-lg: 1.0625rem;                       /* 17 — card titles */
+  --text-xl: 1.375rem;                        /* 22 — section headings */
+  --text-2xl: clamp(1.9rem, 3.2vw, 2.6rem);   /* page titles */
+  --text-3xl: clamp(2.4rem, 4.6vw, 3.6rem);   /* heroes */
+  --text-4xl: clamp(2.9rem, 6.4vw, 5.2rem);   /* home greeting */
+  --text-5xl: clamp(3.4rem, 9vw, 7.5rem);     /* auth wordmark, chapter numerals */
 
-  /* accent — forest ink by default; hue is a real user setting (Account → Appearance) */
-  --accent-h: 165;
-  --accent: oklch(0.40 0.065 var(--accent-h));
-  --accent-soft: oklch(0.46 0.075 var(--accent-h) / 0.10);
-  --accent-ink: oklch(0.36 0.07 var(--accent-h));
-  --on-accent: oklch(0.99 0.01 90);
+  --lh-tight: 1.04;
+  --lh-snug: 1.2;
+  --lh-body: 1.55;
+  --tracking-display: -0.022em;
+  --tracking-eyebrow: 0.18em;
 
-  /* status — complete set (light values; dark overrides below) */
-  --ok: oklch(0.62 0.11 155);
-  --ok-soft: oklch(0.72 0.09 155 / 0.16);
-  --warn: oklch(0.62 0.13 75);
-  --warn-soft: oklch(0.78 0.12 75 / 0.18);
-  --danger: oklch(0.55 0.16 25);
-  --danger-soft: oklch(0.62 0.15 25 / 0.14);
-  --info: oklch(0.56 0.1 250);
-  --info-soft: oklch(0.65 0.09 250 / 0.14);
+  /* ---------- accent (user hue) ---------- */
+  --accent-h: 192;
 
-  /* sage stays an alias of ok for the codex "revealed / safe" semantics */
-  --sage: var(--ok);
-  --sage-soft: var(--ok-soft);
+  /* ---------- atmosphere (book in focus; set at runtime) ----------
+     Registered as <number> properties in ambient.css so hues glide. */
+  --atmo-h1: var(--accent-h);
+  --atmo-h2: calc(var(--accent-h) + 70);
+  --atmo-c: 0.1;
 
-  /* spacing */
+  /* ---------- spacing (4px grid) ---------- */
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
+  --space-9: 96px; --space-10: 128px;
 
-  /* radius */
-  --radius-sm: 6px;
-  --radius: 12px;
-  --radius-lg: 16px;
+  /* ---------- radius ---------- */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 30px;
   --radius-full: 999px;
+  --radius-cover: 3px 9px 9px 3px;            /* spine side / fore-edge */
 
-  /* elevation */
-  --shadow-1: 0 1px 2px oklch(0.3 0.03 70 / 0.06), 0 2px 8px oklch(0.3 0.03 70 / 0.05);
-  --shadow-2: 0 4px 14px oklch(0.3 0.03 70 / 0.09), 0 12px 36px oklch(0.3 0.03 70 / 0.08);
-  --shadow-pop: 0 12px 40px oklch(0.25 0.03 70 / 0.18);
-  --shadow-inset: inset 0 1px 3px oklch(0.3 0.03 70 / 0.12);
+  /* ---------- motion ---------- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);            /* expo-out: arrivals */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);        /* symmetric moves */
+  --ease-in: cubic-bezier(0.55, 0, 1, 0.45);            /* departures */
+  --ease-spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%, 0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%, 1.001);
+  --ease-bounce: linear(0, 0.009, 0.035 2.1%, 0.141, 0.281 6.7%, 0.723 12.9%, 0.938 16.7%, 1.017, 1.077, 1.121, 1.149 24.3%, 1.159, 1.163, 1.161, 1.154 29.9%, 1.129 32.8%, 1.051 39.6%, 1.017 43.1%, 0.991, 0.977 51%, 0.974 53.8%, 0.975 57.1%, 0.997 69.8%, 1.003 76.9%, 1.004 83.8%, 1);
+  --dur-1: 140ms;   /* hover, press */
+  --dur-2: 240ms;   /* popovers, tabs */
+  --dur-3: 420ms;   /* sheets, dialogs, page content */
+  --dur-4: 700ms;   /* heroes, reveals */
+  --dur-5: 1100ms;  /* cinematic moments */
+  --stagger: 55ms;
 
-  /* motion */
-  --ease-out: cubic-bezier(0.22, 0.8, 0.3, 1);
-  --dur-1: 120ms;  /* hovers, presses */
-  --dur-2: 200ms;  /* popovers, tabs */
-  --dur-3: 320ms;  /* drawers, modals, page fades */
+  /* ---------- layout ---------- */
+  --maxw: 1320px;
+  --island-h: 60px;
+  --page-top: 112px;          /* clearance under the floating island */
+  --gutter: clamp(18px, 4vw, 56px);
 
-  /* focus ring */
-  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
-
-  --nav-bg: #183d35;
-  --nav-ink: #f1eee3;
-  --nav-muted: #becfc6;
-  --nav-line: #38594f;
-  --nav-active: #2b5146;
-
-  --maxw: 1380px;
-  --sidebar-w: 76px;
-  --sidebar-w-open: 224px;
+  /* ---------- entity type hues (codex) ---------- */
+  --t-character: 32;
+  --t-location: 190;
+  --t-faction: 12;
+  --t-item: 300;
+  --t-concept: 255;
+  --t-organization: 145;
 }
 
-/* ---- light (warm paper) ---- */
-[data-theme="light"] {
-  --bg: oklch(0.977 0.008 90);
-  --bg-2: oklch(0.947 0.012 90);
-  --surface: oklch(0.995 0.006 86);
-  --surface-2: oklch(0.978 0.009 84);
-  --ink: oklch(0.27 0.015 155);
-  --ink-2: oklch(0.44 0.022 64);
-  --muted: oklch(0.49 0.018 85);
-  --faint: oklch(0.51 0.014 85);
-  --border: oklch(0.9 0.015 80);
-  --border-2: oklch(0.85 0.018 78);
-  --redact: oklch(0.88 0.015 80);
-  color-scheme: light;
-}
-
-/* ---- dark (warm night) ---- */
+/* =================================================================
+   TIDE — dark. Night ocean; moonlight ink; luminous sea glass.
+   ================================================================= */
 [data-theme="dark"] {
-  --bg: oklch(0.195 0.012 62);
-  --bg-2: oklch(0.165 0.012 62);
-  --surface: oklch(0.238 0.014 62);
-  --surface-2: oklch(0.272 0.015 63);
-  --ink: oklch(0.93 0.012 84);
-  --ink-2: oklch(0.8 0.014 80);
-  --muted: oklch(0.7 0.016 76);
-  --faint: oklch(0.7 0.016 76);
-  --border: oklch(0.32 0.015 66);
-  --border-2: oklch(0.4 0.018 68);
-  --redact: oklch(0.34 0.014 66);
-  --accent: oklch(0.8 0.12 var(--accent-h));
-  --accent-soft: oklch(0.8 0.12 var(--accent-h) / 0.18);
-  --accent-ink: oklch(0.84 0.11 var(--accent-h));
-  --on-accent: oklch(0.2 0.02 70);
-  --ok: oklch(0.75 0.1 155);
-  --ok-soft: oklch(0.75 0.1 155 / 0.2);
-  --warn: oklch(0.78 0.12 75);
-  --warn-soft: oklch(0.78 0.12 75 / 0.2);
-  --danger: oklch(0.7 0.15 25);
-  --danger-soft: oklch(0.7 0.15 25 / 0.18);
-  --info: oklch(0.72 0.09 250);
-  --info-soft: oklch(0.72 0.09 250 / 0.18);
-  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.2), 0 2px 10px oklch(0 0 0 / 0.22);
-  --shadow-2: 0 6px 20px oklch(0 0 0 / 0.3), 0 18px 48px oklch(0 0 0 / 0.32);
-  --shadow-pop: 0 16px 50px oklch(0 0 0 / 0.5);
-  --shadow-inset: inset 0 1px 3px oklch(0 0 0 / 0.35);
   color-scheme: dark;
+  --bg: oklch(0.155 0.028 262);
+  --bg-2: oklch(0.128 0.025 262);
+  --bg-3: oklch(0.2 0.032 260);
+  --surface: oklch(0.27 0.036 258 / 0.44);
+  --surface-2: oklch(0.32 0.04 256 / 0.52);
+  --surface-solid: oklch(0.205 0.03 260);
+  --surface-float: oklch(0.2 0.03 260 / 0.72);
+  --ink: oklch(0.955 0.01 250);
+  --ink-2: oklch(0.84 0.018 250);
+  --muted: oklch(0.72 0.025 252);
+  --faint: oklch(0.65 0.028 255);
+  --border: oklch(0.86 0.03 250 / 0.1);
+  --border-2: oklch(0.86 0.03 250 / 0.18);
+  --hairline-hi: oklch(1 0 0 / 0.1);
+  --redact: oklch(0.35 0.03 258);
+  /* the app theme's own page colours, unaffected by reader tones */
+  --app-bg: var(--bg);
+  --app-ink: var(--ink);
+  --seg-thumb: oklch(0.34 0.04 256);   /* segmented-control thumb (Pearl uses the solid surface) */
+
+  --accent: oklch(0.83 0.115 var(--accent-h));
+  --accent-2: oklch(0.76 0.13 calc(var(--accent-h) + 48));
+  --accent-ink: oklch(0.87 0.1 var(--accent-h));
+  --accent-soft: oklch(0.83 0.115 var(--accent-h) / 0.14);
+  --accent-glow: oklch(0.8 0.14 var(--accent-h) / 0.42);
+  --on-accent: oklch(0.17 0.035 262);
+
+  --gold: oklch(0.87 0.105 82);
+  --gold-soft: oklch(0.87 0.105 82 / 0.15);
+
+  --ok: oklch(0.8 0.13 165);
+  --ok-soft: oklch(0.8 0.13 165 / 0.16);
+  --warn: oklch(0.85 0.13 80);
+  --warn-soft: oklch(0.85 0.13 80 / 0.16);
+  --danger: oklch(0.72 0.16 22);
+  --danger-soft: oklch(0.72 0.16 22 / 0.17);
+  --info: oklch(0.79 0.1 240);
+  --info-soft: oklch(0.79 0.1 240 / 0.17);
+
+  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.35), 0 4px 14px oklch(0 0 0 / 0.22);
+  --shadow-2: 0 10px 30px -6px oklch(0 0 0 / 0.5), 0 2px 6px oklch(0 0 0 / 0.3);
+  --shadow-pop: 0 24px 70px -12px oklch(0 0 0 / 0.7), 0 6px 18px oklch(0 0 0 / 0.35);
+  --shadow-cover: 0 2px 4px oklch(0 0 0 / 0.35), 0 18px 40px -10px oklch(0 0 0 / 0.65);
+  --shadow-inset: inset 0 1px 3px oklch(0 0 0 / 0.4);
+
+  --glass-edge: linear-gradient(180deg, oklch(1 0 0 / 0.16), oklch(1 0 0 / 0.03) 42%, oklch(1 0 0 / 0.06));
+  --glass-fill: linear-gradient(180deg, oklch(0.3 0.04 256 / 0.5), oklch(0.22 0.035 258 / 0.38));
+  --scrim: oklch(0.1 0.03 262 / 0.62);
+  --grain-opacity: 0.07;
+
+  --atmo-1: oklch(0.44 var(--atmo-c) var(--atmo-h1));
+  --atmo-2: oklch(0.32 calc(var(--atmo-c) * 0.9) var(--atmo-h2));
+  --atmo-3: oklch(0.62 calc(var(--atmo-c) * 0.85) var(--atmo-h1));
+  --atmo-glow: oklch(0.7 calc(var(--atmo-c) * 1.2) var(--atmo-h1) / 0.35);
 }
 
-/* entity-type hues (codex) */
-.t-character { --tc: oklch(0.74 0.12 64); }
-.t-location  { --tc: oklch(0.72 0.09 195); }
-.t-faction   { --tc: oklch(0.7 0.11 25); }
-.t-item      { --tc: oklch(0.66 0.13 300); }
-.t-concept   { --tc: oklch(0.66 0.11 250); }
-.t-organization { --tc: oklch(0.7 0.1 140); }
+/* =================================================================
+   PEARL — light. Morning shore; deep-sea ink on warm pearl.
+   ================================================================= */
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: oklch(0.978 0.006 88);
+  --bg-2: oklch(0.955 0.009 86);
+  --bg-3: oklch(1 0 0);
+  --surface: oklch(1 0 0 / 0.6);
+  --surface-2: oklch(1 0 0 / 0.84);
+  --surface-solid: oklch(0.996 0.003 88);
+  --surface-float: oklch(0.995 0.004 88 / 0.76);
+  --ink: oklch(0.24 0.035 262);
+  --ink-2: oklch(0.36 0.035 262);
+  --muted: oklch(0.49 0.03 260);
+  --faint: oklch(0.53 0.025 260);
+  --border: oklch(0.3 0.05 262 / 0.1);
+  --border-2: oklch(0.3 0.05 262 / 0.18);
+  --hairline-hi: oklch(1 0 0 / 0.85);
+  --redact: oklch(0.88 0.012 260);
+  --app-bg: var(--bg);
+  --app-ink: var(--ink);
+
+  --accent: oklch(0.52 0.1 var(--accent-h));
+  --accent-2: oklch(0.5 0.13 calc(var(--accent-h) + 48));
+  --accent-ink: oklch(0.43 0.095 var(--accent-h));
+  --accent-soft: oklch(0.55 0.1 var(--accent-h) / 0.11);
+  --accent-glow: oklch(0.6 0.12 var(--accent-h) / 0.3);
+  --on-accent: oklch(0.99 0.005 90);
+
+  --gold: oklch(0.6 0.12 72);
+  --gold-soft: oklch(0.7 0.12 75 / 0.16);
+
+  /* deep enough to pass AA as text on their own soft tints */
+  --ok: oklch(0.45 0.105 160);
+  --ok-soft: oklch(0.6 0.12 160 / 0.13);
+  --warn: oklch(0.5 0.115 68);
+  --warn-soft: oklch(0.72 0.13 75 / 0.18);
+  --danger: oklch(0.5 0.18 25);
+  --danger-soft: oklch(0.62 0.17 25 / 0.12);
+  --info: oklch(0.5 0.12 250);
+  --info-soft: oklch(0.6 0.11 250 / 0.12);
+
+  --shadow-1: 0 1px 2px oklch(0.3 0.05 262 / 0.08), 0 4px 14px oklch(0.3 0.05 262 / 0.06);
+  --shadow-2: 0 12px 32px -8px oklch(0.3 0.06 262 / 0.18), 0 2px 6px oklch(0.3 0.05 262 / 0.08);
+  --shadow-pop: 0 26px 70px -14px oklch(0.28 0.06 262 / 0.3), 0 6px 16px oklch(0.3 0.05 262 / 0.1);
+  --shadow-cover: 0 2px 4px oklch(0.25 0.05 262 / 0.16), 0 18px 36px -12px oklch(0.25 0.06 262 / 0.42);
+  --shadow-inset: inset 0 1px 3px oklch(0.3 0.05 262 / 0.1);
+
+  --glass-edge: linear-gradient(180deg, oklch(1 0 0 / 0.95), oklch(1 0 0 / 0.35) 45%, oklch(0.3 0.05 262 / 0.08));
+  --glass-fill: linear-gradient(180deg, oklch(1 0 0 / 0.78), oklch(1 0 0 / 0.55));
+  --scrim: oklch(0.25 0.04 262 / 0.36);
+  --grain-opacity: 0.05;
+
+  --atmo-1: oklch(0.86 calc(var(--atmo-c) * 0.7) var(--atmo-h1));
+  --atmo-2: oklch(0.89 calc(var(--atmo-c) * 0.6) var(--atmo-h2));
+  --atmo-3: oklch(0.6 calc(var(--atmo-c) * 0.9) var(--atmo-h1));
+  --atmo-glow: oklch(0.7 calc(var(--atmo-c) * 1.1) var(--atmo-h1) / 0.28);
+}
+
+/* shared focus ring (after theme so --bg resolves per theme) */
+:root { --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent), 0 0 18px 2px var(--accent-glow); }
+
+/* entity-type tints (codex): --tc is the type colour, --tc-h its hue */
+.t-character { --tc-h: var(--t-character); }
+.t-location { --tc-h: var(--t-location); }
+.t-faction { --tc-h: var(--t-faction); }
+.t-item { --tc-h: var(--t-item); }
+.t-concept { --tc-h: var(--t-concept); }
+.t-organization { --tc-h: var(--t-organization); }
+:is(.t-character, .t-location, .t-faction, .t-item, .t-concept, .t-organization) {
+  --tc: oklch(0.8 0.12 var(--tc-h));
+}
+[data-theme="light"] :is(.t-character, .t-location, .t-faction, .t-item, .t-concept, .t-organization) {
+  --tc: oklch(0.52 0.13 var(--tc-h));
+}

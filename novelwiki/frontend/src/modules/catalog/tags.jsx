@@ -1,5 +1,6 @@
 /* Tag vocabulary editing: radio groups + genre checkboxes, the reader
-   "suggest tags" flow, and the shelf segmented control. */
+   "suggest tags" flow, and the shelf segmented control. Toggles are real
+   pressed-state buttons; the check springs in when a tag lights up. */
 import React, { useState } from "react";
 import { catalogApi } from "./api.js";
 import { Icon } from "../../components/Icon.jsx";
@@ -14,32 +15,39 @@ export function toggleTag(tags, t, group) {
   return [...tags, t];
 }
 
+function TagToggle({ on, radio, disabled, onClick, children }) {
+  return (
+    <button type="button" disabled={disabled} aria-pressed={on}
+            className={"tag-toggle" + (radio ? " radio" : "") + (on ? " on" : "")}
+            onClick={onClick}>
+      <span className="tt-check" aria-hidden="true"><Icon name="check" size={11} sw={2.6} /></span>
+      <span className="tt-label">{children}</span>
+    </button>
+  );
+}
+
 export function TagEditor({ tags, onToggle, disabled }) {
   return (
     <div className="tag-editor">
       {STATUS_TAG_RADIO_GROUPS.map(g => (
-        <div key={g.id} className="tag-group">
-          <span className="st-label">{g.label}</span>
+        <div key={g.id} className="tag-group" role="group" aria-label={g.label}>
+          <span className="tag-group-label" aria-hidden="true">{g.label}</span>
           <div className="st-tags">
             {g.tags.map(t => (
-              <button key={t} type="button" disabled={disabled}
-                      className={"tag-toggle radio" + (tags.includes(t) ? " on" : "")}
-                      onClick={() => onToggle(t, g)}>
+              <TagToggle key={t} radio on={tags.includes(t)} disabled={disabled} onClick={() => onToggle(t, g)}>
                 {STATUS_TAG_LABELS[t]}
-              </button>
+              </TagToggle>
             ))}
           </div>
         </div>
       ))}
-      <div className="tag-group">
-        <span className="st-label">Genres</span>
+      <div className="tag-group" role="group" aria-label="Genres">
+        <span className="tag-group-label" aria-hidden="true">Genres</span>
         <div className="st-tags">
           {GENRE_TAGS.map(t => (
-            <button key={t} type="button" disabled={disabled}
-                    className={"tag-toggle" + (tags.includes(t) ? " on" : "")}
-                    onClick={() => onToggle(t, null)}>
+            <TagToggle key={t} on={tags.includes(t)} disabled={disabled} onClick={() => onToggle(t, null)}>
               {STATUS_TAG_LABELS[t]}
-            </button>
+            </TagToggle>
           ))}
         </div>
       </div>
@@ -67,12 +75,20 @@ export function TagSuggestForm({ novel, current, onClose }) {
   }
 
   return (
-    <div className="card" style={{ padding: 14, marginTop: 10 }}>
-      <p className="section-eyebrow" style={{ marginTop: 0 }}>Suggest tags</p>
+    <div className="tag-suggest">
+      <div className="tag-suggest-head">
+        <span className="tag-suggest-icon" aria-hidden="true"><Icon name="sparkles" size={15} /></span>
+        <div>
+          <p className="tag-suggest-title">Suggest tags</p>
+          <p className="tag-suggest-sub">The owner reviews your suggestion before anything changes.</p>
+        </div>
+      </div>
       <TagEditor tags={tags} onToggle={(t, g) => setTags(prev => toggleTag(prev, t, g))} disabled={busy} />
-      <textarea className="tt-textarea" rows={2} style={{ marginTop: 10 }} value={note}
-                placeholder="Optional note for the owner…" onChange={e => setNote(e.target.value)} />
-      <div className="row" style={{ gap: 8, marginTop: 10 }}>
+      <label className="field tag-suggest-note">
+        <span>Note for the owner <em>(optional)</em></span>
+        <textarea rows={2} value={note} placeholder="Why these tags fit…" onChange={e => setNote(e.target.value)} disabled={busy} />
+      </label>
+      <div className="row" style={{ gap: 8 }}>
         <Button variant="primary" icon="send" disabled={busy} loading={busy} onClick={submit}>Send suggestion</Button>
         <Button variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
       </div>
@@ -96,7 +112,7 @@ export function ShelfControl({ novel, reloadNovel }) {
   };
 
   return (
-    <SegmentedControl fit ariaLabel="Shelf" value={shelf}
+    <SegmentedControl fit ariaLabel="Shelf" value={shelf} className={"shelf-seg" + (busy ? " is-busy" : "")}
       onChange={setShelf}
       options={SHELF_ORDER.map(s => ({ value: s, label: SHELF_LABELS[s] }))} />
   );

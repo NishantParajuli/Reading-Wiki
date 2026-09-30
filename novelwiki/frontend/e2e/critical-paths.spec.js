@@ -132,6 +132,10 @@ for (const [layout, viewport] of [["desktop", { width: 1440, height: 1000 }], ["
     const editor = page.getByRole("dialog", { name: "Edit chapter translation" });
     const textarea = editor.getByRole("textbox", { name: "Chapter translation" });
     await expect(editor).toBeVisible();
+    // Measure the settled layout, not a frame of the dialog's entrance scale.
+    await editor.evaluate(el => Promise.all(el.getAnimations({ subtree: true })
+      .filter(a => Number.isFinite(a.effect?.getComputedTiming().endTime))
+      .map(a => a.finished.catch(() => {}))));
     const bounds = await textarea.boundingBox();
     expect(bounds.width).toBeGreaterThan(layout === "desktop" ? 500 : 330);
     expect(bounds.height).toBeGreaterThan(layout === "desktop" ? 500 : 300);

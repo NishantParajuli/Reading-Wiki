@@ -1,3 +1,9 @@
+/* ============================================================
+   Admin console panels: Usage & cost (count-up tiles, top spenders, a
+   monthly chart with its table twin), Moderation (visibility per novel)
+   and Global jobs (pipeline triggers for the shared library).
+   Users lives in AdminUsers.jsx; worker health in AdminWorkers.jsx.
+   ============================================================ */
 import React, { useCallback, useEffect, useState } from "react";
 
 import { acquisitionApi } from "../acquisition/api.js";
@@ -5,10 +11,13 @@ import { adminApi } from "./api.js";
 import { catalogApi } from "../catalog/api.js";
 import { codexApi } from "../codex/api.js";
 import { translationApi } from "../translation/api.js";
+import { BlockHead, MetricTile, VISIBILITY, VisibilitySelect, fmtDay } from "./AdminParts.jsx";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, Chip, EmptyState, Loading, StatTile, UserAvatar } from "../../components/ui.jsx";
-import { ConfirmDialog } from "../../components/overlay.jsx";
+import { Button, Chip, Cover, EmptyState, SegmentedControl, Skeleton, Spinner, UserAvatar } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
+
+export { UsersTab } from "./AdminUsers.jsx";
+export { AgyHealthTab, OpenAiCodexHealthTab } from "./AdminWorkers.jsx";
 
 export const ADMIN_TABS = [
   { id: "users", label: "Users", icon: "users" },
@@ -19,324 +28,204 @@ export const ADMIN_TABS = [
   { id: "openai-codex", label: "OpenAI Codex", icon: "cpu" },
 ];
 
-function blankToNull(v) {
-  const s = String(v).trim();
-  if (s === "") return null;
-  const n = Number(s);
-  return Number.isNaN(n) ? null : Math.max(0, Math.round(n));
-}
-
-/* ── Users ── */
-function UserRow({ u, me, onChanged }) {
-  const { toast } = useToast();
-  const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState(false);
-  const [q, setQ] = useState({
-    translated_chapters: u.quota_overrides.translated_chapters ?? "",
-    ocr_pages: u.quota_overrides.ocr_pages ?? "",
-    codex_builds: u.quota_overrides.codex_builds ?? "",
-    tts_chapters: u.quota_overrides.tts_chapters ?? "",
-  });
-  const [confirmDel, setConfirmDel] = useState(false);
-  const initialPolicy = u.ai_backend_policy || {};
-  const [ai, setAi] = useState({
-    agy_enabled: !!initialPolicy.agy_enabled,
-    openai_codex_enabled: !!initialPolicy.openai_codex_enabled,
-    default_backend: initialPolicy.default_backend || "api",
-    agy_workloads: initialPolicy.agy_workloads || [],
-    openai_codex_workloads: initialPolicy.openai_codex_workloads || [],
-    fallback_to_api: !!initialPolicy.fallback_to_api,
-    max_concurrent_agy_jobs: initialPolicy.max_concurrent_agy_jobs || 1,
-    max_concurrent_openai_codex_jobs: initialPolicy.max_concurrent_openai_codex_jobs || 1,
-    notes: initialPolicy.notes || "",
-  });
-  const isSelf = me && u.id === me.id;
-
-  const patch = async (body) => {
-    setBusy(true);
-    try { await adminApi.updateUser(u.id, body); onChanged(); }
-    catch (e) { toast(e.message || "Update failed.", { tone: "danger" }); setBusy(false); }
-  };
-  const saveQuotas = () => patch({
-    quota_translated_chapters: blankToNull(q.translated_chapters),
-    quota_ocr_pages: blankToNull(q.ocr_pages),
-    quota_codex_builds: blankToNull(q.codex_builds),
-    quota_tts_chapters: blankToNull(q.tts_chapters),
-  });
-  const del = async () => {
-    setBusy(true);
-    try { await adminApi.deleteUser(u.id); setConfirmDel(false); onChanged(); }
-    catch (e) { toast(e.message || "Delete failed.", { tone: "danger" }); setBusy(false); }
-  };
-  const saveAi = async () => {
-    setBusy(true);
-    try { await adminApi.saveAiPolicy(u.id, ai); onChanged(); }
-    catch (e) { toast(e.message || "AI backend update failed.", { tone: "danger" }); setBusy(false); }
-  };
-  const revokeAi = async () => {
-    setBusy(true);
-    try { await adminApi.revokeAiPolicy(u.id); onChanged(); }
-    catch (e) { toast(e.message || "AI backend revoke failed.", { tone: "danger" }); setBusy(false); }
-  };
-  const toggleWorkload = (key, field = "agy_workloads") => setAi(s => ({
-    ...s,
-    [field]: s[field].includes(key)
-      ? s[field].filter(x => x !== key) : [...s[field], key],
-  }));
-
-  const statusTone = u.status === "active" ? "ok" : u.status === "suspended" ? "warn" : "danger";
-
+function PanelLoading({ label, rows = 3, height = 72 }) {
   return (
-    <>
-      <div className="admin-user-row">
-        <div className="admin-user-id">
-          <UserAvatar url={u.avatar_url} name={u.display_name || u.username} size={30} />
-          <div className="grow" style={{ minWidth: 0 }}>
-            <div className="admin-user-name">
-              {u.display_name || u.username}
-              {u.role === "admin" && <Chip style={{ marginLeft: 6 }}>admin</Chip>}
-              {initialPolicy.agy_enabled && <Chip tone="accent" style={{ marginLeft: 6 }}>AGY</Chip>}
-              {initialPolicy.openai_codex_enabled && <Chip tone="accent" style={{ marginLeft: 6 }}>Codex</Chip>}
-            </div>
-            <div className="muted admin-user-email">@{u.username} · {u.email}{u.email_verified ? "" : " · unverified"}</div>
-          </div>
-        </div>
-        <div className="admin-user-usage muted mono">
-          {u.usage.translated_chapters}/{u.limits.translated_chapters} ch · {u.usage.ocr_pages}/{u.limits.ocr_pages} ocr · {u.usage.codex_builds}/{u.limits.codex_builds} cdx · {u.usage.tts_chapters}/{u.limits.tts_chapters} tts
-        </div>
-        <Chip tone={statusTone}>{u.status}</Chip>
-        <div className="admin-user-actions">
-          <select className="shelf-select" value={u.status} disabled={busy || isSelf}
-                  onChange={e => patch({ status: e.target.value })} title="Account status">
-            {["active", "suspended", "banned"].map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <Button variant="ghost" size="sm" disabled={busy || (isSelf && u.role === "admin")}
-                  onClick={() => patch({ role: u.role === "admin" ? "user" : "admin" })}>
-            {u.role === "admin" ? "Demote" : "Make admin"}
-          </Button>
-          <button className="icon-btn plain" title="Quotas & AI access" aria-label="Quotas & AI access" onClick={() => setOpen(o => !o)}>
-            <Icon name="sliders" size={16} />
-          </button>
-          <button className="icon-btn plain" title="Delete user" aria-label="Delete user" disabled={isSelf} onClick={() => setConfirmDel(true)}>
-            <Icon name="trash" size={16} />
-          </button>
-        </div>
-      </div>
-      {open && (
-        <div className="admin-quota-edit card">
-          <span className="muted" style={{ fontSize: "var(--text-xs)", flexBasis: "100%" }}>Per-user monthly limits (blank = default):</span>
-          {[["translated_chapters", "Chapters"], ["ocr_pages", "OCR pages"], ["codex_builds", "Codex builds"], ["tts_chapters", "Narration"]].map(([k, lbl]) => (
-            <label key={k} className="field" style={{ flex: "0 0 110px" }}>
-              <span>{lbl}</span>
-              <input value={q[k]} inputMode="numeric" placeholder="default"
-                     onChange={e => setQ(s => ({ ...s, [k]: e.target.value }))} />
-            </label>
-          ))}
-          <Button variant="primary" size="sm" disabled={busy} onClick={saveQuotas}>Save limits</Button>
-          <div style={{ flexBasis: "100%", borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 12 }}>
-            <div className="row wrap" style={{ gap: 12 }}>
-              <label className="check">
-                <input type="checkbox" checked={ai.agy_enabled}
-                       onChange={e => setAi(s => ({ ...s, agy_enabled: e.target.checked, default_backend: (!e.target.checked && s.default_backend === "agy") ? "api" : s.default_backend }))} />
-                AGY access
-              </label>
-              <label className="check">
-                <input type="checkbox" checked={ai.openai_codex_enabled}
-                       onChange={e => setAi(s => ({ ...s, openai_codex_enabled: e.target.checked, default_backend: (!e.target.checked && s.default_backend === "openai_codex") ? "api" : s.default_backend }))} />
-                OpenAI Codex access
-              </label>
-              <label className="field">
-                <span>Default backend</span>
-                <select value={ai.default_backend} disabled={!ai.agy_enabled && !ai.openai_codex_enabled}
-                        onChange={e => setAi(s => ({ ...s, default_backend: e.target.value }))}>
-                  <option value="api">API</option>
-                  {ai.agy_enabled && <option value="agy">Antigravity</option>}
-                  {ai.openai_codex_enabled && <option value="openai_codex">OpenAI Codex</option>}
-                </select>
-              </label>
-              <label className="field">
-                <span>AGY concurrent</span>
-                <input type="number" min="1" max="4" value={ai.max_concurrent_agy_jobs}
-                       onChange={e => setAi(s => ({ ...s, max_concurrent_agy_jobs: Number(e.target.value) }))} />
-              </label>
-              <label className="field">
-                <span>Codex concurrent</span>
-                <input type="number" min="1" max="4" value={ai.max_concurrent_openai_codex_jobs}
-                       onChange={e => setAi(s => ({ ...s, max_concurrent_openai_codex_jobs: Number(e.target.value) }))} />
-              </label>
-              <label className="check">
-                <input type="checkbox" checked={ai.fallback_to_api}
-                       onChange={e => setAi(s => ({ ...s, fallback_to_api: e.target.checked }))} />
-                Allow paid API fallback
-              </label>
-            </div>
-            <div className="row wrap" style={{ gap: 12, marginTop: 8 }}>
-              {[["translate_batch", "Batch translation"], ["codex_extract", "Codex extraction"]].map(([key, label]) => (
-                <label key={key} className="check">
-                  <input type="checkbox" disabled={!ai.agy_enabled}
-                         checked={ai.agy_workloads.includes(key)} onChange={() => toggleWorkload(key)} />
-                  {label}
-                </label>
-              ))}
-            </div>
-            <div className="row wrap" style={{ gap: 12, marginTop: 8 }}>
-              {[['translate_batch', 'Codex batch translation'], ['codex_extract', 'Codex extraction']].map(([key, label]) => (
-                <label key={`openai-${key}`} className="check">
-                  <input type="checkbox" disabled={!ai.openai_codex_enabled}
-                         checked={ai.openai_codex_workloads.includes(key)}
-                         onChange={() => toggleWorkload(key, "openai_codex_workloads")} />
-                  {label}
-                </label>
-              ))}
-            </div>
-            <label className="field" style={{ marginTop: 8 }}>
-              <span>Admin notes</span>
-              <input value={ai.notes} onChange={e => setAi(s => ({ ...s, notes: e.target.value }))} placeholder="owner pilot" />
-            </label>
-            <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
-              <Button variant="primary" size="sm" disabled={busy} onClick={saveAi}>Save AI access</Button>
-              {initialPolicy.policy_version && <Button variant="ghost" size="sm" disabled={busy} onClick={revokeAi}>Revoke AI access</Button>}
-              <span className="muted" style={{ fontSize: "var(--text-xs)" }}>
-                {initialPolicy.active_jobs || 0} AGY active · {initialPolicy.openai_codex_active_jobs || 0} Codex active · policy v{initialPolicy.policy_version || "—"}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-      {confirmDel && (
-        <ConfirmDialog
-          title={`Delete @${u.username}?`} requireText={u.username} confirmLabel="Delete user" busy={busy}
-          onCancel={() => setConfirmDel(false)} onConfirm={del}
-          body="This removes their account, library, progress, bookmarks and overlays. Novels they own become unowned. There's no undo." />
-      )}
-    </>
-  );
-}
-
-export function UsersTab({ me }) {
-  const [users, setUsers] = useState(null);
-  const [q, setQ] = useState("");
-  const load = useCallback((query) => {
-    setUsers(null);
-    adminApi.users(query || "").then(setUsers).catch(() => setUsers([]));
-  }, []);
-  useEffect(() => { load(""); }, [load]);
-
-  return (
-    <div>
-      <form className="row" style={{ gap: 8, marginBottom: 14 }} onSubmit={e => { e.preventDefault(); load(q); }}>
-        <div className="search-box" style={{ maxWidth: 340, flex: 1 }}>
-          <Icon name="search" size={15} className="muted" />
-          <input value={q} placeholder="Search email, username, name…" onChange={e => setQ(e.target.value)} aria-label="Search users" />
-        </div>
-        <Button variant="ghost" type="submit" icon="search">Search</Button>
-      </form>
-      {users == null ? <Loading label="Loading users…" />
-        : users.length === 0 ? <EmptyState icon="users" title="No users found" />
-          : <div className="admin-user-list">{users.map(u => <UserRow key={u.id} u={u} me={me} onChanged={() => load(q)} />)}</div>}
+    <div className="adm-stack" aria-busy="true">
+      <span className="sr-only" role="status">{label}</span>
+      {Array.from({ length: rows }, (_, k) => <Skeleton key={k} height={height} style={{ borderRadius: 20 }} />)}
     </div>
   );
 }
 
 /* ── Usage & cost ── */
+const monthLabel = (period, opts = { month: "short" }) => {
+  const d = new Date(period);
+  return Number.isNaN(d.getTime()) ? String(period).slice(0, 7) : d.toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
+};
+
+function niceMax(max) {
+  if (max <= 0) return 1;
+  const pow = 10 ** Math.floor(Math.log10(max));
+  const n = max / pow;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * pow;
+}
+
+/* Chapters translated per month: one series, the latest month in accent
+   (emphasis), the rest recessive. A picture for pointers only: the table
+   below carries the same figures for assistive tech and the keyboard. */
+function MonthChart({ months }) {
+  const max = niceMax(Math.max(...months.map(m => m.translated_chapters || 0)));
+  const peak = Math.max(...months.map(m => m.translated_chapters || 0));
+  return (
+    <div className="adm-chart" aria-hidden="true">
+      <div className="adm-chart-grid">
+        <span style={{ "--y": 1 }}><i>{max.toLocaleString()}</i></span>
+        <span style={{ "--y": 0.5 }}><i>{(max / 2).toLocaleString()}</i></span>
+        <span style={{ "--y": 0 }}><i>0</i></span>
+      </div>
+      <div className="adm-chart-bars">
+        {months.map((m, i) => {
+          const v = m.translated_chapters || 0;
+          const latest = i === months.length - 1;
+          const label = monthLabel(m.period, { month: "long", year: "numeric" });
+          return (
+            <div key={m.period} className={"adm-bar" + (latest ? " is-latest" : "")}>
+              <div className="adm-bar-plot">
+                <span className="adm-bar-fill" style={{ "--h": v / max, "--i": i }}>
+                  {(latest || (v === peak && v > 0)) && <b className="adm-bar-value">{v.toLocaleString()}</b>}
+                </span>
+              </div>
+              <span className="adm-bar-x">{monthLabel(m.period)}</span>
+              <span className="adm-bar-tip">
+                <b>{v.toLocaleString()}</b> chapters
+                <small>{label} · {(m.ocr_pages || 0).toLocaleString()} OCR · {(m.codex_builds || 0).toLocaleString()} codex</small>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function UsageTab() {
   const [data, setData] = useState(null);
-  useEffect(() => { adminApi.usage().then(setData).catch(() => setData(false)); }, []);
-  if (data == null) return <Loading label="Loading usage…" />;
-  if (data === false) return <EmptyState icon="database" title="Couldn't load usage" />;
-  const t = data.totals;
+  const load = useCallback(() => { setData(null); adminApi.usage().then(setData).catch(() => setData(false)); }, []);
+  useEffect(() => { load(); }, [load]);
+  if (data == null) return <PanelLoading label="Loading usage…" rows={2} height={140} />;
+  if (data === false) {
+    return <EmptyState icon="database" title="Couldn't load usage" body="The usage report didn't arrive."
+             primaryAction={<Button variant="ghost" icon="refresh" onClick={load}>Try again</Button>} />;
+  }
+  const t = data.totals || {};
+  const spenders = data.top_spenders || [];
+  const months = [...(data.months || [])].sort((a, b) => String(a.period).localeCompare(String(b.period)));
   return (
-    <div>
-      <div className="admin-metric-grid">
-        <StatTile value={t.translated_chapters} label="chapters translated" />
-        <StatTile value={t.ocr_pages} label="OCR pages" />
-        <StatTile value={t.codex_builds} label="codex builds" />
-        <StatTile value={t.active_users} label="active this month" />
-        <StatTile value={data.user_count} label="total users" />
-        <StatTile value={data.novel_count} label="novels" />
+    <div className="adm-stack">
+      <div className="adm-metrics">
+        <MetricTile i={0} icon="globe" value={t.translated_chapters ?? 0} label="Chapters translated" note="this month" />
+        <MetricTile i={1} icon="image" value={t.ocr_pages ?? 0} label="OCR pages" note="this month" />
+        <MetricTile i={2} icon="brain" value={t.codex_builds ?? 0} label="Codex builds" note="this month" />
+        <MetricTile i={3} icon="activity" value={t.active_users ?? 0} label="Active this month" />
+        <MetricTile i={4} icon="users" value={data.user_count ?? 0} label="Total users" />
+        <MetricTile i={5} icon="library" value={data.novel_count ?? 0} label="Novels" />
       </div>
 
-      <p className="section-eyebrow" style={{ marginTop: 24 }}>Top spenders this month</p>
-      <div className="card" style={{ padding: 4 }}>
-        {data.top_spenders.length === 0
-          ? <div className="muted" style={{ padding: 12 }}>No spend recorded this month.</div>
-          : data.top_spenders.map(u => (
-            <div key={u.id} className="admin-spender-row">
-              <span className="grow">{u.display_name || u.username} <span className="muted">@{u.username}</span></span>
-              <span className="muted mono">{u.translated_chapters} ch · {u.ocr_pages} ocr · {u.codex_builds} cdx</span>
-            </div>
-          ))}
-      </div>
+      <div className="adm-usage-grid">
+        <section className="card adm-block rise" style={{ "--i": 3 }} aria-labelledby="adm-spenders-h">
+          <BlockHead id="adm-spenders-h" eyebrow="This month" title="Top spenders" />
+          {spenders.length === 0 ? <p className="adm-quiet">No spend recorded this month.</p> : (
+            <ol className="adm-spenders">
+              {spenders.map((u, i) => (
+                <li key={u.id} className="adm-spender">
+                  <span className="adm-rank" aria-hidden="true">{String(i + 1).padStart(2, "0")}</span>
+                  <UserAvatar name={u.display_name || u.username} size={34} />
+                  <span className="adm-spender-id">
+                    <b>{u.display_name || u.username}</b>
+                    <span>@{u.username}</span>
+                  </span>
+                  <span className="adm-spender-figs">
+                    <span><b>{(u.translated_chapters || 0).toLocaleString()}</b> ch</span>
+                    <span><b>{(u.ocr_pages || 0).toLocaleString()}</b> ocr</span>
+                    <span><b>{(u.codex_builds || 0).toLocaleString()}</b> cdx</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
 
-      <p className="section-eyebrow" style={{ marginTop: 24 }}>Last 6 months</p>
-      <div className="card" style={{ padding: 4 }}>
-        {data.months.length === 0
-          ? <div className="muted" style={{ padding: 12 }}>No history yet.</div>
-          : data.months.map(m => (
-            <div key={m.period} className="admin-spender-row">
-              <span className="grow mono">{m.period.slice(0, 7)}</span>
-              <span className="muted mono">{m.translated_chapters} ch · {m.ocr_pages} ocr · {m.codex_builds} cdx</span>
-            </div>
-          ))}
+        <section className="card adm-block rise" style={{ "--i": 4 }} aria-labelledby="adm-months-h">
+          <BlockHead id="adm-months-h" title="Chapters translated"
+                     eyebrow={months.length ? `Last ${months.length} ${months.length === 1 ? "month" : "months"}` : "Monthly"} />
+          {months.length === 0 ? <p className="adm-quiet">No history yet.</p> : (
+            <>
+              <MonthChart months={months} />
+              <table className="adm-table">
+                <caption className="sr-only">Monthly platform usage</caption>
+                <thead><tr><th scope="col">Month</th><th scope="col">Chapters</th><th scope="col">OCR</th><th scope="col">Codex</th></tr></thead>
+                <tbody>
+                  {[...months].reverse().map(m => (
+                    <tr key={m.period}>
+                      <th scope="row">{monthLabel(m.period, { month: "short", year: "numeric" })}</th>
+                      <td>{(m.translated_chapters || 0).toLocaleString()}</td>
+                      <td>{(m.ocr_pages || 0).toLocaleString()}</td>
+                      <td>{(m.codex_builds || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </section>
       </div>
     </div>
   );
 }
 
 /* ── Moderation ── */
-const MOD_VIS = { private: "Private", public: "Public", global: "Global" };
+const FILTERS = [{ value: "", label: "All" }, ...Object.keys(VISIBILITY).map(v => ({ value: v, label: VISIBILITY[v].label, icon: VISIBILITY[v].icon }))];
 
 export function ModerationTab({ openNovel }) {
   const { toast } = useToast();
   const [novels, setNovels] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [vis, setVis] = useState("");
   const [q, setQ] = useState("");
-  const load = useCallback((opts) => {
-    setNovels(null);
-    adminApi.novels(opts).then(setNovels).catch(() => setNovels([]));
+  const load = useCallback((opts, quiet) => {
+    if (quiet) setRefreshing(true); else setNovels(null);
+    return adminApi.novels(opts).then(setNovels).catch(() => setNovels(false)).finally(() => setRefreshing(false));
   }, []);
   useEffect(() => { load({}); }, [load]);
 
   const changeVis = async (n, v) => {
-    try { await catalogApi.setVisibility(n.id, v); load({ visibility: vis || undefined, q: q || undefined }); }
+    try { await catalogApi.setVisibility(n.id, v); await load({ visibility: vis || undefined, q: q || undefined }, true); }
     catch (e) { toast(e.message || "Couldn't change visibility.", { tone: "danger" }); }
   };
 
   return (
-    <div>
-      <form className="row wrap" style={{ gap: 8, marginBottom: 14 }}
-            onSubmit={e => { e.preventDefault(); load({ visibility: vis || undefined, q: q || undefined }); }}>
-        <div className="search-box" style={{ maxWidth: 280, flex: 1 }}>
-          <Icon name="search" size={15} className="muted" />
-          <input value={q} placeholder="Search title…" onChange={e => setQ(e.target.value)} aria-label="Search novels" />
-        </div>
-        <div className="row" style={{ gap: 6 }}>
-          {["", ...Object.keys(MOD_VIS)].map(v => (
-            <button key={v || "all"} type="button" className={"filter-chip" + (vis === v ? " on" : "")}
-                    onClick={() => { setVis(v); load({ visibility: v || undefined, q: q || undefined }); }}>
-              {v ? MOD_VIS[v] : "All"}
-            </button>
-          ))}
-        </div>
-        <Button variant="ghost" type="submit" icon="search">Search</Button>
-      </form>
-      {novels == null ? <Loading label="Loading novels…" />
-        : novels.length === 0 ? <EmptyState icon="book" title="No novels" />
-          : (
-            <div className="admin-user-list">
-              {novels.map(n => (
-                <div key={n.id} className="admin-novel-row">
-                  <button className="admin-novel-title grow" onClick={() => openNovel(n.id)} title="Open novel">
-                    {n.title} <span className="muted mono" style={{ fontSize: "var(--text-xs)" }}>{n.chapter_count} ch.</span>
-                  </button>
-                  <span className="muted" style={{ fontSize: "var(--text-xs)" }}>{n.owner_username ? "@" + n.owner_username : "unowned"}</span>
-                  <select className="shelf-select" value={n.visibility} onChange={e => changeVis(n, e.target.value)} title="Visibility">
-                    {Object.keys(MOD_VIS).map(v => <option key={v} value={v}>{MOD_VIS[v]}</option>)}
-                  </select>
+    <div className="adm-stack">
+      <div className="adm-toolbar">
+        <form className="adm-search" role="search"
+              onSubmit={e => { e.preventDefault(); load({ visibility: vis || undefined, q: q || undefined }); }}>
+          <div className="search-box">
+            <Icon name="search" size={16} />
+            <input value={q} placeholder="Search title…" onChange={e => setQ(e.target.value)} aria-label="Search novels" />
+          </div>
+          <Button variant="ghost" type="submit" icon="search">Search</Button>
+        </form>
+        <SegmentedControl fit className="adm-filter" ariaLabel="Filter by visibility" value={vis} options={FILTERS}
+                          onChange={(v) => { setVis(v); load({ visibility: v || undefined, q: q || undefined }); }} />
+      </div>
+      <p className="adm-legend">
+        {Object.keys(VISIBILITY).map(k => (
+          <span key={k} className={`adm-legend-item vis-${k}`}><Icon name={VISIBILITY[k].icon} size={13} /><b>{VISIBILITY[k].label}</b> {VISIBILITY[k].hint.toLowerCase()}</span>
+        ))}
+      </p>
+      {novels == null ? <PanelLoading label="Loading novels…" rows={4} height={76} />
+        : novels === false ? (
+          <EmptyState icon="alert" title="Couldn't load novels" body="The moderation list didn't arrive."
+            primaryAction={<Button variant="ghost" icon="refresh" onClick={() => load({ visibility: vis || undefined, q: q || undefined })}>Try again</Button>} />
+        ) : novels.length === 0 ? (
+          <EmptyState icon="book" title="No novels" body={q || vis ? "Nothing matches these filters." : "No novels on this instance yet."} />
+        ) : (
+          <div className={"card adm-novels" + (refreshing ? " is-refreshing" : "")} aria-busy={refreshing || undefined}>
+            {novels.map((n, i) => (
+              <div key={n.id} className="adm-novel rise" style={{ "--i": Math.min(i, 12) }}>
+                <Cover src={n.cover_url} title={n.title} author={n.author} className="adm-novel-cover" />
+                <div className="adm-novel-id">
+                  <button type="button" className="adm-novel-title" onClick={() => openNovel(n.id)} title="Open novel">{n.title}</button>
+                  <span className="adm-novel-sub">
+                    {n.author && <span>{n.author}</span>}
+                    <span>{(n.chapter_count || 0).toLocaleString()} ch.</span>
+                    <span>{n.owner_username ? "@" + n.owner_username : "unowned"}</span>
+                  </span>
                 </div>
-              ))}
-            </div>
-          )}
+                <VisibilitySelect value={n.visibility} title={n.title} onChange={v => changeVis(n, v)} />
+              </div>
+            ))}
+          </div>
+        )}
     </div>
   );
 }
@@ -349,7 +238,7 @@ export function GlobalJobsTab({ openNovel }) {
 
   const load = useCallback(() => {
     setNovels(null);
-    adminApi.globalNovels().then(setNovels).catch(() => setNovels([]));
+    adminApi.globalNovels().then(setNovels).catch(() => setNovels(false));
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -366,32 +255,36 @@ export function GlobalJobsTab({ openNovel }) {
     }
   };
 
-  const fmtDate = (s) => s ? new Date(s).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "never";
-
   return (
-    <div>
-      <div className="row" style={{ marginBottom: 14 }}>
-        <p className="grow muted" style={{ margin: 0 }}>Scrape, pre-translate, and build the codex for the shared Global library. Jobs run in the background.</p>
+    <div className="adm-stack">
+      <div className="adm-toolbar">
+        <p className="adm-intro">Scrape, pre-translate, and build the codex for the shared Global library. Jobs run in the background.</p>
         <Button variant="ghost" icon="refresh" onClick={load}>Refresh</Button>
       </div>
-      {novels == null ? <Loading label="Loading Global library…" />
-        : novels.length === 0 ? <EmptyState icon="book" title="No global novels" body="Promote a public novel to Global from the Moderation tab." />
-          : (
-            <div className="admin-user-list">
-              {novels.map(n => {
-                const m = msg[n.id]; const b = !!busy[n.id];
-                const mClass = m && (m.kind === "ok" ? "acct-ok" : m.kind === "err" ? "acct-err" : "muted");
-                return (
-                  <div key={n.id} className="admin-job-row">
-                    <div className="row wrap" style={{ gap: 10, alignItems: "baseline" }}>
-                      <button className="admin-novel-title" onClick={() => openNovel(n.id)} title="Open novel">{n.title}</button>
-                      <span className="muted mono" style={{ fontSize: "var(--text-xs)" }}>
-                        {n.chapter_count} ch · {n.source_count} src · scraped {fmtDate(n.last_scraped_at)}
-                        {n.has_raw ? ` · ${n.untranslated} untranslated` : ""}
-                        {n.codex_enabled ? " · codex" : ""}
-                      </span>
+      {novels == null ? <PanelLoading label="Loading Global library…" rows={2} height={150} />
+        : novels === false ? (
+          <EmptyState icon="alert" title="Couldn't load the Global library" body="The list didn't arrive."
+            primaryAction={<Button variant="ghost" icon="refresh" onClick={load}>Try again</Button>} />
+        ) : novels.length === 0 ? (
+          <EmptyState icon="book" title="No global novels" body="Promote a public novel to Global from the Moderation tab." />
+        ) : (
+          <div className="adm-jobs">
+            {novels.map((n, i) => {
+              const m = msg[n.id]; const b = !!busy[n.id];
+              return (
+                <article key={n.id} className="card adm-job rise" style={{ "--i": Math.min(i, 8) }} data-spotlight=""
+                         aria-labelledby={`adm-job-${n.id}`}>
+                  <Cover src={n.cover_url} title={n.title} author={n.author} className="adm-job-cover" />
+                  <div className="adm-job-body">
+                    <button type="button" id={`adm-job-${n.id}`} className="adm-novel-title adm-job-title" onClick={() => openNovel(n.id)} title="Open novel">{n.title}</button>
+                    <div className="adm-job-facts">
+                      <Chip icon="layers">{(n.chapter_count || 0).toLocaleString()} ch</Chip>
+                      <Chip icon="link">{n.source_count || 0} {n.source_count === 1 ? "source" : "sources"}</Chip>
+                      <Chip icon="clock">scraped {fmtDay(n.last_scraped_at)}</Chip>
+                      {n.has_raw && <Chip tone={n.untranslated > 0 ? "warn" : "ok"} icon="globe">{n.untranslated} untranslated</Chip>}
+                      {n.codex_enabled && <Chip tone="accent" icon="brain">codex</Chip>}
                     </div>
-                    <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
+                    <div className="adm-job-actions">
                       <Button variant="ghost" size="sm" icon="spider" disabled={b}
                               onClick={() => run(n, "Scrape", () => acquisitionApi.scrape(n.id, {}))}>Scrape</Button>
                       {n.has_raw && (
@@ -402,100 +295,19 @@ export function GlobalJobsTab({ openNovel }) {
                               onClick={() => run(n, "Codex build", () => codexApi.codexBuild(n.id, {}))}>
                         {n.codex_enabled ? "Rebuild codex" : "Build codex"}
                       </Button>
-                      {m && <span className={mClass} style={{ fontSize: "var(--text-xs)", alignSelf: "center" }}>{m.text}</span>}
+                    </div>
+                    <div className={"adm-job-msg" + (m ? ` is-${m.kind}` : "")} role="status">
+                      {m && m.kind === "pending" && <Spinner />}
+                      {m && m.kind === "ok" && <Icon name="circleCheck" size={15} />}
+                      {m && m.kind === "err" && <Icon name="circleAlert" size={15} />}
+                      {m && m.text}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
-    </div>
-  );
-}
-
-/* ── AGY health ── */
-export function AgyHealthTab() {
-  const { toast } = useToast();
-  const [health, setHealth] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const load = useCallback(() => adminApi.agyHealth().then(setHealth).catch(() => setHealth(false)), []);
-  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, [load]);
-  if (health == null) return <Loading label="Checking Antigravity worker…" />;
-  if (health === false) return <EmptyState icon="sparkles" title="Couldn't load AGY health" />;
-  const q = health.queue || {};
-  const act = async fn => {
-    setBusy(true);
-    try { await fn(); await load(); }
-    catch (e) { toast(e.message || "AGY action failed.", { tone: "danger" }); }
-    finally { setBusy(false); }
-  };
-  return (
-    <div>
-      <div className="admin-metric-grid">
-        <StatTile value={health.available ? "Ready" : "Offline"} label="worker availability" tone={health.available ? "ok" : "danger"} />
-        <StatTile value={q.queued || 0} label="queued" />
-        <StatTile value={q.running || 0} label="running" />
-        <StatTile value={q.waiting_provider || 0} label="waiting provider" tone={q.waiting_provider > 0 ? "warn" : undefined} />
-      </div>
-      <div className="card pad-lg" style={{ marginTop: 14 }}>
-        <div><b>Global switch:</b> {health.enabled ? "enabled" : "disabled"}</div>
-        <div><b>Worker:</b> {health.worker ? `${health.worker.status} · ${health.worker.version || "unknown version"} · plugin ${health.worker.plugin_version || "—"}` : "no heartbeat"}</div>
-        <div className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 4 }}>
-          Last success: {health.last_success_at || "none"} · oldest queued: {q.oldest_at || "none"}
-        </div>
-        <div className="row wrap" style={{ gap: 8, marginTop: 14 }}>
-          <Button variant="ghost" disabled={busy || !health.enabled} onClick={() => act(adminApi.agySmoke)}>Run consuming smoke test</Button>
-          <Button variant="ghost" disabled={busy || !(q.waiting_provider > 0)} onClick={() => act(adminApi.retryWaitingAgy)}>Retry waiting jobs</Button>
-        </div>
-        {health.recent_failures && health.recent_failures.length > 0 && (
-          <div className="muted" style={{ marginTop: 12, fontSize: "var(--text-xs)" }}>
-            Recent failures: {health.recent_failures.map(x => `${x.code} (${x.count})`).join(", ")}
+                </article>
+              );
+            })}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-export function OpenAiCodexHealthTab() {
-  const { toast } = useToast();
-  const [health, setHealth] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const load = useCallback(() => adminApi.openaiCodexHealth().then(setHealth).catch(() => setHealth(false)), []);
-  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, [load]);
-  if (health == null) return <Loading label="Checking OpenAI Codex worker…" />;
-  if (health === false) return <EmptyState icon="cpu" title="Couldn't load OpenAI Codex health" />;
-  const q = health.queue || {};
-  const act = async fn => {
-    setBusy(true);
-    try { await fn(); await load(); }
-    catch (e) { toast(e.message || "OpenAI Codex action failed.", { tone: "danger" }); }
-    finally { setBusy(false); }
-  };
-  return (
-    <div>
-      <div className="admin-metric-grid">
-        <StatTile value={health.available ? "Ready" : "Offline"} label="worker availability" tone={health.available ? "ok" : "danger"} />
-        <StatTile value={q.queued || 0} label="queued" />
-        <StatTile value={q.running || 0} label="running" />
-        <StatTile value={q.waiting_provider || 0} label="waiting provider" tone={q.waiting_provider > 0 ? "warn" : undefined} />
-      </div>
-      <div className="card pad-lg" style={{ marginTop: 14 }}>
-        <div><b>Global switch:</b> {health.enabled ? "enabled" : "disabled"}</div>
-        <div><b>Worker:</b> {health.worker ? `${health.worker.status} · ${health.worker.version || "unknown version"} · contract ${health.worker.contract_version || "—"}` : "no heartbeat"}</div>
-        <div className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 4 }}>
-          Last success: {health.last_success_at || "none"} · oldest queued: {q.oldest_at || "none"}
-        </div>
-        <div className="row wrap" style={{ gap: 8, marginTop: 14 }}>
-          <Button variant="ghost" disabled={busy || !health.enabled} onClick={() => act(adminApi.openaiCodexSmoke)}>Run consuming smoke test</Button>
-          <Button variant="ghost" disabled={busy || !(q.waiting_provider > 0)} onClick={() => act(adminApi.retryWaitingOpenaiCodex)}>Retry waiting jobs</Button>
-        </div>
-        {health.recent_failures && health.recent_failures.length > 0 && (
-          <div className="muted" style={{ marginTop: 12, fontSize: "var(--text-xs)" }}>
-            Recent failures: {health.recent_failures.map(x => `${x.code} (${x.count})`).join(", ")}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

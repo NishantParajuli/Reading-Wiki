@@ -1,0 +1,585 @@
+/* ============================================================
+   Auth — sign in, register, recovery: the first impression.
+   Surface styles owned by modules/identity (AuthScreen + AuthParts) and the
+   companion rules for atmosphere/OceanScene. Shared primitives live in
+   components.css; tokens in tokens.css.
+
+   Stage (back to front):
+     .auth-sea    the WebGL ocean — full screen on desktop, a tall band on
+                  phones — with the hero standing on its waterline
+     .auth-main   the frosted sea-glass card
+     .auth-top    brand orb + Night/Dawn switch
+   Geometry is shared through custom properties: the canvas reads
+   --ocean-horizon / --ocean-moon-* / --ocean-sun-* from its host, and the
+   wordmark is placed with the same numbers, so its baseline is the horizon.
+   ============================================================ */
+
+/* ---------------- stage + geometry ---------------- */
+.auth-stage {
+  --ocean-horizon: 0.57;
+  --ocean-moon-x: 0.34;
+  --ocean-moon-y: 0.19;
+  --ocean-moon-r: 0.03;
+  --ocean-sun-x: 0.575;
+  --ocean-sun-y: 0.47;
+  --ocean-sun-r: 0.044;
+  --panel-w: clamp(420px, 34vw, 520px);
+  --hero-x: clamp(40px, 6vw, 112px);
+  --wm-size: clamp(4.4rem, min(calc((100vw - var(--panel-w) - var(--hero-x) * 2) / 3.75), 23svh), 13.5rem);
+  --wm-box: calc(var(--wm-size) * 0.723);
+
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg);
+  overflow-x: clip;
+  view-transition-name: auth-stage;
+}
+
+[data-theme="dark"] .auth-stage {
+  --auth-glass: linear-gradient(180deg, oklch(0.26 0.04 256 / 0.56), oklch(0.17 0.034 260 / 0.68));
+  --auth-glass-rim: oklch(0.92 0.03 235 / 0.16);
+  --auth-input: oklch(0.14 0.03 262 / 0.55);
+  --auth-pill: linear-gradient(180deg, oklch(1 0 0 / 0.07), oklch(1 0 0 / 0.025));
+  --wm-fill: linear-gradient(180deg, oklch(0.995 0.01 95) 24%, oklch(0.95 0.03 calc(var(--accent-h) - 10)) 58%, color-mix(in oklch, var(--accent) 62%, oklch(0.95 0.02 240)) 80%);
+  --wm-rf: color-mix(in oklch, var(--accent) 52%, oklch(0.93 0.02 240));
+  --wm-under: color-mix(in oklch, var(--accent) 34%, oklch(0.97 0.012 220));
+  --wm-under-opacity: 0.84;
+  --wm-glow: drop-shadow(0 0 22px color-mix(in oklch, var(--accent) 30%, transparent)) drop-shadow(0 0 60px oklch(0.8 0.05 240 / 0.18));
+  --wm-rf-opacity: 0.74;
+  --wm-shine: linear-gradient(100deg, transparent 38%, color-mix(in oklch, var(--accent) 85%, transparent) 45%, oklch(0.99 0.03 var(--accent-h)) 50%, color-mix(in oklch, var(--accent-2) 70%, transparent) 55%, transparent 62%);
+  --wm-line: color-mix(in oklch, var(--accent) 70%, white);
+  --promise-shade: oklch(0.12 0.03 262 / 0.9);
+  /* CSS stand-in for the ocean while WebGL wakes (or if it can't) */
+  --of-sky-top: oklch(0.12 0.034 268);
+  --of-sky-mid: oklch(0.19 0.05 262);
+  --of-sky-low: oklch(0.33 0.06 calc(var(--accent-h) + 34));
+  --of-sea-far: oklch(0.25 0.05 calc(var(--accent-h) + 40));
+  --of-sea-near: oklch(0.12 0.036 calc(var(--accent-h) + 56));
+  --of-moon: oklch(0.97 0.022 95);
+  --of-halo: oklch(0.8 0.08 calc(var(--accent-h) + 18) / 0.45);
+}
+[data-theme="light"] .auth-stage {
+  --auth-glass: linear-gradient(180deg, oklch(1 0 0 / 0.72), oklch(0.99 0.008 90 / 0.6));
+  --auth-glass-rim: oklch(1 0 0 / 0.75);
+  --auth-input: oklch(1 0 0 / 0.66);
+  --auth-pill: linear-gradient(180deg, oklch(1 0 0 / 0.86), oklch(1 0 0 / 0.6));
+  --wm-fill: linear-gradient(180deg, var(--ink) 30%, color-mix(in oklch, var(--accent-ink) 62%, var(--ink)) 80%);
+  --wm-rf: color-mix(in oklch, var(--accent-ink) 50%, var(--ink));
+  --wm-under: color-mix(in oklch, var(--accent-ink) 45%, var(--ink));
+  --wm-under-opacity: 0.8;
+  --wm-glow: drop-shadow(0 2px 18px oklch(1 0 0 / 0.55)) drop-shadow(0 0 60px oklch(0.98 0.04 80 / 0.5));
+  --wm-rf-opacity: 0.5;
+  --wm-shine: linear-gradient(100deg, transparent 40%, oklch(0.93 0.09 80 / 0.95) 50%, transparent 60%);
+  --wm-line: oklch(1 0 0 / 0.95);
+  --promise-shade: oklch(0.99 0.02 85 / 0.9);
+  --of-sky-top: oklch(0.8 0.055 252);
+  --of-sky-mid: oklch(0.87 0.06 18);
+  --of-sky-low: oklch(0.93 0.085 72);
+  --of-sea-far: oklch(0.84 0.04 215);
+  --of-sea-near: oklch(0.6 0.045 calc(var(--accent-h) + 48));
+  --of-moon: oklch(0.995 0.04 92);
+  --of-halo: oklch(0.9 0.12 68 / 0.6);
+}
+
+/* Moving between sign-in modes the stage stays live: no page cross-fade,
+   so the sea keeps rolling and the card morphs in place. Signing in, the
+   sea dissolves while the app rises (the stage exits alone). */
+html:has(.auth-stage):is([data-vt="page"], [data-vt="pop"])::view-transition-old(root),
+html:has(.auth-stage):is([data-vt="page"], [data-vt="pop"])::view-transition-new(root),
+html:has(.auth-stage):is([data-vt="page"], [data-vt="pop"])::view-transition-group(auth-stage),
+html:has(.auth-stage):is([data-vt="page"], [data-vt="pop"])::view-transition-new(auth-stage) { animation: none; }
+html:has(.auth-stage):is([data-vt="page"], [data-vt="pop"])::view-transition-old(auth-stage) { display: none; }
+html:is([data-vt="page"], [data-vt="pop"])::view-transition-old(auth-stage):only-child {
+  animation: auth-dive 640ms var(--ease-in-out) both;
+}
+@keyframes auth-dive { to { opacity: 0; transform: scale(1.045); filter: blur(10px); } }
+
+/* ---------------- the sea (OceanScene) ---------------- */
+.auth-sea {
+  position: fixed; inset: 0; z-index: 0;
+  overflow: hidden;
+  margin: 0;
+}
+.ocean { position: absolute; inset: 0; container-type: size; overflow: hidden; }
+.ocean-gl { position: absolute; inset: 0; }
+.ocean-canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+  opacity: 0;
+  transition: opacity 1.5s var(--ease-out);
+}
+.ocean-canvas[data-ready] { opacity: 1; }
+
+.ocean-fallback {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(180deg,
+      var(--of-sky-top) 0%,
+      var(--of-sky-mid) calc(var(--ocean-horizon) * 58%),
+      var(--of-sky-low) calc(var(--ocean-horizon) * 100%),
+      var(--of-sea-far) calc(var(--ocean-horizon) * 100%),
+      var(--of-sea-near) 100%);
+}
+/* the moon (or sun) and its halo */
+.ocean-fallback::before {
+  content: ""; position: absolute;
+  left: calc(var(--ocean-moon-x) * 100%); top: calc(var(--ocean-moon-y) * 100%);
+  width: calc(var(--ocean-moon-r) * 200cqh); aspect-ratio: 1; border-radius: 50%;
+  translate: -50% -50%;
+  background: radial-gradient(circle at 42% 38%, var(--of-moon), color-mix(in oklch, var(--of-moon) 86%, var(--of-sky-mid)));
+  box-shadow: 0 0 calc(var(--ocean-moon-r) * 140cqh) calc(var(--ocean-moon-r) * 40cqh) var(--of-halo),
+              0 0 calc(var(--ocean-moon-r) * 900cqh) calc(var(--ocean-moon-r) * 200cqh) color-mix(in oklch, var(--of-halo) 35%, transparent);
+}
+[data-theme="light"] .ocean-fallback::before {
+  left: calc(var(--ocean-sun-x) * 100%); top: calc(var(--ocean-sun-y) * 100%);
+  width: calc(var(--ocean-sun-r) * 200cqh);
+}
+/* the path: a column of broken light on the water */
+.ocean-fallback::after {
+  content: ""; position: absolute;
+  left: calc(var(--ocean-moon-x) * 100%); top: calc(var(--ocean-horizon) * 100%); bottom: 0;
+  width: 34cqh; translate: -50% 0;
+  background: repeating-linear-gradient(180deg, color-mix(in oklch, var(--of-moon) 70%, transparent) 0 1px, transparent 1px 5px);
+  -webkit-mask-image: radial-gradient(50% 100% at 50% 0%, #000, transparent 100%);
+  mask-image: radial-gradient(50% 100% at 50% 0%, #000, transparent 100%);
+  opacity: 0.4;
+}
+[data-theme="light"] .ocean-fallback::after { left: calc(var(--ocean-sun-x) * 100%); opacity: 0.55; }
+.ocean.is-fallback .ocean-gl { display: none; }
+
+/* Legibility veil — a whisper of shade behind the card on desktop. */
+.auth-veil {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(46% 70% at 88% 52%, color-mix(in oklch, var(--bg) 30%, transparent), transparent 72%);
+}
+[data-theme="light"] .auth-veil {
+  background: radial-gradient(46% 70% at 88% 52%, oklch(1 0 0 / 0.2), transparent 72%);
+}
+
+/* ---------------- hero: the wordmark on the waterline ---------------- */
+.auth-hero {
+  position: absolute; z-index: 1;
+  left: var(--hero-x);
+  right: calc(var(--panel-w) + var(--gutter));
+  top: calc(var(--ocean-horizon) * 100% - var(--wm-box));
+  translate: calc(var(--hx, 0) * -14px) calc(var(--hy, 0) * -7px);
+  transition: translate 1.8s var(--ease-out);
+}
+
+.wm {
+  position: relative; display: inline-block; vertical-align: top;
+  font-size: var(--wm-size);
+}
+.wm-title { margin: 0; font: inherit; }
+.wm-stand { position: relative; z-index: 1; display: block; }
+.wm-lit { display: block; filter: var(--wm-glow); }
+.wm-word, .wm-under, .wm-strip {
+  display: block; white-space: nowrap;
+  font-family: var(--font-display); font-style: italic; font-weight: 360;
+  font-optical-sizing: auto;
+  font-feature-settings: normal;
+  line-height: 0.723; /* baseline on the box's bottom edge */
+  letter-spacing: -0.006em;
+}
+.wm-word { height: 0.723em; clip-path: inset(-45% -14% 0 -14%); }
+.wm-l { display: inline-block; }
+.wm-g {
+  display: inline-block;
+  /* room for italic overhangs, ascenders and the g's tail inside the clip-to-text box */
+  padding: 0.28em 0.18em; margin: -0.28em -0.18em;
+  background: var(--wm-fill);
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+}
+
+/* A band of moonlight parked beyond each letter; data-shine sweeps it across. */
+.wm-word .wm-g {
+  background: var(--wm-shine) no-repeat, var(--wm-fill);
+  background-size: 320% 100%, 100% 100%;
+  background-position: 130% 0, 0 0;
+  -webkit-background-clip: text; background-clip: text;
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* wm-rise stays in the list (same timing), so it is kept, not replayed */
+  .wm[data-shine] .wm-word .wm-g {
+    animation: wm-rise 1.3s var(--ease-spring) calc(300ms + var(--i) * 82ms) both,
+               wm-shine 1.25s var(--ease-in-out) calc(var(--i) * 60ms) both;
+  }
+}
+@keyframes wm-shine {
+  from { background-position: 130% 0, 0 0; }
+  to { background-position: -30% 0, 0 0; }
+}
+
+/* Seen through clear water: the part of each letter below the line (the g's
+   tail at rest; whole letters while they rise toward the surface). */
+.wm-under {
+  position: absolute; left: 0; right: 0; top: 0; height: 1.25em;
+  clip-path: inset(0.723em -14% 0 -14%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0.723em, rgb(0 0 0 / 0.8) 0.95em, rgb(0 0 0 / 0.2) 1.08em, transparent 1.2em);
+  mask-image: linear-gradient(180deg, #000 0.723em, rgb(0 0 0 / 0.8) 0.95em, rgb(0 0 0 / 0.2) 1.08em, transparent 1.2em);
+  opacity: var(--wm-under-opacity, 0.62); filter: blur(0.5px);
+}
+.wm-under .wm-g { background: none; color: var(--wm-under); }
+
+.wm-waterline {
+  position: absolute; z-index: 2; left: -7%; right: -7%; top: calc(0.723em - 0.5px); height: 1px;
+  background: linear-gradient(90deg, transparent, var(--wm-line) 22%, oklch(1 0 0 / 0.95) 52%, var(--wm-line) 80%, transparent);
+  opacity: 0.5;
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+.wm-waterline::after {
+  content: ""; position: absolute; inset: -5px 18%;
+  background: radial-gradient(closest-side, color-mix(in oklch, var(--accent) 45%, transparent), transparent);
+  filter: blur(4px);
+}
+
+/* The reflection: the letters flipped into strips that sway and glint. */
+.wm-reflection {
+  position: relative; height: 0.978em; margin-bottom: -0.42em;
+  pointer-events: none;
+  opacity: var(--wm-rf-opacity);
+  -webkit-mask-image: linear-gradient(180deg, #000, rgb(0 0 0 / 0.55) 26%, rgb(0 0 0 / 0.16) 58%, transparent 84%);
+  mask-image: linear-gradient(180deg, #000, rgb(0 0 0 / 0.55) 26%, rgb(0 0 0 / 0.16) 58%, transparent 84%);
+}
+.wm-strip {
+  position: absolute; left: 0; right: 0; top: 0; height: 0.723em;
+  transform: scaleY(-1);
+  clip-path: inset(var(--clip-t) -14% var(--clip-b) -14%);
+}
+.wm-strip .wm-g { background: none; color: var(--wm-rf); }
+
+.auth-promise {
+  margin: 0; max-width: 31ch;
+  font-size: clamp(1rem, 0.55rem + 0.55vw, 1.2rem); line-height: 1.55; font-weight: 450;
+  color: var(--ink-2); letter-spacing: 0.003em;
+  text-shadow: 0 1px 16px var(--promise-shade), 0 0 2px var(--promise-shade);
+  text-wrap: balance;
+}
+
+/* entrance: letters surface with a buoyant spring; reflections follow them */
+@media (prefers-reduced-motion: no-preference) {
+  .wm-g {
+    animation: wm-rise 1.3s var(--ease-spring) both;
+    animation-delay: calc(300ms + var(--i) * 82ms);
+  }
+  .wm-waterline { animation: wm-line-in 1.9s var(--ease-out) 0.2s both; }
+  .wm-strip {
+    animation: wm-sway calc(2300ms + var(--k) * 380ms) var(--ease-in-out) calc(var(--k) * -730ms) infinite alternate,
+               wm-glint calc(1700ms + var(--k) * 530ms) var(--ease-in-out) calc(var(--k) * -410ms) infinite alternate;
+  }
+  .wm-under { animation: wm-waver 3.4s var(--ease-in-out) infinite alternate; }
+  .auth-promise { animation: auth-promise-in 1.2s var(--ease-out) 1.75s both; }
+  .auth-top { animation: auth-fade 1.2s var(--ease-out) 1.4s both; }
+}
+/* The hero waits (briefly) for its face: paused delays don't count down. */
+.auth-stage:not([data-ready]) :is(.wm-g, .wm-waterline, .auth-promise, .auth-top) { animation-play-state: paused; }
+@keyframes wm-rise {
+  from { transform: translateY(1.08em) rotate(5deg); }
+  to { transform: none; }
+}
+@keyframes wm-line-in {
+  from { transform: scaleX(0); opacity: 0; }
+  to { transform: none; opacity: 0.5; }
+}
+@keyframes wm-sway {
+  from { translate: calc((0.6px + var(--k) * 1.15px) * -1) 0; }
+  to { translate: calc(0.6px + var(--k) * 1.15px) 0; }
+}
+@keyframes wm-glint {
+  from { opacity: 1; }
+  to { opacity: 0.55; }
+}
+@keyframes wm-waver {
+  from { translate: -1.5px 0; }
+  to { translate: 1.5px 0; }
+}
+@keyframes auth-promise-in {
+  from { opacity: 0; transform: translateY(10px); filter: blur(6px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+@keyframes auth-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------------- top bar ---------------- */
+.auth-top {
+  position: fixed; z-index: 3; top: 22px; left: var(--hero-x); right: var(--gutter);
+  display: flex; align-items: center; justify-content: space-between;
+  pointer-events: none;
+}
+.auth-top > * { pointer-events: auto; }
+.auth-orb { filter: drop-shadow(0 4px 18px var(--accent-glow)); }
+
+.auth-theme {
+  position: relative; display: inline-flex; align-items: center; gap: 8px;
+  height: 40px; padding: 0 15px 0 12px; border-radius: var(--radius-full);
+  border: 1px solid var(--auth-glass-rim);
+  background: color-mix(in oklch, var(--surface-float) 62%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  color: var(--ink-2); font-size: var(--text-sm); font-weight: 560; letter-spacing: 0.01em;
+  box-shadow: inset 0 1px 0 var(--hairline-hi), var(--shadow-1);
+  transition: color var(--dur-2), border-color var(--dur-2), transform var(--dur-3) var(--ease-spring), box-shadow var(--dur-3);
+}
+.auth-theme:hover { color: var(--ink); transform: translateY(-1px); box-shadow: inset 0 1px 0 var(--hairline-hi), var(--shadow-2); }
+.auth-theme:active { transform: scale(0.96); }
+.auth-theme:focus-visible { border-radius: var(--radius-full); }
+.at-icons { position: relative; width: 18px; height: 18px; display: grid; }
+.at-icon {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  transition: transform 520ms var(--ease-spring), opacity 260ms var(--ease-out);
+}
+.at-sun { color: var(--gold); }
+.at-moon { color: var(--accent-ink); }
+/* the icon shows where the switch takes you */
+.auth-theme[data-theme-now="dark"] .at-moon,
+.auth-theme[data-theme-now="light"] .at-sun { opacity: 0; transform: rotate(-70deg) scale(0.5); }
+
+/* ---------------- the card ---------------- */
+.auth-main {
+  position: relative; z-index: 2;
+  min-height: 100vh; min-height: 100dvh;
+  width: calc(var(--panel-w) + var(--gutter));
+  margin-left: auto;
+  padding: 92px var(--gutter) 56px 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.auth-card {
+  position: relative; width: 100%; max-width: 436px;
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(120% 55% at 18% 0%, color-mix(in oklch, var(--accent) 11%, transparent), transparent 62%),
+    var(--auth-glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.45);
+  backdrop-filter: blur(28px) saturate(1.45);
+  border: 1px solid var(--auth-glass-rim);
+  box-shadow:
+    inset 0 1px 0 var(--hairline-hi),
+    var(--shadow-pop),
+    0 60px 140px -60px var(--accent-glow);
+}
+/* a moonlit rim: brightest on the edge that faces the light */
+.auth-card-rim {
+  position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: linear-gradient(150deg, oklch(1 0 0 / 0.42), oklch(1 0 0 / 0.08) 32%, oklch(1 0 0 / 0.03) 64%, color-mix(in oklch, var(--accent) 34%, transparent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+[data-theme="light"] .auth-card-rim {
+  background: linear-gradient(150deg, oklch(1 0 0 / 0.95), oklch(1 0 0 / 0.5) 40%, color-mix(in oklch, var(--accent) 22%, oklch(1 0 0 / 0.4)));
+}
+.auth-morph { overflow: clip; border-radius: inherit; }
+.auth-morph-inner { position: relative; padding: 34px 34px 28px; }
+
+.auth-form { display: flex; flex-direction: column; gap: 16px; }
+.auth-head { margin-bottom: 2px; }
+.auth-title {
+  margin: 0;
+  font-family: var(--font-display); font-optical-sizing: auto;
+  font-variation-settings: "SOFT" 60, "WONK" 0;
+  font-size: clamp(1.8rem, 1.1rem + 1vw, 2.2rem); font-weight: 420;
+  line-height: 1.08; letter-spacing: -0.022em;
+}
+.auth-title:focus, .auth-title:focus-visible { outline: none; box-shadow: none; }
+.auth-lede { margin: 9px 0 0; color: var(--muted); font-size: var(--text-md); line-height: 1.5; text-wrap: balance; }
+
+/* notices live inside the head so their gap eases open with them */
+.auth-notice { overflow: hidden; }
+.auth-notice .an-body {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin-top: 16px; padding: 11px 14px; border-radius: 14px;
+  font-size: var(--text-sm); line-height: 1.45; font-weight: 520;
+}
+.auth-notice.is-info .an-body {
+  color: var(--accent-ink); background: var(--accent-soft);
+  border: 1px solid color-mix(in oklch, var(--accent) 22%, transparent);
+}
+.auth-notice.is-ok .an-body {
+  color: var(--ok); background: var(--ok-soft);
+  border: 1px solid color-mix(in oklch, var(--ok) 26%, transparent);
+}
+.auth-notice.is-warn .an-body {
+  color: var(--warn); background: var(--warn-soft);
+  border: 1px solid color-mix(in oklch, var(--warn) 28%, transparent);
+}
+.auth-notice.is-error .an-body {
+  color: var(--danger); background: var(--danger-soft);
+  border: 1px solid color-mix(in oklch, var(--danger) 28%, transparent);
+}
+.auth-notice .an-icon { flex-shrink: 0; margin-top: 1px; }
+
+/* ---------------- fields ---------------- */
+.auth-field { gap: 8px; }
+.auth-label { font-size: var(--text-sm); font-weight: 560; color: var(--ink-2); letter-spacing: -0.003em; }
+.auth-control { position: relative; display: flex; align-items: center; }
+.auth-control > .auth-glyph {
+  position: absolute; z-index: 1; left: 15px; top: 50%; translate: 0 -50%;
+  color: var(--faint); pointer-events: none;
+  transition: color var(--dur-2) var(--ease-out), scale var(--dur-3) var(--ease-spring);
+}
+.field .auth-control > input {
+  min-height: 50px; padding-left: 44px; border-radius: 15px;
+  background: var(--auth-input);
+}
+.auth-control:focus-within > .auth-glyph { color: var(--accent-ink); scale: 1.08; }
+/* a line of light runs along the field's lower edge on focus */
+.auth-control::after {
+  content: ""; position: absolute; left: 20px; right: 20px; bottom: 0; height: 1.5px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent) 30%, color-mix(in oklch, var(--accent) 35%, white) 50%, var(--accent) 70%, transparent);
+  transform: scaleX(0.15); opacity: 0; pointer-events: none;
+  transition: transform 720ms var(--ease-out), opacity 260ms var(--ease-out);
+}
+.auth-control:focus-within::after { transform: scaleX(1); opacity: 1; }
+.field.has-error .auth-control::after { background: linear-gradient(90deg, transparent, var(--danger), transparent); }
+
+.pw-wrap > input { padding-right: 50px; }
+.pw-toggle {
+  position: absolute; z-index: 1; right: 7px; top: 50%; translate: 0 -50%;
+  width: 36px; height: 36px; border: none; border-radius: 50%; padding: 0;
+  display: grid; place-items: center;
+  background: transparent; color: var(--muted);
+  transition: color var(--dur-2), background-color var(--dur-2);
+}
+.pw-toggle:hover { color: var(--ink); background: color-mix(in oklch, var(--ink) 8%, transparent); }
+.pw-eye .pw-slash { stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 300ms var(--ease-out); }
+.pw-toggle[data-shown] .pw-slash { stroke-dashoffset: 0; }
+.pw-eye .pw-pupil { transform-box: fill-box; transform-origin: center; transition: transform 380ms var(--ease-spring); }
+.pw-toggle[data-shown] .pw-pupil { transform: scale(0.55); }
+
+.auth-field .field-error, .auth-field .field-help { display: inline-flex; align-items: center; gap: 6px; }
+.auth-field .field-help { color: var(--ok); font-weight: 560; }
+
+.auth-forgot { display: flex; justify-content: flex-end; margin-top: -8px; }
+
+/* ---------------- actions ---------------- */
+.auth-submit { margin-top: 4px; }
+.auth-submit .btn { min-height: 54px; letter-spacing: -0.01em; }
+@media (prefers-reduced-motion: no-preference) {
+  /* one sweep of light across the button once the card has landed */
+  .auth-submit .btn-primary::after { animation: auth-sheen 1.5s var(--ease-in-out) 2.3s backwards; }
+}
+@keyframes auth-sheen {
+  from { transform: translateX(-130%); }
+  to { transform: translateX(130%); }
+}
+
+.auth-divider {
+  display: flex; align-items: center; gap: 14px; margin: 4px 0 14px;
+  color: var(--muted); font-size: var(--text-xs); letter-spacing: 0.04em; font-weight: 520;
+}
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--border-2)); }
+.auth-divider::after { background: linear-gradient(90deg, var(--border-2), transparent); }
+
+.auth-providers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.auth-providers[data-count="1"] { grid-template-columns: minmax(0, 1fr); }
+.auth-providers[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.auth-provider {
+  position: relative; isolation: isolate; overflow: hidden;
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-width: 0;
+  min-height: 48px; padding: 0 16px; border-radius: var(--radius-full);
+  border: 1px solid var(--border-2);
+  background: var(--auth-pill);
+  color: var(--ink); font-size: var(--text-md); font-weight: 560; letter-spacing: -0.005em;
+  box-shadow: inset 0 1px 0 var(--hairline-hi), 0 8px 20px -14px oklch(0 0 0 / 0.55);
+  transition: transform var(--dur-3) var(--ease-spring), border-color var(--dur-2) var(--ease-out),
+              box-shadow var(--dur-3) var(--ease-out), background-color var(--dur-2);
+}
+.auth-provider::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(90% 140% at 50% 0%, color-mix(in oklch, var(--accent) 16%, transparent), transparent 70%);
+  opacity: 0; transition: opacity var(--dur-3) var(--ease-out);
+}
+.auth-provider:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklch, var(--accent) 40%, var(--border-2));
+  box-shadow: inset 0 1px 0 var(--hairline-hi), 0 14px 30px -16px var(--accent-glow);
+}
+.auth-provider:hover:not(:disabled)::before { opacity: 1; }
+.auth-provider:active:not(:disabled) { transform: scale(0.965); transition-duration: 90ms; }
+.auth-provider:disabled { cursor: progress; opacity: 0.7; }
+.auth-provider:focus-visible { border-radius: var(--radius-full); }
+.pv-mark { display: grid; place-items: center; width: 20px; height: 20px; flex-shrink: 0; }
+.pv-mark .btn-spinner { width: 15px; height: 15px; border-radius: 50%; border: 2px solid currentColor; border-top-color: transparent; animation: spin 0.7s linear infinite; }
+.pv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.auth-links { display: flex; justify-content: center; }
+.auth-switch { margin: 0; color: var(--muted); font-size: var(--text-sm); text-align: center; line-height: 1.5; }
+.auth-link {
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  border: none; background: none; padding: 2px 1px; margin: 0;
+  font: inherit; font-size: var(--text-sm); font-weight: 600; color: var(--accent-ink); cursor: pointer;
+  background-image: linear-gradient(currentColor, currentColor);
+  background-size: 0% 1px; background-position: 0 100%; background-repeat: no-repeat;
+  transition: background-size var(--dur-3) var(--ease-out), color var(--dur-2);
+}
+.auth-link:hover { background-size: 100% 1px; }
+.auth-link.is-quiet { color: var(--muted); font-weight: 520; }
+.auth-link.is-quiet:hover { color: var(--ink); }
+.auth-link.is-back svg { transition: transform var(--dur-3) var(--ease-spring); }
+.auth-link.is-back:hover svg { transform: translateX(-3px); }
+
+/* Keyboard focus: these controls paint their own shadows, which would cancel
+   the global ring, so the ring is restated on top of them. */
+.auth-stage .btn:focus-visible { box-shadow: var(--ring), 0 8px 24px -8px var(--accent-glow); }
+.auth-provider:focus-visible { box-shadow: var(--ring); }
+.auth-theme:focus-visible { box-shadow: var(--ring); }
+.auth-link:focus-visible { border-radius: 6px; }
+
+/* ---------------- phones & tablets: the sea becomes a tall band ---------------- */
+@media (max-width: 899px) {
+  .auth-stage {
+    --ocean-horizon: 0.585;
+    --ocean-moon-x: 0.76;
+    --ocean-moon-y: 0.27;
+    --ocean-moon-r: 0.034;
+    --ocean-sun-x: 0.76;
+    --ocean-sun-y: 0.25;
+    --ocean-sun-r: 0.046;
+    --sea-h: clamp(340px, 56svh, 600px);
+    --wm-size: clamp(2.8rem, min(17.5vw, 13svh), 7rem);
+  }
+  .auth-sea { position: absolute; inset: 0 0 auto; height: var(--sea-h); }
+  .auth-veil,
+  [data-theme="light"] .auth-veil {
+    background: linear-gradient(180deg, transparent 76%, color-mix(in oklch, var(--bg) 50%, transparent) 90%, var(--bg) 99.5%);
+  }
+  .auth-hero {
+    left: 16px; right: 16px;
+    top: calc(var(--ocean-horizon) * var(--sea-h) - var(--wm-box));
+    text-align: center;
+  }
+  .auth-promise { margin-inline: auto; max-width: 30ch; font-size: 0.95rem; }
+  .auth-top { position: absolute; top: max(14px, env(safe-area-inset-top)); left: 16px; right: 16px; }
+  .at-label { display: none; }
+  .auth-theme { width: 40px; padding: 0; justify-content: center; }
+  .auth-main {
+    width: auto; min-height: 0; margin: 0;
+    padding: calc(var(--sea-h) - 58px) 16px max(36px, env(safe-area-inset-bottom));
+    display: block;
+  }
+  .auth-card { margin: 0 auto; }
+  .auth-morph-inner { padding: 26px 22px 22px; }
+}
+@media (max-width: 899px) and (max-height: 640px) {
+  .auth-promise { display: none; }
+}
+/* Shorter phones (360×740): a slightly lower sea lifts the card so Sign in
+   clears the fold, while the promise keeps its room above the card. */
+@media (max-width: 899px) and (min-height: 700px) and (max-height: 780px) {
+  .auth-stage { --sea-h: clamp(340px, 52svh, 600px); }
+}
+/* Phones on their side: a shallow sea and a smaller wordmark, so the form
+   starts inside the first screen. */
+@media (max-width: 899px) and (max-height: 520px) {
+  .auth-stage { --sea-h: clamp(170px, 44svh, 600px); --wm-size: clamp(2.2rem, 11svh, 4rem); }
+  .auth-main { padding-top: calc(var(--sea-h) - 34px); }
+}
+/* Touch: the password reveal grows to a finger-sized target. */
+@media (pointer: coarse) {
+  .pw-toggle { right: 5px; width: 40px; height: 40px; }
+}
+@media (max-width: 380px) {
+  .auth-providers { grid-template-columns: minmax(0, 1fr); }
+}
