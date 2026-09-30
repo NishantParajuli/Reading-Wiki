@@ -112,6 +112,7 @@
   /* the app theme's own page colours, unaffected by reader tones */
   --app-bg: var(--bg);
   --app-ink: var(--ink);
+  --seg-thumb: oklch(0.34 0.04 256);   /* segmented-control thumb (Pearl uses the solid surface) */
 
   --accent: oklch(0.83 0.115 var(--accent-h));
   --accent-2: oklch(0.76 0.13 calc(var(--accent-h) + 48));

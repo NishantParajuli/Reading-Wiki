@@ -185,6 +185,15 @@ export function Popover({ open, onClose, trigger, align = "right", className = "
 
     panel.style.left = `${viewportLeft - anchorRect.left}px`;
     panel.style.right = "auto";
+
+    // Open upward when the room below can't hold the panel but the room above
+    // is larger (e.g. a menu in a dock on the bottom edge).
+    const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+    const below = viewportHeight - anchorRect.bottom;
+    const up = panel.offsetHeight + 22 > below && anchorRect.top > below;
+    panel.style.top = up ? "auto" : "calc(100% + 10px)";
+    panel.style.bottom = up ? "calc(100% + 10px)" : "auto";
+    panel.style.setProperty("--pop-origin", `${up ? "bottom" : "top"} ${align === "left" ? "left" : "right"}`);
   }, [align, ref]);
 
   useLayoutEffect(() => {

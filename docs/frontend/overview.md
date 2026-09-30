@@ -50,7 +50,8 @@ src/
 │   ├── experience/          #    Home (+MoonPhase), NotFound, queries
 │   ├── catalog/             #    Library, Discover, Overview, Manage(+Sections/Kit/
 │   │                        #    Panels), AddNovelDialog, NovelHeader(+HeroParts), tags
-│   ├── reading/             #    Reader(+Parts/Toolbar), TranslationTools, Chapters, toc, queries
+│   ├── reading/             #    Reader(+Parts/Toolbar/Settings), TranslationTools, Chapters,
+│   │                        #    toc, queries
 │   ├── acquisition/         #    ImportView(+Basin/Detail/Review/Parts/History),
 │   │                        #    importStatus, NovelpiaCookies
 │   ├── translation/         #    glossary + translate API bindings
@@ -371,27 +372,43 @@ Its chrome is two floating glass capsules. The top capsule holds back, contents,
 book and chapter titles, the position (`119 / 240`), bookmark, the **Aa** reading
 settings and translation editing (with a conflict badge); the bottom capsule holds
 previous/next and a progress ring with percent read and minutes left. Both recede on
-scroll-down and return on scroll-up, a tap on the page, or keyboard focus; restoring
-a saved scroll position does not hide them. A 3px tideline across the top edge shows
-progress. Each chapter opens with an engraved numeral, the title, a drawn ornament and
+scroll-down and return on scroll-up, a tap on the page, or keyboard focus; only
+keyboard focus (`:focus-visible`) holds them, so a mouse or touch press on Play still
+lets them recede. Restoring a saved scroll position does not hide them. The capsules
+themselves carry the view-transition names (`reader-top`, `reader-bottom`), so their
+glass blurs the page beneath. If a chapter fails to load, the top capsule still names
+"Chapter N" and the error says the reader's place is saved. A 3px tideline across the
+top edge shows progress. Each chapter opens with an engraved numeral, the title, a drawn ornament and
 reading time; the first paragraph has a drop cap and small-caps first line. The first
 chapter of a visit settles in with a short entrance (prose readable within ~0.8s);
 moving between chapters uses the tide wash transition instead.
 
-Reading settings (a popover on desktop, a bottom sheet on phones) offer five tones —
-**Theme** (follows the app theme), **Paper**, **Sepia**, **Dusk** and **Night** (true
-black) — which re-map the theme tokens on `.reader` so the chrome follows the page;
-four typefaces (Literata, Fraunces, Geist, Atkinson Hyperlegible Next); size, line
-height, width, justify/indent switches and auto-scroll, with a live preview. Saved
-values are validated (`loadReaderPrefs`) before use; unknown tones or fonts fall back to
-the defaults, and unavailable browser storage does not prevent the reader from opening.
+Reading settings (`ReaderSettings.jsx`, a "Reading settings" dialog rendered at the
+reader root) open as a popover under **Aa** on desktop and tablet — kept inside the
+viewport and re-placed on resize — and as a bottom sheet on phones, where the width
+control is hidden. Opening moves focus to the panel's title; Tab cycles within it;
+Escape or × close it and return focus to **Aa**. Tone and font are radio groups with
+one Tab stop (arrows, Home and End move and select). The body fades at an edge while
+more remains to scroll. Five tones — **Theme** (follows the app theme; its swatch shows
+the app theme), **Paper**, **Sepia**, **Dusk** and **Night** (true black) — re-map the
+theme tokens on `.reader`, including status colours, gold, atmosphere, scrim, the focus
+ring and the page behind the reader, so the chrome follows the page (light tones take
+Pearl's status set, dark tones Tide's). Four typefaces (Literata, Fraunces, Geist,
+Atkinson Hyperlegible Next); size, line height, width, justify/indent switches and
+auto-scroll, with a live preview. Saved values are validated (`loadReaderPrefs`) before
+use; unknown tones or fonts fall back to the defaults, and unavailable browser storage
+does not prevent the reader from opening.
 
 Narration lives in a floating dock above the bottom capsule: a compact pill (voice,
 **Narrate chapter**) until audio exists, then a player with ±15s skips, play/pause
-ringed by progress, a waveform seek bar, speed, voice and regenerate. While the
-chrome is hidden and audio is playing, the dock shrinks to a corner mini-player.
-Shared anchored popovers, including the narrator picker, preserve their preferred
-alignment when space permits and shift inside a 12px viewport gutter when it does not.
+ringed by progress, a tide-line seek bar (an even swell that drifts while playing and
+settles when paused; it carries no audio data), speed, voice and regenerate. While the
+chrome is hidden and audio is playing, the dock shrinks to a corner mini-player. Shared
+anchored popovers, including the narrator picker, preserve their preferred alignment
+when space permits and shift inside a 12px viewport gutter when it does not; they open
+upward when the room below can't hold them and the room above is larger (so the
+narrator menu rises out of the dock). Toasts and the first-visit hint ("Click" or "Tap
+the page to show or hide controls", by pointer type) sit above the bottom chrome.
 During audiobook playback, the reader selects the active paragraph from its actual
 generation-time boundaries by comparing the player clock directly with manifest
 milliseconds. It estimates the active one-or-two-sentence group only within that
@@ -408,7 +425,9 @@ therefore no longer turns a still-running narration job into a client-side failu
 The end of a chapter is marked by a drawn wave, a sealing check with a small burst of
 light when it scrolls into view, and the next chapter's number and title with **Next
 chapter** (or **Translate & continue** for a raw chapter), plus Previous, Contents and
-the book's page. Arrow-key navigation is disabled inside form controls, links,
+the book's page. Pictures in rich chapters open in a lightbox dialog (also by Enter or
+Space) that traps focus, closes on Escape and returns focus to the picture.
+Arrow-key navigation is disabled inside form controls, links,
 editable content, dialogs, and open reader settings/tools/contents. Focus restores the
 hidden reader controls. Bookmark mutation failures show a message, and failed
 table-of-contents requests offer retry. Auto-scroll pauses while reader settings,
@@ -542,6 +561,10 @@ a numbered sources list sits under each answer.
   polling/recovery, unavailable access, preserved galleries, and discarded late responses
   after chapter navigation. `e2e/illustrations.spec.js` exercises desktop/mobile controls, range generation, and inline placement
   and verifies opening the panel does not generate images.
+- `src/modules/reading/ReaderSettings.test.jsx` — rendering at the reader root, focus on
+  open and its return on Escape/close, radio-group arrow keys, and clicks that stay out
+  of tap-to-hide; `src/modules/reading/RichContent.test.jsx` — the image lightbox's
+  labelled modal, Escape and focus return, and its close button.
 - `src/modules/reading/TranslationTools.test.jsx` — shared/personal editing, conflict
   actions, draft protection, keyboard save, failed-write recovery, and contribution/revert
   controls. Editor browser scenarios in `e2e/critical-paths.spec.js` cover desktop/mobile

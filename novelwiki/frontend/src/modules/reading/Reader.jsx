@@ -29,7 +29,7 @@ import {
   AUTOSCROLL_PX_PER_SEC, AudioPlayer, EndOfChapterCard,
   RichContent, loadReaderPrefs, readerFontFamily,
 } from "../../modules/reading/ReaderParts.jsx";
-import { ChapterOpening, ReaderFooter, ReaderToolbar } from "./ReaderToolbar.jsx";
+import { ChapterOpening, CoachMark, ReaderFooter, ReaderToolbar } from "./ReaderToolbar.jsx";
 import { useNarrationGuide } from "./useNarrationGuide.js";
 import { useReadySignal } from "../../motion/navigation.js";
 import { useBookAtmosphere } from "../../atmosphere/store.js";
@@ -60,9 +60,6 @@ export function Reader() {
   const [chrome, setChrome] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
   const [readPct, setReadPct] = useState(0);
-  const [coach, setCoach] = useState(() => {
-    try { return !localStorage.getItem("nw-reader-coached"); } catch { return true; }
-  });
   const [bookmarkBusy, setBookmarkBusy] = useState(false);
   const [tocError, setTocError] = useState(null);
   const scrollSaved = useRef(0);
@@ -176,17 +173,16 @@ export function Reader() {
         readingApi.setProgress(novelId, { last_chapter: number, scroll_pct: pct }).catch(() => {});
       }, 500);
 
-      // Auto-hide on scroll down, reveal on scroll up.
+      // Auto-hide on scroll down, reveal on scroll up. Keyboard focus in the
+      // chrome holds it; a clicked or tapped control (Play) keeps no hold.
       const y = h.scrollTop;
       const dy = y - lastScrollY.current;
       if (Math.abs(dy) > 12) {
         if (dy > 0 && y > 160 && !showSettings && !showTools && !showToc
-          && !document.activeElement?.closest(".reader-bar, .audio-dock")) setChrome(false);
+          && !document.querySelector(".reader-bar :focus-visible, .audio-dock :focus-visible")) setChrome(false);
         else if (dy < 0) setChrome(true);
         lastScrollY.current = y;
       }
-
-
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => { window.removeEventListener("scroll", onScroll); clearTimeout(saveTimer); };
@@ -229,16 +225,6 @@ export function Reader() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [ch, openReader, showSettings, showTools, showToc]);
-
-  // One-time coach mark.
-  useEffect(() => {
-    if (!coach) return;
-    const t = setTimeout(() => {
-      setCoach(false);
-      try { localStorage.setItem("nw-reader-coached", "1"); } catch { /* Storage may be unavailable. */ }
-    }, 5000);
-    return () => clearTimeout(t);
-  }, [coach]);
 
   function openTocDrawer() {
     if (toc == null) {
@@ -311,6 +297,7 @@ export function Reader() {
       {status === "error" && (
         <div className={"reader-col " + widthCls} style={colStyle}>
           <EmptyState icon="x" title="Couldn't load this chapter"
+                      body="The connection or the server stumbled. Your place is saved, so try again in a moment."
                       primaryAction={<Button variant="ghost" icon="refresh" onClick={() => setReloadKey(k => k + 1)}>Retry</Button>} />
         </div>
       )}
@@ -364,11 +351,7 @@ export function Reader() {
                       onPrev={() => openReader(ch.prev, { listen })} onNext={markDoneAndNext} />
       )}
 
-      {coach && status === "ok" && (
-        <div className="coach-mark" role="status">
-          <Icon name="sparkles" size={14} /> Tap the page to show or hide controls
-        </div>
-      )}
+      <CoachMark ready={status === "ok"} />
 
       {/* TOC drawer */}
       {showToc && (

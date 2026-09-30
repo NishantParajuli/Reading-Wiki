@@ -7,8 +7,9 @@ import { useNavigate } from "react-router-dom";
 import { identityApi } from "../identity/api.js";
 import { narrationApi } from "../narration/api.js";
 import { Icon } from "../../components/Icon.jsx";
-import { Button, SegmentedControl } from "../../components/ui.jsx";
-import { useToast } from "../../components/toast.jsx";
+import { Button } from "../../components/ui.jsx";
+import { useOverlayPortal } from "../../components/overlay.jsx";
+import { useFocusTrap } from "../../lib/hooks.js";
 import { VoicePicker, readTtsPrefs } from "../narration/index.js";
 import { clamp, fmtChapter } from "../../lib/utils.js";
 import { activeNarrationChunk } from "./narrationGuide.js";
@@ -58,105 +59,6 @@ export function loadReaderPrefs(user) {
   }
   for (const key of ["justify", "indent", "autoScroll"]) merged[key] = merged[key] === true;
   return merged;
-}
-
-const fillPct = (value, min, max) => `${((value - min) / (max - min)) * 100}%`;
-
-function Switch({ checked, onChange, label }) {
-  return (
-    <label className="rs-switch">
-      <input type="checkbox" role="switch" checked={checked} aria-checked={checked} onChange={e => onChange(e.target.checked)} />
-      <span className="rs-switch-track" aria-hidden="true"><span className="rs-switch-thumb" /></span>
-      <span>{label}</span>
-    </label>
-  );
-}
-
-/* ---------- Settings (Aa) sheet ---------- */
-export function ReaderSettings({ prefs, setPrefs, onClose }) {
-  const set = (k, v) => setPrefs(p => ({ ...p, [k]: v }));
-  const nudge = (d) => set("size", clamp(prefs.size + d, 14, 28));
-  return (
-    <div className="reader-settings" role="region" aria-label="Reading settings" onClick={e => e.stopPropagation()}>
-      <div className="rs-head">
-        <div>
-          <p className="rs-eyebrow">Reading settings</p>
-          <b>Make yourself comfortable</b>
-        </div>
-        <button className="icon-btn plain" aria-label="Close reading settings" onClick={onClose}><Icon name="x" size={17} /></button>
-      </div>
-      <div className={"rs-preview reader-tone-" + prefs.tone} style={{
-        "--rs-font": readerFontFamily(prefs.font), "--rs-size": prefs.size + "px", "--rs-line": prefs.line,
-      }}>
-        <p>The tide pulled back slowly, and for the first time the glass beneath the water caught the morning light.</p>
-      </div>
-
-      <div className="rs-group">
-        <span className="rs-label">Tone</span>
-        <div className="rs-tones" role="radiogroup" aria-label="Reading tone">
-          {READER_TONES.map(t => (
-            <button key={t.value} type="button" role="radio" aria-checked={prefs.tone === t.value}
-                    className={"rs-tone" + (prefs.tone === t.value ? " on" : "")} title={t.hint}
-                    onClick={() => set("tone", t.value)}>
-              <span className={"rs-tone-swatch reader-tone-" + t.value} aria-hidden="true">Aa</span>
-              <span className="rs-tone-label">{t.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="rs-group">
-        <span className="rs-label">Typeface</span>
-        <div className="rs-fonts" role="radiogroup" aria-label="Font">
-          {READER_FONTS.map(f => (
-            <button key={f.value} type="button" role="radio" aria-checked={prefs.font === f.value}
-                    className={"rs-font" + (prefs.font === f.value ? " on" : "")} title={f.hint}
-                    onClick={() => set("font", f.value)}>
-              <span className="rs-font-sample" style={{ fontFamily: f.family }} aria-hidden="true">Ag</span>
-              <span className="rs-font-label">{f.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="rs-group">
-        <span className="rs-label">Size <span className="rs-value">{prefs.size}px</span></span>
-        <div className="rs-slider-row">
-          <button type="button" className="rs-step" aria-label="Smaller text" onClick={() => nudge(-1)} disabled={prefs.size <= 14}><span style={{ fontSize: 12 }}>A</span></button>
-          <input type="range" className="slider" min={14} max={28} step={1} value={prefs.size}
-                 style={{ "--fill": fillPct(prefs.size, 14, 28) }}
-                 aria-label="Font size" onChange={e => set("size", Number(e.target.value))} />
-          <button type="button" className="rs-step" aria-label="Larger text" onClick={() => nudge(1)} disabled={prefs.size >= 28}><span style={{ fontSize: 18 }}>A</span></button>
-        </div>
-      </div>
-      <div className="rs-group">
-        <span className="rs-label">Line height <span className="rs-value">{prefs.line.toFixed(1)}</span></span>
-        <input type="range" className="slider" min={1.3} max={2.2} step={0.1} value={prefs.line}
-               style={{ "--fill": fillPct(prefs.line, 1.3, 2.2) }}
-               aria-label="Line height" onChange={e => set("line", Math.round(Number(e.target.value) * 10) / 10)} />
-      </div>
-      <div className="rs-group">
-        <span className="rs-label">Width</span>
-        <SegmentedControl value={prefs.width} onChange={v => set("width", v)} ariaLabel="Column width"
-          options={[{ value: "narrow", label: "Narrow" }, { value: "normal", label: "Normal" }, { value: "wide", label: "Wide" }, { value: "full", label: "Full" }]} />
-      </div>
-      <div className="rs-group rs-toggles">
-        <Switch checked={!!prefs.justify} onChange={v => set("justify", v)} label="Justify" />
-        <Switch checked={!!prefs.indent} onChange={v => set("indent", v)} label="Indent paragraphs" />
-      </div>
-      <div className="rs-group">
-        <span className="rs-label">Auto-scroll <span className="rs-value">{prefs.autoScroll ? `speed ${prefs.autoSpeed}` : "off"}</span></span>
-        <div className="rs-autoscroll">
-          <SegmentedControl fit value={prefs.autoScroll} onChange={v => set("autoScroll", v)} ariaLabel="Auto-scroll"
-            options={[{ value: false, label: "Off" }, { value: true, label: "On" }]} />
-          <input type="range" className="slider" min={1} max={10} step={1} value={prefs.autoSpeed}
-                 style={{ "--fill": fillPct(prefs.autoSpeed, 1, 10) }}
-                 aria-label="Auto-scroll speed" disabled={!prefs.autoScroll}
-                 onChange={e => set("autoSpeed", Number(e.target.value))} />
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export { TranslationTools } from "./TranslationTools.jsx";
@@ -464,20 +366,20 @@ export function AudioPlayer({
           />
           <div className="ad-transport">
             <button className="ad-skip" aria-label="Back 15 seconds" onClick={() => skip(-15)}>
-              <Icon name="rotateCcw" size={19} /><span className="ad-skip-n" aria-hidden="true">15</span>
+              <Icon name="rotateCcw" size={24} sw={1.5} /><span className="ad-skip-n" aria-hidden="true">15</span>
             </button>
             <button className={"ad-play" + (playing ? " is-playing" : "")} onClick={togglePlay} aria-label={playing ? "Pause" : "Play"}>
               <span className="ad-play-ring" aria-hidden="true" />
               <Icon name={playing ? "pause" : "play"} size={18} />
             </button>
             <button className="ad-skip ad-skip-fwd" aria-label="Forward 15 seconds" onClick={() => skip(15)}>
-              <Icon name="rotateCcw" size={19} /><span className="ad-skip-n" aria-hidden="true">15</span>
+              <Icon name="rotateCcw" size={24} sw={1.5} /><span className="ad-skip-n" aria-hidden="true">15</span>
             </button>
           </div>
           <div className="ad-track">
             <span className="ad-time">{fmt(cur)}</span>
             <span className="ad-seek-wrap">
-              <span className="ad-wave" aria-hidden="true" style={{ WebkitMaskImage: WAVE_MASK, maskImage: WAVE_MASK }} />
+              <TideLine />
               <input type="range" className="ad-seek" min={0} max={dur || 0} step={0.1} value={Math.min(cur, dur || 0)}
                      onChange={seek} aria-label="Seek" />
             </span>
@@ -531,17 +433,23 @@ export function AudioPlayer({
   );
 }
 
-/* A still, hand-tuned waveform silhouette under the seek bar (decorative). */
-const WAVE_BARS = [0.35, 0.55, 0.4, 0.7, 0.5, 0.85, 0.6, 0.45, 0.75, 0.95, 0.65, 0.5, 0.8, 0.55, 0.4, 0.7, 0.9, 0.6, 0.45, 0.65, 0.8, 0.5, 0.35, 0.6, 0.75, 0.55, 0.85, 0.45, 0.6, 0.4, 0.7, 0.5, 0.65, 0.9, 0.55, 0.4, 0.6, 0.75, 0.5, 0.35];
-/* The bars are a mask over a progress gradient, so played audio lights up. */
-const WAVE_MASK = (() => {
-  const width = WAVE_BARS.length * 6;
-  const rects = WAVE_BARS.map((h, i) => {
-    const height = (h * 34).toFixed(1);
-    return `<rect x='${i * 6 + 1.3}' y='${((40 - h * 34) / 2).toFixed(1)}' width='3.4' height='${height}' rx='1.7'/>`;
-  }).join("");
-  return `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${width} 40' preserveAspectRatio='none'>${rects}</svg>`)}")`;
-})();
+/* The seek track's tide line: an even swell, deliberately not a waveform —
+   it carries no audio data. Two swells drift while narration plays and settle
+   flat when it pauses; the stretch already heard is lit (--pct). */
+const swell = (period, lift) => {
+  let d = "M0 8";
+  for (let x = 0; x < 1600; x += period) d += ` Q${x + period / 4} ${8 - lift} ${x + period / 2} 8 T${x + period} 8`;
+  return d;
+};
+const SWELLS = [swell(60, 4), swell(30, 6)];
+function TideLine() {
+  const layer = (heard) => (
+    <span className={"ad-tide-layer" + (heard ? " is-heard" : "")}>
+      {SWELLS.map((d, i) => <svg key={i} className={`ad-swell ad-swell-${i}`} height="16"><path d={d} /></svg>)}
+    </span>
+  );
+  return <span className="ad-tide" aria-hidden="true">{layer(false)}{layer(true)}</span>;
+}
 
 /* ---------- End of chapter: the tide turns ---------- */
 export function EndOfChapterCard({ ch, novelId, onNext, onPrev }) {
@@ -571,10 +479,10 @@ export function EndOfChapterCard({ ch, novelId, onNext, onPrev }) {
       {ch.next != null ? (
         <>
           <p className="eoc-next-label">Up next</p>
-          <h3 className="eoc-next-title">
+          <h2 className="eoc-next-title">
             Chapter {fmtChapter(ch.next)}
             {ch.next_title ? <><span className="eoc-dash"> — </span><em>{ch.next_title}</em></> : null}
-          </h3>
+          </h2>
           <div className="eoc-actions">
             <Button variant="primary" size="lg" full iconRight="arrowRight" onClick={onNext}>
               {nextIsRaw ? "Translate & continue" : "Next chapter"}
@@ -583,7 +491,7 @@ export function EndOfChapterCard({ ch, novelId, onNext, onPrev }) {
         </>
       ) : (
         <>
-          <h3 className="eoc-next-title">You're all caught up</h3>
+          <h2 className="eoc-next-title">You're all caught up</h2>
           <p className="eoc-caught">That's the last chapter for now. New ones will wash up here.</p>
         </>
       )}
@@ -596,8 +504,32 @@ export function EndOfChapterCard({ ch, novelId, onNext, onPrev }) {
   );
 }
 
+/* The enlarged picture: a modal that holds focus, closes on Escape, its close
+   button or a tap, and hands focus back to the picture it came from. */
+function Lightbox({ image, onClose }) {
+  const trapRef = useFocusTrap(true);
+  const portal = useOverlayPortal();
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return portal(
+    <div ref={trapRef} className="lightbox-scrim" role="dialog" aria-modal="true"
+         aria-label={image.alt ? `Image: ${image.alt}` : "Image"}
+         onClick={(e) => { e.stopPropagation(); onClose(); }}>
+      <img src={image.src} alt={image.alt} />
+      <button type="button" className="icon-btn lightbox-close" aria-label="Close image"
+              onClick={(e) => { e.stopPropagation(); onClose(); }}>
+        <Icon name="x" size={18} />
+      </button>
+    </div>
+  );
+}
+
 /* ---------- Reader ---------- */
 const NO_ILLUSTRATIONS = [];
+const zoomable = (node) => node && node.tagName === "IMG" && node.src && !node.closest(".chapter-art");
 export function RichContent({ html, illustrations = NO_ILLUSTRATIONS }) {
   const proseRef = useRef(null);
   const prepared = useMemo(() => prepareIllustratedHtml(html, illustrations), [html, illustrations]);
@@ -607,21 +539,31 @@ export function RichContent({ html, illustrations = NO_ILLUSTRATIONS }) {
       const node = proseRef.current?.querySelector(`[data-illustration-slot="${index}"]`);
       return node ? [{ node, scene }] : [];
     }));
+    // Pictures open larger by keyboard too (unless a link already owns them).
+    proseRef.current?.querySelectorAll("img").forEach(img => {
+      if (!zoomable(img) || img.closest("a")) return;
+      img.tabIndex = 0;
+      img.setAttribute("role", "button");
+      img.setAttribute("aria-label", img.alt ? `Enlarge image: ${img.alt}` : "Enlarge image");
+    });
   }, [prepared]);
   const [lightbox, setLightbox] = useState(null);
-  const onClick = (e) => {
+  const closeLightbox = useCallback(() => setLightbox(null), []);
+  const open = (e) => {
     const img = e.target.closest("img");
-    if (img && img.src && !img.closest(".chapter-art")) { e.stopPropagation(); setLightbox(img.src); }
+    if (!zoomable(img)) return;
+    e.stopPropagation();
+    setLightbox({ src: img.currentSrc || img.src, alt: img.getAttribute("alt") || "" });
+  };
+  const onKeyDown = (e) => {
+    if ((e.key === "Enter" || e.key === " ") && zoomable(e.target)) { e.preventDefault(); open(e); }
   };
   return (
     <>
-      <div ref={proseRef} className="reader-text reader-rich" onClick={onClick} dangerouslySetInnerHTML={{ __html: prepared.html }} />
+      <div ref={proseRef} className="reader-text reader-rich" onClick={open} onKeyDown={onKeyDown}
+           dangerouslySetInnerHTML={{ __html: prepared.html }} />
       {portals.map(({ node, scene }) => createPortal(<Illustration item={scene} inline />, node, scene.id))}
-      {lightbox && (
-        <div className="lightbox-scrim" onClick={(e) => { e.stopPropagation(); setLightbox(null); }}>
-          <img src={lightbox} alt="" />
-        </div>
-      )}
+      {lightbox && <Lightbox image={lightbox} onClose={closeLightbox} />}
     </>
   );
 }

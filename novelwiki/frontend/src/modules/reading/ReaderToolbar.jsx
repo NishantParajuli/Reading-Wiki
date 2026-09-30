@@ -1,29 +1,36 @@
 /* Reader chrome: a floating glass capsule at the top (navigation, title,
    bookmark, reading settings, translation tools) and one at the bottom
    (previous/next and where you are). Both recede while you read and
-   return on scroll-up, tap or keyboard focus. Named for view transitions
-   so they hold still while a new chapter washes in beneath them. */
-import React from "react";
+   return on scroll-up, tap or keyboard focus. The capsules themselves are
+   named for view transitions (never their wrappers, which would stop the
+   glass blurring the page) so they hold still while a new chapter washes
+   in beneath them. */
+import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../../components/Icon.jsx";
 import { ProgressRing } from "../../components/ui.jsx";
 import { fmtChapter } from "../../lib/utils.js";
-import { ReaderSettings, TranslationTools } from "./ReaderParts.jsx";
+import { TranslationTools } from "./ReaderParts.jsx";
+import { ReaderSettings } from "./ReaderSettings.jsx";
 
 export function ReaderToolbar({ chrome, setChrome, novel, novelId, number, total,
   ch, status, bookmark, bookmarkBusy, toggleBookmark, prefs, setPrefs,
   showSettings, setShowSettings, showTools, setShowTools, onBack, onOpenContents, onReload }) {
+  const aaRef = useRef(null);
+  const chapterName = ch ? (ch.title || `Chapter ${fmtChapter(ch.number)}`)
+    : status === "loading" ? "…" : `Chapter ${fmtChapter(number)}`;
   return (
     <div className={"reader-bar" + (chrome ? "" : " hidden")} onFocusCapture={() => setChrome(true)}>
       <div className="reader-capsule">
         <button className="rc-btn" aria-label="Back to novel" title="Back to novel" onClick={() => onBack()}>
           <Icon name="arrowLeft" size={18} />
         </button>
-        <button className="rc-btn" aria-label="Table of contents" title="Contents" onClick={onOpenContents}>
+        <button className="rc-btn" aria-label="Table of contents" title="Contents"
+                onClick={() => { setShowSettings(false); onOpenContents(); }}>
           <Icon name="list" size={18} />
         </button>
         <div className="reader-bar-title">
           <span className="rt-novel">{novel ? novel.title : ""}</span>
-          <span className="rt-chapter">{ch ? (ch.title || `Chapter ${fmtChapter(ch.number)}`) : "…"}</span>
+          <span className="rt-chapter">{chapterName}</span>
         </div>
         <span className="reader-bar-pos">{fmtChapter(number)}{total ? <span className="rbp-total"> / {total}</span> : ""}</span>
         <button className={"rc-btn rc-bookmark" + (bookmark ? " active" : "")} onClick={toggleBookmark}
@@ -31,13 +38,13 @@ export function ReaderToolbar({ chrome, setChrome, novel, novelId, number, total
                 aria-label={bookmark ? "Remove bookmark" : "Bookmark"} title={bookmark ? "Remove bookmark" : "Bookmark"}>
           <Icon name="bookmark" size={17} />
         </button>
-        <div className="rc-anchor">
-          <button className={"rc-btn rc-aa" + (showSettings ? " active" : "")} onClick={e => { e.stopPropagation(); setShowSettings(s => !s); setShowTools(false); }}
-                  aria-label="Reading settings" aria-expanded={showSettings} title="Reading settings">
-            <span aria-hidden="true">Aa</span>
-          </button>
-          {showSettings && <ReaderSettings prefs={prefs} setPrefs={setPrefs} onClose={() => setShowSettings(false)} />}
-        </div>
+        <button ref={aaRef} className={"rc-btn rc-aa" + (showSettings ? " active" : "")}
+                onClick={e => { e.stopPropagation(); setShowSettings(s => !s); setShowTools(false); }}
+                aria-label="Reading settings" aria-expanded={showSettings} aria-haspopup="dialog" title="Reading settings">
+          <span aria-hidden="true">Aa</span>
+        </button>
+        {showSettings && <ReaderSettings prefs={prefs} setPrefs={setPrefs} anchorRef={aaRef}
+                                         onClose={() => setShowSettings(false)} />}
         {status === "ok" && ch && (ch.content != null || ch.has_original) && (
           <div className="rc-anchor">
             <button className={"rc-btn" + (ch.overlay ? " active" : "") + (ch.overlay_conflict ? " is-conflict" : "")}
@@ -78,6 +85,29 @@ export function ReaderFooter({ chrome, setChrome, ch, readPct, minsLeft, onPrev,
           <span>Next chapter</span><Icon name="arrowRight" size={16} />
         </button>
       </div>
+    </div>
+  );
+}
+
+/* First visit only: a quiet hint on bringing the controls back, worded for
+   the pointer in hand. It waits for the page, then retires for good. */
+export function CoachMark({ ready }) {
+  const [show, setShow] = useState(() => {
+    try { return !localStorage.getItem("nw-reader-coached"); } catch { return true; }
+  });
+  useEffect(() => {
+    if (!show || !ready) return undefined;
+    const t = setTimeout(() => {
+      setShow(false);
+      try { localStorage.setItem("nw-reader-coached", "1"); } catch { /* Storage may be unavailable. */ }
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [show, ready]);
+  if (!show || !ready) return null;
+  const touch = typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+  return (
+    <div className="coach-mark" role="status">
+      <Icon name="sparkles" size={14} /> {touch ? "Tap" : "Click"} the page to show or hide controls
     </div>
   );
 }
