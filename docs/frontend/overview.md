@@ -109,7 +109,7 @@ Signed-in, inside `Shell` (island header, novel capsule, mobile dock, toasts):
 
 | Route | Screen |
 |---|---|
-| `/` | Reading room: featured continue-reading book with a listening shortcut when audio exists, other current books, fresh chapters, active jobs, newest shared books |
+| `/` | Reading room: featured continue-reading book with a listening shortcut when audio exists, other current books, books with unread chapters waiting, active jobs, newest shared books |
 | `/library` · `/discover` · `/import` · `/jobs` | Library grid · shared-library browser · import center · unified job center |
 | `/u/:username` · `/account(/:section)` · `/admin(/:tab)` | profile · account/quota settings · admin dashboard |
 | `/n/:novelId` (NovelLayout tabs) | `index` Overview · `chapters` · `manage` · `codex` · `codex/e/:entityId` · `ask` |
@@ -172,8 +172,21 @@ does not render the shell.
 
 Dialogs and drawers portal to the page root (`components/overlay.jsx`), so a glass or
 animated ancestor can never trap or clip them; the reader provides its own host
-(`OverlayHostProvider`) so they keep its tone. Keyboard focus draws a glowing ring
-that outranks component shadows and follows each control's shape.
+(`OverlayHostProvider`) so they keep its tone. Popovers (menus, the Codex gauge, the
+narrator picker) open toward the larger room between the header and the phone dock,
+scroll within the height they get, and hand focus back to their trigger when Escape or a
+choice closes them. Loading buttons stay focusable (`aria-busy`, `aria-disabled`) and
+ignore repeat presses; tabs follow the ARIA pattern (one Tab stop; arrows, Home and End
+move and select). Keyboard focus draws a glowing ring that outranks component shadows
+and follows each control's shape. Books without art get generated jackets whose title
+size follows the longest word, so words wrap whole.
+
+A novel route that can't load says so: a missing or private book (404/403) shows "This
+book isn't here" with links to the library and Discover; any other failure shows
+"Couldn't open this book" with **Try again**. The novel capsule is hidden in both cases.
+The capsule's cover link is a pointer shortcut outside the tab order; its navigation is
+named after the book. On short landscape screens the header tucks away while scrolling
+down, as on phones.
 
 Home greets the reader by time of day under a drawing of the moon at its current
 phase, then gives the most recent story a spotlight: the jacket floats with a
@@ -181,8 +194,11 @@ reflection in a card tinted by the cover, with a progress ring, the resume chapt
 and its title, Continue reading, and Listen when audio exists. Beside it are
 shortcuts (collection count, Discover, Import) and live background work. Rails show
 the rest of the nightstand and the newest shared books, each ending in a glass tile
-onward (the library, Discover); fresh-chapter rows show the new-chapter count and open
-the actual table of contents, which supports fractional and non-contiguous numbering.
+onward (the library, Discover). **Chapters waiting** lists books with chapters beyond
+the reader's furthest read (the API's `new_chapters`, an unread count rather than a
+count of recently added chapters), most recently updated first; each row shows that
+count and opens the actual table of contents, which supports fractional and
+non-contiguous numbering.
 On phones the spotlight sets the jacket beside the title with the resume action across
 the card, so it stays above the dock. Its first-use welcome only appears after the
 library, home, and activity queries succeed and there are no books, reading activity,
@@ -199,7 +215,7 @@ island while scrolling. The header summarises real figures only: the number of b
 and chapters read (the sum of `max_chapter_read`). Covers tilt toward the pointer;
 Resume/Start and the shelf menu rise on hover or focus and stay visible on touch — the
 cover link, resume link and shelf menu are separate controls. Reading state is a slim
-progress line with the resume chapter and last-read time, a gold "N new" tab when
+progress line with the resume chapter and last-read time, a gold "N unread" tab when
 `new_chapters` > 0, and "Finished" on the Completed shelf. Changing shelf, search or
 sort re-flows the books with layout animation (the first 48 animate) and switching
 grid/list flies each cover to its new place. Lingering on a book with a mouse tints the
@@ -247,8 +263,8 @@ More/Less), the shelf control and the ⋯ menu (type-to-confirm delete), and act
 **Continue · Ch. N** with a progress ring and that chapter's title, or **Start reading**;
 **Listen** only when audio exists; **Codex**; **Narrate book**. A tideline spans the whole
 book with the read part lit, a "You are here" marker, bookmarks as gold pins and volume
-ticks, and keeps "N% read · N new since you last read" ("Not started yet" before the
-first chapter); it is a progressbar with a spoken summary. Section navigation lives in
+ticks, and reads "N% read · N unread" ("caught up" when nothing is left; "Not started
+yet" before the first chapter); it is a progressbar with a spoken summary. Section navigation lives in
 the shell's novel capsule. Overview lists the latest chapters (unread dots, a "Reading"
 tag on the current one) and bookmarks (removal is optimistic with rollback and an error
 toast), beside a column with Codex counts (shown only when stats for the current
@@ -584,6 +600,9 @@ a numbered sources list sits under each answer.
 - `src/modules/catalog/Library.test.jsx` + `Discover.test.jsx` — shelves, search, sorts and
   saved views, optimistic shelf moves with undo, URL-synced filters, paging, optimistic
   add with rollback, and honest error states.
+- `src/components/ui.test.jsx` + `overlay.test.jsx` — tab keyboard pattern, focusable
+  loading buttons that ignore presses and form submits, popover focus return, and
+  popover viewport positioning.
 - `src/modules/catalog/novelHero.test.jsx` — honest figures, the fact strip, and the
   tideline's progress, place, bookmarks and not-started states; `src/modules/reading/toc.test.jsx`
   — volume grouping, the current volume and read state, opening rows, and list windowing.
@@ -617,4 +636,5 @@ a numbered sources list sits under each answer.
   60-book library and `SHOWCASE_EMPTY=1` a new account. `fixtures-codex.mjs` adds
   boundary-aware entities, cited answers and illustration plates; `fixtures-novel.mjs`
   adds an owner inbox (`/n/3/manage`), an unscraped book (`/n/15`) and a very long
-  title (`/n/16`). All stories and people in the fixtures are invented.
+  title (`/n/16`); `/n/404` and `/n/500` render a missing book and a failed load. All
+  stories and people in the fixtures are invented.
