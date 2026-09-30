@@ -242,7 +242,7 @@ export function Jobs() {
                                     className={"jobs-row" + (failed ? " is-expandable" : "") + (isOpen ? " is-open" : "")}>
                           <div onClick={failed ? (e) => { if (!e.target.closest("button, a")) toggle(key); } : undefined}>
                             <JobRow job={job} detail busy={busyId === key} onCancel={cancel}
-                                    onOpenNovel={null}
+                                    onOpenNovel={null} controls={failed ? panelId : undefined}
                                     expanded={isOpen} onToggle={failed ? () => toggle(key) : undefined}
                                     duration={duration} />
                           </div>
@@ -279,8 +279,9 @@ export function Jobs() {
         ) : null} />
 
       <div className="jobs-bar rise" style={{ "--i": 4 }}>
-        <Tabs value={tab} onChange={setTab} tabs={[
-          { id: "active", label: "Active", count: activeCount },
+        <Tabs value={tab} onChange={setTab} label="Job lists" idBase="jobs" tabs={[
+          // No count until the list has arrived: "0" would claim nothing is running.
+          { id: "active", label: "Active", count: jobs ? activeCount : undefined },
           { id: "all", label: "History", count: jobs ? jobs.length : undefined },
         ]} />
         {tab === "active" && activeCount > 0 && (
@@ -288,7 +289,7 @@ export function Jobs() {
         )}
       </div>
 
-      <div className="jobs-panel" role="tabpanel" aria-label={tab === "active" ? "Active jobs" : "Job history"}>
+      <div className="jobs-panel" role="tabpanel" id="jobs-panel" aria-labelledby={`jobs-tab-${tab}`}>
         <AnimatePresence mode="wait" initial={false}>
           <motion.div key={tab}
                       initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { duration: 0.2 } }}

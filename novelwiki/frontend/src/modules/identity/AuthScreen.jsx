@@ -9,7 +9,7 @@
    rolling (the route change is not cross-faded, see auth.css): the card
    morphs to the new height on a spring while its content cross-fades.
    ============================================================ */
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { authApi } from "./api.js";
 import { Icon } from "../../components/Icon.jsx";
@@ -56,14 +56,24 @@ const itemVariants = {
   show: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.62, ease: ease.out }, transitionEnd: { filter: "none" } },
 };
 
-function Field({ label, error, help, children }) {
+/* The label names the control (htmlFor) and holds only its text: the note
+   below describes the field (aria-describedby) rather than joining its name,
+   and the password's reveal toggle stays out of the label. The label's parent
+   holds the input (the e2e contract finds inputs that way). */
+function Field({ id, label, error, help, children }) {
   return (
-    <motion.label variants={itemVariants} className={"field auth-field" + (error ? " has-error" : "")}>
-      <span className="auth-label">{label}</span>
+    <motion.div variants={itemVariants} className={"field auth-field" + (error ? " has-error" : "")}>
+      <label className="auth-label" htmlFor={id}>{label}</label>
       {children}
-      <FieldNote error={error} help={help} />
-    </motion.label>
+      <FieldNote id={`${id}-note`} error={error} help={help} />
+    </motion.div>
   );
+}
+
+/* aria props for a field's input: invalid while it has an error, and pointed
+   at its note while one shows. */
+function described(id, error, help) {
+  return { "aria-invalid": !!error, "aria-describedby": error || help ? `${id}-note` : undefined };
 }
 
 const matches = (query) => {
@@ -123,6 +133,9 @@ export function AuthScreen({ onAuthed }) {
 
   const cardRef = useRef(null);
   const heroRef = useRef(null);
+  const uid = useId();
+  // Per mode, so the outgoing form (still fading) never shares an id with the new one.
+  const fid = (name) => `${uid}-${mode}-${name}`;
   const shakeX = useMotionValue(0);
   const motionPref = useReducedMotion();
   // Read the media query directly too: the hook can report late on first paint.
@@ -242,6 +255,7 @@ export function AuthScreen({ onAuthed }) {
   const submitLabel = SUBMIT_LABELS[mode];
   const lede = LEDES[mode];
   const touch = (key) => () => setTouched(t => ({ ...t, [key]: true }));
+  const passwordHelp = !fieldErrors.password && password.length >= 8 ? "Looks good." : "";
 
   return (
     <div className="auth-stage" data-mode={mode} data-ready={fontReady ? "" : undefined}>
@@ -282,35 +296,38 @@ export function AuthScreen({ onAuthed }) {
 
                 {mode === "register" && (
                   <>
-                    <Field label="Email" error={fieldErrors.email}>
+                    <Field id={fid("email")} label="Email" error={fieldErrors.email}>
                       <Control glyph="mail">
-                        <input type="email" value={email} placeholder="you@example.com" autoComplete="email"
-                               onChange={e => setEmail(e.target.value)} onBlur={touch("email")} />
+                        <input id={fid("email")} type="email" value={email} placeholder="you@example.com" autoComplete="email"
+                               onChange={e => setEmail(e.target.value)} onBlur={touch("email")}
+                               {...described(fid("email"), fieldErrors.email)} />
                       </Control>
                     </Field>
-                    <Field label="Username" error={fieldErrors.username}>
+                    <Field id={fid("username")} label="Username" error={fieldErrors.username}>
                       <Control glyph="at">
-                        <input value={username} placeholder="a–z, 0–9, underscore" autoComplete="username"
-                               onChange={e => setUsername(e.target.value)} onBlur={touch("username")} />
+                        <input id={fid("username")} value={username} placeholder="a–z, 0–9, underscore" autoComplete="username"
+                               onChange={e => setUsername(e.target.value)} onBlur={touch("username")}
+                               {...described(fid("username"), fieldErrors.username)} />
                       </Control>
                     </Field>
-                    <Field label="Password" error={fieldErrors.password}
-                           help={!fieldErrors.password && password.length >= 8 ? "Looks good." : ""}>
-                      <PasswordInput value={password} onChange={(v) => { setPassword(v); setTouched(t => ({ ...t, password: true })); }}
-                                     placeholder="at least 8 characters" autoComplete="new-password" />
+                    <Field id={fid("password")} label="Password" error={fieldErrors.password} help={passwordHelp}>
+                      <PasswordInput id={fid("password")} value={password}
+                                     onChange={(v) => { setPassword(v); setTouched(t => ({ ...t, password: true })); }}
+                                     placeholder="at least 8 characters" autoComplete="new-password"
+                                     {...described(fid("password"), fieldErrors.password, passwordHelp)} />
                     </Field>
                   </>
                 )}
 
                 {mode === "login" && (
                   <>
-                    <Field label="Email or username">
+                    <Field id={fid("identifier")} label="Email or username">
                       <Control glyph="user">
-                        <input value={identifier} autoComplete="username" onChange={e => setIdentifier(e.target.value)} />
+                        <input id={fid("identifier")} value={identifier} autoComplete="username" onChange={e => setIdentifier(e.target.value)} />
                       </Control>
                     </Field>
-                    <Field label="Password">
-                      <PasswordInput value={password} onChange={setPassword} autoComplete="current-password" />
+                    <Field id={fid("password")} label="Password">
+                      <PasswordInput id={fid("password")} value={password} onChange={setPassword} autoComplete="current-password" />
                     </Field>
                     <motion.div variants={itemVariants} className="auth-forgot">
                       <button type="button" className="auth-link is-quiet" onClick={() => go("/forgot")}>Forgot password?</button>
@@ -319,18 +336,20 @@ export function AuthScreen({ onAuthed }) {
                 )}
 
                 {mode === "forgot" && (
-                  <Field label="Email">
+                  <Field id={fid("email")} label="Email">
                     <Control glyph="mail">
-                      <input type="email" value={email} placeholder="you@example.com" autoComplete="email"
+                      <input id={fid("email")} type="email" value={email} placeholder="you@example.com" autoComplete="email"
                              onChange={e => setEmail(e.target.value)} />
                     </Control>
                   </Field>
                 )}
 
                 {mode === "reset" && (
-                  <Field label="New password" error={fieldErrors.password}>
-                    <PasswordInput value={password} onChange={(v) => { setPassword(v); setTouched(t => ({ ...t, password: true })); }}
-                                   placeholder="at least 8 characters" autoComplete="new-password" />
+                  <Field id={fid("password")} label="New password" error={fieldErrors.password}>
+                    <PasswordInput id={fid("password")} value={password}
+                                   onChange={(v) => { setPassword(v); setTouched(t => ({ ...t, password: true })); }}
+                                   placeholder="at least 8 characters" autoComplete="new-password"
+                                   {...described(fid("password"), fieldErrors.password)} />
                   </Field>
                 )}
 

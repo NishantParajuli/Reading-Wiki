@@ -1,6 +1,7 @@
 /* ============================================================
    Usage — this month's quotas as luminous gauges. Each ring fills from
-   empty on arrival; the fill carries severity (accent → warn → danger)
+   empty as it arrives on screen (with motion allowed; otherwise it simply
+   shows its value); the fill carries severity (accent → warn → danger)
    over a track of the same hue. Loading, error and unlimited states are
    shown for what they are.
    ============================================================ */
@@ -12,6 +13,7 @@ import { useAuth } from "../../App.jsx";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, ProgressRing, Skeleton } from "../../components/ui.jsx";
 import { useInView } from "../../motion/index.js";
+import { prefersReducedMotion } from "../../motion/navigation.js";
 import { NumberTicker } from "../../motion/NumberTicker.jsx";
 
 const METERS = [
@@ -26,22 +28,23 @@ function nextReset() {
   return new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString(undefined, { month: "long", day: "numeric" });
 }
 
+const RING = 112;
+const RING_STROKE = 7;
+
 function Gauge({ label, used, limit, help, icon, i }) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
   const tone = pct >= 100 ? "danger" : pct >= 80 ? "warn" : "calm";
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "0px 0px -10% 0px" });
-  const [shown, setShown] = useState(0);
-  // Start empty; once the gauge is on screen the ring's stroke transition carries it to the value.
-  useEffect(() => {
-    if (!inView) return undefined;
-    const id = requestAnimationFrame(() => setShown(pct));
-    return () => cancelAnimationFrame(id);
-  }, [pct, inView]);
+  // The ring always carries the real value (and so does its progressbar). With
+  // motion allowed, only its stroke waits empty until the gauge is on screen;
+  // the stroke transition then fills it. Otherwise it shows its value at once.
+  const waiting = !inView && !prefersReducedMotion() && typeof IntersectionObserver !== "undefined";
   const left = Math.max(0, limit - used);
   return (
-    <div ref={ref} className={`acct-gauge tone-${tone} rise`} style={{ "--i": i + 2 }}>
-      <ProgressRing value={shown} size={112} stroke={7} label={`${label}: ${used} of ${limit} used`}>
+    <div ref={ref} className={`acct-gauge tone-${tone} rise` + (waiting ? " is-waiting" : "")}
+         style={{ "--i": i + 2, "--gauge-empty": `${Math.PI * (RING - RING_STROKE)}px` }}>
+      <ProgressRing value={pct} size={RING} stroke={RING_STROKE} label={`${label}: ${used} of ${limit} used`}>
         <span className="acct-gauge-pct"><NumberTicker value={Math.round(pct)} />%</span>
       </ProgressRing>
       <div className="acct-gauge-text">

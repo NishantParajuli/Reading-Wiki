@@ -18,6 +18,8 @@
 @media (max-width: 959px) {
   .imp-layout { grid-template-columns: minmax(0, 1fr); }
   .imp-detail { scroll-margin-top: 84px; }
+  /* the review's scroll padding already clears the top; land 84px down regardless */
+  html:has(.imp-review) .imp-detail { scroll-margin-top: calc(84px - var(--imp-clear-top)); }
 }
 
 .imp-eyebrow {
@@ -273,9 +275,10 @@
 .imp-item.is-active .imp-item-title { color: var(--accent-ink); }
 .imp-item-check, .imp-item-delete { position: relative; z-index: 1; }
 .imp-item-check { padding: 6px; }
-.imp-item-delete { width: 32px; height: 32px; color: var(--faint); }
+.imp-item-delete { width: 32px; height: 32px; color: var(--muted); }
+/* quieter at rest, but never below 3:1 against the row */
 @media (hover: hover) {
-  .imp-item-delete { opacity: 0.55; transition: opacity var(--dur-2), color var(--dur-2); }
+  .imp-item-delete { opacity: 0.8; transition: opacity var(--dur-2), color var(--dur-2); }
   .imp-item:hover .imp-item-delete, .imp-item-delete:focus-visible { opacity: 1; }
 }
 .imp-item-delete:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
@@ -367,7 +370,7 @@
 .imp-tide-node {
   position: relative; width: 30px; height: 30px; border-radius: 50%;
   display: grid; place-items: center;
-  background: var(--surface-solid); color: var(--faint);
+  background: var(--surface-solid); color: var(--muted);
   border: 1.5px solid var(--border-2);
   box-shadow: inset 0 1px 0 var(--hairline-hi);
   transition: background-color var(--dur-3) var(--ease-out), border-color var(--dur-3), color var(--dur-3), box-shadow var(--dur-3);
@@ -375,7 +378,7 @@
 .imp-tide-num { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .imp-tide-core { width: 10px; height: 10px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
 .imp-tide-label {
-  font-size: 12px; font-weight: 600; letter-spacing: 0.01em; color: var(--faint);
+  font-size: 12px; font-weight: 600; letter-spacing: 0.01em; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
 }
 .imp-tide-step.is-done .imp-tide-node {
@@ -436,7 +439,7 @@
 @keyframes imp-jacket-in { from { opacity: 0; transform: translateY(6px) scale(0.95); filter: blur(5px); } }
 .imp-job-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .imp-job-file {
-  margin: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--faint);
+  margin: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .imp-job-title {
@@ -685,6 +688,10 @@
 
 /* ---------- review: book details ---------- */
 .imp-review { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* Keyboard focus scrolls clear of the sticky segment header and commit bar
+   (--imp-clear-top: the header's reach, also used to keep the detail's own
+   scroll-into-view landing where it did). */
+html:has(.imp-review) { --imp-clear-top: 150px; scroll-padding-top: var(--imp-clear-top); scroll-padding-bottom: 110px; }
 .imp-card { padding: clamp(18px, 2.4vw, 26px); border-radius: var(--radius-lg); }
 .imp-card-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 24px; margin-bottom: 20px; }
 .imp-card-head .imp-eyebrow { margin-bottom: 6px; }
@@ -758,12 +765,12 @@
 .imp-seg.is-excluded {
   background: repeating-linear-gradient(135deg, transparent 0 9px, color-mix(in oklch, var(--ink) 3%, transparent) 9px 10px);
 }
-.imp-seg.is-excluded .imp-seg-main, .imp-seg.is-excluded .imp-seg-actions { opacity: 0.5; }
+.imp-seg.is-excluded .imp-seg-main { opacity: 0.5; }
 .imp-seg.is-excluded .imp-seg-title { text-decoration: line-through; text-decoration-color: var(--faint); }
 .imp-seg-include { padding-top: 9px; }
 .imp-seg-main { min-width: 0; }
 .imp-seg-line1 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.imp-seg-idx { min-width: 22px; font-family: var(--font-mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.imp-seg-idx { min-width: 22px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .imp-seg-title {
   flex: 1 1 180px; min-width: 0; height: 36px; padding: 0 10px; border-radius: 10px;
   border: 1px solid transparent; background: color-mix(in oklch, var(--ink) 3%, transparent);
@@ -775,7 +782,7 @@
   border-color: color-mix(in oklch, var(--accent) 60%, transparent); background: color-mix(in oklch, var(--bg-3) 80%, transparent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.imp-seg-title::placeholder { color: var(--faint); font-weight: 500; }
+.imp-seg-title::placeholder { color: var(--muted); font-weight: 500; }
 .imp-seg-kind {
   appearance: none; -webkit-appearance: none;
   height: 30px; padding: 0 28px 0 12px; border-radius: var(--radius-full);
@@ -788,11 +795,12 @@
 }
 .kind-chapter .imp-seg-kind { color: var(--accent-ink); background-color: var(--accent-soft); border-color: color-mix(in oklch, var(--accent) 26%, transparent); }
 .kind-interlude .imp-seg-kind { color: var(--gold); background-color: var(--gold-soft); border-color: color-mix(in oklch, var(--gold) 28%, transparent); }
+[data-theme="light"] .kind-interlude .imp-seg-kind { color: oklch(0.5 0.11 72); }
 .imp-seg-num {
   display: inline-flex; align-items: center; height: 30px; padding: 0 4px 0 11px;
   border-radius: var(--radius-full); border: 1px solid var(--border);
   background: color-mix(in oklch, var(--ink) 4%, transparent);
-  color: var(--faint); font-family: var(--font-mono); font-size: 12px; cursor: text;
+  color: var(--muted); font-family: var(--font-mono); font-size: 12px; cursor: text;
   transition: border-color var(--dur-2), box-shadow var(--dur-3) var(--ease-out), background-color var(--dur-2);
 }
 .imp-seg-num input {
@@ -815,8 +823,8 @@
   transition: border-color var(--dur-2), box-shadow var(--dur-3) var(--ease-out);
 }
 .imp-seg-vol:focus, .imp-seg-vol:focus-visible { border-color: color-mix(in oklch, var(--accent) 60%, transparent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.imp-seg-vol::placeholder { color: var(--faint); }
-.imp-seg-range { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
+.imp-seg-vol::placeholder { color: var(--muted); }
+.imp-seg-range { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
 .imp-seg-words { font-variant-numeric: tabular-nums; }
 .imp-seg-first {
   flex: 1 1 200px; min-width: 0;
@@ -826,7 +834,7 @@
 .imp-seg-actions { display: flex; gap: 2px; }
 .imp-seg-actions .icon-btn { width: 34px; height: 34px; color: var(--muted); }
 @media (hover: hover) {
-  .imp-seg-actions { opacity: 0.4; transition: opacity var(--dur-2) var(--ease-out); }
+  .imp-seg-actions { opacity: 0.75; transition: opacity var(--dur-2) var(--ease-out); }
   .imp-seg:hover .imp-seg-actions, .imp-seg:focus-within .imp-seg-actions { opacity: 1; }
 }
 .imp-options { display: grid; gap: 8px; margin-top: 6px; }
@@ -869,6 +877,8 @@
 
 .imp-commit-dest { display: none; }
 @media (max-width: 767px) {
+  /* the header wraps to two or three lines on phones (it ends near 175px at 360px) */
+  html:has(.imp-review) { --imp-clear-top: 190px; scroll-padding-bottom: calc(180px + env(safe-area-inset-bottom)); }
   .imp-segs-head { top: 76px; }
   .shell-top.is-hidden ~ .shell-main .imp-segs-head { top: 10px; }
   /* phones: a compact bar (destination + Commit) that opens into the full controls */
@@ -907,6 +917,12 @@
   .imp-error-action { grid-column: 1 / -1; justify-self: start; }
   .imp-done .btn { margin-left: 0; width: 100%; }
   .imp-dup { flex-wrap: wrap; }
+}
+/* Touch: compact row controls keep their look but grow to a finger-sized target. */
+@media (pointer: coarse) {
+  .imp-item-delete, .imp-seg-actions .icon-btn { width: 40px; height: 40px; }
+  .imp-seg-title, .imp-seg-kind, .imp-seg-num, .imp-seg-vol { min-height: 40px; }
+  .imp-item-check, .imp-seg-include { display: grid; place-items: center; min-width: 40px; min-height: 40px; padding: 0; }
 }
 
 /* ============================================================
@@ -1022,7 +1038,7 @@
   outline: none;
   transition: border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-3) var(--ease-out);
 }
-.npc-secure textarea::placeholder { color: var(--faint); font-family: var(--font-ui); font-size: var(--text-sm); }
+.npc-secure textarea::placeholder { color: var(--muted); font-family: var(--font-ui); font-size: var(--text-sm); }
 .npc-secure textarea:hover:not(:disabled) { border-color: color-mix(in oklch, var(--ink) 26%, transparent); }
 .npc-secure textarea:focus, .npc-secure textarea:focus-visible {
   border-color: color-mix(in oklch, var(--accent) 75%, transparent);
@@ -1033,7 +1049,7 @@
 .npc-secure-tag {
   position: absolute; right: 12px; bottom: 9px; pointer-events: none;
   display: inline-flex; align-items: center; gap: 6px;
-  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; color: var(--faint);
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; color: var(--muted);
 }
 .npc-hint { margin: 0; font-size: var(--text-xs); line-height: 1.55; color: var(--muted); }
 .npc-msg { margin: 0; display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
@@ -1059,3 +1075,6 @@
   transition: background-color var(--dur-2) var(--ease-out), border-color var(--dur-2), transform var(--dur-3) var(--ease-spring);
 }
 .recovery-links a:hover { background: color-mix(in oklch, var(--accent) 22%, transparent); border-color: color-mix(in oklch, var(--accent) 44%, transparent); transform: translateY(-1px); }
+@media (pointer: coarse) {
+  .recovery-links a { min-height: 40px; }
+}

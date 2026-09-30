@@ -121,7 +121,8 @@ redirects home; `/verify` still opens so an email link can be confirmed while si
 
 **Settings → Source accounts** (`/account/sources`) renders the Acquisition slice's
 `NovelpiaCookies` through its public export. Users paste an EditThisCookie JSON array,
-save or replace their own login cookies, and remove a saved connection. The field is
+save or replace their own login cookies, and remove a saved connection (after confirming
+in a dialog; chapters already imported are kept). The field is
 never populated from stored values, clears after successful saving/removal, and is not
 persisted in browser storage. The screen shows cookie names/expiry dates and the last
 update, with loading/retry and save-error feedback. Replacement and removal remain
@@ -242,7 +243,8 @@ an error with Try again rather than an empty shelf.
 
 Profiles show a glowing avatar orb, name, handle, join date and bio, the book being
 read, four real reading figures and shelves (currently reading, recently finished,
-published); the room takes the colours of the current book. Account settings use a
+published) whose books rise in as they scroll into view, or are simply there under
+reduced motion; the room takes the colours of the current book. Account settings use a
 grouped side nav (a scrolling pill row on phones); section changes only swap the panel.
 **Appearance** offers Tide/Pearl preview cards (the theme spreads from the chosen card),
 accent hues as sea-glass pebbles — Sea glass 192 (default), Lagoon 165, Abyss 245,
@@ -250,10 +252,18 @@ Amethyst 295, Coral 22, Lantern 75, Kelp 140 — which glide across the interfac
 saved to `prefs.appearance.accent_h` (applied at sign-in on every device), and **Ambient
 motion** (Living water / Still / Off). **Reading** has a live page preview; **Usage**
 shows ring gauges with the remaining quota and reset date, and a failed usage request
-says so with Try again. Admin keeps its tabs (users with quota and AI-access editors and
-guarded role/status/delete actions, usage with a six-month chart, moderation, global
-jobs, worker health with live status); list failures show Try again instead of an empty
-list, and smoke-test/retry actions confirm with a toast.
+says so with Try again. Each gauge's progressbar carries its real value from the start;
+with motion allowed only the ring's stroke waits empty until the gauge is on screen and
+then fills, and under reduced motion it is drawn full at once. Admin keeps its tabs
+(a row that scrolls sideways below 1024px, with a fade at its right edge on phones):
+users with quota and AI-access editors and guarded role/status/delete actions —
+**Make admin**/**Demote** and a change to *banned* ask for confirmation in a dialog, and
+deleting needs the username typed — usage with a chart of the months on record (up to
+six, "Last N months"; a picture for pointers, hidden from assistive technology, with the
+table beneath as the accessible version), moderation, global jobs, and worker health
+with live status. List failures show Try again instead of an empty list; **Run consuming
+smoke test** asks first (it spends subscription quota), and smoke-test/retry results
+confirm with a toast.
 
 Novel pages share one hero (`catalog/NovelHeader.jsx` + `NovelHeroParts.jsx`): full
 on Overview, compact on Chapters and Manage, with the jacket morphing between the two on
@@ -285,9 +295,13 @@ open inline beneath the source list.
 
 Import (`/import`) puts a glass drop basin and the **Recent imports** shelf in a left
 column and the selected import on the right (one column below 960px, where choosing an
-import scrolls it into view). Dragging files over the window lights the basin's rim;
-over the basin the water rises and the prompt reads "Release to add your books", and
-while uploading the water level is the upload percentage with "Book 2 of 3 · filename".
+import scrolls it into view). The selected import lives in the URL (`/import?job=<id>`,
+replaced rather than pushed as you choose), so a link or a reload opens it. Dragging
+files over the window lights the basin's rim and lifts the water a little; over the
+basin it rises further — still below the prompt, which reads "Release to add your
+books" — and while uploading the water level is the upload percentage with "Book 2 of
+3 · filename". A filename standing in for a title drops its `.epub`/`.pdf` extension,
+and truncated titles in the shelf show the full title on hover.
 Files dropped outside the basin are ignored instead of opening in the browser. A
 tideline stepper marks each step as done, in progress, waiting for you, or failed
 (announced to screen readers). The detail header shows the jacket, metadata, status,
@@ -295,13 +309,20 @@ stats, failing quality checks and a quality ring, and the room takes the book's 
 OCR approval shows the estimate and **Run OCR**; failures show the error with **Delete
 import**, even without a server reason. The review keeps a ruled segment list (inline
 titles, kind and number pills, merge/split with focus handed to the surviving row) and a
-sticky commit bar that collapses to "Destination + Commit" on phones. Jobs (`/jobs`) has
-live counters (Running, Queued, Waiting, Needs you) and tabs with counts, groups jobs by
-novel beside its cover, and gives each row a status orb, live progress and cancel.
-Failed rows open a keyboard-accessible **Show error** disclosure with **Copy** (a failed
-copy is reported) and the Novelpia recovery links. A failed list reads "Couldn't load
-jobs" with **Try again**, never "No active jobs"; empty states link to history, Import
-and the library, and finished rows show only real progress.
+sticky commit bar that collapses to "Destination + Commit" on phones; keyboard focus
+scrolls clear of the sticky segment header and the commit bar (a scroll padding while
+the review is open). **Replace chapters** asks for confirmation in a dialog naming the
+source and novel, since it deletes that source's current chapters. Jobs (`/jobs`) has
+live counters (Running, Queued, Waiting, Needs you) and Active/History tabs with counts
+(no Active count until the list has arrived, so a slow or failed load never reads "0"),
+groups jobs by novel beside its cover, and gives each row a status orb, live progress,
+the AI backend by name (API, Antigravity, OpenAI Codex, and "OpenAI Codex → API" after a
+fallback) and cancel. An import that needs you links to its step: **Review** or
+**Approve OCR** opens `/import?job=<id>`. Failed rows open a keyboard-accessible **Show
+error** disclosure (`aria-controls` names the panel) with **Copy** (a failed copy is
+reported) and the Novelpia recovery links. A failed list reads "Couldn't load jobs" with
+**Try again**, never "No active jobs"; empty states link to history, Import and the
+library, and finished rows show only real progress.
 
 Signing in opens on a real-time WebGL sea (`atmosphere/OceanScene.jsx`): a moonlit
 night in Tide and a dawn in Pearl, coloured from the accent hue. The "Tideglass"
@@ -312,8 +333,13 @@ and wordmark share `--ocean-horizon`, `--ocean-moon-*` and `--ocean-sun-*` so th
 wordmark's baseline sits on the horizon. The sea renders at most 0.64 MP (less on
 touch and software renderers), caps its frame rate, pauses when hidden or scrolled
 away, paints one still frame under reduced motion, falls back to a CSS gradient if
-WebGL fails, and releases its context on unmount. An `?error=oauth` message stays
-visible until the mode changes.
+WebGL fails, and releases its context on unmount. On short phones the sea is shallower
+(360×740 keeps **Sign in** on the first screen) and on phones held sideways the sea and
+wordmark shrink so the form starts within the first screen. Each field's label names
+only its input; a validation note below it is the input's description
+(`aria-describedby`) and marks it `aria-invalid`. The password's eye is a toggle
+reachable by keyboard ("Show password", pressed while the password is visible). An
+`?error=oauth` message stays visible until the mode changes.
 
 **Add novel** and **Manage → Add source** load website choices from `GET /api/adapters`.
 They show a loading state or retryable error and prevent submission until a website is
@@ -586,17 +612,22 @@ a numbered sources list sits under each answer.
   controls. Editor browser scenarios in `e2e/critical-paths.spec.js` cover desktop/mobile
   space, preview switching, and draft protection.
 - `src/modules/acquisition/NovelpiaCookies.test.jsx` — saved/expired status, JSON
-  validation, successful replacement and field clearing, removal, request failures, and
-  replacement/removal recovery after unreadable saved status.
-- `src/modules/acquisition/ImportView.test.jsx` — commit/OCR polling resumes, previous
-  reviews stay hidden while a selected job loads, and a series commit cannot save retained
-  edits under a newly selected volume; `src/modules/reading/readerPrefs.test.js`
+  validation, successful replacement and field clearing, confirmed removal (and a
+  cancelled one that keeps the cookies), request failures, and replacement/removal
+  recovery after unreadable saved status.
+- `src/modules/acquisition/ImportView.test.jsx` — `?job=` opens that import and follows
+  the chosen one, commit/OCR polling resumes, previous reviews stay hidden while a
+  selected job loads, and a series commit cannot save retained edits under a newly
+  selected volume; `src/modules/reading/readerPrefs.test.js`
   exercises malformed and out-of-range persisted reader settings.
 - `src/modules/identity/Account.test.jsx` — section routes, theme/accent/ambient
-  pickers, reading/audio/password saves and an honest usage error;
-  `src/modules/identity/Profile.test.jsx` — loading, error and empty profile states;
-  `src/modules/admin/Admin.test.jsx` — admin guards and self-guards, quota/AI-access editor
-  saves, type-to-confirm delete, tab routes, moderation, global jobs and worker health.
+  pickers, reading/audio/password saves, an honest usage error, and gauges that report
+  their real value before they scroll into view (filled at once under reduced motion);
+  `src/modules/identity/Profile.test.jsx` — loading, error and empty profile states, and
+  shelves that show without motion; `src/modules/admin/Admin.test.jsx` — admin guards and
+  self-guards, quota/AI-access editor saves, confirmed bans and role changes,
+  type-to-confirm delete, tab routes and panel naming, the usage chart hidden behind its
+  table, moderation, global jobs, worker health and the confirmed smoke test.
 - `src/modules/catalog/Library.test.jsx` + `Discover.test.jsx` — shelves, search, sorts and
   saved views, optimistic shelf moves with undo, URL-synced filters, paging, optimistic
   add with rollback, and honest error states.
@@ -607,12 +638,15 @@ a numbered sources list sits under each answer.
   tideline's progress, place, bookmarks and not-started states; `src/modules/reading/toc.test.jsx`
   — volume grouping, the current volume and read state, opening rows, and list windowing.
 - `src/modules/acquisition/ImportFlow.test.jsx` — the import tideline, OCR progress, the
-  review's commit summary and unnumbered-chapter flags, and the basin's drop invitation;
-  `src/modules/work/Jobs.test.jsx` — grouping, live progress and cancel, the copyable
-  error disclosure with Novelpia recovery, the load-failure retry, and finished-row
-  wording.
-- `src/modules/identity/AuthScreen.test.jsx` — labels, modes, validation, providers, the
-  password toggle and the `?error=oauth` message.
+  review's commit summary and unnumbered-chapter flags, the confirmed **Replace
+  chapters**, filename titles without extensions, and the basin's drop invitation;
+  `src/modules/work/Jobs.test.jsx` — grouping, live progress and cancel, links from
+  imports that need you, the copyable error disclosure (`aria-controls`) with Novelpia
+  recovery, no Active count before the list loads, the load-failure retry, backend names
+  and finished-row wording.
+- `src/modules/identity/AuthScreen.test.jsx` — labels, modes, validation (errors as
+  descriptions with `aria-invalid`, never part of the field's name), providers, the
+  keyboard-reachable password toggle and its pressed state, and the `?error=oauth` message.
 - `src/modules/catalog/sourceForms.test.jsx` — adapter loading/retry, language and raw
   defaults with explicit overrides, archive password scoping and replacement/retry,
   and finite continuation/edit offsets.

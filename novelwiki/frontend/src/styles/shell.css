@@ -252,6 +252,8 @@
   .island-link { padding: 0 13px; }
 }
 @media (max-width: 767px) {
+  /* keyboard focus and find-in-page never land under the floating dock */
+  html { scroll-padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
   .shell-main { padding-top: 72px; }
   .shell-top { padding: 12px 14px; grid-template-columns: minmax(0, 1fr) auto; }
   .shell-top.is-scrolled { padding-top: 8px; padding-bottom: 8px; }

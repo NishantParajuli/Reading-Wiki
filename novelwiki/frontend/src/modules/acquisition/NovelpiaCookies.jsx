@@ -5,6 +5,7 @@ import React, { useEffect, useState } from "react";
 
 import { acquisitionApi } from "./api.js";
 import { Icon } from "../../components/Icon.jsx";
+import { ConfirmDialog } from "../../components/overlay.jsx";
 import { Button, Chip, Loading } from "../../components/ui.jsx";
 
 function displayDate(value) {
@@ -30,6 +31,7 @@ export function NovelpiaCookies() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -79,7 +81,7 @@ export function NovelpiaCookies() {
       setMessage("Saved Novelpia cookies removed.");
     } catch {
       setError("Couldn't remove cookies. Try again.");
-    } finally { setBusy(""); }
+    } finally { setBusy(""); setConfirmRemove(false); }
   }
 
   const chipTone = !status ? "neutral" : !status.configured ? "neutral" : status.usable ? "ok" : "warn";
@@ -156,11 +158,16 @@ export function NovelpiaCookies() {
               <Button type="submit" loading={busy === "save"} disabled={!!busy || !cookies.trim()}>
                 {busy === "save" ? "Saving cookies…" : status?.configured ? "Replace cookies" : "Save cookies"}
               </Button>
-              {(status?.configured || loadError) && <Button variant="ghost" className="is-danger" loading={busy === "remove"} disabled={!!busy} onClick={remove}>
+              {(status?.configured || loadError) && <Button variant="ghost" className="is-danger" loading={busy === "remove"} disabled={!!busy} onClick={() => setConfirmRemove(true)}>
                 {busy === "remove" ? "Removing…" : "Remove saved cookies"}
               </Button>}
             </div>
           </form>
+          {confirmRemove && (
+            <ConfirmDialog title="Remove saved Novelpia cookies?" confirmLabel="Remove cookies" busy={busy === "remove"}
+              body="Novelpia imports stop using your login until you save a fresh export. Chapters already imported are kept."
+              onCancel={() => setConfirmRemove(false)} onConfirm={remove} />
+          )}
           <p className="npc-foot" style={{ "--i": 6 }}>
             <Icon name="sparkles" size={14} />
             Imports complete supported ad countdowns automatically when the browser helper is available. If an ad needs your attention, saved chapters are kept and a recovery link is shown.

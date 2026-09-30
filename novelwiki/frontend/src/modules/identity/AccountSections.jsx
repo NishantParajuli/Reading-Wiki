@@ -173,7 +173,7 @@ export function SecuritySection({ links, reloadLinks }) {
               <input id={`${uid}-new`} type={reveal ? "text" : "password"} value={newPw} onChange={e => setNewPw(e.target.value)}
                      autoComplete="new-password" aria-describedby={`${uid}-req`} />
               <button type="button" className="icon-btn plain acct-reveal" onClick={() => setReveal(r => !r)}
-                      aria-label={reveal ? "Hide passwords" : "Show passwords"} aria-pressed={reveal}>
+                      aria-label="Show passwords" aria-pressed={reveal}>
                 <Icon name={reveal ? "eyeOff" : "eye"} size={16} />
               </button>
             </span>

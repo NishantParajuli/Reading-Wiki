@@ -95,7 +95,7 @@ a.jobs-group-title:focus-visible { box-shadow: none; }
 .jobs-group-go { flex-shrink: 0; margin-top: 3px; color: var(--accent-ink); opacity: 0; transform: translate(-4px, 3px); transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-3) var(--ease-spring); }
 .jobs-group-id:hover .jobs-group-go, .jobs-group-id:focus-within .jobs-group-go { opacity: 1; transform: none; }
 .jobs-group-author { font-family: var(--font-display); font-style: italic; font-variation-settings: "SOFT" 80; font-size: var(--text-sm); color: var(--muted); }
-.jobs-group-sub { margin-top: 4px; font-size: var(--text-xs); color: var(--faint); font-variant-numeric: tabular-nums; }
+.jobs-group-sub { margin-top: 4px; font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .jobs-rows { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 6px; }
 .jobs-row { position: relative; border-radius: 16px; transition: background-color var(--dur-2) var(--ease-out); }
@@ -218,7 +218,7 @@ a.jobs-group-title:focus-visible { box-shadow: none; }
 .jr-kind { font-size: var(--text-md); font-weight: 640; letter-spacing: -0.006em; color: var(--ink); }
 .jr-status { display: inline-flex; align-items: center; gap: 7px; font-size: var(--text-xs); font-weight: 620; color: var(--orb-c); }
 .jr.is-working .jr-status { color: var(--accent-ink); }
-.jr.is-queued .jr-status { color: var(--muted); }
+.jr.is-queued .jr-status, .jr.is-canceled .jr-status, .jr.is-idle .jr-status { color: var(--muted); }
 .jr-orb {
   position: relative; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   background: var(--orb-c); box-shadow: 0 0 10px var(--orb-c);
@@ -228,14 +228,14 @@ a.jobs-group-title:focus-visible { box-shadow: none; }
   content: ""; position: absolute; inset: -4px; border-radius: 50%;
   border: 1px solid var(--orb-c); opacity: 0;
 }
-.jr-backend { min-height: 20px; padding: 1px 8px; font-size: 10.5px; }
+.jr-backend { min-height: 20px; padding: 1px 8px; font-size: 11px; }
 .jr-desc {
   margin: 3px 0 0; font-size: var(--text-sm); color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .jr.is-working .jr-desc { color: var(--ink-2); }
 .jr-err { margin: 3px 0 0; font-size: var(--text-xs); color: var(--danger); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.jr-meta { margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: var(--text-xs); color: var(--faint); font-variant-numeric: tabular-nums; }
+.jr-meta { margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .jr-progress { grid-area: progress; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .jr-progress .progress-track { flex: 1 1 auto; min-width: 0; }
@@ -245,6 +245,8 @@ a.jobs-group-title:focus-visible { box-shadow: none; }
 .jr-aside { grid-area: aside; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .jr-time { min-width: 60px; text-align: right; font-size: var(--text-xs); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .jr-actions { display: inline-flex; align-items: center; gap: 2px; }
+/* "Needs you" imports: the way back to the step that waits (Review / Approve OCR) */
+.jr-review { margin-right: 4px; white-space: nowrap; }
 .jr-actions .icon-btn { width: 34px; height: 34px; }
 .jr-actions .icon-btn[aria-label="Cancel"]:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
 .jr-disclose svg { transition: transform var(--dur-3) var(--ease-spring); }
@@ -257,7 +259,7 @@ a.jobs-group-title:focus-visible { box-shadow: none; }
   .jr-orb.is-settling { animation: jr-settle 700ms var(--ease-bounce); }
   .jr-orb.is-settling::after { animation: jr-ring 900ms var(--ease-out) 1; }
 }
-@keyframes jr-ring { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(2.4); opacity: 0; } }
+@keyframes jr-ring { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(1.7); opacity: 0; } }
 @keyframes jr-breathe { 50% { opacity: 0.45; transform: scale(0.8); } }
 @keyframes jr-settle { from { transform: scale(1.9); } }
 
@@ -272,4 +274,9 @@ a.jobs-group-title:focus-visible { box-shadow: none; }
   .jr-aside { flex-direction: column; align-items: flex-end; gap: 2px; }
   .jr-time { min-width: 0; padding-top: 2px; }
   .jr-actions .icon-btn { width: 32px; height: 32px; }
+}
+
+/* Touch: row actions grow to a finger-sized target (after the container rules). */
+@media (pointer: coarse) {
+  .jr-actions .icon-btn { width: 40px; height: 40px; }
 }

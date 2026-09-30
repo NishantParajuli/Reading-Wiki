@@ -11,7 +11,7 @@ import { Icon } from "../../components/Icon.jsx";
 import { Button, Cover } from "../../components/ui.jsx";
 import { useToast } from "../../components/toast.jsx";
 import { AnimatePresence, motion, springs } from "../../motion/index.js";
-import { IMPORT_STATUS_LABEL, OCR_STATUSES, importTone, stepOf } from "./importStatus.js";
+import { IMPORT_STATUS_LABEL, OCR_STATUSES, fileTitle, importTone, stepOf } from "./importStatus.js";
 
 export { IMPORT_BUSY, IMPORT_KINDS, IMPORT_STATUS_LABEL, stepOf } from "./importStatus.js";
 export { UploadDrop } from "./ImportBasin.jsx";
@@ -97,9 +97,9 @@ export function QualityBadge({ quality }) {
 
 /* The book being imported: jacket, title, status, what was found. */
 export function JobHeader({ job, meta }) {
-  const detected = (job.detected_meta && job.detected_meta.title) || job.filename || "Untitled";
+  const detected = (job.detected_meta && job.detected_meta.title) || fileTitle(job.filename) || "Untitled";
   const jacketTitle = useSettled(meta.title || detected);
-  const title = meta.title || job.filename || "Untitled";
+  const title = meta.title || fileTitle(job.filename) || "Untitled";
   const tone = importTone(job.status);
   const stats = job.stats;
   const misses = ((stats && stats.quality && stats.quality.factors) || []).filter(f => !f.ok).slice(0, 3);

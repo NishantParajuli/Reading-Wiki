@@ -575,7 +575,7 @@ img.avatar-user { background: var(--bg-3); }
   .toast-close { min-width: 40px; min-height: 40px; }
   .linkish { padding-block: 10px; margin-block: -10px; }
   /* compact controls keep their look but grow to a comfortable finger target */
-  .btn.sm, .tab { min-height: 40px; }
+  .btn.sm, .tabs > .tab { min-height: 40px; }
   .seg > button { min-height: 38px; }
 }
 .toast-timer {
@@ -855,7 +855,7 @@ img.avatar-user { background: var(--bg-3); }
 .search-box > svg { color: var(--muted); transition: color var(--dur-2), transform var(--dur-3) var(--ease-spring); }
 .search-box:focus-within { border-color: color-mix(in oklch, var(--accent) 70%, transparent); box-shadow: 0 0 0 4px var(--accent-soft), 0 0 30px -10px var(--accent-glow); }
 .search-box:focus-within > svg { color: var(--accent-ink); transform: scale(1.08) rotate(-8deg); }
-.search-box input { border: none; background: transparent; outline: none; box-shadow: none; color: var(--ink); font-size: var(--text-md); flex: 1; min-width: 0; padding: 10px 0; min-height: 0; }
+.search-box input { border: none; background: transparent; outline: none; box-shadow: none; color: var(--ink); font-size: var(--text-md); flex: 1; min-width: 0; padding: 10px 0; min-height: 40px; }
 .search-box input:focus { box-shadow: none; }
 .search-box input::placeholder { color: var(--muted); }
 .search-box .icon-btn { width: 30px; height: 30px; }

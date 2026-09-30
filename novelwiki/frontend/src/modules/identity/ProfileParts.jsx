@@ -167,8 +167,9 @@ export function Shelf({ id, eyebrow, title, items, kind }) {
           </div>
         )}
       </header>
+      {/* Without motion the books are simply there, not hidden until a scroll reveals them. */}
       <motion.div ref={railRef} className={["pf-rail", fades].filter(Boolean).join(" ")} onScroll={measure}
-                  variants={stagger(0.065, 0.05)} initial="hidden" whileInView="show"
+                  variants={stagger(0.065, 0.05)} initial={prefersReducedMotion() ? false : "hidden"} whileInView="show"
                   viewport={{ once: true, amount: 0.15 }}>
         {items.map(n => <BookCard key={n.id} n={n} kind={kind} />)}
       </motion.div>

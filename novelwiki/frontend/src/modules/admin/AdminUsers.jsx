@@ -3,6 +3,7 @@
    meters) with the quota + AI-access editor unfolding in place.
    Self-guards: you can't change your own status, demote yourself or
    delete your own account (the server also guards the last admin).
+   Role changes and bans confirm in a dialog; deleting needs the username.
    ============================================================ */
 import React, { useCallback, useEffect, useState } from "react";
 
@@ -161,6 +162,8 @@ function UserRow({ u, me, onChanged, i }) {
     tts_chapters: overrides.tts_chapters ?? "",
   });
   const [confirmDel, setConfirmDel] = useState(false);
+  // Role changes and bans wait for a second, deliberate click in a dialog.
+  const [pending, setPending] = useState(null);
   const initialPolicy = u.ai_backend_policy || {};
   const [ai, setAi] = useState({
     agy_enabled: !!initialPolicy.agy_enabled,
@@ -208,6 +211,20 @@ function UserRow({ u, me, onChanged, i }) {
   };
 
   const name = u.display_name || u.username;
+  const promote = u.role !== "admin";
+  const confirmPending = async () => { await patch(pending.body); setPending(null); };
+  // The dialog's copy is fixed when it opens, so a refresh behind it can't flip it.
+  const askRole = () => setPending(promote ? {
+    body: { role: "admin" }, title: `Make @${u.username} an admin?`, confirmLabel: "Make admin", danger: false,
+    text: "Admins can use this console: change any account's role, limits and AI access, moderate every novel and run jobs for the Global library.",
+  } : {
+    body: { role: "user" }, title: `Remove @${u.username}'s admin role?`, confirmLabel: "Demote", danger: true,
+    text: "They lose access to this console. Their own library and reading are unchanged.",
+  });
+  const askBan = () => setPending({
+    body: { status: "banned" }, title: `Ban @${u.username}?`, confirmLabel: "Ban account", danger: true,
+    text: "They're signed out everywhere, their running AI jobs stop, and they can't sign in until you set their status back to active.",
+  });
   const joined = u.created_at ? new Date(u.created_at).toLocaleDateString(undefined, { year: "numeric", month: "short" }) : null;
   const statusTone = STATUS_TONE[u.status] || "danger";
   const usage = u.usage || {};
@@ -245,7 +262,8 @@ function UserRow({ u, me, onChanged, i }) {
         <div className="adm-user-ctl">
           <span className={`adm-status tone-${statusTone}`}>
             <span className="adm-status-dot" aria-hidden="true" />
-            <select value={u.status} disabled={busy || isSelf} onChange={e => patch({ status: e.target.value })}
+            <select value={u.status} disabled={busy || isSelf}
+                    onChange={e => (e.target.value === "banned" ? askBan() : patch({ status: e.target.value }))}
                     title="Account status" aria-label={`Account status for @${u.username}`}>
               {["active", "suspended", "banned"].map(s => <option key={s} value={s}>{s}</option>)}
             </select>
@@ -253,8 +271,8 @@ function UserRow({ u, me, onChanged, i }) {
           </span>
           <Button variant="ghost" size="sm" className="adm-role" disabled={busy || (isSelf && u.role === "admin")}
                   title={isSelf && u.role === "admin" ? "You can't demote yourself" : undefined}
-                  onClick={() => patch({ role: u.role === "admin" ? "user" : "admin" })}>
-            {u.role === "admin" ? "Demote" : "Make admin"}
+                  onClick={askRole}>
+            {promote ? "Make admin" : "Demote"}
           </Button>
           <button type="button" className={"icon-btn adm-expand" + (open ? " active" : "")} title="Quotas & AI access"
                   aria-label={`Quotas & AI access for @${u.username}`} aria-expanded={open} aria-controls={`adm-edit-${u.id}`}
@@ -278,6 +296,10 @@ function UserRow({ u, me, onChanged, i }) {
           </motion.div>
         )}
       </AnimatePresence>
+      {pending && (
+        <ConfirmDialog title={pending.title} body={pending.text} confirmLabel={pending.confirmLabel} danger={pending.danger}
+          busy={busy} onCancel={() => setPending(null)} onConfirm={confirmPending} />
+      )}
       {confirmDel && (
         <ConfirmDialog
           title={`Delete @${u.username}?`} requireText={u.username} confirmLabel="Delete user" busy={busy}

@@ -35,6 +35,11 @@ export function importTone(status) {
   return "idle";
 }
 
+/* A filename standing in for a title reads without its .epub/.pdf extension. */
+export function fileTitle(filename) {
+  return String(filename || "").replace(/\.(epub|pdf)$/i, "");
+}
+
 export function importTitle(job) {
-  return (job && job.detected_meta && job.detected_meta.title) || (job && job.filename) || (job ? `Import ${job.id}` : "");
+  return (job && job.detected_meta && job.detected_meta.title) || (job && fileTitle(job.filename)) || (job ? `Import ${job.id}` : "");
 }

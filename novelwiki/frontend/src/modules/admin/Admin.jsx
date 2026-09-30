@@ -61,12 +61,12 @@ export function Admin() {
       </header>
 
       <div className="adm-tabs-wrap rise" style={{ "--i": 4 }} ref={tabsRef}>
-        <Tabs className="adm-tabs" tabs={ADMIN_TABS} value={tab}
+        <Tabs className="adm-tabs" tabs={ADMIN_TABS} value={tab} label="Admin sections" idBase="adm"
           onChange={(id) => navigate(id === "users" ? "/admin" : `/admin/${id}`)} />
         <p className="adm-tab-lead" aria-live="polite">{LEADS[tab]}</p>
       </div>
 
-      <div className="adm-panel" role="tabpanel" aria-label={current.label} key={tab}>
+      <div className="adm-panel" role="tabpanel" id="adm-panel" aria-labelledby={`adm-tab-${tab}`} key={tab}>
         {tab === "users" && <UsersTab me={user} />}
         {tab === "usage" && <UsageTab />}
         {tab === "moderation" && <ModerationTab openNovel={openNovel} />}

@@ -23,6 +23,11 @@ const narration = {
   source: "tts", id: 77, kind: "tts", status: "queued", novel_id: null, cancelable: true,
   progress: { done: 0, total: 12 }, created_at: iso(60e3), updated_at: iso(60e3),
 };
+const review = {
+  source: "import", id: 32, kind: "import", status: "awaiting_review", novel_id: null, cancelable: true,
+  filename: "moonlit-archive-vol2.epub", created_at: iso(7200e3), updated_at: iso(7200e3),
+};
+const scanned = { ...review, id: 33, status: "awaiting_ocr_confirm", filename: "harbour-hymns.pdf" };
 const failedScrape = {
   source: "job", id: 466, kind: "scrape", status: "failed", novel_id: 7, cancelable: false,
   error: "Novelpia requires an ad. Open https://global.novelpia.com/viewer/409763, complete the ad, then retry.",
@@ -81,14 +86,33 @@ describe("Jobs", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /History/ }));
     const toggle = await screen.findByRole("button", { name: "Show error" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-controls", "job-error-job-466");
     fireEvent.click(toggle);
     expect(await screen.findByText(/requires an ad/)).toBeInTheDocument();
+    expect(document.getElementById("job-error-job-466")).toContainElement(screen.getByText(/requires an ad/));
     expect(screen.getByRole("link", { name: "Open chapter on Novelpia" }))
       .toHaveAttribute("href", "https://global.novelpia.com/viewer/409763");
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(failedScrape.error));
     fireEvent.click(screen.getByRole("button", { name: "Hide error" }));
     await waitFor(() => expect(screen.queryByText(/requires an ad/)).not.toBeInTheDocument());
+  });
+
+  it("links imports that wait for the reader to their step in Import", async () => {
+    vi.spyOn(experienceApi, "activity").mockResolvedValue({ jobs: [review, scanned] });
+    renderJobs();
+    expect(await screen.findByRole("link", { name: "Review moonlit-archive-vol2.epub" })).toHaveAttribute("href", "/import?job=32");
+    expect(screen.getByRole("link", { name: "Approve OCR harbour-hymns.pdf" })).toHaveAttribute("href", "/import?job=33");
+    expect(screen.getByText("Needs you")).toBeInTheDocument();
+  });
+
+  it("names the tab panel by its tab and gives no active count before the list arrives", async () => {
+    vi.spyOn(experienceApi, "activity").mockReturnValue(new Promise(() => {}));
+    renderJobs();
+    const active = screen.getByRole("tab", { name: "Active" });
+    expect(active.querySelector(".tab-count")).toBeNull();
+    expect(screen.getByRole("tabpanel", { name: "Active" })).toHaveAttribute("id", "jobs-panel");
+    expect(active).toHaveAttribute("aria-controls", "jobs-panel");
   });
 
   it("offers a retry instead of an empty list when jobs can't load", async () => {
@@ -98,6 +122,8 @@ describe("Jobs", () => {
     renderJobs();
     expect(await screen.findByText("Couldn't load jobs")).toBeInTheDocument();
     expect(screen.queryByText("No active jobs")).not.toBeInTheDocument();
+    // "0 active" would claim nothing is running.
+    expect(screen.getByRole("tab", { name: "Active" }).querySelector(".tab-count")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("No active jobs")).toBeInTheDocument();
   });
@@ -109,6 +135,14 @@ describe("JobRow", () => {
     expect(screen.getByText("Canceled")).toBeInTheDocument();
     expect(screen.queryByText("narrating…")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  });
+
+  it("names the AI backend in words, including a fallback", () => {
+    const { rerender } = render(<JobRow job={{ ...running, execution_backend: "openai_codex" }} />);
+    expect(screen.getByText("OpenAI Codex")).toBeInTheDocument();
+    expect(screen.queryByText(/OPENAI_CODEX/)).not.toBeInTheDocument();
+    rerender(<JobRow job={{ ...running, execution_backend: "api", backend_fallback_from: "agy" }} />);
+    expect(screen.getByTitle("Ran on API after Antigravity was unavailable")).toHaveTextContent("Antigravity → , then API");
   });
 
   it("keeps the inline error for callers without a detail panel", () => {

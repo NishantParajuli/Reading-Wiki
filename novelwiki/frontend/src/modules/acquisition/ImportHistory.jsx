@@ -78,7 +78,7 @@ export function ImportHistory({ jobs, jobsError, loadJobs, sel, setSel, seriesCo
                 {active && <motion.span layoutId={`${uid}-glow`} className="imp-item-glow" transition={springs.layout} aria-hidden="true" />}
                 <button type="button" className="imp-item-select" aria-pressed={active}
                         disabled={busy} onClick={() => setSel(j.id)}>
-                  <span className="imp-item-title">{title}</span>{" "}
+                  <span className="imp-item-title" title={title}>{title}</span>{" "}
                   <span className="imp-item-status">
                     <i className="imp-dot" aria-hidden="true" />
                     {(IMPORT_STATUS_LABEL[j.status] || j.status)

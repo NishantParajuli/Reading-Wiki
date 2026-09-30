@@ -1,10 +1,13 @@
 /* One canonical job/activity row — kind glyph, status orb, live progress,
    relative time, cancel. Used by the Jobs page and the novel Manage tab.
    Props: job, onCancel, onOpenNovel, busy, detail (the error is shown by
-   the caller, not inline). Optional: expanded + onToggle (a disclosure for
-   failed rows), duration (how long a finished job took). The row lays itself
-   out by its own width (container queries), so it fits any column. */
+   the caller, not inline). Optional: expanded + onToggle + controls (a
+   disclosure for failed rows and the id of the panel it opens), duration (how
+   long a finished job took). An import waiting for the reader links to its
+   step in Import. The row lays itself out by its own width (container
+   queries), so it fits any column. */
 import React, { useRef } from "react";
+import { Link } from "react-router-dom";
 import { Icon } from "../../components/Icon.jsx";
 import { Chip, ProgressBar, RelativeTime, IconButton } from "../../components/ui.jsx";
 import { ACT_KIND_LABEL, ACT_KIND_ICON, activityProgress, activityFraction } from "../../lib/constants.js";
@@ -26,6 +29,13 @@ const STATUS_LABEL = {
 };
 
 const GENERIC_PROGRESS = new Set(["narrating…", "Waiting to begin"]);
+// jobs.execution_backend (and backend_fallback_from): api · agy · openai_codex
+const BACKEND_LABEL = { api: "API", agy: "Antigravity", openai_codex: "OpenAI Codex" };
+
+export function backendLabel(backend) {
+  const text = String(backend || "").replace(/_/g, " ");
+  return BACKEND_LABEL[backend] || text.replace(/\b\w/g, ch => ch.toUpperCase());
+}
 
 /** working · queued · waiting · attention · done · failed · canceled · idle */
 export function jobPhase(status) {
@@ -37,7 +47,7 @@ export function jobStatusLabel(status) {
   return STATUS_LABEL[status] || (text.charAt(0).toUpperCase() + text.slice(1));
 }
 
-export function JobRow({ job, onCancel, onOpenNovel, busy, detail, expanded, onToggle, duration }) {
+export function JobRow({ job, onCancel, onOpenNovel, busy, detail, expanded, onToggle, controls, duration }) {
   const kindLabel = ACT_KIND_LABEL[job.kind] || job.kind;
   const phase = jobPhase(job.status);
   const firstPhase = useRef(phase);
@@ -51,6 +61,11 @@ export function JobRow({ job, onCancel, onOpenNovel, busy, detail, expanded, onT
   const desc = (progressText && !generic ? progressText : "") || job.filename || "";
   const failed = job.status === "failed" && !!job.error;
   const showProgress = frac != null && active;
+  const backend = job.execution_backend && backendLabel(job.execution_backend);
+  const fallbackFrom = job.backend_fallback_from && backendLabel(job.backend_fallback_from);
+  // An import that waits for the reader (review, or OCR approval) opens at that step.
+  const importStep = job.source === "import" && phase === "attention"
+    ? (job.status === "awaiting_ocr_confirm" ? "Approve OCR" : "Review") : null;
   return (
     <div className={`job-row jr is-${phase}`} data-kind={job.kind}>
       <div className="jr-grid">
@@ -64,15 +79,15 @@ export function JobRow({ job, onCancel, onOpenNovel, busy, detail, expanded, onT
               <span key={phase} className={"jr-orb" + (phase !== firstPhase.current ? " is-settling" : "")} aria-hidden="true" />
               {jobStatusLabel(job.status)}
             </span>
-            {job.execution_backend && (
-              <Chip tone={job.execution_backend === "agy" ? "accent" : "neutral"} className="mono jr-backend">
-                {job.backend_fallback_from
-                  ? `${job.backend_fallback_from.toUpperCase()}→${job.execution_backend.toUpperCase()}`
-                  : job.execution_backend.toUpperCase()}
+            {backend && (
+              <Chip tone={job.execution_backend === "agy" ? "accent" : "neutral"} className="jr-backend"
+                    title={fallbackFrom ? `Ran on ${backend} after ${fallbackFrom} was unavailable` : `Runs on ${backend}`}>
+                {fallbackFrom && <>{fallbackFrom}<span aria-hidden="true"> → </span><span className="sr-only">, then </span></>}
+                {backend}
               </Chip>
             )}
           </div>
-          {desc && <p className="jr-desc">{desc}</p>}
+          {desc && <p className="jr-desc" title={desc}>{desc}</p>}
           {failed && !detail && <p className="jr-err" title={job.error}>{(job.error || "").slice(0, 60)}</p>}
           {((job.attempts > 1 && job.status !== "done") || duration) && (
             <p className="jr-meta">
@@ -90,6 +105,12 @@ export function JobRow({ job, onCancel, onOpenNovel, busy, detail, expanded, onT
         <div className="jr-aside">
           <span className="jr-time"><RelativeTime iso={job.updated_at || job.created_at} /></span>
           <span className="jr-actions">
+            {importStep && (
+              <Link className="btn btn-secondary sm jr-review" to={`/import?job=${job.id}`}>
+                {importStep}<span className="sr-only"> {job.filename || `import ${job.id}`}</span>
+                <Icon name="arrowRight" size={14} />
+              </Link>
+            )}
             {job.novel_id && onOpenNovel && (
               <IconButton plain name="book" size={15} label="Open novel" onClick={() => onOpenNovel(job.novel_id)} />
             )}
@@ -98,7 +119,7 @@ export function JobRow({ job, onCancel, onOpenNovel, busy, detail, expanded, onT
             )}
             {failed && onToggle && (
               <button type="button" className={"icon-btn plain jr-disclose" + (expanded ? " is-open" : "")}
-                      aria-expanded={!!expanded} aria-label={expanded ? "Hide error" : "Show error"}
+                      aria-expanded={!!expanded} aria-controls={controls} aria-label={expanded ? "Hide error" : "Show error"}
                       title={expanded ? "Hide error" : "Show error"} onClick={onToggle}>
                 <Icon name="chevronDown" size={16} />
               </button>

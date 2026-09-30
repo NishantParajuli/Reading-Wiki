@@ -123,7 +123,9 @@ export function UploadDrop({ onUploaded }) {
 
   const pct = Math.round(progress * 100);
   const measured = busy && progress > 0 && progress < 1;
-  const level = busy ? (measured ? 0.12 + progress * 0.76 : 0.36) : drag ? 0.52 : near ? 0.2 : 0.075;
+  // Resting → files over the page → over the basin: the water climbs, but a drop
+  // hovering over the basin keeps it below the prompt so "Release…" stays legible.
+  const level = busy ? (measured ? 0.12 + progress * 0.76 : 0.36) : drag ? 0.24 : near ? 0.15 : 0.075;
   const cls = ["imp-basin", drag ? "is-drag" : "", near && !drag ? "is-near" : "", busy ? "is-busy" : "",
     busy && !measured ? "is-swelling" : ""].filter(Boolean).join(" ");
 

@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -80,13 +80,44 @@ describe("Admin console", () => {
     expect(within(theirs).getByRole("progressbar", { name: "@ari — Chapters: 90 of 100" })).toHaveAttribute("aria-valuenow", "90");
   });
 
-  it("changes status and role", async () => {
+  it("changes status at once but asks before a ban", async () => {
     renderAdmin();
     const theirs = await screen.findByRole("article", { name: "Ari (@ari)" });
-    await act(async () => fireEvent.change(within(theirs).getByRole("combobox", { name: "Account status for @ari" }), { target: { value: "suspended" } }));
+    const status = within(theirs).getByRole("combobox", { name: "Account status for @ari" });
+    await act(async () => fireEvent.change(status, { target: { value: "suspended" } }));
     expect(adminApi.updateUser).toHaveBeenCalledWith(2, { status: "suspended" });
-    await act(async () => fireEvent.click(within(theirs).getByRole("button", { name: "Make admin" })));
+
+    fireEvent.change(status, { target: { value: "banned" } });
+    const dialog = screen.getByRole("dialog", { name: "Ban @ari?" });
+    expect(dialog).toHaveTextContent("can't sign in");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(adminApi.updateUser).toHaveBeenCalledTimes(1);
+    expect(status).toHaveValue("active");
+
+    fireEvent.change(status, { target: { value: "banned" } });
+    await act(async () => fireEvent.click(within(screen.getByRole("dialog", { name: "Ban @ari?" })).getByRole("button", { name: "Ban account" })));
+    expect(adminApi.updateUser).toHaveBeenLastCalledWith(2, { status: "banned" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("confirms promotions and demotions before changing a role", async () => {
+    const sol = { ...ari, id: 3, username: "sol", display_name: "Sol", email: "sol@example.test", role: "admin" };
+    adminApi.users.mockResolvedValue([me, ari, sol]);
+    renderAdmin();
+    const theirs = await screen.findByRole("article", { name: "Ari (@ari)" });
+    fireEvent.click(within(theirs).getByRole("button", { name: "Make admin" }));
+    const promote = screen.getByRole("dialog", { name: "Make @ari an admin?" });
+    expect(adminApi.updateUser).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(within(promote).getByRole("button", { name: "Make admin" })));
     expect(adminApi.updateUser).toHaveBeenCalledWith(2, { role: "admin" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const other = screen.getByRole("article", { name: "Sol (@sol)" });
+    fireEvent.click(within(other).getByRole("button", { name: "Demote" }));
+    const demote = screen.getByRole("dialog", { name: "Remove @sol's admin role?" });
+    await act(async () => fireEvent.click(within(demote).getByRole("button", { name: "Demote" })));
+    expect(adminApi.updateUser).toHaveBeenLastCalledWith(3, { role: "user" });
   });
 
   it("unfolds the quota and AI access editor and saves limits", async () => {
@@ -137,6 +168,12 @@ describe("Admin console", () => {
     expect(await screen.findByText("Chapters translated", { selector: ".adm-metric-label" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Top spenders" })).toBeInTheDocument();
     expect(screen.getByRole("table")).toHaveTextContent("Sep 2026");
+    // The panel is named by its tab; the chart is a picture of the table, hidden from assistive tech.
+    expect(screen.getByRole("tabpanel", { name: /Usage & cost/ })).toHaveAttribute("id", "adm-panel");
+    expect(screen.getByRole("tab", { name: /Usage & cost/ })).toHaveAttribute("aria-controls", "adm-panel");
+    expect(screen.getByText("Last 2 months")).toBeInTheDocument();
+    expect(document.querySelector(".adm-chart")).toHaveAttribute("aria-hidden", "true");
+    expect(document.querySelector(".adm-chart [tabindex]")).toBeNull();
   });
 
   it("changes a novel's visibility from moderation", async () => {
@@ -170,5 +207,23 @@ describe("Admin console", () => {
     expect(screen.getByRole("button", { name: "Run consuming smoke test" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Retry waiting jobs" })).toBeDisabled();
     expect(screen.getByText("rate_limited")).toBeInTheDocument();
+  });
+
+  it("asks before running the consuming smoke test", async () => {
+    vi.spyOn(adminApi, "agyHealth").mockResolvedValue({
+      enabled: true, available: true, worker: { status: "idle", version: "0.52.0", plugin_version: "1.1.2" },
+      queue: { queued: 0, running: 0, waiting_provider: 0 }, last_success_at: null, recent_failures: [],
+    });
+    const smoke = vi.spyOn(adminApi, "agySmoke").mockResolvedValue({});
+    renderAdmin("/admin/agy");
+    fireEvent.click(await screen.findByRole("button", { name: "Run consuming smoke test" }));
+    const dialog = screen.getByRole("dialog", { name: "Run the consuming smoke test?" });
+    expect(dialog).toHaveTextContent("spends subscription quota");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(smoke).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Run consuming smoke test" }));
+    await act(async () => fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Run smoke test" })));
+    expect(smoke).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });

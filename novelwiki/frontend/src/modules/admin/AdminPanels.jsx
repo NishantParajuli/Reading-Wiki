@@ -1,6 +1,6 @@
 /* ============================================================
    Admin console panels: Usage & cost (count-up tiles, top spenders, a
-   six-month chart with its table twin), Moderation (visibility per novel)
+   monthly chart with its table twin), Moderation (visibility per novel)
    and Global jobs (pipeline triggers for the shared library).
    Users lives in AdminUsers.jsx; worker health in AdminWorkers.jsx.
    ============================================================ */
@@ -51,13 +51,14 @@ function niceMax(max) {
 }
 
 /* Chapters translated per month: one series, the latest month in accent
-   (emphasis), the rest recessive. Values also live in the table below. */
+   (emphasis), the rest recessive. A picture for pointers only: the table
+   below carries the same figures for assistive tech and the keyboard. */
 function MonthChart({ months }) {
   const max = niceMax(Math.max(...months.map(m => m.translated_chapters || 0)));
   const peak = Math.max(...months.map(m => m.translated_chapters || 0));
   return (
-    <div className="adm-chart" role="group" aria-label="Chapters translated per month">
-      <div className="adm-chart-grid" aria-hidden="true">
+    <div className="adm-chart" aria-hidden="true">
+      <div className="adm-chart-grid">
         <span style={{ "--y": 1 }}><i>{max.toLocaleString()}</i></span>
         <span style={{ "--y": 0.5 }}><i>{(max / 2).toLocaleString()}</i></span>
         <span style={{ "--y": 0 }}><i>0</i></span>
@@ -68,15 +69,14 @@ function MonthChart({ months }) {
           const latest = i === months.length - 1;
           const label = monthLabel(m.period, { month: "long", year: "numeric" });
           return (
-            <div key={m.period} className={"adm-bar" + (latest ? " is-latest" : "")} tabIndex={0}
-                 aria-label={`${label}: ${v} chapters translated, ${m.ocr_pages || 0} OCR pages, ${m.codex_builds || 0} codex builds`}>
+            <div key={m.period} className={"adm-bar" + (latest ? " is-latest" : "")}>
               <div className="adm-bar-plot">
                 <span className="adm-bar-fill" style={{ "--h": v / max, "--i": i }}>
                   {(latest || (v === peak && v > 0)) && <b className="adm-bar-value">{v.toLocaleString()}</b>}
                 </span>
               </div>
               <span className="adm-bar-x">{monthLabel(m.period)}</span>
-              <span className="adm-bar-tip" role="tooltip">
+              <span className="adm-bar-tip">
                 <b>{v.toLocaleString()}</b> chapters
                 <small>{label} · {(m.ocr_pages || 0).toLocaleString()} OCR · {(m.codex_builds || 0).toLocaleString()} codex</small>
               </span>
@@ -136,7 +136,8 @@ export function UsageTab() {
         </section>
 
         <section className="card adm-block rise" style={{ "--i": 4 }} aria-labelledby="adm-months-h">
-          <BlockHead id="adm-months-h" eyebrow="Last 6 months" title="Chapters translated" />
+          <BlockHead id="adm-months-h" title="Chapters translated"
+                     eyebrow={months.length ? `Last ${months.length} ${months.length === 1 ? "month" : "months"}` : "Monthly"} />
           {months.length === 0 ? <p className="adm-quiet">No history yet.</p> : (
             <>
               <MonthChart months={months} />

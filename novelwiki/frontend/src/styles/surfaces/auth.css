@@ -467,7 +467,7 @@ html:is([data-vt="page"], [data-vt="pop"])::view-transition-old(auth-stage):only
 
 .auth-divider {
   display: flex; align-items: center; gap: 14px; margin: 4px 0 14px;
-  color: var(--faint); font-size: var(--text-xs); letter-spacing: 0.04em; font-weight: 520;
+  color: var(--muted); font-size: var(--text-xs); letter-spacing: 0.04em; font-weight: 520;
 }
 .auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--border-2)); }
 .auth-divider::after { background: linear-gradient(90deg, var(--border-2), transparent); }
@@ -564,6 +564,21 @@ html:is([data-vt="page"], [data-vt="pop"])::view-transition-old(auth-stage):only
 }
 @media (max-width: 899px) and (max-height: 640px) {
   .auth-promise { display: none; }
+}
+/* Shorter phones (360×740): a slightly lower sea lifts the card so Sign in
+   clears the fold, while the promise keeps its room above the card. */
+@media (max-width: 899px) and (min-height: 700px) and (max-height: 780px) {
+  .auth-stage { --sea-h: clamp(340px, 52svh, 600px); }
+}
+/* Phones on their side: a shallow sea and a smaller wordmark, so the form
+   starts inside the first screen. */
+@media (max-width: 899px) and (max-height: 520px) {
+  .auth-stage { --sea-h: clamp(170px, 44svh, 600px); --wm-size: clamp(2.2rem, 11svh, 4rem); }
+  .auth-main { padding-top: calc(var(--sea-h) - 34px); }
+}
+/* Touch: the password reveal grows to a finger-sized target. */
+@media (pointer: coarse) {
+  .pw-toggle { right: 5px; width: 40px; height: 40px; }
 }
 @media (max-width: 380px) {
   .auth-providers { grid-template-columns: minmax(0, 1fr); }

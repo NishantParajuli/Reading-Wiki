@@ -9,9 +9,9 @@
                    per-letter boxes lose the font's own kerning.
    · MorphHeight   the card's height follows its content on a spring
                    (motion value, no re-renders), so mode switches morph.
-   · Fields        glyph-led inputs; the password keeps its label/input
-                   nesting (label > span "Password" + input) and an animated
-                   eye that draws its slash when the password is visible.
+   · Fields        glyph-led inputs; the password has an animated eye (a
+                   keyboard-reachable toggle, pressed while the password is
+                   visible) that draws its slash when the password shows.
    · ProviderButton  glass pills with inline provider marks.
    · ThemeSwitch   Night ⇄ Dawn with the app's circular theme ripple.
    ============================================================ */
@@ -274,13 +274,16 @@ export function Glyph({ name }) {
   );
 }
 
-/* Field note: a validation error or a quiet confirmation, easing in. */
-export function FieldNote({ error, help }) {
+/* Field note: a validation error or a quiet confirmation, easing in. It sits
+   outside the field's label (the input points at it with aria-describedby),
+   so it describes the field instead of joining its name. One note at a time:
+   the id never appears twice while an error hands over to a confirmation. */
+export function FieldNote({ id, error, help }) {
   const text = error || help;
   return (
-    <AnimatePresence initial={false}>
+    <AnimatePresence initial={false} mode="wait">
       {text && (
-        <motion.span key={error ? "e" : "h"} className={error ? "field-error" : "field-help"}
+        <motion.span key={error ? "e" : "h"} id={id} className={error ? "field-error" : "field-help"}
                      initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
                      transition={{ duration: 0.22 }}>
           {!error && <Icon name="check" size={12} sw={2.4} />}
@@ -302,15 +305,17 @@ function EyeGlyph() {
   );
 }
 
-export function PasswordInput({ value, onChange, placeholder, autoComplete, id }) {
+/* Extra props (aria-invalid, aria-describedby…) go to the input. */
+export function PasswordInput({ value, onChange, placeholder, autoComplete, id, ...inputProps }) {
   const [show, setShow] = useState(false);
   return (
     <span className="auth-control pw-wrap">
       <Glyph name="lock" />
       <input id={id} type={show ? "text" : "password"} value={value} placeholder={placeholder}
-             autoComplete={autoComplete} onChange={e => onChange(e.target.value)} />
-      <button type="button" className="pw-toggle" aria-label={show ? "Hide password" : "Show password"}
-              data-shown={show ? "" : undefined} onClick={() => setShow(s => !s)} tabIndex={-1}>
+             autoComplete={autoComplete} onChange={e => onChange(e.target.value)} {...inputProps} />
+      {/* A toggle: one name, and its pressed state says whether the password shows. */}
+      <button type="button" className="pw-toggle" aria-label="Show password" aria-pressed={show}
+              data-shown={show ? "" : undefined} onClick={() => setShow(s => !s)}>
         <EyeGlyph />
       </button>
     </span>

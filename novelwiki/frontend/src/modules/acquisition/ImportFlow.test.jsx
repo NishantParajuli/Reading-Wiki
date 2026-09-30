@@ -2,7 +2,8 @@ import React from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { OcrProgress, PlanEditor, Stepper, UploadDrop } from "./ImportParts.jsx";
+import { catalogApi } from "../catalog/api.js";
+import { JobHeader, OcrProgress, PlanEditor, Stepper, UploadDrop } from "./ImportParts.jsx";
 
 const plan = {
   version: 1,
@@ -60,6 +61,33 @@ describe("review editor", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Destination novel" }), { target: { value: "9" } });
     expect(screen.getByRole("button", { name: /Destination/ })).toHaveTextContent("Append to The Glass Tide");
     expect(screen.getByRole("button", { name: "Commit" })).toBeEnabled();
+  });
+
+  it("asks before replacing a source's chapters", async () => {
+    vi.spyOn(catalogApi, "novel").mockResolvedValue({ id: 9, sources: [{ id: 12, label: "Royal Road", adapter: "royalroad" }] });
+    const { onCommit } = renderEditor();
+    fireEvent.click(screen.getByRole("button", { name: "Replace…" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Destination novel" }), { target: { value: "9" } });
+    await screen.findByRole("option", { name: "Royal Road (#12)" });
+    fireEvent.change(screen.getByRole("combobox", { name: "Source to replace" }), { target: { value: "12" } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace chapters" }));
+    const dialog = screen.getByRole("dialog", { name: "Replace this source's chapters?" });
+    expect(dialog).toHaveTextContent("Royal Road (#12) in The Glass Tide");
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Replace chapters" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Replace chapters" }));
+    expect(onCommit).toHaveBeenCalledWith({ mode: "replace", source_id: 12, offset: 0, is_raw: false, as_volume: false });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("import header", () => {
+  it("titles a book by its filename without the extension", () => {
+    render(<JobHeader job={{ id: 4, status: "failed", filename: "tidal-atlas_vol_07_FINAL.epub", detected_meta: {} }} meta={{}} />);
+    expect(screen.getByRole("heading", { level: 2, name: "tidal-atlas_vol_07_FINAL" })).toBeInTheDocument();
+    expect(screen.getByText("tidal-atlas_vol_07_FINAL.epub")).toHaveAttribute("title", "tidal-atlas_vol_07_FINAL.epub");
   });
 });
 

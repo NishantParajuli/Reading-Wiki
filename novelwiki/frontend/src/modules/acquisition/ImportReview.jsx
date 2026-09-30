@@ -6,6 +6,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 
 import { catalogApi } from "../catalog/api.js";
 import { Icon } from "../../components/Icon.jsx";
+import { ConfirmDialog } from "../../components/overlay.jsx";
 import { Button, Chip } from "../../components/ui.jsx";
 import { motion, springs } from "../../motion/index.js";
 import { IMPORT_KIND_LABEL, IMPORT_KINDS } from "./importStatus.js";
@@ -89,6 +90,7 @@ export function PlanEditor({
   const [sourcesError, setSourcesError] = useState(null);
   const [flash, setFlash] = useState(null);
   const [barOpen, setBarOpen] = useState(false);
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const flashTimer = useRef(null);
   const listRef = useRef(null);
   const uid = useId();
@@ -327,7 +329,7 @@ export function PlanEditor({
           </label>
         )}
         <Button variant="primary" icon="check" className="imp-commit-go" disabled={commitDisabled} loading={busy}
-                onClick={() => onCommit(buildBody())}>
+                onClick={() => (mode === "replace" ? setConfirmReplace(true) : onCommit(buildBody()))}>
           {mode === "replace" ? "Replace chapters" : "Commit"}
         </Button>
         {mode === "replace" && (
@@ -338,6 +340,12 @@ export function PlanEditor({
         )}
         {mode === "replace" && sourcesError && <p role="alert" className="acct-err imp-commit-note">{sourcesError}</p>}
       </div>
+      {confirmReplace && mode === "replace" && destSource && (
+        <ConfirmDialog title="Replace this source's chapters?" confirmLabel="Replace chapters" busy={busy}
+          body={`This deletes the current chapters of ${destSource.label || destSource.adapter} (#${destSource.id})${destNovel ? ` in ${destNovel.title}` : ""}, imports ${includedCount} ${includedCount === 1 ? "segment" : "segments"} in their place and rebuilds that source's part of the codex. There's no undo.`}
+          onCancel={() => setConfirmReplace(false)}
+          onConfirm={() => { setConfirmReplace(false); onCommit(buildBody()); }} />
+      )}
     </div>
   );
 }

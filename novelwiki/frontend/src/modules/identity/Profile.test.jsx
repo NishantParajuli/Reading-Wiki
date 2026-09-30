@@ -56,6 +56,16 @@ describe("Public profile", () => {
     expect(screen.getByRole("button", { name: "Account & settings" })).toBeInTheDocument();
   });
 
+  it("shows shelf books at once under reduced motion, without waiting for a scroll", async () => {
+    globalThis.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} };
+    vi.spyOn(identityApi, "profile").mockResolvedValue(profile);
+    renderProfile();
+    const shelf = await screen.findByRole("region", { name: "Recently finished" });
+    const cell = shelf.querySelector(".pf-book-cell");
+    expect(cell).not.toBeNull();
+    expect(cell.style.opacity).not.toBe("0");
+  });
+
   it("offers recovery when the profile can't load", async () => {
     vi.spyOn(identityApi, "profile").mockRejectedValueOnce(new Error("User not found.")).mockResolvedValue(profile);
     renderProfile();

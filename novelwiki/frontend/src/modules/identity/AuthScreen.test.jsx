@@ -79,12 +79,18 @@ describe("AuthScreen — sign in", () => {
     expect(authApi.oauthStart).toHaveBeenCalledWith("google");
   });
 
-  it("shows and hides the password", () => {
+  it("reveals the password with a keyboard-reachable toggle that reports its state", () => {
     renderAt("/login");
-    fireEvent.click(screen.getByRole("button", { name: "Show password" }));
+    expect(passwordInput()).toHaveAccessibleName("Password");
+    const toggle = screen.getByRole("button", { name: "Show password" });
+    expect(toggle).not.toHaveAttribute("tabindex");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
     expect(passwordInput()).toHaveAttribute("type", "text");
-    fireEvent.click(screen.getByRole("button", { name: "Hide password" }));
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(toggle);
     expect(passwordInput()).toHaveAttribute("type", "password");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
   });
 
   it("keeps the failed-provider message from ?error=oauth visible", async () => {
@@ -130,11 +136,23 @@ describe("AuthScreen — register", () => {
     expect(await screen.findByText("That doesn't look like an email address.")).toBeInTheDocument();
     expect(screen.getByText("3–24 characters: a–z, 0–9, underscore.")).toBeInTheDocument();
     expect(screen.getByText("At least 8 characters.")).toBeInTheDocument();
+    // Errors describe the field (and mark it invalid) without joining its name.
+    expect(email).toHaveAccessibleName("Email");
+    expect(email).toHaveAttribute("aria-invalid", "true");
+    expect(email).toHaveAccessibleDescription("That doesn't look like an email address.");
+    expect(username).toHaveAccessibleDescription("3–24 characters: a–z, 0–9, underscore.");
+    expect(passwordInput()).toHaveAccessibleName("Password");
+    expect(passwordInput()).toHaveAttribute("aria-invalid", "true");
+    expect(passwordInput()).toHaveAccessibleDescription("At least 8 characters.");
 
     fireEvent.change(email, { target: { value: " reader@example.test " } });
     fireEvent.change(username, { target: { value: "new_reader" } });
     fireEvent.change(passwordInput(), { target: { value: "long-enough" } });
     expect(await screen.findByText("Looks good.")).toBeInTheDocument();
+    expect(email).toHaveAttribute("aria-invalid", "false");
+    expect(email).not.toHaveAttribute("aria-describedby");
+    expect(passwordInput()).toHaveAttribute("aria-invalid", "false");
+    expect(passwordInput()).toHaveAccessibleDescription("Looks good.");
     fireEvent.click(screen.getByRole("button", { name: "Create account" }));
 
     await waitFor(() => expect(onAuthed).toHaveBeenCalledWith(user));

@@ -20,6 +20,13 @@ class InstantObserver {
   disconnect() {}
 }
 
+/* A gauge far below the fold: never reported as on screen. */
+class NeverObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 function setReducedMotion(on) {
   window.matchMedia.mockImplementation((query) => ({
     matches: on && query.includes("prefers-reduced-motion") && !query.includes("no-preference"), media: query, onchange: null,
@@ -191,5 +198,24 @@ describe("Account settings", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Try again" })));
     await waitFor(() => expect(screen.getByRole("progressbar", { name: /Chapters translated: 212 of 1000/ })).toBeInTheDocument());
     expect(screen.getByText("788 left")).toBeInTheDocument();
+  });
+
+  it("gives every gauge its real value, even before it scrolls into view", async () => {
+    setReducedMotion(false);
+    globalThis.IntersectionObserver = NeverObserver;
+    renderAt("/account/usage");
+    const ring = await screen.findByRole("progressbar", { name: /Chapters translated: 212 of 1000/ });
+    expect(ring).toHaveAttribute("aria-valuenow", "21");
+    expect(screen.getByRole("progressbar", { name: /OCR pages: 40 of 500/ })).toHaveAttribute("aria-valuenow", "8");
+    // With motion allowed only the stroke waits (empty) for the gauge to arrive on screen.
+    expect(ring.closest(".acct-gauge")).toHaveClass("is-waiting");
+  });
+
+  it("shows gauges filled at once under reduced motion", async () => {
+    globalThis.IntersectionObserver = NeverObserver;
+    renderAt("/account/usage");
+    const ring = await screen.findByRole("progressbar", { name: /Chapters translated: 212 of 1000/ });
+    expect(ring).toHaveAttribute("aria-valuenow", "21");
+    expect(ring.closest(".acct-gauge")).not.toHaveClass("is-waiting");
   });
 });

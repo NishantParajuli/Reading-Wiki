@@ -210,9 +210,11 @@ function BackgroundWork({ loading, error, retry, jobs }) {
             {jobs.slice(0, 3).map((j, i) => {
               const frac = activityFraction(j);
               const label = ACT_KIND_LABEL[j.kind] || j.kind;
+              // An import waiting on the reader opens that import, not the job list.
+              const yourTurn = j.source === "import" && (j.status === "awaiting_review" || j.status === "awaiting_ocr_confirm");
               return (
                 <li key={`${j.source}:${j.id}`} className="rise" style={{ "--i": i }}>
-                  <Link className="tide-work-row" to="/jobs">
+                  <Link className="tide-work-row" to={yourTurn ? `/import?job=${j.id}` : "/jobs"}>
                     <span className={"work-orb" + (j.status === "queued" ? " is-queued" : "")} aria-hidden="true"><Icon name={ACT_KIND_ICON[j.kind] || "sparkles"} size={14} /></span>
                     <span className="tide-work-text">
                       <b>{label}</b>

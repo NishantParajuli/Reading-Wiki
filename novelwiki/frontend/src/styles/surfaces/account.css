@@ -295,7 +295,7 @@
 .acct-nav-label {
   margin: 0 0 6px 17px;
   font-size: var(--text-2xs); font-weight: 650; letter-spacing: var(--tracking-eyebrow);
-  text-transform: uppercase; color: var(--faint);
+  text-transform: uppercase; color: var(--muted);
 }
 .acct-nav-item {
   position: relative; isolation: isolate;
@@ -368,7 +368,7 @@
 .acct-affix > input { flex: 1; min-width: 0; }
 .acct-affix-mark {
   position: absolute; left: 15px; z-index: 1; pointer-events: none;
-  color: var(--faint); font-weight: 600; font-size: var(--text-md);
+  color: var(--muted); font-weight: 600; font-size: var(--text-md);
 }
 .acct-affix-mark + input { padding-left: 33px; }
 .acct-affix > input:has(+ .acct-reveal) { padding-right: 48px; }
@@ -421,7 +421,7 @@
   color: var(--accent-ink); background: var(--accent-soft); padding: 2px 9px; border-radius: var(--radius-full);
 }
 .acct-slider-row { display: flex; align-items: center; gap: 12px; }
-.acct-slider-glyph { flex-shrink: 0; color: var(--faint); font-family: var(--font-display); font-size: 13px; line-height: 1; width: 18px; text-align: center; }
+.acct-slider-glyph { flex-shrink: 0; color: var(--muted); font-family: var(--font-display); font-size: 13px; line-height: 1; width: 18px; text-align: center; }
 .acct-slider-glyph.lg { font-size: 22px; }
 
 /* shared picker pieces: radio dot + selection ring */
@@ -854,6 +854,9 @@
   transition: stroke-dashoffset 1.5s var(--ease-out);
 }
 .acct-gauge .pr-label { font-size: inherit; font-weight: inherit; color: inherit; }
+/* motion only: the stroke waits empty (--gauge-empty: the ring's circumference)
+   until the gauge is on screen, then fills; its value is always the real one */
+.acct-gauge.is-waiting .progress-ring .pr-fill { stroke-dashoffset: var(--gauge-empty); }
 .acct-gauge-pct { font-family: var(--font-display); font-variation-settings: "SOFT" 60; font-size: 25px; font-weight: 380; letter-spacing: -0.03em; color: var(--ink); }
 .acct-gauge-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .acct-gauge-label { display: flex; align-items: center; gap: 7px; font-size: var(--text-sm); font-weight: 600; color: var(--ink-2); }
@@ -863,7 +866,7 @@
 .acct-gauge-left { font-size: var(--text-xs); font-weight: 620; color: var(--muted); }
 .acct-gauge.tone-warn .acct-gauge-left { color: var(--warn); }
 .acct-gauge.tone-danger .acct-gauge-left { color: var(--danger); }
-.acct-gauge small { margin-top: 4px; font-size: var(--text-xs); color: var(--faint); line-height: 1.45; }
+.acct-gauge small { margin-top: 4px; font-size: var(--text-xs); color: var(--muted); line-height: 1.45; }
 .acct-unlimited { flex-direction: row; align-items: center; gap: 22px; }
 .acct-infinity {
   flex-shrink: 0; font-family: var(--font-display); font-size: 60px; line-height: 1; font-weight: 300;
@@ -952,4 +955,8 @@ html[data-vt="tab"]::view-transition-old(acct-nav) { animation: none; opacity: 0
   .acct-speed > button { padding: 0 4px; }
   .acct-gauge { padding: 16px; gap: 16px; }
   .acct-sheet { padding-inline: 18px; }
+}
+/* Touch: the password reveal grows to a finger-sized target. */
+@media (pointer: coarse) {
+  .acct-reveal { right: 2px; width: 40px; height: 40px; }
 }

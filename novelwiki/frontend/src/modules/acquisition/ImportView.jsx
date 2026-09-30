@@ -2,7 +2,7 @@
    Left: the glass basin and the shelf of recent imports.
    Right: the selected import, told as a tideline. */
 import React, { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { acquisitionApi } from "../../modules/acquisition/api.js";
 import { catalogApi } from "../../modules/catalog/api.js";
@@ -51,7 +51,15 @@ export function ImportView() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [jobs, setJobs] = useState(null);
-  const [sel, setSel] = useState(null);
+  // The selected import lives in ?job=, so Jobs can link straight to it and a
+  // reload reopens it. Choosing another import replaces the entry (no history spam).
+  const [params, setParams] = useSearchParams();
+  const sel = Number(params.get("job")) || null;
+  const setSel = useCallback((id) => setParams(previous => {
+    const next = new URLSearchParams(previous);
+    if (id == null) next.delete("job"); else next.set("job", String(id));
+    return next;
+  }, { replace: true }), [setParams]);
   const [job, setJob] = useState(null);
   const [plan, setPlan] = useState(null);
   const [metadata, setMetadata] = useState(null);

@@ -1,7 +1,8 @@
 /* ============================================================
    Subscription worker health (Antigravity, OpenAI Codex): a status orb
    that pulses while work is running, queue figures, heartbeat facts,
-   the consuming smoke test and retry-waiting actions. Refreshes every 10s.
+   the consuming smoke test (confirmed first: it spends subscription
+   quota) and retry-waiting actions. Refreshes every 10s.
    ============================================================ */
 import React, { useCallback, useEffect, useState } from "react";
 
@@ -9,6 +10,7 @@ import { adminApi } from "./api.js";
 import { MetricTile, StatusOrb } from "./AdminParts.jsx";
 import { Icon } from "../../components/Icon.jsx";
 import { Button, Chip, EmptyState, RelativeTime, Skeleton } from "../../components/ui.jsx";
+import { ConfirmDialog } from "../../components/overlay.jsx";
 import { useToast } from "../../components/toast.jsx";
 
 const WORKER_TONE = { healthy: "ok", idle: "ok", standby: "info", starting: "info", disabled: "neutral", unhealthy: "danger" };
@@ -17,6 +19,7 @@ function WorkerHealth({ name, short, slug, icon, fetchHealth, smoke, retry, vers
   const { toast } = useToast();
   const [health, setHealth] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [confirmSmoke, setConfirmSmoke] = useState(false);
   const load = useCallback(() => fetchHealth().then(setHealth).catch(() => setHealth(false)), [fetchHealth]);
   useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, [load]);
 
@@ -71,12 +74,18 @@ function WorkerHealth({ name, short, slug, icon, fetchHealth, smoke, retry, vers
           </dl>
           <div className="adm-worker-actions">
             <Button variant="ghost" icon="zap" disabled={busy || !health.enabled}
-                    onClick={() => act(smoke, r => (r && r.warning) || "Smoke test queued.")}>Run consuming smoke test</Button>
+                    onClick={() => setConfirmSmoke(true)}>Run consuming smoke test</Button>
             <Button variant="ghost" icon="rotateCcw" disabled={busy || !(waiting > 0)}
                     onClick={() => act(retry, r => `${(r && r.jobs_requeued) || 0} waiting ${(r && r.jobs_requeued) === 1 ? "job" : "jobs"} requeued.`)}>Retry waiting jobs</Button>
           </div>
         </div>
       </section>
+      {confirmSmoke && (
+        <ConfirmDialog title="Run the consuming smoke test?" confirmLabel="Run smoke test" danger={false} busy={busy}
+          body={`This queues a real job on the ${name} worker. It uses no novel or reader content, but it spends subscription quota like any other run.`}
+          onCancel={() => setConfirmSmoke(false)}
+          onConfirm={async () => { await act(smoke, r => (r && r.warning) || "Smoke test queued."); setConfirmSmoke(false); }} />
+      )}
 
       <div className="adm-metrics adm-metrics-3">
         <MetricTile i={1} icon="hourglass" value={q.queued || 0} label="Queued" />
