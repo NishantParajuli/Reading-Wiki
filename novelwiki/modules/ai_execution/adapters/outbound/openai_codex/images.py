@@ -32,6 +32,8 @@ def image_bytes(item: dict, root: Path) -> bytes:
     data = None
     if saved:
         path = Path(saved)
+        if not path.is_absolute():
+            path = root / path
         resolved = path.resolve()
         allowed = (root.resolve(), codex_home_path(root).resolve())
         if path.is_symlink() or not any(
@@ -41,8 +43,16 @@ def image_bytes(item: dict, root: Path) -> bytes:
                 "Codex returned an image outside its workspace",
                 code="openai_codex_artifact_invalid",
             )
-        if path.is_file() and path.stat().st_size <= MAX_IMAGE_BYTES:
-            data = path.read_bytes()
+        try:
+            if path.is_file():
+                with path.open("rb") as stream:
+                    data = stream.read(MAX_IMAGE_BYTES + 1)
+        except OSError as exc:
+            raise AgyError(
+                "Codex image artifact could not be read",
+                code="openai_codex_artifact_invalid",
+                safe_detail="Generated image file could not be read",
+            ) from exc
     if data is None:
         encoded = item.get("result") or ""
         if len(encoded) > MAX_IMAGE_BYTES * 4 // 3 + 4:
@@ -52,7 +62,7 @@ def image_bytes(item: dict, root: Path) -> bytes:
             )
         try:
             data = base64.b64decode(encoded, validate=True)
-        except (ValueError, binascii.Error) as exc:
+        except (TypeError, ValueError, binascii.Error) as exc:
             raise AgyError(
                 "Codex returned no usable image", code="openai_codex_artifact_invalid"
             ) from exc
@@ -70,6 +80,9 @@ def image_bytes(item: dict, root: Path) -> bytes:
             if image.width * image.height > 24_000_000:
                 raise ValueError("Image dimensions too large")
             image.verify()
+        # verify() checks PNG chunk checksums, but does not decode the pixel stream.
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
     except Exception as exc:
         raise AgyError(
             "Generated PNG is corrupt", code="openai_codex_artifact_invalid"
@@ -81,6 +94,7 @@ class ImageSession(AppServerSession):
     def __init__(self, root: Path):
         super().__init__(root)
         self.images: dict[str, dict] = {}
+        self.completed_turn: dict | None = None
 
     def _observe(self, message):
         super()._observe(message)
@@ -88,10 +102,14 @@ class ImageSession(AppServerSession):
             item = (message.get("params") or {}).get("item") or {}
             if item.get("type") == "imageGeneration":
                 self.images[str(item.get("id"))] = item
+        elif message.get("method") == "turn/completed":
+            self.completed_turn = (message.get("params") or {}).get("turn") or {}
 
     async def generate(
         self, prompt: str, references: list[Path], cancel_check=None
     ) -> bytes:
+        self.images.clear()
+        self.completed_turn = None
         # No user config, MCP servers, shell, or network-capable tool is inherited.
         result = await self.request(
             "thread/start",
@@ -122,11 +140,22 @@ class ImageSession(AppServerSession):
             },
             cancel_check=cancel_check,
         )
-        thread = result["thread"]["id"]
+        thread = (result.get("thread") or {}).get("id")
+        if not thread:
+            raise AgyError(
+                "Codex App Server did not return a thread ID",
+                code="openai_codex_protocol_error",
+                retryable=False,
+            )
         inputs = [{"type": "text", "text": prompt}]
         for reference in references:
             if not reference.resolve().is_relative_to(self.run_root.resolve()):
-                raise ValueError("Reference must be staged inside the run workspace")
+                raise AgyError(
+                    "Reference must be staged inside the run workspace",
+                    code="openai_codex_artifact_invalid",
+                    retryable=False,
+                    safe_detail="Character reference is outside the run workspace",
+                )
             inputs.append({"type": "localImage", "path": str(reference)})
         await self.request(
             "turn/start",
@@ -147,6 +176,28 @@ class ImageSession(AppServerSession):
         while True:
             if cancel_check and await cancel_check():
                 raise AgyCanceled("Illustration canceled", code="openai_codex_canceled")
+            # request() observes notifications while waiting for the turn/start reply.
+            # Consume those results before attempting another read that may never arrive.
+            if self.images:
+                # Finish at the first completed image; close() stops unnecessary redraws.
+                return image_bytes(next(iter(self.images.values())), self.run_root)
+            if self.completed_turn is not None:
+                turn = self.completed_turn
+                if turn.get("status") != "completed":
+                    code, retryable, detail = _classify_codex_turn_error(
+                        turn.get("error") or {}
+                    )
+                    raise AgyError(
+                        "Codex image generation failed",
+                        code=code,
+                        retryable=retryable,
+                        safe_detail=detail,
+                    )
+                raise AgyError(
+                    "The image provider completed without an image",
+                    code="openai_codex_provider_unavailable",
+                    safe_detail="Image provider returned no image - waiting before retrying",
+                )
             if asyncio.get_running_loop().time() >= deadline:
                 raise AgyError(
                     "Image generation timed out", code="openai_codex_timeout"
@@ -156,30 +207,8 @@ class ImageSession(AppServerSession):
             except asyncio.TimeoutError:
                 continue
             self._observe(message)
-            if self.images:
-                # Finish at the first completed image; close() stops unnecessary redraws.
-                return image_bytes(next(iter(self.images.values())), self.run_root)
             if "id" in message and "method" in message:
                 raise AgyError(
                     "Unexpected interactive image tool request",
                     code="openai_codex_permission_blocked",
                 )
-            if message.get("method") != "turn/completed":
-                continue
-            turn = (message.get("params") or {}).get("turn") or {}
-            if turn.get("status") != "completed":
-                code, retryable, detail = _classify_codex_turn_error(
-                    turn.get("error") or {}
-                )
-                raise AgyError(
-                    "Codex image generation failed",
-                    code=code,
-                    retryable=retryable,
-                    safe_detail=detail,
-                )
-            if len(self.images) != 1:
-                raise AgyError(
-                    "Codex did not produce exactly one image",
-                    code="openai_codex_artifact_invalid",
-                )
-            return image_bytes(next(iter(self.images.values())), self.run_root)

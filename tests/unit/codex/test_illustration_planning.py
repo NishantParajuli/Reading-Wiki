@@ -9,7 +9,7 @@ import pytest
 from novelwiki.modules.codex.application.illustration_worker import IllustrationWorker
 from novelwiki.modules.codex.adapters.outbound.illustration_store import IllustrationStore
 from novelwiki.modules.codex.domain.illustrations import (
-    IllustrationPlan, placement_metadata, source_hash, validate_plan,
+    IllustrationPlan, IllustrationPlanInvalid, placement_metadata, source_hash, validate_plan,
 )
 from novelwiki.modules.reading.adapters.outbound.codex import PostgresReadingCodexGateway
 
@@ -96,7 +96,11 @@ async def test_selected_context_is_fetched_only_after_decision_and_saved_for_ret
 @pytest.mark.asyncio
 async def test_fixed_count_existing_jobs_still_enforced():
     worker, job, *_ = harness(count=1, planned_count=2)
-    with pytest.raises(ValueError, match="requested image count"):
+    worker.renderer.plan.side_effect = [
+        {"previous_chapters": 0, "max_chars": 0, "reason": "Self contained."},
+        *[planned(2) for _ in range(3)],
+    ]
+    with pytest.raises(IllustrationPlanInvalid, match="requested image count"):
         await worker.execute(job)
     worker.renderer.image.assert_not_awaited()
 
@@ -105,9 +109,154 @@ async def test_fixed_count_existing_jobs_still_enforced():
 @pytest.mark.parametrize("chapters,budget", [(0, 2000), (1, 0), (4, 2000), (2, 9001)])
 async def test_invalid_context_budget_never_reads_prior_text(chapters, budget):
     worker, job, _, _, preceding = harness(decision={"previous_chapters": chapters, "max_chars": budget, "reason": "Test"})
-    with pytest.raises(ValueError):
+    worker.renderer.plan.side_effect = None
+    worker.renderer.plan.return_value = {"previous_chapters": chapters, "max_chars": budget, "reason": "Test"}
+    with pytest.raises(IllustrationPlanInvalid, match="consistent count and budget"):
         await worker.execute(job)
+    assert worker.renderer.plan.await_count == 3
     preceding.assert_not_awaited()
+    worker.store.save_plan.assert_not_awaited()
+    worker.renderer.image.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["evidence", "placement", "schema", "identity", "name"])
+async def test_invalid_plan_is_repaired_before_checkpoint_or_render(failure):
+    worker, job, saved, images, preceding = harness()
+    invalid = planned()
+    if failure == "evidence":
+        invalid["scenes"][0]["evidence"] = "A paraphrase absent from the chapter."
+    elif failure == "placement":
+        invalid["scenes"][0]["placement"] = {"position": "after", "anchor": "An absent anchor quotation."}
+    elif failure == "schema":
+        invalid["scenes"][0]["prompt"] = 42
+    elif failure == "identity":
+        invalid["scenes"][0]["characters"] = ["missing-character"]
+    else:
+        invalid["name_updates"] = [{"key": "missing", "name": "New name", "aliases": [], "evidence": TEXT[:39]}]
+    worker.renderer.plan.side_effect = [
+        {"previous_chapters": 0, "max_chars": 0, "reason": "Self contained."},
+        invalid, planned(),
+    ]
+    await worker.execute(job)
+    assert worker.renderer.plan.await_count == 3
+    correction = worker.renderer.plan.call_args_list[2].args[1]
+    assert correction["text"] == TEXT
+    assert correction["repair"]["previous_response"] == invalid
+    assert correction["repair"]["validation_error"]
+    assert saved["plan"] == planned()
+    worker.store.save_plan.assert_awaited_once()
+    worker.renderer.image.assert_awaited_once()
+    assert len(images) == 1
+    preceding.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_repeated_bad_evidence_is_bounded_and_has_safe_job_error():
+    from novelwiki.modules.ai_execution.adapters.outbound.openai_codex.runner import safe_error_summary
+
+    worker, job, saved, images, _ = harness()
+    invalid = planned()
+    invalid["scenes"][0]["evidence"] = "Private invented chapter text."
+    worker.renderer.plan.side_effect = [
+        {"previous_chapters": 0, "max_chars": 0, "reason": "Self contained."},
+        invalid, invalid, invalid,
+    ]
+    with pytest.raises(IllustrationPlanInvalid) as error:
+        await worker.execute(job)
+    summary = safe_error_summary(error.value)
+    assert summary == (
+        "illustration_plan_invalid: IllustrationPlanInvalid "
+        "(Illustration scene has no exact evidence in this chapter)"
+    )
+    assert "Private" not in summary
+    assert worker.renderer.plan.await_count == 4
+    assert not saved and not images
+    worker.renderer.image.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_schema_failure_does_not_log_untrusted_values():
+    import traceback
+
+    worker, job, *_ = harness()
+    worker.renderer.plan.side_effect = None
+    worker.renderer.plan.return_value = {"previous_chapters": "PRIVATE CHAPTER CONTENT"}
+    with pytest.raises(IllustrationPlanInvalid) as error:
+        await worker.execute(job)
+    assert "PRIVATE CHAPTER CONTENT" not in "".join(traceback.format_exception(error.value))
+
+
+@pytest.mark.asyncio
+async def test_context_can_be_corrected_before_retrieving_history():
+    worker, job, saved, _, preceding = harness()
+    worker.renderer.plan.side_effect = [
+        {"previous_chapters": 1, "max_chars": 0, "reason": "Invalid budget."},
+        {"previous_chapters": 1, "max_chars": 1800, "reason": "Continuation."},
+        planned(),
+    ]
+    await worker.execute(job)
+    preceding.assert_awaited_once_with(1, 2, 1, 1800)
+    assert saved["context_decision"]["max_chars"] == 1800
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["cancel", "source"])
+async def test_repair_checks_cancellation_and_source_before_another_provider_call(change):
+    from novelwiki.modules.ai_execution.application.errors import AgyCanceled
+    from novelwiki.modules.codex.application.illustrations import IllustrationSourceChanged
+
+    worker, job, *_ = harness()
+    invalid = planned()
+    invalid["scenes"][0]["evidence"] = "A paraphrase absent from the chapter."
+    worker.renderer.plan.side_effect = [
+        {"previous_chapters": 0, "max_chars": 0, "reason": "Self contained."}, invalid,
+    ]
+
+    async def progress(_job, _progress, *, stage):
+        if stage == "Correcting illustration plan":
+            if change == "cancel":
+                worker.cancel.side_effect = AgyCanceled("Canceled")
+            else:
+                worker.snapshot.return_value = {"title": "Edited", "content": TEXT}
+
+    worker.progress.side_effect = progress
+    with pytest.raises(AgyCanceled if change == "cancel" else IllustrationSourceChanged):
+        await worker.execute(job)
+    assert worker.renderer.plan.await_count == 2
+    worker.store.save_plan.assert_not_awaited()
+    worker.renderer.image.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_is_not_a_plan_repair():
+    from novelwiki.modules.ai_execution.application.errors import AgyError
+
+    worker, job, *_ = harness()
+    failure = AgyError("Unavailable", code="openai_codex_provider_unavailable")
+    worker.renderer.plan.side_effect = failure
+    with pytest.raises(AgyError) as error:
+        await worker.execute(job)
+    assert error.value is failure
+    worker.renderer.plan.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_repaired_plan_is_checkpointed_and_reused_after_render_failure():
+    worker, job, saved, images, _ = harness()
+    invalid = planned()
+    invalid["scenes"][0]["evidence"] = "A paraphrase absent from the chapter."
+    worker.renderer.plan.side_effect = [
+        {"previous_chapters": 0, "max_chars": 0, "reason": "Self contained."},
+        invalid, planned(),
+    ]
+    worker.renderer.image.side_effect = [RuntimeError("Provider unavailable"), b"png"]
+    with pytest.raises(RuntimeError):
+        await worker.execute(job)
+    await worker.execute(job)
+    assert worker.renderer.plan.await_count == 3
+    assert saved["plan"] == planned()
+    assert len(images) == 1
 
 
 @pytest.mark.parametrize("position,anchor,offset", [

@@ -140,7 +140,15 @@ For each chapter, the pipeline runs:
    legacy request fixes the count. The host validates character keys, exact scene evidence,
    name-update evidence/name occurrences, and placement. An `after` placement must quote
    a unique exact 12–600 character passage; `start`/`end` placements have no anchor. The
-   prompt forbids placing a revelation before the prose establishes it.
+   prompt forbids placing a revelation before the prose establishes it. Evidence and
+   placement anchors must copy the current chapter verbatim, including punctuation,
+   Markdown and whitespace; quotations from preceding context do not qualify.
+   Each planning stage allows up to two correction turns for invalid schema, context
+   budgets, evidence, identity references, or placement. Corrections receive the rejected
+   response and a host-written validation reason with the same source/context. Cancellation
+   and source freshness are checked before and after each turn. Invalid responses are
+   never checkpointed or rendered. Exhausted corrections report `illustration_plan_invalid`
+   with a safe reason through the normal durable job retry/failure path.
 5. Persist the plan, context decision, supplied context, and exact chosen reference revisions.
    Retries reuse this checkpoint rather than choosing different scenes or context. The
    renderer checks Luna/MAX availability before each turn; neither planning turn has tools.
@@ -175,8 +183,12 @@ gallery refresh. These jobs use subscription access/concurrency and provider lim
 they do not reserve a monthly `codex_builds` unit.
 
 The UI polls every five seconds while work is active. Transient read errors retry
-without starting another job. Empty or unfinished provider image results enter provider-wait handling; corrupt or
-out-of-workspace image artifacts are rejected. Provider exhaustion or unavailability is shown through
+without starting another job. Empty or unfinished provider image results, including a
+completed turn with no image event, enter provider-wait handling. Image and terminal-turn
+notifications received before the `turn/start` acknowledgment are retained and processed
+without waiting for another event. Saved relative image paths resolve within the run
+workspace; oversized, corrupt, undecodable, or out-of-workspace image artifacts are rejected.
+PNG checks include both chunk verification and pixel decoding. Provider exhaustion or unavailability is shown through
 the durable job state; see the [OpenAI Codex operator runbook](../openai-codex-operator-runbook.md)
 for worker health, waiting jobs, and the separately authorized subscription setup.
 
@@ -185,7 +197,9 @@ for worker health, waiting jobs, and the separately authorized subscription setu
 A chapter is a sequence of provider turns: one context decision, one scene/design plan,
 then one image turn for each missing character sheet and each chosen scene. These image
 turns run sequentially, and a range processes one chapter at a time. A first chapter can
-therefore require up to nine turns (two planning turns, four sheets, three scenes).
+therefore require up to nine turns without corrections (two planning turns, four sheets,
+three scenes). Each planning stage can add up to two correction turns per job attempt,
+for at most thirteen turns when both stages need corrections and all seven images are new.
 Later chapters reuse eligible same-style, same-revision sheets, but newly introduced
 characters still need their own images. The one-to-three scene count does not include
 character sheets. Both planning turns use Luna/MAX.

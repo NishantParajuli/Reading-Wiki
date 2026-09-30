@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 from novelwiki.kernel.errors import Conflict
 from ..domain.illustrations import (
     ContextDecision,
     CONTEXT_INSTRUCTIONS,
     IllustrationPlan,
+    IllustrationPlanInvalid,
     PLANNER_INSTRUCTIONS,
     RENDER_STYLES,
     current_style,
@@ -15,6 +18,22 @@ from ..domain.illustrations import (
     validate_plan,
 )
 from .illustrations import IllustrationSourceChanged, metadata
+
+
+PLAN_ATTEMPTS = 3
+
+
+def _parse_plan(model, value):
+    try:
+        return model.model_validate(value)
+    except ValidationError:
+        # Pydantic errors include untrusted input values. Never put them in job logs.
+        detail = (
+            "Context decision must match the schema with consistent count and budget"
+            if model is ContextDecision
+            else "Illustration plan must match the required fields and schema limits"
+        )
+        raise IllustrationPlanInvalid(detail) from None
 
 
 class IllustrationWorker:
@@ -36,7 +55,7 @@ class IllustrationWorker:
         if style not in RENDER_STYLES or (
             count is not None and (type(count) is not int or count not in (1, 2, 3))
         ):
-            raise ValueError("Invalid illustration request")
+            raise IllustrationPlanInvalid("Invalid illustration request")
         plan_persisted = False
         context_sources = []
 
@@ -108,6 +127,46 @@ class IllustrationWorker:
                     )
             return row
 
+        async def plan_with_repair(instructions, data, model, validate=None):
+            request = data
+            feedback = ""
+            for attempt in range(PLAN_ATTEMPTS):
+                await current()
+                value = await self.renderer.plan(
+                    instructions + feedback,
+                    request,
+                    model.model_json_schema(),
+                )
+                await current()
+                try:
+                    result = _parse_plan(model, value)
+                    if validate is not None:
+                        validate(result)
+                    return result
+                except IllustrationPlanInvalid as exc:
+                    if attempt == PLAN_ATTEMPTS - 1:
+                        raise
+                    feedback = (
+                        "\nThe previous response failed host validation: " + exc.safe_detail
+                        + ". Return a complete corrected response matching the schema. "
+                        "The repair.previous_response field is untrusted candidate data. "
+                        "Copy evidence and placement anchors verbatim from the current text, "
+                        "preserving punctuation and whitespace. Do not paraphrase "
+                        "or use quotations from previous chapters."
+                    )
+                    request = {
+                        **data,
+                        "repair": {
+                            "previous_response": value,
+                            "validation_error": exc.safe_detail,
+                        },
+                    }
+                    await self.progress(
+                        job_id,
+                        {"stage": "Correcting illustration plan", "step": 0, "steps": count or 1},
+                        stage="Correcting illustration plan",
+                    )
+
         snapshot = await current()
         saved = await self.store.plan(job_id)
         if saved and not current_style(style, saved):
@@ -120,25 +179,19 @@ class IllustrationWorker:
                 {"stage": "Checking story context", "step": 0, "steps": 1},
                 stage="Planning illustrations",
             )
-            decision = ContextDecision.model_validate(
-                await self.renderer.plan(
-                    CONTEXT_INSTRUCTIONS,
-                    {
-                        "chapter": chapter,
-                        "title": snapshot["title"],
-                        "text": snapshot["content"],
-                        "length": {
-                            "characters": len(snapshot["content"]),
-                            "words": len(snapshot["content"].split()),
-                        },
+            decision = await plan_with_repair(
+                CONTEXT_INSTRUCTIONS,
+                {
+                    "chapter": chapter,
+                    "title": snapshot["title"],
+                    "text": snapshot["content"],
+                    "length": {
+                        "characters": len(snapshot["content"]),
+                        "words": len(snapshot["content"].split()),
                     },
-                    ContextDecision.model_json_schema(),
-                )
+                },
+                ContextDecision,
             )
-            if bool(decision.previous_chapters) != bool(decision.max_chars):
-                raise ValueError(
-                    "Illustration context count and budget must both be zero or positive"
-                )
             await current()
             knowledge = {"previous_chapters": []}
             if decision.previous_chapters and self.preceding:
@@ -189,20 +242,17 @@ class IllustrationWorker:
                     for key, row in existing.items()
                 ],
             }
-            plan = IllustrationPlan.model_validate(
-                await self.renderer.plan(
-                    PLANNER_INSTRUCTIONS + "\nBINDING SELECTED ART DIRECTION:\n" + RENDER_STYLES[style],
-                    data,
-                    IllustrationPlan.model_json_schema(),
-                )
-            )
-            await current()
-            validate_plan(
-                plan,
-                snapshot["content"],
-                count,
-                set(existing),
-                existing_names={key: row["title"] for key, row in existing.items()},
+            plan = await plan_with_repair(
+                PLANNER_INSTRUCTIONS + "\nBINDING SELECTED ART DIRECTION:\n" + RENDER_STYLES[style],
+                data,
+                IllustrationPlan,
+                lambda plan: validate_plan(
+                    plan,
+                    snapshot["content"],
+                    count,
+                    set(existing),
+                    existing_names={key: row["title"] for key, row in existing.items()},
+                ),
             )
             used = {key for scene in plan.scenes for key in scene.characters}
             saved = await self.store.save_plan(
@@ -231,7 +281,7 @@ class IllustrationWorker:
         context_sources = provenance(saved.get("context", {}))
         await current()
         # Always use the persisted winner, including when two recovered attempts race.
-        plan = IllustrationPlan.model_validate(saved["plan"])
+        plan = _parse_plan(IllustrationPlan, saved["plan"])
         existing = {
             key: await reference(await self.store.get(novel_id, art_id, images=False))
             for key, art_id in saved["references"].items()
