@@ -116,6 +116,12 @@ try {
           await route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ detail: "Not authenticated." }) });
           return;
         }
+        // /n/404 and /n/500 render a missing book and a failed load.
+        const failing = url.pathname.match(/^\/api\/novels\/(404|500)(\/|$)/);
+        if (failing) {
+          await route.fulfill({ status: Number(failing[1]), contentType: "application/json", body: JSON.stringify({ detail: failing[1] === "404" ? "Novel not found." : "Server error." }) });
+          return;
+        }
         const body = respond(route.request().method(), url.pathname, url.searchParams);
         await route.fulfill({ contentType: "application/json", body: JSON.stringify(body ?? {}) });
       });

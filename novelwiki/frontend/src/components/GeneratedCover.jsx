@@ -141,6 +141,13 @@ function Horizon({ id, h1, h2, r }) {
 
 const MOTIFS = [Tide, Shards, Ripples, Horizon];
 
+/* The title's size shrinks with its longest word, so words wrap whole
+   instead of breaking mid-word on narrow jackets. */
+function titleSize(title) {
+  const longest = String(title || "").split(/\s+/).reduce((max, word) => Math.max(max, word.length), 0);
+  return `${Math.min(13.5, 118 / Math.max(8, longest)).toFixed(2)}cqw`;
+}
+
 export function GeneratedCover({ title, author }) {
   const rawId = useId();
   const id = `gc${rawId.replace(/[^a-zA-Z0-9]/g, "")}`;
@@ -159,7 +166,7 @@ export function GeneratedCover({ title, author }) {
       </svg>
       <div className="cover-ph-text">
         <div>
-          <div className="cover-ph-title">{title || ""}</div>
+          <div className="cover-ph-title" style={{ "--ph-size": titleSize(title) }}>{title || ""}</div>
           <div className="cover-ph-rule" />
         </div>
         {author ? <div className="cover-ph-author">{author}</div> : <span />}

@@ -168,7 +168,8 @@ export function Tideline({ novel, bookmarks, toc, compact, animate }) {
   const started = progress.last_chapter != null;
   const current = started ? Number(progress.last_chapter) : null;
   const pct = novel.max_chapter ? Math.round(Math.min(100, (maxRead / novel.max_chapter) * 100)) : 0;
-  const newCount = novel.max_chapter != null && maxRead > 0 ? Math.max(0, Math.round(novel.max_chapter - maxRead)) : 0;
+  // Chapters beyond your furthest read (the API's `new_chapters`): unread, not "new".
+  const unread = novel.max_chapter != null && maxRead > 0 ? Math.max(0, Math.round(novel.max_chapter - maxRead)) : 0;
   const lit = maxRead > 0 ? pos(maxRead) : 0;
 
   const volumes = useMemo(() => {
@@ -196,7 +197,7 @@ export function Tideline({ novel, bookmarks, toc, compact, animate }) {
   const moonAt = current != null ? pos(current) : null;
   const edge = moonAt == null ? "mid" : moonAt < 0.1 ? "start" : moonAt > 0.9 ? "end" : "mid";
   const status = started
-    ? `${pct}% read${newCount > 0 ? ` · ${newCount} new since you last read` : ""}`
+    ? `${pct}% read · ${unread > 0 ? `${unread.toLocaleString()} unread` : "caught up"}`
     : "Not started yet";
   const valueText = started
     ? `${status}${current != null ? `. You are at chapter ${fmtNum(current)} of ${fmtNum(max)}` : ""}${marks.length ? `. ${marks.length} bookmark${marks.length === 1 ? "" : "s"}` : ""}.`

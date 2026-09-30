@@ -135,7 +135,7 @@ function CoverMorph({ id, on, children }) {
 export function NewBadge({ count }) {
   return (
     <span className="shelf-new">
-      <b>{Number(count).toLocaleString()}</b> new<span className="sr-only"> chapters</span>
+      <b>{Number(count).toLocaleString()}</b> unread<span className="sr-only"> chapters</span>
     </span>
   );
 }

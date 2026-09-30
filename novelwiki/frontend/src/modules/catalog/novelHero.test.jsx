@@ -32,8 +32,8 @@ describe("novel hero parts", () => {
     render(<Tideline novel={novel} bookmarks={[{ id: 1, chapter: 42 }, { id: 2, chapter: 117, note: "The door opens" }]} toc={[]} />);
     const bar = screen.getByRole("progressbar", { name: "Reading progress" });
     expect(bar).toHaveAttribute("aria-valuenow", "49");
-    expect(bar.getAttribute("aria-valuetext")).toMatch(/49% read · 122 new since you last read\. You are at chapter 119 of 240\. 2 bookmarks\./);
-    expect(screen.getByText("49% read · 122 new since you last read")).toBeInTheDocument();
+    expect(bar.getAttribute("aria-valuetext")).toMatch(/49% read · 122 unread\. You are at chapter 119 of 240\. 2 bookmarks\./);
+    expect(screen.getByText("49% read · 122 unread")).toBeInTheDocument();
   });
 
   it("says a book hasn't been started instead of inventing progress", () => {

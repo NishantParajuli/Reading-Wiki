@@ -119,7 +119,7 @@ moved to 192 once; chosen hues are kept.
 - **Accent:** `--accent`, `--accent-2` (a companion hue +48° for gradients),
   `--accent-ink` (accent-coloured text), `--accent-soft` (tints), `--accent-glow`
   (light), `--on-accent`.
-- **Gold** marks warm, rare moments (fresh-chapter counts, sparkles).
+- **Gold** marks warm, rare moments (unread-chapter counts, sparkles).
 - **Status:** `--ok/--warn/--danger/--info` with `-soft` tints. Status is never
   conveyed by colour alone.
 - **Atmosphere:** `--atmo-h1/--atmo-h2/--atmo-c` (registered `@property` numbers,
@@ -222,7 +222,7 @@ designed at 390px with no horizontal page overflow.
 - **Home** — the date and a time-of-day greeting under tonight's actual moon phase;
   the book you are in floats in a spotlight tinted by its jacket (progress ring,
   chapter, continue/listen); destinations and live background work beside it; rails
-  for the nightstand and the shared library; fresh-chapter counts in gold.
+  for the nightstand and the shared library; unread-chapter counts in gold.
 - **Reader** — see the [reader surface brief](.impeccable/surfaces/novelwiki-frontend-src-modules-reading-reader-jsx.md).
   Five tones (Theme, Paper, Sepia, Dusk, Night), an engraved chapter numeral with a
   drawn ornament, drop caps with small-caps first lines, floating capsules that

@@ -165,6 +165,21 @@ export function CostConfirmDialog({ novelId, action, params, title, actionLabel 
 /* Anchored popover: relative-positioned wrapper + absolutely-positioned card.
    Dismisses on outside click / Escape. `align` = left|right. The preferred
    alignment is clamped to the viewport so wide menus cannot render off-screen. */
+/* The panel is its own component so its cleanup runs while it still holds
+   focus: closing with Escape or choosing an item hands focus back to the
+   trigger instead of dropping it to <body>. A click elsewhere has already
+   moved focus, so nothing is stolen then. */
+function PopoverPanel({ panelRef, returnFocus, className, style, children }) {
+  useLayoutEffect(() => () => {
+    const panel = panelRef.current;
+    if (panel && panel.contains(document.activeElement)) {
+      const target = returnFocus();
+      if (target) target.focus({ preventScroll: true });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return <div ref={panelRef} className={className} style={style}>{children}</div>;
+}
+
 export function Popover({ open, onClose, trigger, align = "right", className = "", children, style }) {
   const ref = useDismissable(open, onClose);
   const panelRef = useRef(null);
@@ -172,6 +187,11 @@ export function Popover({ open, onClose, trigger, align = "right", className = "
     const anchor = ref.current;
     const panel = panelRef.current;
     if (!anchor || !panel) return;
+    // A panel restyled as a fixed sheet (phones) places itself.
+    if (getComputedStyle(panel).position === "fixed") {
+      panel.style.left = panel.style.top = panel.style.bottom = panel.style.maxHeight = "";
+      return;
+    }
 
     const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
     const panelWidth = panel.offsetWidth;
@@ -186,13 +206,23 @@ export function Popover({ open, onClose, trigger, align = "right", className = "
     panel.style.left = `${viewportLeft - anchorRect.left}px`;
     panel.style.right = "auto";
 
-    // Open upward when the room below can't hold the panel but the room above
-    // is larger (e.g. a menu in a dock on the bottom edge).
+    // Room below ends at the phone dock (or the viewport); room above at the
+    // header and the novel capsule. Open toward the larger room when the
+    // panel doesn't fit below, and cap its height to the room it gets.
     const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-    const below = viewportHeight - anchorRect.bottom;
-    const up = panel.offsetHeight + 22 > below && anchorRect.top > below;
+    const dock = document.querySelector(".dock");
+    const floor = dock && getComputedStyle(dock).display !== "none" ? dock.getBoundingClientRect().top : viewportHeight;
+    const ceiling = Math.max(0, ...[".shell-top:not(.is-hidden)", ".novel-capsule"].map(sel => {
+      const el = document.querySelector(sel);
+      const box = el && el.getBoundingClientRect();
+      return box && box.bottom <= anchorRect.top ? box.bottom : 0;
+    }));
+    const below = floor - anchorRect.bottom - 10 - gutter;
+    const above = anchorRect.top - 10 - Math.max(gutter, ceiling + 6);
+    const up = panel.scrollHeight > below && above > below;
     panel.style.top = up ? "auto" : "calc(100% + 10px)";
     panel.style.bottom = up ? "calc(100% + 10px)" : "auto";
+    panel.style.maxHeight = `${Math.max(160, up ? above : below)}px`;
     panel.style.setProperty("--pop-origin", `${up ? "bottom" : "top"} ${align === "left" ? "left" : "right"}`);
   }, [align, ref]);
 
@@ -216,14 +246,16 @@ export function Popover({ open, onClose, trigger, align = "right", className = "
     };
   }, [open, positionPanel, ref]);
 
+  const returnFocus = () => ref.current && ref.current.querySelector("[aria-expanded], button, a[href]");
   return (
     <div className="usermenu" ref={ref} style={{ position: "relative", display: "inline-block" }}>
       {trigger}
       {open && (
-        <div ref={panelRef} className={["popover", className].filter(Boolean).join(" ")}
-             style={{ top: "calc(100% + 10px)", [align]: 0, "--pop-origin": align === "left" ? "top left" : "top right", ...style }}>
+        <PopoverPanel panelRef={panelRef} returnFocus={returnFocus}
+                      className={["popover", className].filter(Boolean).join(" ")}
+                      style={{ top: "calc(100% + 10px)", [align]: 0, "--pop-origin": align === "left" ? "top left" : "top right", ...style }}>
           {children}
-        </div>
+        </PopoverPanel>
       )}
     </div>
   );

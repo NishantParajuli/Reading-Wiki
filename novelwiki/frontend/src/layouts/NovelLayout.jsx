@@ -4,13 +4,13 @@
    reader's trusted progress and is clamped server-side), and codex stats.
    ============================================================ */
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { Outlet, useParams } from "react-router-dom";
+import { Link, Outlet, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { codexApi } from "../modules/codex/api.js";
 import { useNovelQuery } from "../modules/catalog/queries.js";
 import { useDebounce } from "../lib/hooks.js";
-import { Loading, EmptyState } from "../components/ui.jsx";
+import { Button, Loading, EmptyState } from "../components/ui.jsx";
 import { useReadySignal } from "../motion/navigation.js";
 import { useBookAtmosphere } from "../atmosphere/store.js";
 
@@ -21,7 +21,7 @@ export function NovelLayout() {
   const { novelId: novelIdParam } = useParams();
   const novelId = Number(novelIdParam);
   const qc = useQueryClient();
-  const { data: novel, isLoading, isError, refetch } = useNovelQuery(novelId);
+  const { data: novel, isLoading, isError, error, refetch } = useNovelQuery(novelId);
 
   const [ceiling, setCeiling] = useState(1);
   const [ceilingFor, setCeilingFor] = useState(null);
@@ -80,9 +80,22 @@ export function NovelLayout() {
 
   if (isLoading) return <div className="page"><Loading label="Loading novel…" /></div>;
   if (isError || !novel) {
+    // Missing or private is a fact about the book; anything else is a failed
+    // request worth retrying.
+    const missing = !isError || (error && (error.status === 404 || error.status === 403));
     return (
       <div className="page">
-        <EmptyState icon="x" title="Couldn't open this novel" body="It may be private, deleted, or the link is wrong." />
+        {missing ? (
+          <EmptyState icon="compass" title="This book isn't here"
+            body="It may be private, removed, or the link may be wrong."
+            primaryAction={<Link className="btn btn-primary" to="/library">Back to your library</Link>}
+            secondaryAction={<Link className="btn btn-ghost" to="/discover">Explore Discover</Link>} />
+        ) : (
+          <EmptyState icon="alert" title="Couldn't open this book"
+            body="Something went wrong while loading it. Your library and reading progress are safe."
+            primaryAction={<Button icon="refresh" onClick={() => refetch()}>Try again</Button>}
+            secondaryAction={<Link className="btn btn-ghost" to="/library">Your library</Link>} />
+        )}
       </div>
     );
   }

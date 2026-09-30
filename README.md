@@ -41,9 +41,10 @@ unlock future codex data. Full model:
   moderation); **monthly quotas** for translation, OCR, Codex builds, and narration,
   plus hourly and concurrency limits for uncached AI answers and profiles.
 - **🏠 Reading room** — a featured book to resume, a listening shortcut, current reads,
-  fresh chapters, and background work beside your library. A **unified job center**
-  covers all three durable-job systems, with **cost estimates before you spend**,
-  Discover filters + provenance badges, and a per-novel pipeline **health panel**.
+  books with unread chapters waiting, and background work beside your library. A
+  **unified job center** covers all three durable-job systems, with **cost estimates
+  before you spend**, Discover filters + provenance badges, and a per-novel pipeline
+  **health panel**.
 - **🕸 Scraping** — a novel stitched from several sources (each with a `chapter_offset`
   mapping onto one **global** chapter sequence); incremental, with clear access-boundary
   handling; per-site adapters with [documented URL formats and limits](docs/pipelines/supported-sites.md);

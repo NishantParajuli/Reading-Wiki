@@ -32,7 +32,7 @@ sits beside it in a small glass card that says plainly when all is quiet.
 
 ## VISITOR PATH
 Continue the current chapter; reach other current reads from "Also on your
-nightstand"; open "Fresh chapters" from books in progress; browse "New in the shared
+nightstand"; open "Chapters waiting" (books with unread chapters); browse "New in the shared
 library"; step to the library, Discover, or Import from the three horizon tiles. A new
 account sees the welcome room instead: moon, a two-line headline, and three paths —
 add a webnovel from a link, bring an EPUB or PDF, or find a read in the shared
@@ -61,7 +61,7 @@ paint of the resume action.
   reflection, chapter + title, "N% through your story", Continue/Listen, tide line.
   Loading uses skeletons with `role="status"`; the empty state links to the library.
 - Rails: "Also on your nightstand" shelf books with a hover/focus play button and
-  progress; "Fresh chapters" rows link to each novel's chapter list; "New in the
+  progress; "Chapters waiting" rows (unread counts) link to each novel's chapter list; "New in the
   shared library" covers.
 - Background work: live job rows linking to Jobs, a calm orb when nothing runs.
 - Horizon: three destination tiles with pointer spotlight.

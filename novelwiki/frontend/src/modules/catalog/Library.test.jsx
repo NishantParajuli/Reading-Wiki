@@ -72,7 +72,7 @@ describe("Library", () => {
     expect(tabs.map(t => within(t).queryByText(/^\d+$/)?.textContent)).toEqual(["3", "1", "1", "1"]);
     expect(container.querySelector(".lib-summary")).toHaveTextContent(/3 books on your shelves/);
     expect(container.querySelector(".lib-summary")).toHaveTextContent(/206 chapters read/);
-    expect(container.querySelector(".shelf-new")).toHaveTextContent("6 new chapters");
+    expect(container.querySelector(".shelf-new")).toHaveTextContent("6 unread chapters");
     expect(screen.getByText("Finished")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Start reading Letters from the North" })).toHaveAttribute("href", "/n/8/read/1");
   });

@@ -393,9 +393,9 @@ input[type="range"].slider:focus-visible::-webkit-slider-thumb { box-shadow: var
 .cover-ph-title {
   font-family: var(--font-display); font-optical-sizing: auto;
   font-variation-settings: "SOFT" 60, "WONK" 1;
-  font-weight: 460; font-size: clamp(9px, 13.5cqw, 30px); line-height: 1.08; letter-spacing: -0.015em;
+  font-weight: 460; font-size: clamp(8px, var(--ph-size, 13.5cqw), 30px); line-height: 1.08; letter-spacing: -0.015em;
   display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden;
-  overflow-wrap: break-word; hyphens: auto; text-wrap: balance;
+  overflow-wrap: break-word; hyphens: manual; text-wrap: balance;
 }
 .cover-ph-rule { width: 28%; height: 1px; background: currentColor; opacity: 0.55; margin-top: 8%; }
 .cover-ph-author {
@@ -505,6 +505,7 @@ img.avatar-user { background: var(--bg-3); }
 /* ---------- Popover / menu ---------- */
 .popover {
   position: absolute; z-index: 120; min-width: 200px; max-width: calc(100vw - 24px);
+  overflow-y: auto; overscroll-behavior: contain;  /* Popover caps max-height to the room it gets */
   padding: 7px; border-radius: 18px;
   background: var(--surface-float);
   -webkit-backdrop-filter: blur(24px) saturate(1.7);

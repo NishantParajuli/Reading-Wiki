@@ -31,7 +31,7 @@ Full explanation: [../concepts/spoiler-safety.md](../concepts/spoiler-safety.md)
 
 | You see | What it does | Owned by |
 |---|---|---|
-| **Home** | a featured book to resume, listening shortcut, other current reads, fresh chapters, running jobs, newest shared novels | Experience |
+| **Home** | a featured book to resume, listening shortcut, other current reads, books with unread chapters waiting, running jobs, newest shared novels | Experience |
 | **Library / Discover** | your shelves (`to_read`/`reading`/`completed`); browse the shared (public/global) library with filters and provenance badges; "add to library" shares one text among many readers | Catalog + Experience |
 | **Accounts** | email+password (Argon2), optional Google/Discord sign-in, email verification, password reset, public profiles `/u/<name>`, avatars, synced reader prefs | Identity |
 | **Reader** | themes/width/auto-scroll, volume-grouped TOC, bookmarks, scroll recovery, translation editing, audiobook transport | Reading (+ Narration) |

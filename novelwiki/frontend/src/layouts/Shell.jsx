@@ -254,8 +254,9 @@ function NovelCapsule({ novelId, novel }) {
   }, [pathname, items.length]);
   return (
     <div className="novel-capsule-wrap">
-      <nav className="novel-capsule" aria-label="Novel sections" ref={navRef}>
-        <Link className="nc-book" to={`/n/${novelId}`} aria-label={novel ? `${novel.title} overview` : "Novel overview"}>
+      <nav className="novel-capsule" aria-label={novel ? `${novel.title}: sections` : "Novel sections"} ref={navRef}>
+        {/* A pointer shortcut to the overview; keyboard and screen readers use "Overview". */}
+        <Link className="nc-book" to={`/n/${novelId}`} tabIndex={-1} aria-hidden="true">
           <Cover src={novel && novel.cover_url} title={novel ? novel.title : ""} className="nc-cover" />
           <span className="nc-title">{novel ? novel.title : "…"}</span>
         </Link>
@@ -288,7 +289,7 @@ export function Shell() {
 
   const novelMatch = useMatch("/n/:novelId/*");
   const novelId = novelMatch ? Number(novelMatch.params.novelId) : null;
-  const { data: novel } = useNovelQuery(novelId, { enabled: novelId != null });
+  const { data: novel, isError: novelError } = useNovelQuery(novelId, { enabled: novelId != null });
 
   const { data: jobs } = useActivityQuery();
   const activeCount = (jobs || []).filter(isActiveJob).length;
@@ -344,7 +345,7 @@ export function Shell() {
 
       <div className="shell-main">
         {!online && <div className="offline-banner" role="status"><Icon name="alert" size={14} /> You're offline — changes won't save.</div>}
-        {novelId != null && <NovelCapsule novelId={novelId} novel={novel} />}
+        {novelId != null && !novelError && <NovelCapsule novelId={novelId} novel={novel} />}
         <main className="grow" id="main-content" tabIndex={-1}>
           <RouteBoundary resetKey={location.pathname}><Outlet /></RouteBoundary>
         </main>

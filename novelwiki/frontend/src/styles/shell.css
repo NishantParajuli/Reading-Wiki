@@ -307,8 +307,16 @@
   }
   .page { padding-bottom: calc(128px + env(safe-area-inset-bottom)); }
 }
+/* Phone landscape counts as wide but is short: the header tucks away while
+   scrolling down, as on phones, so content isn't buried under chrome. */
+@media (min-width: 768px) and (max-height: 500px) {
+  .shell-top.is-hidden { transform: translateY(-115%); }
+  .shell-top.is-hidden ~ .shell-main .novel-capsule-wrap { top: 8px; }
+  .shell-top.is-hidden ~ .shell-main::before { opacity: 0; }
+  .shell[data-route="n"] .shell-top.is-hidden ~ .shell-main::before { opacity: 1; --band: 76px; }
+}
 @media (max-width: 480px) {
-  /* the jacket names the book (and the link's label says it); the sections get the room */
+  /* the jacket names the book (the sections nav is named after it); the sections get the room */
   .nc-title { display: none; }
   .nc-book { padding: 3px 6px 3px 4px; }
 }

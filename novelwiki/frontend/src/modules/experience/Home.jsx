@@ -357,7 +357,7 @@ export function Home() {
           )}
 
           {updated.length > 0 && (
-            <Section eyebrow="Since you last read" title="Fresh chapters">
+            <Section eyebrow="In your library" title="Chapters waiting">
               <div className="fresh-list">
                 {updated.map((n, i) => (
                   <Link className="newrow rise" style={{ "--i": i }} key={n.id} to={`/n/${n.id}/chapters`} data-vt-card="" data-spotlight="">
@@ -366,8 +366,8 @@ export function Home() {
                       <span className="newrow-title">{n.title}</span>
                       <span className="newrow-sub">{n.author ? `${n.author} · ` : ""}{n.source_updated_at ? <>updated <RelativeTime iso={n.source_updated_at} /></> : "updated recently"}</span>
                     </span>
-                    <span className="newrow-count" aria-label={`${n.new_chapters} new ${n.new_chapters === 1 ? "chapter" : "chapters"}`}>
-                      +{n.new_chapters}<small>{n.new_chapters === 1 ? "chapter" : "chapters"}</small>
+                    <span className="newrow-count" aria-label={`${n.new_chapters} unread ${n.new_chapters === 1 ? "chapter" : "chapters"}`}>
+                      {n.new_chapters.toLocaleString()}<small>unread</small>
                     </span>
                     <Icon name="arrowRight" size={18} className="newrow-arrow" />
                   </Link>
