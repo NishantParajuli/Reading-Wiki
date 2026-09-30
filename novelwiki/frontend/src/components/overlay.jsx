@@ -81,7 +81,7 @@ export function ConfirmDialog({ title, body, confirmLabel = "Delete", cancelLabe
       {requireText && (
         <label className="field" style={{ marginTop: 12 }}>
           <span>Type <b>{requireText}</b> to confirm</span>
-          <input value={typed} onChange={e => setTyped(e.target.value)} autoFocus placeholder={requireText} spellCheck={false} />
+          <input value={typed} onChange={e => setTyped(e.target.value)} placeholder={requireText} spellCheck={false} />
         </label>
       )}
       <div className="row" style={{ gap: 10, marginTop: 18, justifyContent: "flex-end" }}>

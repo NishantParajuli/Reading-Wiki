@@ -296,7 +296,7 @@
   box-shadow: var(--shadow-inset); outline: none;
   transition: border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-3) var(--ease-out);
 }
-.illustration-range-field input::placeholder { color: var(--faint); }
+.illustration-range-field input::placeholder { color: var(--muted); }
 .illustration-range-field input:focus { border-color: color-mix(in oklch, var(--accent) 80%, transparent); box-shadow: 0 0 0 4px var(--accent-soft), 0 0 24px -8px var(--accent-glow); }
 .illustration-range-field input:disabled { opacity: 0.55; cursor: not-allowed; }
 .illustration-range-arrow { display: grid; place-items: center; height: 46px; padding: 0 2px; color: var(--faint); }

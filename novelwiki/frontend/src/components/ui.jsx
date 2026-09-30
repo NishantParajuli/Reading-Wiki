@@ -5,20 +5,24 @@
    Motion lives in CSS where it can (ripples, sheens, reveals) and in
    motion/react where layout must be animated (sliding tab lozenges).
    ============================================================ */
-import React, { useId, useState } from "react";
-import { motion } from "motion/react";
+import React, { useId, useRef, useState } from "react";
 import { Icon } from "./Icon.jsx";
 import { GeneratedCover } from "./GeneratedCover.jsx";
 import { TextReveal } from "../motion/TextReveal.jsx";
 import { NumberTicker } from "../motion/NumberTicker.jsx";
-import { springs } from "../motion/index.js";
+import { motion, springs } from "../motion/index.js";
 import { TYPE_ICON, TYPE_LABEL } from "../lib/constants.js";
 import { relativeTime } from "../lib/utils.js";
 
-export function Button({ variant = "primary", size, icon, iconRight, loading, full, className = "", children, disabled, type = "button", ...rest }) {
+/* A loading button stays focusable (aria-disabled, not disabled): a natively
+   disabled button drops keyboard focus to <body> mid-save. Its clicks (and
+   Enter's implicit form submission) are cancelled until the work finishes. */
+export function Button({ variant = "primary", size, icon, iconRight, loading, full, className = "", children, disabled, type = "button", onClick, ...rest }) {
   const cls = ["btn", `btn-${variant}`, size ? size : "", full ? "full" : "", loading ? "is-loading" : "", className].filter(Boolean).join(" ");
+  const busy = !!loading && !disabled;
   return (
-    <button type={type} className={cls} disabled={disabled || loading} aria-busy={loading || undefined} {...rest}>
+    <button type={type} className={cls} disabled={disabled} aria-disabled={busy || undefined} aria-busy={loading || undefined}
+            onClick={busy ? (e) => e.preventDefault() : onClick} {...rest}>
       {loading ? <span className="btn-spinner" aria-hidden /> : (icon ? <Icon name={icon} size={size === "sm" ? 14 : size === "lg" ? 18 : 16} /> : null)}
       {children}
       {iconRight && <Icon name={iconRight} size={size === "sm" ? 14 : size === "lg" ? 18 : 16} />}
@@ -233,14 +237,37 @@ export function Reveal({ chapter, ceiling, lines = 2, label, children, className
 }
 
 /* Pill tabs (Library shelves, Jobs Active/History, Admin) with a sliding lozenge. */
-export function Tabs({ tabs, value, onChange, className = "" }) {
+/* ARIA tabs with automatic activation: one Tab stop (the selected tab), arrows
+   and Home/End move and select. `label` names the tablist. With `idBase`, tab
+   ids are `${idBase}-tab-<id>` and every tab controls `${idBase}-panel`, so the
+   caller can render <div role="tabpanel" id={`${idBase}-panel`}
+   aria-labelledby={`${idBase}-tab-${value}`}>. */
+export function Tabs({ tabs, value, onChange, className = "", label, idBase }) {
   const group = useId();
+  const refs = useRef({});
+  const current = Math.max(0, tabs.findIndex(t => t.id === value));
+  const select = (index) => {
+    const next = tabs[(index + tabs.length) % tabs.length];
+    if (!next) return;
+    onChange(next.id);
+    const el = refs.current[next.id];
+    if (el) el.focus();
+  };
+  const onKeyDown = (e) => {
+    const to = { ArrowRight: current + 1, ArrowLeft: current - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (to == null) return;
+    e.preventDefault();
+    select(to);
+  };
   return (
-    <div className={["tabs", className].filter(Boolean).join(" ")} role="tablist">
+    <div className={["tabs", className].filter(Boolean).join(" ")} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
       {tabs.map(t => {
         const on = value === t.id;
         return (
-          <button key={t.id} type="button" role="tab" aria-selected={on}
+          <button key={t.id} type="button" role="tab" aria-selected={on} tabIndex={on ? 0 : -1}
+                  ref={el => { refs.current[t.id] = el; }}
+                  id={idBase ? `${idBase}-tab-${t.id}` : undefined}
+                  aria-controls={idBase ? `${idBase}-panel` : undefined}
                   className={"tab" + (on ? " active" : "")}
                   onClick={() => onChange(t.id)}>
             {on && <motion.span layoutId={`tabs-${group}`} className="tab-lozenge" transition={springs.layout} aria-hidden="true" />}

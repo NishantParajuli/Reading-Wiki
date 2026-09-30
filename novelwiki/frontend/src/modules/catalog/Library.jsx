@@ -279,7 +279,7 @@ export function Library() {
 
       <section className="lib-controls rise" style={{ "--i": 5 }} aria-label="Library tools">
         <Tabs className="lib-shelves" tabs={LIBRARY_TABS.map(t => ({ ...t, count: novels ? counts[t.id] : undefined }))}
-              value={tab} onChange={setTab} />
+              value={tab} onChange={setTab} label="Shelves" idBase="lib" />
         <div className="lib-tools">
           <SearchField ref={searchRef} className="lib-search" value={q} onChange={setQ}
                        placeholder="Search your library…" label="Search your library" shortcut />
@@ -291,7 +291,8 @@ export function Library() {
 
       <p className="lib-status" role="status"><span className="lib-status-dot" aria-hidden="true" />{status}</p>
 
-      <div className="lib-stage" aria-busy={isLoading || undefined}>{body}</div>
+      <div className="lib-stage" role="tabpanel" id="lib-panel" aria-labelledby={`lib-tab-${tab}`}
+           aria-busy={isLoading || undefined}>{body}</div>
 
       {adding && (
         <AddNovelDialog onClose={() => setAdding(false)}

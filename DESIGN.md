@@ -19,7 +19,7 @@ colors:
   pearl-muted: "oklch(0.49 0.03 260)"
   pearl-accent: "oklch(0.52 0.1 var(--accent-h))"
   gold: "oklch(0.87 0.105 82) / oklch(0.6 0.12 72)"
-  ok: "oklch(0.8 0.13 165) / oklch(0.5 0.11 160)"
+  ok: "oklch(0.8 0.13 165) / oklch(0.45 0.105 160)"
   warn: "oklch(0.85 0.13 80) / oklch(0.5 0.115 68)"
   danger: "oklch(0.72 0.16 22) / oklch(0.5 0.18 25)"
   info: "oklch(0.79 0.1 240) / oklch(0.5 0.12 250)"
@@ -196,10 +196,14 @@ designed at 390px with no horizontal page overflow.
 
 - **Buttons** are pills. Primary: accent gradient, lit edge, a sheen that sweeps on
   hover, a tide ripple from the press point, a slight press scale. Secondary: accent
-  tint. Ghost: glass. Danger: coral. Loading replaces the icon with a spinner.
+  tint. Ghost: glass. Danger: coral. Loading replaces the icon with a spinner and
+  marks the button busy (`aria-busy`, `aria-disabled`) without disabling it, so
+  keyboard focus stays put and repeat presses are ignored. On touch, compact
+  buttons, tabs and segments grow to ~40px.
 - **Fields** are 44px, softly inset; focus adds an accent ring and glow; errors are
   explained in text.
-- **Segmented controls and tabs** slide a lozenge between options.
+- **Segmented controls and tabs** slide a lozenge between options. Tabs follow the
+  ARIA pattern: one Tab stop, and arrows, Home and End move and select.
 - **Progress:** slim glowing bars (with a sheen when live) and progress rings.
 - **Overlays:** dialogs, sheets (phones), popovers, drawers, the command palette and
   toasts are frosted glass with spring entrances and animated exits; focus is

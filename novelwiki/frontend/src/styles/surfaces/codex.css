@@ -857,7 +857,7 @@ a.cx-rel:hover .cx-rel-go { color: var(--accent-ink); transform: translateX(3px)
   field-sizing: content;
 }
 .cx-ask-field textarea:focus-visible { box-shadow: none; }
-.cx-ask-field textarea::placeholder { color: var(--faint); }
+.cx-ask-field textarea::placeholder { color: var(--muted); }
 .cx-ask-submit.btn { min-height: 46px; padding: 0 22px; }
 .cx-ask-hint { margin: 10px 0 0; text-align: center; font-size: var(--text-xs); color: var(--faint); }
 .cx-ask-hint kbd { font-size: 10px; }

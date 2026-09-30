@@ -51,7 +51,7 @@ export function AddNovelDialog({ onCreated, onClose }) {
 
         <label className="field nf-title-field">
           <span>Title</span>
-          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. I Was Trapped in a Bad Ending…" autoFocus required disabled={busy} />
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. I Was Trapped in a Bad Ending…" required disabled={busy} />
         </label>
 
         <fieldset className="nf-group">
