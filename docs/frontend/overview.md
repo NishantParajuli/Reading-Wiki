@@ -167,7 +167,7 @@ title with Overview, Chapters, Codex/Ask (when the Codex is enabled) and Manage
 only the active section keeps its visible label, the capsule scrolls it into view, and
 below 480px the cover alone stands for the book. Below 768px the destinations move to
 a floating bottom **dock** (Home, Library, Discover, Jobs, You) and the top bar hides
-while scrolling down. The offline banner sits beneath the capsule. A skip link moves
+while scrolling down; scroll padding keeps keyboard focus from landing under the dock. The offline banner sits beneath the capsule. A skip link moves
 keyboard users to the main content. The reader has its own full-screen controls and
 does not render the shell.
 
@@ -206,7 +206,8 @@ library, home, and activity queries succeed and there are no books, reading acti
 active jobs, or recent imports. If the home query fails, the spotlight slot says so
 with a retry while the shortcuts and background work (separate queries) stay, so an
 unavailable server does not masquerade as an empty library. Background work has
-distinct loading, failed-with-retry, and empty states.
+distinct loading, failed-with-retry, and empty states; an import waiting on the reader
+(review or OCR approval) opens that import (`/import?job=<id>`) rather than Jobs.
 
 Library is the reader's shelf of book covers. Shelf tabs (All, Reading, To read,
 Completed) carry live counts; title/author search highlights matches (`/` focuses it,
